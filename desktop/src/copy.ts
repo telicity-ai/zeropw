@@ -633,6 +633,8 @@ export const COPY = {
   'listen.err.restored': '예전 설정으로 되돌리고 중계기를 다시 켰어요',
   'listen.err.relayOff': '예전 설정으로 되돌렸지만 중계기는 꺼져 있어요',
   'listen.err.kept': '설정을 되돌리지 못해 중계기가 꺼져 있어요',
+  'listen.err.settings': '설정 파일이 망가져서 다른 기기 접속을 켤 수 없어요. 설정 화면에서 기본값으로 되돌려 주세요',
+  'listen.toSettings': '설정 화면으로',
   'toast.relay.on': '중계기를 켰어요',
   'home.relay.offNote': '중계기가 꺼져 있어 에이전트 요청이 모두 실패해요',
   'set.backup.help': '백업은 만들 때의 기기 키로만 되돌릴 수 있어요. 다른 기기나 바꾼 기기 키로는 열리지 않아요',

@@ -17,7 +17,7 @@ import { ConfirmSheet } from './Confirm';
 import { passErrorKey, useClearOnClose, useDash, useIntent, useLoad, useNow, useSheets, type Intent } from './context';
 import { ListenSetup } from './ListenSetup';
 import { Empty, ListCard, metaLine, Row, SectionHead, Tag } from './parts';
-import { ListenError, listenErrorLines, relayLeftOff, turnOnListen } from './relay';
+import { ListenError, listenErrorLines, readSettings, relayLeftOff, turnOnListen } from './relay';
 import { Sheet } from './Sheet';
 
 type Incoming = { ref: string; preview: InvitePreview };
@@ -38,14 +38,16 @@ const roleText = (r: string): string => (r === 'admin' ? t('inv.role.admin') : r
 export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
   intent?: Intent; onIntent(): void; incoming: Incoming | null; onIncomingTaken(): void;
 }) {
-  const { tick, bump, relay } = useDash();
+  const { tick, bump, relay, go } = useDash();
   const { toast } = useApp();
   const [n, setN] = useState(0);
   const reload = () => setN((x) => x + 1);
   const base = useLoad(async () => {
     // a damaged settings file (settings_corrupt) is fixed on the Settings page; the environments still load
-    const [p, s, i] = await Promise.all([call('project_list'), call('settings_get').catch(() => null), call('net_interfaces').catch(() => [] as NetInterface[])]);
-    return { pairs: teamEnvPairs(p), envsUnread: teamEnvsUnread(p), settings: s, interfaces: i };
+    const [p, s, i] = await Promise.all([
+      call('project_list'), readSettings().catch(() => ({ settings: null, corrupt: false })), call('net_interfaces').catch(() => [] as NetInterface[]),
+    ]);
+    return { pairs: teamEnvPairs(p), envsUnread: teamEnvsUnread(p), settings: s.settings, settingsCorrupt: s.corrupt, interfaces: i };
   }, [tick, n]);
   const [env, setEnv] = useState('');
   const pairs = base.data?.pairs ?? [];
@@ -116,6 +118,10 @@ export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
             onDone={() => { toast(t('toast.listen.on')); reload(); bump(); }}
             onFailed={(down) => { if (down) relay.report(down); reload(); bump(); }} />
         )}
+        {/* nor can it be turned on until the damaged settings file is reset */}
+        {td?.shared && base.data?.settingsCorrupt && (
+          <Callout kind="info">{t('listen.err.settings')} <ToSettings onClick={() => go('settings')} /></Callout>
+        )}
       </div>
 
       {td?.shared && (
@@ -185,6 +191,11 @@ export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
         onClose={sheets.close} onEnv={setEnv} onChanged={() => { reload(); bump(); }} onJoined={() => { sheets.close(); reload(); bump(); }} />
     </>
   );
+}
+
+/** To the Settings page, where a damaged settings file is reset. */
+function ToSettings({ onClick }: { onClick(): void }) {
+  return <button className="btn btn-ghost btn-sm" type="button" onClick={onClick}>{t('listen.toSettings')}</button>;
 }
 
 // ---------------------------------------------------------------- invite
@@ -429,8 +440,8 @@ function JoinSheet({ open, incoming, onClose, onEnv, onChanged, onJoined }: {
   const [local, setLocal] = useState('');
   const [localErr, setLocalErr] = useState<CopyKey | null>(null);
   const [busy, setBusy] = useState(false);
-  const { relay } = useDash();
-  const [joined, setJoined] = useState<{ interfaces: NetInterface[] } | null>(null);
+  const { relay, go } = useDash();
+  const [joined, setJoined] = useState<{ interfaces: NetInterface[]; settingsCorrupt: boolean } | null>(null);
   const heldRef = useRef(held);
   heldRef.current = held;
   const seq = useRef(0);
@@ -503,13 +514,14 @@ function JoinSheet({ open, incoming, onClose, onEnv, onChanged, onJoined }: {
       // the page shows the environment just joined
       onEnv(envKey(String(out.project), String(out.environment)));
       field.ripple(0.1);
-      // sync needs other-device access on this device (no team listener, no team sync)
+      // sync needs other-device access on this device (no team listener, no team sync); a damaged
+      // settings file keeps it off until it is reset on the Settings page
       const [s, i] = await Promise.all([
-        call('settings_get').catch(() => null),
+        readSettings().catch(() => null),
         call('net_interfaces').catch(() => [] as NetInterface[]),
       ]);
-      if (s && !parseListen(s.team_listen)) {
-        setJoined({ interfaces: i });
+      if (s && (s.corrupt || !parseListen(s.settings.team_listen))) {
+        setJoined({ interfaces: i, settingsCorrupt: s.corrupt });
         toast(t('toast.join.needListen'));
         announce(t('team.joined.sub'));
         onChanged();
@@ -530,9 +542,13 @@ function JoinSheet({ open, incoming, onClose, onEnv, onChanged, onJoined }: {
   if (joined) {
     return (
       <Sheet id="sheet-join" open={open} title={t('join.title')} lead={t('team.joined.sub')} onClose={onJoined} closeLabel={t('sync.later')}>
-        <ListenSetup id="join-listen" interfaces={joined.interfaces} run={relay.run}
-          onDone={() => { toast(t('toast.listen.on')); onJoined(); }}
-          onFailed={(down) => { if (down) relay.report(down); onChanged(); }} />
+        {joined.settingsCorrupt
+          ? <Callout kind="info">{t('listen.err.settings')} <ToSettings onClick={() => { onJoined(); go('settings'); }} /></Callout>
+          : (
+            <ListenSetup id="join-listen" interfaces={joined.interfaces} run={relay.run}
+              onDone={() => { toast(t('toast.listen.on')); onJoined(); }}
+              onFailed={(down) => { if (down) relay.report(down); onChanged(); }} />
+          )}
       </Sheet>
     );
   }

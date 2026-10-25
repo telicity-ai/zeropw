@@ -457,6 +457,18 @@ describe('settings and window protection', () => {
     expect((await rejection(readSettings())).reason).toBe('settings_unreadable');
   });
 
+  // pr69-frontend-flows-mock-3: the team page loads with a damaged settings file, and turning on
+  // other-device access there ended in the generic error
+  it('sends turning on other-device access with a damaged settings file to the reset, changing nothing', async () => {
+    const b = createMockBackend({ latency: 0, initialized: true, settingsCorrupt: true });
+    backend?.dispose(); backend = b; useMockBackend(b);
+    const e = await rejection(turnOnListen('100.64.1.7', 47420));
+    expect(e.reason).toBe('settings_corrupt');
+    expect(listenErrorLines(e)).toEqual([{ key: 'listen.err.settings' }]);
+    expect(t('listen.err.settings')).toContain('설정 화면에서 기본값으로 되돌려');
+    expect(await readSettings()).toEqual({ settings: null, corrupt: true });
+  });
+
   it('turns window protection on before a hold is ready and keeps it while any holder needs it', async () => {
     const b = ready();
     const h1 = holdSecureView(), h2 = holdSecureView();

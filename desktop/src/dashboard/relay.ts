@@ -77,11 +77,14 @@ export async function turnOnListen(ip: string, port: number): Promise<ServeStatu
 
 /** Why turning on other-device access failed, as sentences for one error slot. A ListenError
  *  names the address (or the relay port, when the core says that is what failed) and says
- *  whether the previous setting and the relay are back. */
+ *  whether the previous setting and the relay are back. A settings file the core cannot read
+ *  (`settings_corrupt`) stops it before anything changes and sends the user to the reset. */
 export function listenErrorLines(e: unknown): CopyLine[] {
   if (e instanceof ListenError) return listenFailureLines(e);
   const { reason, detail } = toIpcError(e);
   if (reason === 'invalid_listen') return [{ key: 'set.listen.port.err' }];
+  // the settings file is damaged: nothing was changed, and the Settings page offers to reset it
+  if (reason === 'settings_corrupt') return [{ key: 'listen.err.settings' }];
   if (reason.startsWith('serve_') || reason === 'admin_binary_missing' || reason === 'invalid_port') {
     const r = relayError(reason, detail);
     return [{ key: r.key, vars: { reason: r.reason } }];
