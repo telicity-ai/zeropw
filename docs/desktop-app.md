@@ -49,7 +49,7 @@ flowchart LR
 - 봉투에서 읽은 값은 `Zeroizing`으로 들고 다니며 명령이 끝나면 지운다.
 - 봉투가 없으면 지금과 똑같이 동작한다. 기존 출력 JSON은 바뀌지 않는다.
 
-CLI는 재인증을 받지 않지만 앱은 받아야 하는 명령(`resume`, `connection create-http`·`create-ssh`, `grant create`, `approvals approve`, `team invite`, `team remove`, `restore`)에는 숨은 전역 옵션 `--require-admin`을 함께 넘긴다. 이 옵션은 `--input-envelope`와 같이 쓸 때만 받고, 봉투 없이 쓰면 `UsageError`다. 명령을 실행하기 전에 봉투의 `admin_passphrase`를 CLI가 재인증할 때 쓰는 경로(`verify_admin`) 그대로 확인한다. 비밀번호가 틀리거나 없으면 `auth_failed` 감사 기록(`state`는 `require_admin`)을 남기고 그 오류(`admin_reauth_failed`, `passphrase_missing`)로 멈추며, 상태는 바뀌지 않는다. 감사 기록을 쓸 수 없는 상태 디렉터리에서는 확인하기 전에 거부한다. 확인을 통과하면 명령은 옵션이 없을 때와 똑같이 돌고, `incident close`처럼 원래 재인증하는 명령은 비밀번호를 한 번 더 확인한다. `--input-envelope`처럼 도움말과 사용법에는 나오지 않는다. `rust/tests/admin_input_envelope.rs`가 틀리거나 빠진 비밀번호, 맞는 비밀번호, 봉투 없이 쓴 경우, 이미 재인증하는 명령을 시험한다.
+CLI는 재인증을 받지 않지만 앱은 받아야 하는 명령(`resume`, `connection create-http`·`create-ssh`·`update --cli-program`, `grant create`, `approvals approve`, `team invite`, `team remove`, `restore`)에는 숨은 전역 옵션 `--require-admin`을 함께 넘긴다. 이 옵션은 `--input-envelope`와 같이 쓸 때만 받고, 봉투 없이 쓰면 `UsageError`다. 명령을 실행하기 전에 봉투의 `admin_passphrase`를 CLI가 재인증할 때 쓰는 경로(`verify_admin`) 그대로 확인한다. 비밀번호가 틀리거나 없으면 `auth_failed` 감사 기록(`state`는 `require_admin`)을 남기고 그 오류(`admin_reauth_failed`, `passphrase_missing`)로 멈추며, 상태는 바뀌지 않는다. 감사 기록을 쓸 수 없는 상태 디렉터리에서는 확인하기 전에 거부한다. 확인을 통과하면 명령은 옵션이 없을 때와 똑같이 돌고, `incident close`처럼 원래 재인증하는 명령은 비밀번호를 한 번 더 확인한다. `--input-envelope`처럼 도움말과 사용법에는 나오지 않는다. `rust/tests/admin_input_envelope.rs`가 틀리거나 빠진 비밀번호, 맞는 비밀번호, 봉투 없이 쓴 경우, 이미 재인증하는 명령을 시험한다.
 
 같이 읽기 전용 명령 `zeropw-admin status`를 더한다. 출력은 `stop-all`·`resume`과 같은 `{stopped, restore_pending, incident_open}`이다. 앱이 정지 상태를 바꾸지 않고 읽을 때 쓴다.
 
@@ -86,7 +86,10 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 - 시작: `zeropw-admin --state-dir D serve --listen 127.0.0.1:<port> [--team-listen IP:PORT] --quiet`, 환경은 4.1과 같다. 첫 stdout 줄의 JSON에서 `url`을 읽고 `/healthz`가 200을 줄 때까지 기다린다(60초).
 - 단일 인스턴스: 앱 데이터 폴더의 `serve.json`(pid, url, 시작 시각). 다시 켤 때는 pid가 살아 있고 `/healthz`와 `Server: zeropw-prototype` 헤더가 맞을 때만 이어 붙는다.
 - 중지: SIGTERM, 최대 25초 기다린 뒤에만 SIGKILL.
-- 감시: 코어는 2초마다 사이드카가 아직 있는지 본다. 앱이 띄운 사이드카는 자식 프로세스가 끝났는지로, 이어 붙은 사이드카는 pid로 안다. 시작이나 중지가 진행 중이면 그 차례는 건너뛴다. 사이드카가 스스로 끝났거나 누가 끝냈으면 창이 묻기 전에 `serve://status`로 꺼졌다고 알린다. 창에 마지막으로 알린 상태와 다를 때만 보낸다. 끝난 사이드카를 다시 켜지는 않는다.
+- 감시: 코어는 2초마다 사이드카가 아직 있는지 본다. 앱이 띄운 사이드카는 자식 프로세스가 끝났는지로, 이어 붙은 사이드카는 pid에 신호(`kill(pid, 0)`)를 보내 안다. 시작이나 중지가 진행 중이면 그 차례는 건너뛴다. 사이드카가 스스로 끝났거나 누가 끝냈으면 창이 묻기 전에 `serve://status`로 꺼졌다고 알린다. 창에 마지막으로 알린 상태와 다를 때만 보낸다. 끝난 사이드카를 다시 켜지는 않는다.
+  - 이어 붙은 사이드카의 부모였던 예전 앱은 이미 끝났으므로, 사이드카가 끝나면 launchd나 init이 바로 거둬 가고 다음 감시에서 신호가 실패한다. 신호에 답하는 좀비는 `ps`로만 가릴 수 있지만, `ps`를 2초마다 띄우지 않도록 감시는 15번에 한 번(30초)만 `ps`도 본다. `serve_status`, 이어 붙기, 시작, 중지는 매번 `ps`를 보고, 중지는 신호를 보내기 전에 명령줄까지 확인하므로 다시 쓰인 pid에는 신호를 보내지 않는다.
+  - 시작, 중지, 앱을 켤 때의 이어 붙기도 감시와 같은 잠금 안에서 결과를 창에 알린다. 그래서 그사이에 감시가 끼어들지 못하고, 창이 받는 상태의 순서는 실제로 일어난 순서와 같다.
+  - 감시 스레드를 띄우지 못하면 표준 오류에 남긴다. 그때 창은 물을 때만 상태를 안다.
 - 시작하다 사이드카가 끝나면 로그에 남은 CLI 오류를 돌려준다. 주소를 열지 못한 실패는 어느 설정(`gateway_port`, `team_listen`) 때문인지 알린다(§5).
 
 ### 4.3 일회용 보관소 (OneTimeStore)
@@ -101,6 +104,11 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 ### 4.4 앱 안 터미널
 
 - `portable-pty`로 사용자의 로그인 셸을 띄운다. 환경에 `ZEROPW_GATEWAY_URL`, `ZEROPW_CALLER_TOKEN`, `no_proxy=127.0.0.1,localhost`를 넣고, `PATH` 앞에 번들 바이너리 폴더를 둔다. 토큰은 키 입력으로 넣지 않으므로 화면과 셸 기록에 남지 않는다.
+- 로그인 셸은 시작 파일을 읽으며 `PATH`를 다시 짠다(macOS `/etc/zprofile`의 `path_helper`, Homebrew를 앞에 두는 `.zprofile`). 그래서 macOS 기본 셸인 zsh에서는 VS Code의 셸 통합처럼 `ZDOTDIR`을 앱 데이터 폴더의 `zsh/`(0700, 파일 0600)로 돌린다.
+  - 이 폴더의 `.zshenv`·`.zprofile`·`.zshrc`·`.zlogin`은 사용자의 같은 이름 파일을 사용자의 `ZDOTDIR`(앱이 받은 값, 없으면 `HOME`)에서 실행한다. 그 파일이 도는 동안 `ZDOTDIR`은 사용자 값이고, 사용자의 `.zshenv`가 `ZDOTDIR`을 바꾸면 다음 파일부터는 거기서 읽는다.
+  - 셸이 마지막으로 읽는 이 폴더의 파일(로그인 셸은 `.zlogin`, 사용자 파일이 `unsetopt rcs`로 그 뒤의 시작 파일을 막았으면 그 사용자 파일을 실행한 파일)이 번들 폴더를 `PATH` 맨 앞에 한 번만 다시 두고, `ZDOTDIR`을 사용자 값으로 돌려놓고(없었으면 지운다), 도우미 변수 `ZEROPW_TERMINAL_BIN`·`ZEROPW_USER_ZDOTDIR`를 지운다. 도우미 변수는 `.zshenv`가 처음부터 내보내지 않게 바꾸므로(`typeset +x`), 셸과 사용자 파일이 띄우는 프로그램에는 가지 않는다. 시스템 zshrc가 이 폴더로 잡은 기록 파일(`HISTFILE`)은 사용자 위치로 돌린다.
+  - 파일에는 비밀도 폴더 이름도 없고, 환경에는 폴더 이름만 더한다. 파일을 쓸 수 없으면 zsh도 다른 셸처럼 띄운다.
+  - zsh가 아닌 셸(bash 등)은 바꾸지 않으므로, 시작 파일이 다른 폴더를 앞에 두면 번들 폴더가 뒤로 밀린다(2026-10-22 데스크톱 E2E의 F5). 그래서 제안 명령은 번들 바이너리를 절대 경로로 부른다.
 - 다른 macOS 계정에서 실행할 때 첫 제안 명령은 `sudo --preserve-env=ZEROPW_GATEWAY_URL,ZEROPW_CALLER_TOKEN,no_proxy -u <계정> -i`다.
 - 제안 명령은 프롬프트에 입력만 해 두고 사용자가 엔터를 누르면 실행된다. 두 번째 제안은 `<번들 경로>/zeropw-agent list-connections`.
 - 출력은 Tauri 채널로 웹뷰의 xterm.js에 보낸다.
@@ -117,6 +125,7 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 
 - 상태 디렉터리: 앱 데이터 폴더의 `state/` (macOS `~/Library/Application Support/ZeroPW/state`).
 - 앱 설정 `settings.json`(0600): 중계기 포트, 팀 동기화 주소. 상태 디렉터리 안에는 쓰지 않는다.
+- `zsh/`(0700): 앱 안 터미널의 zsh 시작 파일(§4.4). 터미널을 열 때마다 내용과 권한을 맞춘다.
 - 파일 선택(키 파일, CA, 백업, `.env`)은 Rust에서 네이티브 창을 열고 경로를 불투명한 `file_token`으로만 웹뷰에 알린다.
 - 창에 끌어다 놓은 파일도 경로는 Rust에만 있다. 셸이 놓인 경로를 코어에 넘기면 코어가 일반 파일 하나만 읽어 일회용 보관소에 두고, 웹뷰에는 `envfile://dropped`로 참조와 파일 이름만 알린다(§5, §8.10).
 
@@ -181,9 +190,9 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 
 `secret_reveal`·`secret_retire`·`secret_revoke`의 `version`은 CLI가 `secret_list`·`secret_versions`에 출력한 값 그대로다. CLI는 버전을 JSON 숫자로 출력하지만 코어는 숫자와 문자열(영숫자, `-`, `_`, 64자 이하)을 모두 받아 바꾸지 않고 `--version=<값>`으로 넘긴다. 받아들일지는 CLI가 정한다.
 
-`connection_create_ssh`는 에이전트의 `exec`가 실행할 ssh의 경로 `cli_program`을 꼭 받아 `--cli-program`으로 넘긴다. ssh가 없는 SSH 연결은 `exec`가 `cli_not_supported`로 거절해 서버에 닿지 못하므로(2026-10-22 데스크톱 E2E의 F8), 코어는 이 필드가 빠진 요청을 `invalid_payload`로, 빈 값을 `cli_program_required`로 CLI를 부르기 전에 막는다. 연결 화면은 시스템 ssh(`/usr/bin/ssh`)를 미리 채워 두고 "더 보기"에서 바꾸게 한다. HTTP 연결 화면의 직접 지정처럼 `/`로 시작하는 전체 경로만 받는다. `desktop/core/tests/e2e_real_admin.rs`가 이렇게 만든 연결로 실제 `serve`와 `zeropw-agent exec`가 시험용 sshd에서 명령을 실행하는지 본다.
+`connection_create_ssh`는 에이전트의 `exec`가 실행할 ssh의 경로 `cli_program`을 꼭 받아 `--cli-program`으로 넘긴다. ssh가 없는 SSH 연결은 `exec`가 `cli_not_supported`로 거절해 서버에 닿지 못하므로(2026-10-22 데스크톱 E2E의 F8), 코어는 이 필드가 빠진 요청을 `invalid_payload`로, 빈 값을 `cli_program_required`로, 이 기기에 있는 실행 파일의 절대 경로가 아닌 값(오타, `ssh` 같은 이름만, 폴더, 실행 권한이 없는 파일)을 `cli_program_not_found`로 CLI를 부르기 전에 막는다. 오류에는 경로를 되풀이하지 않는다. 연결 화면은 시스템 ssh(`/usr/bin/ssh`)를 미리 채워 두고 "더 보기"에서 바꾸게 한다. HTTP 연결 화면의 직접 지정처럼 `/`로 시작하는 전체 경로만 받는다. `desktop/core/tests/e2e_real_admin.rs`가 이렇게 만든 연결로 실제 `serve`와 `zeropw-agent exec`가 시험용 sshd에서 명령을 실행하는지 본다.
 
-이 수정 전의 앱(v0.2.0 포함)으로 만든 SSH 연결에는 ssh가 없다. `connection_set_cli_program`은 그런 연결에 같은 이름 그대로 ssh를 넣는다(`connection update --cli-program`). 코어는 빈 값을 `cli_program_required`로 막고, 어느 연결에 넣을 수 있는지는 CLI가 정한다. SSH가 아니면 `cli_requires_ssh`, 끈 연결이면 `connection_disabled`, 이미 ssh가 있으면 `cli_already_set`이다. 넣은 ssh는 바꿀 수 없고, 바꾸려면 연결을 끄고 새로 만든다. ssh를 넣으면 연결이 넓어진 것으로 보아 그 연결에 준 권한은 모두 `stale`이 되고, 에이전트에게 권한을 다시 줘야 한다. 연결 화면은 ssh가 없는 SSH 연결의 줄에 "에이전트가 아직 못 써요"와 "ssh 경로 넣기" 버튼을 보인다. 확인 시트는 `/usr/bin/ssh`를 미리 채우고, 권한을 다시 줘야 한다는 파랑 알림과 경로를 나중에 바꿀 수 없다는 주황 알림을 단 뒤 관리 비밀번호를 받는다. 팀으로 공유한 환경에서는 CLI가 `connection.update` 커밋을 만들어 다른 기기에도 퍼진다([team-sync.md](team-sync.md) §12). `e2e_real_admin.rs`가 ssh 없이 만든 연결에서 `exec`가 `cli_not_supported`로 거절되고, ssh를 넣은 뒤 예전 권한은 `grant_stale`로 거절되며, 권한을 다시 주면 시험용 sshd에서 명령이 도는지 본다.
+이 수정 전의 앱(v0.2.0 포함)으로 만든 SSH 연결에는 ssh가 없다. `connection_set_cli_program`은 그런 연결에 같은 이름 그대로 ssh를 넣는다(`connection update --cli-program`). 코어는 빈 값을 `cli_program_required`로, 이 기기에 없는 실행 파일을 `cli_program_not_found`로 막는다. 넣은 경로는 바꿀 수 없어서 오타 하나로 연결 이름과 권한을 잃기 때문이다. 팀으로 공유한 환경에서는 같은 경로가 다른 기기에도 쓰이는데, 그 기기에 파일이 있는지는 이 확인으로 알 수 없다. 어느 연결에 넣을 수 있는지는 CLI가 정한다. SSH가 아니면 `cli_requires_ssh`, 끈 연결이면 `connection_disabled`, 이미 ssh가 있으면 `cli_already_set`이다. 넣은 ssh는 바꿀 수 없고, 바꾸려면 연결을 끄고 새로 만든다. ssh를 넣으면 연결이 넓어진 것으로 보아 그 연결에 준 권한은 모두 `stale`이 되고, 에이전트에게 권한을 다시 줘야 한다. 연결 화면은 ssh가 없는 SSH 연결의 줄에 "에이전트가 아직 못 써요"와 "ssh 경로 넣기" 버튼을 보인다. 확인 시트는 `/usr/bin/ssh`를 미리 채우고, 권한을 다시 줘야 한다는 파랑 알림과 경로를 나중에 바꿀 수 없다는 주황 알림을 단 뒤 관리 비밀번호를 받는다. 팀으로 공유한 환경에서는 CLI가 `connection.update` 커밋을 만들어 다른 기기에도 퍼진다([team-sync.md](team-sync.md) §12). `e2e_real_admin.rs`가 ssh 없이 만든 연결에서 `exec`가 `cli_not_supported`로 거절되고, ssh를 넣은 뒤 예전 권한은 `grant_stale`로 거절되며, 권한을 다시 주면 시험용 sshd에서 명령이 도는지 본다.
 
 코어가 보내는 이벤트는 `invite://preview`, `control://changed`, `serve://status`, `envfile://hover`(`{over}`: 파일을 창 위로 끌고 있는지), `envfile://dropped`(`{import_ref, name}` 또는 `{error}`)다. `serve://status`는 시작·중지 때와 사이드카가 스스로 끝났을 때(§4.2) 보낸다. `control://changed`는 앱에서 한 `stop_all`·`resume`만 보낸다. 계약의 `audit://records`는 자리만 있고 코어는 아직 보내지 않는다. 대시보드는 창이 보이는 동안 `audit_tail`을 4초마다 다시 불러 새 기록을 안다. 새 기록이 오면 `control_get`으로 정지·사고·복원 상태를 다시 읽는다. 중계기가 스스로 연 사고와 전체 정지, 앱 안 터미널에서 실행한 명령도 기록을 남기므로 이렇게 알게 된다. 상태가 바뀌었으면 창이 다시 앞에 올 때처럼 모든 화면을 다시 읽는다.
 

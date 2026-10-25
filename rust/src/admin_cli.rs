@@ -2010,13 +2010,21 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             let mut out = json!({"projects":ctx.projects.list()?.into_iter().map(|p| json!({"name":p.name,"environments":p.environments,"created_at":p.created_at})).collect::<Vec<_>>()});
             // A joined environment lives only in the team mapping, never in
             // `projects.json`; list every mapping so it can be found by its
-            // local name. Without one the output is unchanged.
-            let team = crate::team::sync::env_mappings(ctx.state)?;
-            if !team.is_empty() {
-                out["team_environments"] = team
-                    .into_iter()
-                    .map(|(env_id, project, environment)| json!({"project":project,"environment":environment,"env_id":env_id}))
-                    .collect();
+            // local name. Without one the output is unchanged. A damaged
+            // mapping fails only the team features: the projects still list,
+            // with `team_environments_error` in place of the team list.
+            match crate::team::sync::env_mappings(ctx.state) {
+                Ok(team) if team.is_empty() => {}
+                Ok(team) => {
+                    out["team_environments"] = team
+                        .into_iter()
+                        .map(|(env_id, project, environment)| json!({"project":project,"environment":environment,"env_id":env_id}))
+                        .collect();
+                }
+                Err(error) if error.reason == "state_corrupt" => {
+                    out["team_environments_error"] = json!("state_corrupt");
+                }
+                Err(error) => return Err(error),
             }
             Ok(out)
         }

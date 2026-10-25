@@ -258,6 +258,65 @@ fn team_share_cli_reports_not_shared_connection() {
     assert_eq!(raw["gh"]["shared_env"], payload["env_id"]);
 }
 
+/// Under the desktop app's umask 022 every directory the CLI makes in the
+/// state directory is 0700, the ones a deep write makes on its way included:
+/// `team share` writes `team/<env>/commits/<fp>/<seq>.json` into a state
+/// directory that has no `team/<env>` yet.
+#[test]
+fn team_share_under_umask_022_keeps_every_state_directory_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let case = Case::new();
+    let run = |args: &[&str]| case.admin.cmd(args).umask("022").ok();
+    run(&["init"]);
+    run(&["project", "create", "demo"]);
+    case.admin
+        .cmd(&[
+            "secret",
+            "put",
+            "--id",
+            "gh-token",
+            "--kind",
+            "api_key",
+            "--project",
+            "demo",
+            "--environment",
+            "dev",
+            "--stdin",
+        ])
+        .stdin(format!("{SYNTHETIC}\n").as_bytes())
+        .umask("022")
+        .ok();
+    let shared = run(&["team", "share", "--project", "demo", "--environment", "dev"]);
+    let env_id = shared["env_id"].as_str().unwrap();
+
+    let state = &case.admin.state;
+    let mut pending = vec![state.clone()];
+    let mut modes = Vec::new();
+    while let Some(dir) = pending.pop() {
+        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        modes.push((dir.strip_prefix(state).unwrap().to_path_buf(), mode));
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() {
+                pending.push(entry.path());
+            }
+        }
+    }
+    let commits = std::path::Path::new("team").join(env_id).join("commits");
+    assert!(
+        modes
+            .iter()
+            .any(|(dir, _)| dir.parent() == Some(commits.as_path())),
+        "no commit directory under {commits:?}: {modes:?}"
+    );
+    let open: Vec<_> = modes
+        .iter()
+        .filter(|(_, mode)| *mode != 0o700)
+        .map(|(dir, mode)| format!("{} {mode:o}", dir.display()))
+        .collect();
+    assert!(open.is_empty(), "not 0700: {open:?}");
+}
+
 #[test]
 fn team_share_status_members_log_show() {
     let case = Case::new();

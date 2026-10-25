@@ -6,6 +6,7 @@
 //!   settings.json        0600  app settings, never inside state/
 //!   serve.json           0600  pid file of the serve sidecar
 //!   serve.log            0600  serve's stderr
+//!   zsh/                 0700  the in-app terminal's zsh startup files (0600), no secrets
 //! ```
 
 use std::ffi::OsString;
@@ -50,6 +51,11 @@ impl AppPaths {
 
     pub fn serve_log_file(&self) -> PathBuf {
         self.app_data_dir.join("serve.log")
+    }
+
+    /// `ZDOTDIR` of the in-app terminal's zsh (docs/desktop-app.md §4.4).
+    pub fn zsh_dir(&self) -> PathBuf {
+        self.app_data_dir.join("zsh")
     }
 
     pub fn admin_bin(&self) -> PathBuf {

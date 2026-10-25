@@ -500,15 +500,26 @@ pub(crate) fn path_mkdir(
     parents: bool,
     exist_ok: bool,
 ) -> std::io::Result<()> {
+    mkdir_with_parents(path, mode, parents.then_some(0o777), exist_ok)
+}
+
+/// [`path_mkdir`] with the mode of missing parents given: `None` is
+/// `parents=False`.
+fn mkdir_with_parents(
+    path: &Path,
+    mode: u32,
+    parent_mode: Option<u32>,
+    exist_ok: bool,
+) -> std::io::Result<()> {
     match DirBuilder::new().mode(mode).create(path) {
         Ok(()) => Ok(()),
         Err(error) if error.raw_os_error() == Some(libc::ENOENT) => {
             let parent = pathlib_parent(path);
-            if !parents || parent == path {
+            let Some(parent_mode) = parent_mode.filter(|_| parent != path) else {
                 return Err(error);
-            }
-            path_mkdir(&parent, 0o777, true, true)?;
-            path_mkdir(path, mode, false, exist_ok)
+            };
+            mkdir_with_parents(&parent, parent_mode, Some(parent_mode), true)?;
+            mkdir_with_parents(path, mode, None, exist_ok)
         }
         Err(error) => {
             if !exist_ok || !path.is_dir() {
@@ -521,9 +532,14 @@ pub(crate) fn path_mkdir(
 }
 
 /// `target.parent.mkdir(mode=DIR_MODE, parents=True, exist_ok=True)`, the
-/// uncaught first step of `write_json`, `append_line` and `write_bytes`.
+/// uncaught first step of `write_json`, `append_line` and `write_bytes`,
+/// except that every directory it creates gets `DIR_MODE`, not only the
+/// last: pathlib's `0o777` for the others would leave a deep write such as
+/// `team/<env>/commits/<fp>/<seq>.json` with `team/<env>` and `commits` at
+/// whatever the umask allows (0755 under the desktop app's 022).
 fn mkdir_parent(target: &Path) -> Result<(), Error> {
-    path_mkdir(&pathlib_parent(target), DIR_MODE, true, true).map_err(|e| uncaught_os_error(&e))
+    mkdir_with_parents(&pathlib_parent(target), DIR_MODE, Some(DIR_MODE), true)
+        .map_err(|e| uncaught_os_error(&e))
 }
 
 /// `os.chmod(path, mode)`, uncaught in `StateDir.create`.
