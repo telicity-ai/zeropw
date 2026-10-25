@@ -5,7 +5,7 @@ import {
   addressChoices, blockText, countOf, declarableScopes, declareOutcome, defaultListenIp, defaultMethodStates, envPairs, grantState, groupSecrets, interfaceLabel, inviteFraction, isBasicUser,
   isCliPath, isHeaderName, isHostKey, isPlainText, isSshHost, isSshUser, keyChoices, lineText, liveGrants, methodsPayload, msLeft,
   newRecordCount, nextMethodState, olderVersionCount, openIncident, openIncidentScope, parseListen, parseMaxUses, parsePathPrefixes, parsePort, pendingApprovals, publicKeyOf,
-  recordSig, relayBlocked, relayPill, relayState, runtimeStopsAll, sameControl, settingsFields, shortHash, sortedVersions, splitEnv, SSH_PROGRAM, summarizeConnection,
+  recordSig, relayBlocked, relayPill, relayState, runtimeStopsAll, sameControl, settingsFields, shortHash, shownChoice, sortedVersions, splitEnv, SSH_PROGRAM, summarizeConnection,
   teamEnvPairs, teamEnvsUnread, valueText, writeConsequences,
 } from '../src/lib/dash';
 
@@ -36,6 +36,19 @@ describe('projects and environments', () => {
     // an older CLI prints no team list; a malformed entry is skipped
     expect(teamEnvPairs({ projects })).toEqual(envPairs(projects));
     expect(teamEnvPairs({ projects, team_environments: [{ project: 7, environment: 'x', env_id: 'e' } as unknown as TeamEnvironment] })).toEqual(envPairs(projects));
+  });
+
+  // pr69-frontend-flows-mock-4: the team page kept loading a joined environment the picker no
+  // longer listed (its mapping could not be read), while the picker showed the first one
+  it('loads the environment the picker shows, the first one when the chosen one left the list', () => {
+    const team: TeamEnvironment[] = [{ project: 'team-abcdefgh', environment: 'shared', env_id: 'joined' }];
+    const joined = teamEnvPairs({ projects, team_environments: team }).map((p) => p.key);
+    const unread = teamEnvPairs({ projects }).map((p) => p.key);
+    expect(shownChoice('team-abcdefgh/shared', joined)).toBe('team-abcdefgh/shared');
+    expect(shownChoice('team-abcdefgh/shared', unread)).toBe('demo/dev');
+    expect(shownChoice('', unread)).toBe('demo/dev');
+    expect(shownChoice('shop/prod', unread)).toBe('shop/prod');
+    expect(shownChoice('team-abcdefgh/shared', [])).toBe('');
   });
 
   it('notices a project list that could not read the team environments', () => {

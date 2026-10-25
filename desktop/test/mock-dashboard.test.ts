@@ -147,6 +147,17 @@ describe('connections', () => {
     expect([typo.error, typo.reason]).toEqual(['InvalidInput', 'cli_program_not_found']);
     expect(sshProgramError(typo.reason)).toEqual({ field: 'conn.cli.err.notFound' });
     expect((await call('connection_list')).connections.some((c) => c.id === 'box')).toBe(false);
+    // pr69-frontend-flows-mock-5: the core's order, as the app answers: an empty passphrase, no
+    // host key, an empty path, a path with nothing there, and only then the CLI's passphrase check
+    const order = async (over: Partial<typeof ssh & { cli_program: string }>) => {
+      const e = await rejection(call('connection_create_ssh', { ...ssh, cli_program: SSH_PROGRAM, ...over }));
+      return [e.error, e.reason];
+    };
+    expect(await order({ admin_passphrase: '', host_keys: [], cli_program: '' })).toEqual(['AuthFailed', 'passphrase_missing']);
+    expect(await order({ admin_passphrase: 'wrong', host_keys: [], cli_program: '' })).toEqual(['InvalidInput', 'host_key_required']);
+    expect(await order({ admin_passphrase: 'wrong', cli_program: '' })).toEqual(['InvalidInput', 'cli_program_required']);
+    expect(await order({ admin_passphrase: 'wrong', cli_program: '/usr/bin/sshh' })).toEqual(['InvalidInput', 'cli_program_not_found']);
+    expect(await order({ admin_passphrase: 'wrong', id: 'Not A Name' })).toEqual(['AuthFailed', 'bad_passphrase']);
 
     const c = await call('connection_create_ssh', { ...ssh, cli_program: SSH_PROGRAM });
     expect(c.cli).toEqual({ program: '/usr/bin/ssh', kind: 'ssh', base_url_env: 'ZEROPW_API_BASE_URL', extra_env: {} });
@@ -356,9 +367,38 @@ describe('team', () => {
     expect(listed.projects).toEqual(before.projects);
     expect(listed.team_environments).toEqual([{ project: 'team-x', environment: 'shared', env_id: preview.env_id }]);
     expect(teamEnvPairs(listed).map((p) => p.key)).toContain('team-x/shared');
-    // keys go into it through the team, as the CLI's shared-environment branch does
-    await call('secret_put', { id: 'team-key', kind: 'api_key', project: 'team-x', environment: 'shared', source: { typed: 'synthetic-team-value' } });
     expect((await rejection(call('secret_put', { id: 'k2', kind: 'api_key', project: 'team-y', environment: 'shared', source: { typed: 'v' } }))).reason).toBe('project_unknown');
+  });
+
+  // pr69-frontend-flows-mock-2: the team commit behind a key or a connection in a team environment
+  // is refused to a device that is not an admin of that team (rust/src/team/membership.rs
+  // `require_editing_standing`); the mock let any role write
+  it('writes into a joined environment only as an admin of that team, as the CLI does', async () => {
+    ready();
+    const join = async (n: number, project: string) => {
+      const { ref, preview } = await call('team_invite_preview', { text: 'zeropw://join#' + 'abcdefghijklmnopqrstuvwxyz234567'.repeat(n) });
+      await call('team_join', { ref, project, environment: 'shared' });
+      return preview.role;
+    };
+    expect(await join(4, 'team-u')).toBe('user');
+    expect(await join(5, 'team-a')).toBe('admin');
+    const put = (project: string) => call('secret_put', { id: 'team-key', kind: 'api_key', project, environment: 'shared', source: { typed: 'synthetic-team-value' } });
+    const http = (project: string) => call('connection_create_http', {
+      id: 'team-api', project, environment: 'shared', service: 'team-api', secret_id: 'team-key', target: 'https://api.example.com', auth: 'bearer',
+      methods: ['GET'], confirm_methods: [], path_prefixes: [], allow_private_network: false, admin_passphrase: PASS,
+    });
+    const ssh = (project: string) => call('connection_create_ssh', {
+      id: 'team-box', project, environment: 'shared', service: 'team-box', secret_id: 'team-key', host: 'git.example.com', port: 22, username: 'git',
+      host_keys: [HOST_KEY], cli_program: SSH_PROGRAM, admin_passphrase: PASS,
+    });
+    for (const write of [put, http, ssh]) {
+      const refused = await rejection(write('team-u'));
+      expect([refused.error, refused.reason]).toEqual(['PolicyDenied', 'not_admin']);
+    }
+    expect((await call('secret_list', {})).secrets.some((s) => s.id === 'team-key')).toBe(false);
+    // as one of its admins, keys and connections go into it through the team
+    await put('team-a');
+    expect((await http('team-a')).project).toBe('team-a');
   });
 
   // pr4-state-display-1: a damaged team mapping no longer fails project list, which the keys,
@@ -415,6 +455,18 @@ describe('settings and window protection', () => {
     // any other failure to read the settings is not offered a reset
     b.failNext('settings_get', { error: 'IoError', reason: 'settings_unreadable' });
     expect((await rejection(readSettings())).reason).toBe('settings_unreadable');
+  });
+
+  // pr69-frontend-flows-mock-3: the team page loads with a damaged settings file, and turning on
+  // other-device access there ended in the generic error
+  it('sends turning on other-device access with a damaged settings file to the reset, changing nothing', async () => {
+    const b = createMockBackend({ latency: 0, initialized: true, settingsCorrupt: true });
+    backend?.dispose(); backend = b; useMockBackend(b);
+    const e = await rejection(turnOnListen('100.64.1.7', 47420));
+    expect(e.reason).toBe('settings_corrupt');
+    expect(listenErrorLines(e)).toEqual([{ key: 'listen.err.settings' }]);
+    expect(t('listen.err.settings')).toContain('설정 화면에서 기본값으로 되돌려');
+    expect(await readSettings()).toEqual({ settings: null, corrupt: true });
   });
 
   it('turns window protection on before a hold is ready and keeps it while any holder needs it', async () => {

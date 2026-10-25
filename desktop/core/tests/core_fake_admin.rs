@@ -789,8 +789,8 @@ fn ssh_input(cli_program: &str) -> SshConnectionIn {
 fn ssh_connection_repeats_host_keys_and_names_its_ssh() {
     let fx = Fixture::new();
     let core = core(&fx);
-    core.connection_create_ssh(ssh_input("/usr/bin/ssh"))
-        .unwrap();
+    let ssh = fx.synthetic_ssh();
+    core.connection_create_ssh(ssh_input(&ssh)).unwrap();
     assert_eq!(
         fx.last("connection_create-ssh").args(),
         [
@@ -806,7 +806,7 @@ fn ssh_connection_repeats_host_keys_and_names_its_ssh() {
             "--username=deploy",
             "--host-key=ssh-ed25519 AAAAone",
             "--host-key=ssh-ed25519 AAAAtwo",
-            "--cli-program=/usr/bin/ssh",
+            &format!("--cli-program={ssh}"),
         ]
     );
 }
@@ -848,8 +848,8 @@ fn ssh_program_is_given_through_connection_update_behind_the_admin_password() {
         cli_program: program.into(),
         admin_passphrase: pass(),
     };
-    core.connection_set_cli_program(input("/usr/bin/ssh"))
-        .unwrap();
+    let ssh = fx.synthetic_ssh();
+    core.connection_set_cli_program(input(&ssh)).unwrap();
     let call = fx.last("connection_update");
     assert!(call.requires_admin());
     assert_eq!(
@@ -858,7 +858,7 @@ fn ssh_program_is_given_through_connection_update_behind_the_admin_password() {
             "connection",
             "update",
             "--id=prod",
-            "--cli-program=/usr/bin/ssh"
+            &format!("--cli-program={ssh}")
         ]
     );
     assert_eq!(call.stdin_json(), json!({"admin_passphrase": ADMIN_PASS}));
@@ -871,7 +871,7 @@ fn ssh_program_is_given_through_connection_update_behind_the_admin_password() {
     let e = core
         .connection_set_cli_program(CliProgramIn {
             admin_passphrase: SecretString::from(""),
-            ..input("/usr/bin/ssh")
+            ..input(&ssh)
         })
         .unwrap_err();
     assert_eq!(
@@ -942,11 +942,13 @@ fn an_ssh_path_that_names_no_executable_here_is_refused_before_the_cli() {
     assert_eq!(fx.count("connection_create-ssh"), 0);
     assert_eq!(fx.count("connection_update"), 0);
 
-    // A real executable passes, also through a symlink, and reaches the CLI unchanged.
+    // A real executable passes, also through a symlink, and reaches the CLI unchanged: the
+    // host's own ssh where it has one, and the shell every host has.
     let link = fx.dir.path().join("ssh-link");
     std::os::unix::fs::symlink("/bin/sh", &link).unwrap();
     let link = link.to_string_lossy().into_owned();
-    for good in ["/bin/sh", link.as_str()] {
+    let host_ssh = Some("/usr/bin/ssh").filter(|p| Path::new(p).is_file());
+    for good in host_ssh.into_iter().chain(["/bin/sh", link.as_str()]) {
         core.connection_create_ssh(ssh_input(good)).unwrap();
         let create = fx.last("connection_create-ssh");
         assert!(

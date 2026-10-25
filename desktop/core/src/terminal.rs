@@ -9,9 +9,9 @@
 //!   first) rebuild `PATH` after that. For zsh, the macOS default, `ZDOTDIR` points at the
 //!   app's own startup files ([`TerminalManager::with_zsh_dir`]), as VS Code's shell
 //!   integration does: each runs the user's file of the same name, and the last ones put the
-//!   bundle folder first again and give `ZDOTDIR` back to the user. Other shells keep the
-//!   order their startup files leave, which is why the suggested commands name the bundled
-//!   binaries by absolute path.
+//!   bundle folder first again and give `ZDOTDIR` back to the user. Other shells, and a zsh
+//!   started again inside the session (tmux, `zsh -l`), keep the order their startup files
+//!   leave, which is why the suggested commands name the bundled binaries by absolute path.
 //! - The rest of the environment is an allowlist taken from the app process (`HOME`, `USER`,
 //!   locale, …); anything else, including any `ZEROPW_*` variable, is dropped.
 //! - Suggested commands are returned for the UI to place at the prompt; nothing runs until the
@@ -311,7 +311,9 @@ fi
 /// Run the user's own startup file `@FILE@` with `ZDOTDIR` as the user has it (unset when
 /// they have none), note the user's `ZDOTDIR` afterwards (a `.zshenv` often sets it), then
 /// point zsh back here for its next file. Top level, not a function, so that the user's
-/// `typeset` stays global.
+/// `typeset` stays global. Inside the user's file `$0` is that file's path, not `-zsh`
+/// (`FUNCTION_ARGZERO`); turning the option off around the `source` would also change `$0`
+/// for every script and function the file runs, so it stays on (docs/desktop-app.md §4.4).
 const ZSH_USER_FILE: &str = r#"if (( ${+ZEROPW_USER_ZDOTDIR} )); then
   ZDOTDIR=$ZEROPW_USER_ZDOTDIR
 else
@@ -778,7 +780,8 @@ impl TerminalManager {
     /// When the shell is zsh, write the app's startup files into `dir` (an app-private folder,
     /// 0700) and point `ZDOTDIR` at them, so that the bundle folder is first on `PATH` once
     /// the user's own startup files have run. Without it, or when the files cannot be
-    /// written, zsh starts like any other shell.
+    /// written, zsh starts like any other shell; in the second case the core says so on
+    /// stderr.
     pub fn with_zsh_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.zsh_dir = Some(dir.into());
         self
@@ -814,7 +817,13 @@ impl TerminalManager {
             let _guard = self.zsh_write.lock().unwrap_or_else(|e| e.into_inner());
             write_zsh_startup(dir)
         };
-        if written.is_err() {
+        if let Err(e) = written {
+            eprintln!(
+                "zeropw: the terminal's zsh startup files could not be written ({:?}): zsh \
+                 starts without them, and its own startup files may put another folder before \
+                 the bundle folder on PATH",
+                e.kind()
+            );
             return;
         }
         cmd.env("ZDOTDIR", dir);

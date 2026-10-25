@@ -153,6 +153,17 @@ impl Fixture {
     pub fn state_dir_arg(&self) -> String {
         format!("--state-dir={}", self.paths.state_dir().display())
     }
+
+    /// A synthetic executable named `ssh` in the fixture folder. The core takes an ssh path
+    /// only when it names an executable on this machine, and the fake CLI never runs it, so
+    /// the tests need no OpenSSH on the host.
+    pub fn synthetic_ssh(&self) -> String {
+        let ssh = self.dir.path().join("tools/ssh");
+        fs::create_dir_all(ssh.parent().unwrap()).unwrap();
+        fs::write(&ssh, "#!/bin/sh\nexit 1\n").unwrap();
+        fs::set_permissions(&ssh, fs::Permissions::from_mode(0o755)).unwrap();
+        ssh.to_string_lossy().into_owned()
+    }
 }
 
 /// A loopback server answering every request like zeropw serve's `/healthz`.

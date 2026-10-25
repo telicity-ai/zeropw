@@ -6,6 +6,7 @@ import { call, outputChannel } from '../ipc/client';
 import { useApp } from './context';
 import { fontReady } from './fonts';
 import { TerminalInput } from './terminalInput';
+import { TerminalSize } from './terminalSize';
 
 const THEME = {
   background: '#05050a', foreground: '#bfbfcc', cursor: '#8fb0ff', cursorAccent: '#05050a',
@@ -43,7 +44,6 @@ export function AppTerminal({ domId, name, source, onOpened, onVerified, onFaile
   const { motionOn, toast, announce } = useApp();
   const host = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
-  const idRef = useRef<string | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [used, setUsed] = useState<Set<number>>(new Set());
   const [pending, setPending] = useState<number | null>(null);
@@ -98,11 +98,17 @@ export function AppTerminal({ domId, name, source, onOpened, onVerified, onFaile
     const fit = new FitAddon();
     term.loadAddon(fit);
     termRef.current = term;
+    // the PTY is sized once the core opened the terminal and xterm is open and fitted (./terminalSize.ts)
+    const size = new TerminalSize(
+      (terminalId, cols, rows) => { call('terminal_resize', { terminal_id: terminalId, cols, rows }).catch(() => undefined); },
+      () => ({ cols: term.cols, rows: term.rows }),
+    );
     // output that arrives first is kept by xterm and drawn when it opens
     void fontReady(typeof document === 'undefined' ? undefined : document.fonts, FONT, FONT_WAIT_MS).then(() => {
       if (disposed) return;
       term.open(el);
       try { fit.fit(); } catch { /* not laid out yet */ }
+      size.fitted();
       // focus asked for before the terminal opened (focusTerminalIn)
       const root = el.closest<HTMLElement>('[data-focus-pending]');
       if (root) { root.removeAttribute('data-focus-pending'); term.focus(); }
@@ -130,10 +136,7 @@ export function AppTerminal({ domId, name, source, onOpened, onVerified, onFaile
       }
     };
     const sub = term.onData((d) => { write(d); if (d.includes('\r')) setPending(null); });
-    const subR = term.onResize(({ cols, rows }) => {
-      const id = idRef.current;
-      if (id) call('terminal_resize', { terminal_id: id, cols, rows }).catch(() => undefined);
-    });
+    const subR = term.onResize(() => size.resized());
 
     const channel = outputChannel(onData);
     const opened = source.kind === 'open'
@@ -142,11 +145,10 @@ export function AppTerminal({ domId, name, source, onOpened, onVerified, onFaile
     opened.then(
       (r) => {
         if (disposed) return;   // detached before the core answered; the shell keeps running
-        idRef.current = r.terminal_id;
         input.current = inputFor(r.terminal_id);
         list = r.suggestions.slice(0, 4);
         setSuggestions(list);
-        call('terminal_resize', { terminal_id: r.terminal_id, cols: term.cols, rows: term.rows }).catch(() => undefined);
+        size.opened(r.terminal_id);
         if (!firstOutput) { if (quiet) clearTimeout(quiet); quiet = setTimeout(typeFirst, 250); }
         cb.current.onOpened?.(r.terminal_id);
       },
@@ -159,7 +161,7 @@ export function AppTerminal({ domId, name, source, onOpened, onVerified, onFaile
       disposed = true;
       if (quiet) clearTimeout(quiet);
       ro?.disconnect(); sub.dispose(); subR.dispose();
-      idRef.current = null;
+      size.dispose();
       input.current?.dispose(); input.current = null;
       if (droppedTimer.current) clearTimeout(droppedTimer.current);
       if (tooLargeTimer.current) clearTimeout(tooLargeTimer.current);

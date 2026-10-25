@@ -1,9 +1,10 @@
 // Usage records and alerts as the record lists show them (DESIGN.md §6.2: plain Korean, no
 // internal names). The event, alert, result and reason codes the CLI writes map to short copy:
 // every event in rust/src/audit.rs `EVENTS`, every alert `maybe_alert` writes, every result, and
-// the reasons the relay, the SSH signer and an agent's commands record (denials, failed checks,
-// near-exposures) with the most common others. The agent and connection
-// names stay as they are. Anything else (a code missing here, the CLI's English `detail`, the
+// the reasons the relay and its policy, the SSH signer and an agent's commands and runs record
+// (denials, failed checks, near-exposures, why a run ended) with the most common others. The agent and connection
+// names stay as they are; the caller `admin` is called the administrator only on a record the
+// administrator's CLI writes, since an agent may be named `admin` too. Anything else (a code missing here, the CLI's English `detail`, the
 // other fields) stays visible as the core wrote it, on a secondary `key=value` line. Records
 // never contain values (rust/src/audit.rs); this reads no field the lists did not show before.
 
@@ -71,20 +72,28 @@ const REASON: Record<string, CopyKey | null> = {
   credential_unavailable: 'log.why.credential_unavailable', local_id_conflict: 'log.why.local_id_conflict',
   member_removed_rotation_recommended: 'log.why.member_removed_rotation_recommended',
   cli_env_contains_credential: 'log.why.cli_env_contains_credential',
-  // the service behind an API connection and a repeated request (rust/src/gateway.rs)
+  // the service behind an API connection, a repeated request, a request or a key the relay
+  // cannot send (rust/src/gateway.rs)
   upstream_unreachable: 'log.why.upstream_unreachable', upstream_connection_lost: 'log.why.upstream_connection_lost',
-  upstream_protocol_error: 'log.why.upstream_protocol_error', response_too_large: 'log.why.response_too_large',
+  upstream_protocol_error: 'log.why.upstream_protocol_error', upstream_timeout: 'log.why.upstream_timeout',
+  response_too_large: 'log.why.response_too_large', response_encoding_unsupported: 'log.why.response_encoding_unsupported',
   ca_file_unavailable: 'log.why.ca_file_unavailable', unsupported_auth_mode: 'log.why.unsupported_auth_mode',
   request_in_flight: 'log.why.request_in_flight', request_id_reused: 'log.why.request_id_reused',
-  outcome_uncertain: 'log.why.outcome_uncertain', audit_unavailable: 'log.why.audit_unavailable',
-  // a command an agent runs (rust/src/tools.rs `exec`, rust/src/runs.rs); a cancelled run's
-  // reason repeats its result
+  outcome_uncertain: 'log.why.outcome_uncertain', replay_body_unavailable: 'log.why.replay_body_unavailable',
+  audit_unavailable: 'log.why.audit_unavailable', invalid_path: 'log.why.malformed_request', invalid_method: 'log.why.malformed_request',
+  invalid_request_id: 'log.why.malformed_request', invalid_header_value: 'log.why.malformed_request',
+  self_referential_credential: 'log.why.self_referential_credential', credential_not_text: 'log.why.credential_header_unsafe',
+  credential_header_unsafe: 'log.why.credential_header_unsafe',
+  // a command an agent runs (rust/src/tools.rs `exec`, rust/src/runs.rs) and why a run ended or was
+  // cancelled; a cancelled run's reason may repeat its result
   policy_denied: 'log.why.policy_denied', cli_not_supported: 'log.why.cli_not_supported',
   cli_program_missing: 'log.why.cli_program_missing', cli_kind_unsupported: 'log.why.cli_kind_unsupported',
   ssh_signer_unavailable: 'log.why.ssh_signer_unavailable', public_url_unset: 'log.why.public_url_unset',
   exec_setup_failed: 'log.why.exec_setup_failed', run_dir_unset: 'log.why.exec_setup_failed', runs_not_installed: 'log.why.exec_setup_failed',
   cli_env_conflict: 'log.why.cli_env_conflict', ssh_public_key_unavailable: 'log.why.ssh_public_key_unavailable',
-  connection_changed: 'log.why.connection_changed', cancelled: null,
+  connection_changed: 'log.why.connection_changed', spawn_failed: 'log.why.spawn_failed', timeout: 'log.why.timeout',
+  internal_error: 'log.why.internal_error', cancelled_by_caller: 'log.why.cancelled_by_caller',
+  incident_lockdown: 'log.why.incident_lockdown', shutdown: 'log.why.shutdown', cancelled: null,
   // the SSH signer (rust/src/signer.rs): the agent protocol's own refusals
   agent_forwarding_not_allowed: 'log.why.agent_forwarding_not_allowed', host_key_unsupported: 'log.why.host_key_unsupported',
   host_signature_invalid: 'log.why.host_signature_invalid', host_signature_malformed: 'log.why.host_signature_invalid',
@@ -110,6 +119,27 @@ const REASON: Record<string, CopyKey | null> = {
 };
 
 const SCOPE: Record<string, CopyKey> = { principal: 'inc.scope.principal', runtime: 'inc.scope.runtime', all: 'inc.scope.all' };
+
+/** The events the administrator's CLI records with the caller `admin` (rust/src/admin_cli.rs,
+ *  rust/src/team/membership.rs), and the reveal, which only the administrator can do. The relay,
+ *  the SSH signer, an agent's commands and the server's token check write the agent's own id as
+ *  the caller, and an agent may be named `admin` (rust/src/projects.rs `validate_name`), so on
+ *  their events `admin` is a name. */
+const ADMIN_EVENTS = new Set([
+  'project_create', 'principal_create', 'principal_disable', 'secret_put', 'secret_import', 'secret_reveal',
+  'connection_create', 'connection_update', 'connection_disable', 'connection_switch_credential',
+  'grant_create', 'grant_revoke', 'grant_regrant', 'stop_all', 'resume', 'approval_grant', 'rotation', 'restore_ack',
+  'auth_failed', 'team_share', 'team_invite_create', 'team_invite_revoke', 'team_join', 'team_member_remove',
+  'team_dek_rotate', 'team_fact_apply',
+]);
+/** An `auth_failed` the administrator's password checks write; the server's token check writes
+ *  one with a caller only for a disabled agent (`principal_disabled`, rust/src/server.rs). */
+const ADMIN_AUTH = new Set(['admin_reauth_failed', 'admin_reauth_stale', 'passphrase_missing', 'recovery_passphrase_invalid']);
+
+/** Whether the record says the administrator acted, not an agent named `admin`. */
+const byAdmin = (rec: AuditRecord): boolean =>
+  rec.caller === 'admin' && typeof rec.event === 'string' && ADMIN_EVENTS.has(rec.event)
+  && (rec.event !== 'auth_failed' || (typeof rec.reason === 'string' && ADMIN_AUTH.has(rec.reason)));
 
 /** The fixed English `detail` of the alerts rust/src/audit.rs writes: the alert and its reason
  *  already say it. */
@@ -178,7 +208,7 @@ export function recordView(rec: AuditRecord, kind: 'audit' | 'alert'): RecordVie
   }
 
   const caller = valueText(rec.caller);
-  if (caller) meta.push(caller === 'admin' ? t('log.admin') : caller);
+  if (caller) meta.push(byAdmin(rec) ? t('log.admin') : caller);
   const conn = valueText(rec.connection);
   if (conn) meta.push(conn);
 

@@ -5,6 +5,7 @@ import type { Commands, EnvFileRef, SecretKind, SecretSource, SecretView } from 
 import { groupSecrets, olderVersionCount, publicKeyOf, REVEAL_SECONDS, sortedVersions, splitEnv, type VersionId, teamEnvPairs, type EnvPair } from '../lib/dash';
 import { dropErrorKey } from '../lib/envimport';
 import { shortTime } from '../lib/format';
+import { teamWriteErrorKey } from '../lib/reasons';
 import { DEFAULT_ENVIRONMENTS, isValidName } from '../lib/validators';
 import { useApp } from '../ui/context';
 import { PassField, SelectField, TextField } from '../ui/fields';
@@ -198,7 +199,10 @@ export function AddKeySheet({ open, data, pairs, taken, onClose, onSaved }: {
       else onClose();
     } catch (e) {
       const r = toIpcError(e).reason;
-      if (r === 'invalid_secret_id') { setErrs({ id: 'proj.err.name' }); idRef.current?.focus(); }
+      // a team environment this device may not write to (not one of its admins)
+      const team = teamWriteErrorKey(r);
+      if (team) { setErrs(replace ? { form: team } : { env: team }); envRef.current?.focus(); }
+      else if (r === 'invalid_secret_id') { setErrs({ id: 'proj.err.name' }); idRef.current?.focus(); }
       else if (r === 'secret_identity_mismatch') { setErrs({ id: 'keys.err.exists' }); idRef.current?.focus(); }
       else if (r === 'invalid_secret_value' || r === 'file_token_unknown' || r === 'file_unreadable') { setFile(null); setErrs({ value: 'keys.err.value' }); valueRef.current?.focus(); }
       else setErrs({ form: 'error.generic' });
