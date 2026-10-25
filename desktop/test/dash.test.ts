@@ -351,6 +351,11 @@ describe('team helpers', () => {
     for (const [list, cur] of [[[LAN], '127.0.0.1'], [[VPN, LAN], VPN.ip], [[], '10.0.0.9']] as const) {
       expect(addressChoices(list, cur).some((c) => c.value === cur)).toBe(true);
     }
+    // once another address is picked, the saved one is still there to go back to
+    expect(addressChoices([LAN], LAN.ip, '127.0.0.1').map((c) => c.value)).toEqual(['127.0.0.1', LAN.ip]);
+    expect(addressChoices([LAN], '127.0.0.1', '127.0.0.1').map((c) => c.value)).toEqual(['127.0.0.1', LAN.ip]);
+    expect(addressChoices([VPN, LAN], '10.0.0.9', '127.0.0.1').map((c) => c.value)).toEqual(['127.0.0.1', '10.0.0.9', VPN.ip, LAN.ip]);
+    expect(addressChoices([VPN, LAN], LAN.ip, VPN.ip).map((c) => c.value)).toEqual([VPN.ip, LAN.ip]);
   });
 
   // desktop E2E F13: emptying the port field refilled it with the saved port

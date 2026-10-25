@@ -414,14 +414,15 @@ export const MIN_GATEWAY_PORT = 1024;
 /** The relay port a fresh app uses (desktop/core/src/settings.rs `DEFAULT_GATEWAY_PORT`). */
 export const DEFAULT_GATEWAY_PORT = 47380;
 
-/** The address picker's choices: this device's addresses, and first `current` when it is not one
- *  of them (a saved address a VPN or DHCP change took away, or one the list leaves out such as
- *  loopback), marked so. A <select> whose value matches no option shows the first option, so
- *  without it the picker would show one address while the app saves another (desktop E2E F16). */
-export function addressChoices(interfaces: readonly NetInterface[], current: string): Array<{ value: string; label: string }> {
+/** The address picker's choices: this device's addresses, and first the saved address and the
+ *  picked one (`current`) when they are not among them (a saved address a VPN or DHCP change took
+ *  away, or one the list leaves out such as loopback), marked so. A <select> whose value matches
+ *  no option shows the first option, so without it the picker would show one address while the
+ *  app saves another (desktop E2E F16); the saved one stays a choice after another is picked. */
+export function addressChoices(interfaces: readonly NetInterface[], current: string, saved?: string | null): Array<{ value: string; label: string }> {
   const out = interfaces.map((i) => ({ value: i.ip, label: interfaceLabel(i) }));
-  if (current && !interfaces.some((i) => i.ip === current)) out.unshift({ value: current, label: `${current} · ${t('set.listen.unlisted')}` });
-  return out;
+  const unlisted = [...new Set([saved ?? '', current])].filter((ip) => ip && !interfaces.some((i) => i.ip === ip));
+  return [...unlisted.map((ip) => ({ value: ip, label: `${ip} · ${t('set.listen.unlisted')}` })), ...out];
 }
 
 /** The settings page's fields: the relay port, and the address and port for other devices. */

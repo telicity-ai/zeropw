@@ -147,7 +147,7 @@ export function SettingsPage({ intent, onIntent }: { intent?: Intent; onIntent()
               {listen && <span className="mono">{`${listen.ip}:${listen.port}`}</span>}
             </div>
             <div className="inline" style={{ marginTop: 14 }}>
-              <SelectField id="set-if" label={t('set.listen.iface')} mono value={ip} options={addressChoices(ifaces, ip)}
+              <SelectField id="set-if" label={t('set.listen.iface')} mono value={ip} options={addressChoices(ifaces, ip, listen?.ip)}
                 onChange={(v) => { setField('ip', v); setTErr(null); }} style={{ flex: 1.7 }} />
               <TextField id="set-tport" label={t('conn.ssh.port')} mono value={tport} inputRef={tportRef} inputMode="numeric" maxLength={5} style={{ flex: '0 0 92px' }}
                 error={tErr ? tLines(tErr) : null} onChange={(v) => { setField('tport', v); setTErr(null); }} />
