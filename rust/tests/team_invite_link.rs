@@ -1120,6 +1120,49 @@ fn project_list_names_shared_and_joined_environments() {
     assert_eq!(shared["projects"][0]["name"], "demo");
 }
 
+/// A damaged team mapping fails only the team features, not `project list`
+/// (which the desktop app's key, connection and team pages all load first):
+/// the projects still list, and `team_environments_error` takes the place of
+/// `team_environments`. The key is there only then.
+#[test]
+fn project_list_survives_an_unreadable_team_mapping() {
+    let tmp = TempDir::new().unwrap();
+    let admin = Admin::new(tmp.path());
+    admin.ok(&["init"]);
+    admin.ok(&["project", "create", "mine", "--environments", "dev"]);
+    let before = admin.ok(&["project", "list"]);
+    assert_eq!(keys(&before), ["projects"]);
+    let mapping = admin.state.join("team").join("envs.json");
+    std::fs::create_dir_all(mapping.parent().unwrap()).unwrap();
+
+    std::fs::write(&mapping, "{broken").unwrap();
+    let damaged = admin.ok(&["project", "list"]);
+    assert_eq!(
+        damaged,
+        json!({"projects": before["projects"], "team_environments_error": "state_corrupt"})
+    );
+    // The team commands that need the mapping still refuse.
+    let refused = admin.fail(&["team", "members", "--env", "mine/dev"]);
+    assert_eq!(refused["reason"], "state_corrupt");
+    // A directory in its place cannot be read at all.
+    std::fs::remove_file(&mapping).unwrap();
+    std::fs::create_dir(&mapping).unwrap();
+    assert_eq!(admin.ok(&["project", "list"]), damaged);
+
+    std::fs::remove_dir(&mapping).unwrap();
+    std::fs::write(
+        &mapping,
+        r#"{"env-1": {"project": "team-x", "environment": "shared"}}"#,
+    )
+    .unwrap();
+    let listed = admin.ok(&["project", "list"]);
+    assert_eq!(keys(&listed), ["projects", "team_environments"]);
+    assert_eq!(
+        listed["team_environments"],
+        json!([{"project": "team-x", "environment": "shared", "env_id": "env-1"}])
+    );
+}
+
 /// `team invite` without `--link` refuses every address its own `team join`
 /// would refuse, and a plain invite to a bracketed IPv6 address with a zone
 /// is created, previewed and joined over TCP.
