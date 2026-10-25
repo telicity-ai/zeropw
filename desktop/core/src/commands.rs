@@ -1172,6 +1172,7 @@ impl Core {
         if input.cli_program.is_empty() {
             return Err(AppError::invalid_input("cli_program_required"));
         }
+        check_ssh_program(&input.cli_program)?;
         let mut args = AdminArgs::command(&["connection", "create-ssh"])
             .require_admin()
             .opt("id", &input.id)?
@@ -1202,6 +1203,7 @@ impl Core {
         if input.cli_program.is_empty() {
             return Err(AppError::invalid_input("cli_program_required"));
         }
+        check_ssh_program(&input.cli_program)?;
         let args = AdminArgs::command(&["connection", "update"])
             .require_admin()
             .opt("id", &input.id)?
@@ -1914,6 +1916,23 @@ fn require_passphrase(pass: &SecretString) -> Result<(), AppError> {
         Err(AppError::auth_failed("passphrase_missing"))
     } else {
         Ok(())
+    }
+}
+
+/// An SSH connection's ssh is an absolute path to an executable file on this machine, as the
+/// agent's `exec` will look for it; otherwise `cli_program_not_found`, before the CLI runs.
+/// Once given the path cannot be changed, so a typo would cost the connection its name and
+/// its grants. In a team environment the path also applies on the other devices, which this
+/// check cannot see.
+fn check_ssh_program(program: &str) -> Result<(), AppError> {
+    let path = Path::new(program);
+    let executable = path.is_absolute()
+        && path.is_file()
+        && nix::unistd::access(path, nix::unistd::AccessFlags::X_OK).is_ok();
+    if executable {
+        Ok(())
+    } else {
+        Err(AppError::invalid_input("cli_program_not_found"))
     }
 }
 

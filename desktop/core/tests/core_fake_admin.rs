@@ -893,13 +893,71 @@ fn ssh_program_is_given_through_connection_update_behind_the_admin_password() {
         1,
     );
     let e = core
-        .connection_set_cli_program(input("/bin/false"))
+        .connection_set_cli_program(input("/bin/sh"))
         .unwrap_err();
     assert_eq!(
         (e.error.as_str(), e.reason.as_str()),
         ("InvalidInput", "cli_already_set")
     );
     assert_argv_clean(&fx, &[ADMIN_PASS]);
+}
+
+/// The ssh path cannot be changed once given, so one that is not an absolute path to an
+/// executable file on this machine is refused before the CLI runs, by both the create and the
+/// fill (`cli_program_not_found`). The refusal does not repeat the path.
+#[test]
+fn an_ssh_path_that_names_no_executable_here_is_refused_before_the_cli() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fx = Fixture::new();
+    let core = core(&fx);
+    let plain = fx.dir.path().join("plain-file");
+    fs::write(&plain, "synthetic").unwrap();
+    fs::set_permissions(&plain, fs::Permissions::from_mode(0o644)).unwrap();
+    let plain = plain.to_string_lossy().into_owned();
+    let fill = |program: &str| CliProgramIn {
+        id: "prod".into(),
+        cli_program: program.into(),
+        admin_passphrase: pass(),
+    };
+    for bad in [
+        "/usr/bin/sshh",
+        "ssh",
+        "usr/bin/ssh",
+        "/usr/bin",
+        "/bin/sh/",
+        plain.as_str(),
+    ] {
+        for e in [
+            core.connection_create_ssh(ssh_input(bad)).unwrap_err(),
+            core.connection_set_cli_program(fill(bad)).unwrap_err(),
+        ] {
+            assert_eq!(
+                (e.error.as_str(), e.reason.as_str(), e.detail.as_deref()),
+                ("InvalidInput", "cli_program_not_found", None),
+                "{bad}"
+            );
+        }
+    }
+    assert_eq!(fx.count("connection_create-ssh"), 0);
+    assert_eq!(fx.count("connection_update"), 0);
+
+    // A real executable passes, also through a symlink, and reaches the CLI unchanged.
+    let link = fx.dir.path().join("ssh-link");
+    std::os::unix::fs::symlink("/bin/sh", &link).unwrap();
+    let link = link.to_string_lossy().into_owned();
+    for good in ["/bin/sh", link.as_str()] {
+        core.connection_create_ssh(ssh_input(good)).unwrap();
+        let create = fx.last("connection_create-ssh");
+        assert!(
+            create
+                .args()
+                .contains(&format!("--cli-program={good}").as_str())
+        );
+        core.connection_set_cli_program(fill(good)).unwrap();
+        let update = fx.last("connection_update");
+        assert_eq!(update.args()[3], format!("--cli-program={good}"));
+    }
 }
 
 /// The envelopes of the `recover` calls after the first `skip`.
