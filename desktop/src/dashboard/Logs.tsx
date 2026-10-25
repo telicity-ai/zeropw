@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { t, type CopyKey } from '../copy';
 import { call, toIpcError } from '../ipc/client';
 import type { Incident, Principal } from '../ipc/contract';
-import { declarableScopes, declareOutcome, isPlainText, openIncident, runtimeStopsAll, valueText, type IncidentScope } from '../lib/dash';
+import { declarableScopes, declareOutcome, isPlainText, openIncidentScope, runtimeStopsAll, valueText, type IncidentScope } from '../lib/dash';
 import { shortTime } from '../lib/format';
 import { recordView } from '../lib/records';
 import { isValidName } from '../lib/validators';
@@ -44,8 +44,9 @@ export function LogsPage({ intent, onIntent }: { intent?: Intent; onIntent(): vo
   const alerts = useLoad(() => (tab === 'alerts' ? call('alerts', { limit: LIMIT }) : Promise.resolve(null)), [tab, tick, n]);
   const incidents = useLoad(async () => {
     if (tab !== 'incidents') return null;
-    const [i, p] = await Promise.all([call('incident_list'), call('principal_list')]);
-    return { incidents: i.incidents.slice().reverse(), principals: p.principals };
+    // the core decides whether an incident is open by its pointer (control), not by the files
+    const [i, p, c] = await Promise.all([call('incident_list'), call('principal_list'), call('control_get')]);
+    return { incidents: i.incidents.slice().reverse(), principals: p.principals, control: c };
   }, [tab, tick, n]);
   const reload = () => setN((x) => x + 1);
   const sheets = useSheets<LogSheet>();
@@ -53,7 +54,7 @@ export function LogsPage({ intent, onIntent }: { intent?: Intent; onIntent(): vo
 
   const declareBtn = <button className="btn btn-ghost btn-sm" type="button" onClick={() => sheets.open({ kind: 'declare' })}>{t('inc.declare')}</button>;
   const closing = sheets.data('close')?.incident;
-  const openInc = incidents.data ? openIncident(incidents.data.incidents) : null;
+  const openScope = incidents.data ? openIncidentScope(incidents.data.incidents, incidents.data.control) : null;
 
   return (
     <>
@@ -94,7 +95,7 @@ export function LogsPage({ intent, onIntent }: { intent?: Intent; onIntent(): vo
       {skipped > 0 && <div className="help">{t('home.alerts.skipped', { n: skipped })}</div>}
 
       <DeclareSheet key={sheets.key('declare')} open={sheets.isOpen('declare')} principals={incidents.data?.principals ?? []}
-        openScope={openInc?.scope ?? null} onClose={sheets.close} onDone={() => { sheets.close(); reload(); bump(); }}
+        openScope={openScope} onClose={sheets.close} onDone={() => { sheets.close(); reload(); bump(); }}
         onRefresh={() => { reload(); bump(); }} onAgents={() => { sheets.close(); go('agents'); }} />
       <ConfirmSheet key={sheets.key('close')} id="sheet-inc-close" open={sheets.isOpen('close')} title={t('inc.close.title')} lead={t('inc.close.sub')}
         confirmLabel={t('inc.close.confirm')} onClose={sheets.close} needPass chips={closing ? [closing.id, scopeText(closing.scope)] : []}

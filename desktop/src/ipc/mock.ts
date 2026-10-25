@@ -16,7 +16,7 @@ import type {
 } from './contract';
 import { fnv1a, mulberry32 } from '../lib/rng';
 import { containsAdmin, INVITE_LINK_MAX, isInviteLink, isValidName, MIN_PASSPHRASE_CHARS, parseTarget, sameAsAdmin } from '../lib/validators';
-import { CONNECTION_KEY_KINDS, countOf, declarableScopes, grantState, isHostKey, isSshHost, isSshUser, openIncident, parseListen, splitEnv } from '../lib/dash';
+import { CONNECTION_KEY_KINDS, countOf, declarableScopes, grantState, isHostKey, isSshHost, isSshUser, parseListen, splitEnv } from '../lib/dash';
 
 export interface MockChannel { onmessage: (data: string) => void }
 export interface MockSeed {
@@ -45,6 +45,9 @@ export interface MockSeed {
   /** With `initialized`: an SSH connection the app made before it sent an ssh (`cli: null`),
    *  with a grant for agent-1. */
   sshWithoutCli?: boolean;
+  /** With `initialized`: an incident file still marked open (scope `all`) while the core's pointer
+   *  to the open incident names none, as a restore by a build before the fix left it. */
+  staleOpenIncident?: boolean;
   /** The settings file is damaged (desktop/core/src/settings.rs): reading it, and so starting the
    *  relay, fails with `settings_corrupt` until `settings_set` writes over it. */
   settingsCorrupt?: boolean;
@@ -237,6 +240,9 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
   const approvals = new Map<string, Record<string, unknown>>();
   const approvalHistory: Record<string, unknown>[] = [];
   const incidents: Incident[] = [];
+  /** The core's pointer to the open incident (policy/control.json `incident_open`); `control`
+   *  says only whether there is one, as `status` does. */
+  let openIncidentId: string | null = null;
   const teams = new Map<string, MockTeamEnv>();
   const files = new Map<string, MockFile>();
   let deviceFp: string | null = null;
@@ -453,6 +459,12 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       id: 'inc_' + randFrom(12, HEX), status: 'closed', scope: 'principal', opened_at: ago(30 * HOUR), runtime: null, principals: ['agent-0'],
       trigger: 'manual', rule: null, detail: 'rotated after a test', actions: {}, assessment: {}, notification: {}, closed_at: ago(29 * HOUR), widened_from: [],
     });
+    if (seed.staleOpenIncident) {
+      incidents.push({
+        id: 'inc_' + randFrom(12, HEX), status: 'open', scope: 'all', opened_at: ago(26 * HOUR), runtime: null, principals: [],
+        trigger: 'manual', rule: null, detail: null, actions: {}, assessment: {}, notification: {}, closed_at: null, widened_from: [],
+      });
+    }
     // alerts as rust/src/audit.rs `maybe_alert` writes them, with its fixed English detail
     alerts.push(
       { ts: ago(HOUR), alert: 'revoked_use_attempt', caller: 'agent-1', connection: 'example-api', event: 'http_relay', reason: 'grant_revoked', detail: 'use attempted under a revoked, stale, or stopped grant' },
@@ -958,9 +970,10 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       needInit(); await wait(400);
       if (scope === 'all') checkAdmin(admin_passphrase);
       else if (admin_passphrase) checkAdmin(admin_passphrase);
-      // rust/src/incident.rs `open_incident`: an open incident takes in a declaration that is not
-      // wider unchanged, and a wider one widens it
-      const current = openIncident(incidents);
+      // rust/src/incident.rs `open_incident`: the incident the pointer names takes in a declaration
+      // that is not wider unchanged, and a wider one widens it; a file marked open that the
+      // pointer does not name is not met
+      const current = openIncidentId ? incidents.find((i) => i.id === openIncidentId) ?? null : null;
       if (current && !declarableScopes(current.scope).includes(scope)) return { ...current, existing: true, widened: false };
       let affected: string[];
       if (scope === 'principal') {
@@ -993,6 +1006,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
         closed_at: null, widened_from: [],
       };
       incidents.push(inc);
+      openIncidentId = inc.id;
       record({ ts: iso(), event: 'incident_open', incident: inc.id, scope });
       setControl({ ...control, incident_open: true, stopped: stops ? true : control.stopped });
       return { ...inc };
@@ -1005,7 +1019,8 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       if (x.status === 'closed') throw fail('InvalidInput', 'incident_already_closed');
       x.status = 'closed'; x.closed_at = iso();
       record({ ts: iso(), event: 'incident_close', incident: id });
-      setControl({ ...control, incident_open: incidents.some((i) => i.status === 'open') });
+      // the pointer is cleared only when it names this incident (rust/src/incident.rs `close_incident`)
+      if (openIncidentId === id) { openIncidentId = null; setControl({ ...control, incident_open: false }); }
       return { ...x };
     },
 

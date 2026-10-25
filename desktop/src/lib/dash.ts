@@ -232,6 +232,16 @@ export function openIncident<T extends { status: string; scope: string }>(incide
   return found;
 }
 
+/** The scope of the open incident a declaration meets, or null when it meets none. The core goes
+ *  by its pointer to the open incident (`control.incident_open`; rust/src/incident.rs
+ *  `open_incident`), not by the files: a file still marked open while the pointer names none (a
+ *  restore by an earlier build left that, or a crash between writing the file and the pointer)
+ *  is met by a new incident of any scope. So the list gives the scope only while the pointer says
+ *  an incident is open (pr3-incident-1). */
+export function openIncidentScope(incidents: readonly { status: string; scope: string }[], control: Pick<Control, 'incident_open'> | null | undefined): string | null {
+  return control?.incident_open ? openIncident(incidents)?.scope ?? null : null;
+}
+
 /** Scopes a declaration still contains while an incident of scope `open` is open: the core widens
  *  an open incident to a wider scope and returns it unchanged for any other, even one naming
  *  another agent or runtime (rust/src/incident.rs `open_incident`). An unknown scope ranks below

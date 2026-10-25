@@ -4,7 +4,10 @@ import { ListenError, listenErrorLines, readSettings, relayLeftOff, resetSetting
 import { call, IpcError, outputChannel, toIpcError, useMockBackend } from '../src/ipc/client';
 import { createMockBackend, type MockBackend, type MockSeed } from '../src/ipc/mock';
 import { holdSecureView, secureViewHolders } from '../src/ui/secure';
-import { declareOutcome, grantState, liveGrants, olderVersionCount, pendingApprovals, runtimeStopsAll, SSH_PROGRAM, teamEnvPairs } from '../src/lib/dash';
+import {
+  declarableScopes, declareOutcome, grantState, liveGrants, olderVersionCount, openIncident, openIncidentScope, pendingApprovals, runtimeStopsAll, SSH_PROGRAM,
+  teamEnvPairs,
+} from '../src/lib/dash';
 import { watchRecords } from '../src/dashboard/watch';
 import type { Control } from '../src/ipc/contract';
 import { isTeamListenReason, listenFailureLines, offersListenOff, relayError, restoreErrorKey, sshProgramError } from '../src/lib/reasons';
@@ -571,6 +574,27 @@ describe('stop, incidents, restore and recovery as the CLI does them', () => {
     expect((await call('control_get')).incident_open).toBe(true);
     const e = await rejection(call('resume', { admin_passphrase: PASS }));
     expect([e.error, e.reason]).toEqual(['InvalidInput', 'incident_open']);
+  });
+
+  // pr3-incident-1: a file left open while the core's pointer names no incident (a restore by an
+  // earlier build) is not met by a declaration; the sheet offers every scope, as the core allows
+  it('opens a new incident of any scope when only a stale file says one is open', async () => {
+    const b = createMockBackend({ latency: 0, initialized: true, staleOpenIncident: true });
+    backend?.dispose(); backend = b; useMockBackend(b);
+    const list = (await call('incident_list')).incidents;
+    const control = await call('control_get');
+    expect(openIncident(list)?.scope).toBe('all');                 // the files alone would say nothing can be widened
+    expect(control.incident_open).toBe(false);
+    expect(declarableScopes(openIncidentScope(list, control))).toEqual(['principal', 'runtime', 'all']);
+    const out = await call('incident_declare', { scope: 'principal', principal: 'agent-1' });
+    expect(declareOutcome(out)).toBe('opened');
+    expect(out.scope).toBe('principal');
+    expect((await call('principal_list')).principals.find((p) => p.id === 'agent-1')?.status).toBe('disabled');
+    expect((await call('control_get')).incident_open).toBe(true);
+    // closing the stale file does not touch the open one the pointer names
+    const stale = list.find((i) => i.status === 'open');
+    await call('incident_close', { id: stale?.id ?? '', admin_passphrase: PASS });
+    expect((await call('control_get')).incident_open).toBe(true);
   });
 
   it('keeps a global stop after acknowledging a restore', async () => {

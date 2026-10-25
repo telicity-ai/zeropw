@@ -4,7 +4,7 @@ import { t } from '../src/copy';
 import {
   addressChoices, blockText, countOf, declarableScopes, declareOutcome, defaultListenIp, defaultMethodStates, envPairs, grantState, groupSecrets, interfaceLabel, inviteFraction, isBasicUser,
   isCliPath, isHeaderName, isHostKey, isPlainText, isSshHost, isSshUser, keyChoices, lineText, liveGrants, methodsPayload, msLeft,
-  newRecordCount, nextMethodState, olderVersionCount, openIncident, parseListen, parseMaxUses, parsePathPrefixes, parsePort, pendingApprovals, publicKeyOf,
+  newRecordCount, nextMethodState, olderVersionCount, openIncident, openIncidentScope, parseListen, parseMaxUses, parsePathPrefixes, parsePort, pendingApprovals, publicKeyOf,
   recordSig, relayBlocked, relayPill, relayState, runtimeStopsAll, sameControl, settingsFields, shortHash, sortedVersions, splitEnv, SSH_PROGRAM, summarizeConnection,
   teamEnvPairs, valueText, writeConsequences,
 } from '../src/lib/dash';
@@ -209,6 +209,16 @@ describe('incident scope', () => {
     expect(openIncident([i('a', 'closed', 'all'), i('b', 'closed', 'principal')])).toBeNull();
     expect(openIncident([i('a', 'closed', 'all'), i('b', 'open', 'principal')])?.id).toBe('b');
     expect(openIncident([i('a', 'open', 'principal'), i('b', 'open', 'runtime'), i('c', 'open', 'principal')])?.id).toBe('b');
+  });
+
+  // pr3-incident-1: the core goes by its pointer to the open incident, not by the files
+  it('meets an open incident only while the core says one is open', () => {
+    const list = [{ id: 'a', status: 'open', scope: 'all' }, { id: 'b', status: 'closed', scope: 'principal' }];
+    expect(openIncidentScope(list, { incident_open: true })).toBe('all');
+    expect(openIncidentScope(list, { incident_open: false })).toBeNull();
+    expect(declarableScopes(openIncidentScope(list, { incident_open: false }))).toEqual(['principal', 'runtime', 'all']);
+    expect(openIncidentScope(list, null)).toBeNull();
+    expect(openIncidentScope([], { incident_open: true })).toBeNull();
   });
 
   it('reads a declaration that met an open incident as no lockdown unless it widened it', () => {
