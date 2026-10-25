@@ -4,7 +4,7 @@ import { ListenError, listenErrorLines, relayLeftOff, turnOffListen, turnOnListe
 import { call, IpcError, outputChannel, toIpcError, useMockBackend } from '../src/ipc/client';
 import { createMockBackend, type MockBackend, type MockSeed } from '../src/ipc/mock';
 import { holdSecureView, secureViewHolders } from '../src/ui/secure';
-import { declareOutcome, grantState, liveGrants, pendingApprovals, runtimeStopsAll, SSH_PROGRAM, teamEnvPairs } from '../src/lib/dash';
+import { declareOutcome, grantState, liveGrants, olderVersionCount, pendingApprovals, runtimeStopsAll, SSH_PROGRAM, teamEnvPairs } from '../src/lib/dash';
 import { watchRecords } from '../src/dashboard/watch';
 import type { Control } from '../src/ipc/contract';
 import { isTeamListenReason, listenFailureLines, offersListenOff, relayError, restoreErrorKey } from '../src/lib/reasons';
@@ -415,6 +415,16 @@ describe('versions as the CLI prints them', () => {
     expect(revoked).toMatchObject({ secret_id: 'cli-shape', status: 'revoked', provider_revocation_required: true });
     expect(String(revoked.reminder)).toMatch(/provider/);
     expect((await rejection(call('secret_revoke', { id: 'cli-shape', version: 'v2' }))).reason).toBe('invalid_argument');
+  });
+
+  it('counts both versions as earlier once the one in use is revoked too', async () => {
+    ready();
+    const listed = async () => (await call('secret_list', {})).secrets.find((s) => s.id === 'example-api')!;
+    expect(olderVersionCount(await listed())).toBe(1);
+    await call('secret_revoke', { id: 'example-api', version: (await listed()).active_version! });
+    const after = await listed();
+    expect(after.active_version).toBeNull();
+    expect(olderVersionCount(after)).toBe(2);
   });
 
   it('lists a generated SSH key with its public half, so it can be shown again later', async () => {

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { t, type CopyKey } from '../copy';
 import { call, toIpcError } from '../ipc/client';
 import type { Commands, EnvFileRef, SecretKind, SecretSource, SecretView } from '../ipc/contract';
-import { envPairs, groupSecrets, publicKeyOf, REVEAL_SECONDS, sortedVersions, splitEnv, type VersionId, teamEnvPairs, type EnvPair } from '../lib/dash';
+import { envPairs, groupSecrets, olderVersionCount, publicKeyOf, REVEAL_SECONDS, sortedVersions, splitEnv, type VersionId, teamEnvPairs, type EnvPair } from '../lib/dash';
 import { dropErrorKey } from '../lib/envimport';
 import { shortTime } from '../lib/format';
 import { DEFAULT_ENVIRONMENTS, isValidName } from '../lib/validators';
@@ -92,15 +92,18 @@ export function KeysPage({ intent, onIntent, incomingFile, onFileTaken }: {
               <section key={g.key} className="group" aria-labelledby={`grp-${g.key}`}>
                 <h3 className="group-head" id={`grp-${g.key}`}><span>{g.project}</span><span aria-hidden="true">/</span><span>{g.environment}</span></h3>
                 <ul className="list">
-                  {g.secrets.map((s) => (
-                    <Row key={s.id} dot={s.active_version ? 'on' : 'idle'} mono name={s.id} tag={<Tag>{kindLabel(s.kind)}</Tag>}
-                      meta={metaLine(s.active_version ? t('keys.version', { n: s.active_version }) : t('keys.noActive'), s.versions.length > 1 ? t('keys.older', { n: s.versions.length - 1 }) : null)}>
-                      <button className="btn btn-ghost btn-sm" type="button" aria-disabled={!s.active_version || undefined}
-                        aria-label={t('keys.reveal.aria', { id: s.id })} onClick={() => { if (s.active_version) sheets.open({ kind: 'reveal', id: s.id }); }}>{t('keys.reveal')}</button>
-                      <button className="btn btn-text btn-sm" type="button" aria-label={t('keys.versions.aria', { id: s.id })}
-                        onClick={() => sheets.open({ kind: 'versions', id: s.id })}>{t('keys.versions')}</button>
-                    </Row>
-                  ))}
+                  {g.secrets.map((s) => {
+                    const older = olderVersionCount(s);
+                    return (
+                      <Row key={s.id} dot={s.active_version ? 'on' : 'idle'} mono name={s.id} tag={<Tag>{kindLabel(s.kind)}</Tag>}
+                        meta={metaLine(s.active_version ? t('keys.version', { n: s.active_version }) : t('keys.noActive'), older > 0 ? t('keys.older', { n: older }) : null)}>
+                        <button className="btn btn-ghost btn-sm" type="button" aria-disabled={!s.active_version || undefined}
+                          aria-label={t('keys.reveal.aria', { id: s.id })} onClick={() => { if (s.active_version) sheets.open({ kind: 'reveal', id: s.id }); }}>{t('keys.reveal')}</button>
+                        <button className="btn btn-text btn-sm" type="button" aria-label={t('keys.versions.aria', { id: s.id })}
+                          onClick={() => sheets.open({ kind: 'versions', id: s.id })}>{t('keys.versions')}</button>
+                      </Row>
+                    );
+                  })}
                 </ul>
               </section>
             ))}

@@ -3,7 +3,7 @@ import type { ConnectionView, Control, Grant, Project, SecretView, ServeStatus, 
 import {
   blockText, countOf, declarableScopes, declareOutcome, defaultListenIp, defaultMethodStates, envPairs, grantState, groupSecrets, interfaceLabel, inviteFraction, isBasicUser,
   isCliPath, isHeaderName, isHostKey, isPlainText, isSshHost, isSshUser, keyChoices, lineText, liveGrants, methodsPayload, msLeft,
-  newRecordCount, nextMethodState, openIncident, parseListen, parseMaxUses, parsePathPrefixes, parsePort, pendingApprovals, publicKeyOf,
+  newRecordCount, nextMethodState, olderVersionCount, openIncident, parseListen, parseMaxUses, parsePathPrefixes, parsePort, pendingApprovals, publicKeyOf,
   recordSig, relayBlocked, relayPill, relayState, runtimeStopsAll, sameControl, shortHash, sortedVersions, splitEnv, SSH_PROGRAM, summarizeConnection,
   teamEnvPairs, valueText, writeConsequences,
 } from '../src/lib/dash';
@@ -42,6 +42,16 @@ describe('projects and environments', () => {
     expect(groups.map((g) => g.key)).toEqual(['demo/prod', 'shop/prod', 'gone/x']);
     expect(groups[0]?.secrets.map((s) => s.id)).toEqual(['alpha', 'beta']);
     expect(groupSecrets([], projects)).toEqual([]);
+  });
+
+  // desktop E2E F9: with both versions revoked the list said "이전 버전 1개"
+  it('counts every version as earlier when none is in use, and all but the one in use otherwise', () => {
+    expect(olderVersionCount(secret('a', 'demo', 'dev', [['1', 'retired'], ['2', 'active']]))).toBe(1);
+    expect(olderVersionCount(secret('a', 'demo', 'dev', [['1', 'revoked'], ['2', 'revoked']]))).toBe(2);
+    expect(olderVersionCount(secret('a', 'demo', 'dev', [['1', 'revoked']]))).toBe(1);
+    expect(olderVersionCount(secret('a', 'demo', 'dev', [['1', 'active']]))).toBe(0);
+    // versions as the CLI prints them: numbers
+    expect(olderVersionCount({ active_version: 3, versions: [{ version: 1 }, { version: 3 }, { version: 2 }] } as unknown as SecretView)).toBe(2);
   });
 
   it('sorts versions newest first by number, not text', () => {

@@ -73,6 +73,14 @@ export function sortedVersions(s: SecretView): SecretView['versions'] {
   return s.versions.slice().sort((a, b) => Number(b.version) - Number(a.version));
 }
 
+/** Versions other than the one in use: all of them when none is (every version revoked or
+ *  retired), not one fewer (desktop E2E F9). */
+export function olderVersionCount(s: Pick<SecretView, 'active_version' | 'versions'>): number {
+  const active = s.active_version;
+  if (active === null || active === undefined || String(active) === '') return s.versions.length;
+  return s.versions.filter((v) => String(v.version) !== String(active)).length;
+}
+
 /** Kinds of stored key the core accepts for each connection type (`secret_kind_mismatch`). */
 export const CONNECTION_KEY_KINDS: Record<'http' | 'ssh', readonly SecretView['kind'][]> = {
   http: ['api_key', 'password', 'env_var'],
