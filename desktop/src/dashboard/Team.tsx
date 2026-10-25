@@ -43,7 +43,8 @@ export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
   const [n, setN] = useState(0);
   const reload = () => setN((x) => x + 1);
   const base = useLoad(async () => {
-    const [p, s, i] = await Promise.all([call('project_list'), call('settings_get'), call('net_interfaces').catch(() => [] as NetInterface[])]);
+    // a damaged settings file (settings_corrupt) is fixed on the Settings page; the environments still load
+    const [p, s, i] = await Promise.all([call('project_list'), call('settings_get').catch(() => null), call('net_interfaces').catch(() => [] as NetInterface[])]);
     return { pairs: teamEnvPairs(p), envsUnread: teamEnvsUnread(p), settings: s, interfaces: i };
   }, [tick, n]);
   const [env, setEnv] = useState('');
@@ -110,7 +111,7 @@ export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
             </div>
           )}
         {/* a shared environment syncs only while other-device access is on */}
-        {td?.shared && base.data && !parseListen(base.data.settings.team_listen) && (
+        {td?.shared && base.data?.settings && !parseListen(base.data.settings.team_listen) && (
           <ListenSetup id="team-listen" interfaces={base.data.interfaces} run={relay.run}
             onDone={() => { toast(t('toast.listen.on')); reload(); bump(); }}
             onFailed={(down) => { if (down) relay.report(down); reload(); bump(); }} />
