@@ -104,6 +104,11 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 ### 4.4 앱 안 터미널
 
 - `portable-pty`로 사용자의 로그인 셸을 띄운다. 환경에 `ZEROPW_GATEWAY_URL`, `ZEROPW_CALLER_TOKEN`, `no_proxy=127.0.0.1,localhost`를 넣고, `PATH` 앞에 번들 바이너리 폴더를 둔다. 토큰은 키 입력으로 넣지 않으므로 화면과 셸 기록에 남지 않는다.
+- 로그인 셸은 시작 파일을 읽으며 `PATH`를 다시 짠다(macOS `/etc/zprofile`의 `path_helper`, Homebrew를 앞에 두는 `.zprofile`). 그래서 macOS 기본 셸인 zsh에서는 VS Code의 셸 통합처럼 `ZDOTDIR`을 앱 데이터 폴더의 `zsh/`(0700, 파일 0600)로 돌린다.
+  - 이 폴더의 `.zshenv`·`.zprofile`·`.zshrc`·`.zlogin`은 사용자의 같은 이름 파일을 사용자의 `ZDOTDIR`(앱이 받은 값, 없으면 `HOME`)에서 실행한다. 그 파일이 도는 동안 `ZDOTDIR`은 사용자 값이고, 사용자의 `.zshenv`가 `ZDOTDIR`을 바꾸면 다음 파일부터는 거기서 읽는다.
+  - 마지막 파일(로그인 셸은 `.zlogin`)이 번들 폴더를 `PATH` 맨 앞에 한 번만 다시 두고, `ZDOTDIR`을 사용자 값으로 돌려놓고(없었으면 지운다), 도우미 변수 `ZEROPW_TERMINAL_BIN`·`ZEROPW_USER_ZDOTDIR`를 지운다. 시스템 zshrc가 이 폴더로 잡은 기록 파일(`HISTFILE`)은 사용자 위치로 돌린다.
+  - 파일에는 비밀도 폴더 이름도 없고, 환경에는 폴더 이름만 더한다. 파일을 쓸 수 없으면 zsh도 다른 셸처럼 띄운다.
+  - zsh가 아닌 셸(bash 등)은 바꾸지 않으므로, 시작 파일이 다른 폴더를 앞에 두면 번들 폴더가 뒤로 밀린다(2026-10-22 데스크톱 E2E의 F5). 그래서 제안 명령은 번들 바이너리를 절대 경로로 부른다.
 - 다른 macOS 계정에서 실행할 때 첫 제안 명령은 `sudo --preserve-env=ZEROPW_GATEWAY_URL,ZEROPW_CALLER_TOKEN,no_proxy -u <계정> -i`다.
 - 제안 명령은 프롬프트에 입력만 해 두고 사용자가 엔터를 누르면 실행된다. 두 번째 제안은 `<번들 경로>/zeropw-agent list-connections`.
 - 출력은 Tauri 채널로 웹뷰의 xterm.js에 보낸다.
@@ -120,6 +125,7 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 
 - 상태 디렉터리: 앱 데이터 폴더의 `state/` (macOS `~/Library/Application Support/ZeroPW/state`).
 - 앱 설정 `settings.json`(0600): 중계기 포트, 팀 동기화 주소. 상태 디렉터리 안에는 쓰지 않는다.
+- `zsh/`(0700): 앱 안 터미널의 zsh 시작 파일(§4.4). 터미널을 열 때마다 내용과 권한을 맞춘다.
 - 파일 선택(키 파일, CA, 백업, `.env`)은 Rust에서 네이티브 창을 열고 경로를 불투명한 `file_token`으로만 웹뷰에 알린다.
 - 창에 끌어다 놓은 파일도 경로는 Rust에만 있다. 셸이 놓인 경로를 코어에 넘기면 코어가 일반 파일 하나만 읽어 일회용 보관소에 두고, 웹뷰에는 `envfile://dropped`로 참조와 파일 이름만 알린다(§5, §8.10).
 

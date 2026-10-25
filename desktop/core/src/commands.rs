@@ -788,7 +788,8 @@ impl Core {
             terminals: TerminalManager::with_ring_bytes(
                 config.terminal_program,
                 config.terminal_ring_bytes,
-            ),
+            )
+            .with_zsh_dir(paths.zsh_dir()),
             events,
             clipboard_clear_after: config.clipboard_clear_after,
             pending_clears: Arc::new(Mutex::new(PendingClears::default())),
