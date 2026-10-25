@@ -18,12 +18,51 @@ const DETAILS = [
 ];
 const HANGUL = /[가-힣]/;
 
+// The results and reasons the relay, the SSH signer and an agent's commands record, read the same
+// way (each file's `mod tests` left out).
+const sources = import.meta.glob(['../../rust/src/gateway.rs', '../../rust/src/signer.rs', '../../rust/src/tools.rs', '../../rust/src/runs.rs'], { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
+const rs = (name: string): string => {
+  const text = Object.entries(sources).find(([k]) => k.endsWith(`/${name}`))?.[1] ?? '';
+  const tests = text.search(/^#\[cfg\(test\)\]\r?\nmod tests\b/m);
+  return tests < 0 ? text : text.slice(0, tests);
+};
+const all = (text: string, re: RegExp): string[] => [...text.matchAll(re)].map((m) => m[1] ?? '');
+const gateway = rs('gateway.rs'), signer = rs('signer.rs'), tools = rs('tools.rs'), runs = rs('runs.rs');
+const RESULTS = [...new Set([
+  ...all(gateway + signer + tools + runs, /result: Some\("([a-z_]+)"\)/g),
+  ...all(gateway, /result: "([a-z_]+)"/g), ...all(gateway, /self\.audit\("([a-z_]+)"/g),
+  ...all(tools, /refuse_exec\(\s*ctx,\s*caller,\s*id,\s*req,\s*"([a-z_]+)"/g), ...all(tools, /Some\(\("([a-z_]+)", Error::/g),
+  ...all(runs, /(?:COMPLETED|CANCELLED|BLOCKED|_) => "([a-z]+)",/g),
+])];
+const REASONS = [...new Set([
+  ...all(signer, /safe_audit\(\s*"[a-z_]+",\s*"[a-z_]+",\s*Some\("([a-z_]+)"\)/g),
+  ...all(gateway, /UpstreamFailure::(?:denied|error|blocked)\("([a-z_]+)"/g),
+  ...all(gateway, /self\.refuse\(\s*\d+,\s*"([a-z_]+)"/g),
+  ...all(tools, /refuse_exec\(\s*ctx,\s*caller,\s*id,\s*req,\s*"[a-z_]+",\s*"([a-z_]+)"/g),
+  ...all(tools, /Error::(?:unsupported|state)\("([a-z_]+)"\)/g),
+])];
+
 describe('records and alerts in plain words', () => {
   it('reads the CLI source it follows', () => {
     expect(EVENTS.length).toBeGreaterThan(60);
     expect(EVENTS).toContain('http_relay');
     expect(ALERTS).toEqual(expect.arrayContaining(['secret_reveal', 'intrusion', 'revoked_use_attempt', 'repeated_denials', 'failure', 'credential_exposure']));
     expect(DETAILS.length).toBeGreaterThanOrEqual(13);
+    expect(RESULTS).toEqual(expect.arrayContaining(['ok', 'denied', 'failed', 'attempt', 'error', 'blocked', 'cancelled', 'unsupported']));
+    expect(REASONS).toEqual(expect.arrayContaining(['unknown_key', 'no_session_bind', 'upstream_unreachable', 'request_in_flight', 'cli_not_supported', 'cli_program_missing']));
+  });
+
+  it('says every result in words, and every reason the relay, the SSH signer and a command record', () => {
+    for (const result of RESULTS) {
+      const v = recordView({ ts: 't', event: 'http_relay', result }, 'audit');
+      expect(v.raw, result).toEqual([]);
+      if (result !== 'ok') expect(v.meta, result).toEqual([expect.stringMatching(HANGUL)]);
+    }
+    for (const reason of REASONS) {
+      const v = recordView({ ts: 't', event: 'ssh_sign', caller: 'agent-1', result: 'denied', reason }, 'audit');
+      expect(v.raw, reason).toEqual([]);
+      expect(v.meta, reason).toEqual(['agent-1', t('log.res.denied'), expect.stringMatching(HANGUL)]);
+    }
   });
 
   it('names every event the CLI writes in Korean, with nothing left on the raw line', () => {

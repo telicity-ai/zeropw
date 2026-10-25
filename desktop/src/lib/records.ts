@@ -1,7 +1,8 @@
 // Usage records and alerts as the record lists show them (DESIGN.md §6.2: plain Korean, no
 // internal names). The event, alert, result and reason codes the CLI writes map to short copy:
-// every event in rust/src/audit.rs `EVENTS`, every alert `maybe_alert` writes, and the reasons
-// that end up in records most (denials, failed checks, near-exposures). The agent and connection
+// every event in rust/src/audit.rs `EVENTS`, every alert `maybe_alert` writes, every result, and
+// the reasons the relay, the SSH signer and an agent's commands record (denials, failed checks,
+// near-exposures) with the most common others. The agent and connection
 // names stay as they are. Anything else (a code missing here, the CLI's English `detail`, the
 // other fields) stays visible as the core wrote it, on a secondary `key=value` line. Records
 // never contain values (rust/src/audit.rs); this reads no field the lists did not show before.
@@ -44,16 +45,18 @@ const ALERT: Record<string, CopyKey> = {
   repeated_denials: 'log.al.repeated_denials',
 };
 
-/** `ok` says nothing a record does not already say; the other results are shown. */
+/** `ok` says nothing a record does not already say; the other results are shown (rust/src/gateway.rs,
+ *  rust/src/tools.rs, rust/src/runs.rs). */
 const RESULT: Record<string, CopyKey | null> = {
   ok: null, denied: 'log.res.denied', failed: 'log.res.failed', skipped: 'log.res.skipped', attempt: 'log.res.attempt',
+  error: 'log.res.error', blocked: 'log.res.blocked', cancelled: 'log.res.cancelled', unsupported: 'log.res.unsupported',
 };
 
 const REASON: Record<string, CopyKey | null> = {
   // the relay's policy (rust/src/policy.rs, rust/src/gateway.rs, rust/src/tools.rs)
   no_grant: 'log.why.no_grant', grant_expired: 'log.why.grant_expired', grant_exhausted: 'log.why.grant_exhausted',
   grant_revoked: 'log.why.grant_revoked', grant_stale: 'log.why.grant_stale', grant_inactive: 'log.why.grant_inactive',
-  grant_unknown: 'log.why.grant_unknown', grant_mismatch: 'log.why.grant_unknown', principal_disabled: 'log.why.principal_disabled',
+  grant_unknown: 'log.why.grant_unknown', grant_mismatch: 'log.why.grant_mismatch', principal_disabled: 'log.why.principal_disabled',
   principal_unknown: 'log.why.principal_unknown', connection_unknown: 'log.why.connection_unknown',
   connection_disabled: 'log.why.connection_disabled', global_stop: 'log.why.global_stop', restore_pending: 'log.why.restore_pending',
   method_not_allowed: 'log.why.method_not_allowed', path_not_allowed: 'log.why.path_not_allowed',
@@ -68,6 +71,32 @@ const REASON: Record<string, CopyKey | null> = {
   credential_unavailable: 'log.why.credential_unavailable', local_id_conflict: 'log.why.local_id_conflict',
   member_removed_rotation_recommended: 'log.why.member_removed_rotation_recommended',
   cli_env_contains_credential: 'log.why.cli_env_contains_credential',
+  // the service behind an API connection and a repeated request (rust/src/gateway.rs)
+  upstream_unreachable: 'log.why.upstream_unreachable', upstream_connection_lost: 'log.why.upstream_connection_lost',
+  upstream_protocol_error: 'log.why.upstream_protocol_error', response_too_large: 'log.why.response_too_large',
+  ca_file_unavailable: 'log.why.ca_file_unavailable', unsupported_auth_mode: 'log.why.unsupported_auth_mode',
+  request_in_flight: 'log.why.request_in_flight', request_id_reused: 'log.why.request_id_reused',
+  outcome_uncertain: 'log.why.outcome_uncertain', audit_unavailable: 'log.why.audit_unavailable',
+  // a command an agent runs (rust/src/tools.rs `exec`, rust/src/runs.rs); a cancelled run's
+  // reason repeats its result
+  policy_denied: 'log.why.policy_denied', cli_not_supported: 'log.why.cli_not_supported',
+  cli_program_missing: 'log.why.cli_program_missing', cli_kind_unsupported: 'log.why.cli_kind_unsupported',
+  ssh_signer_unavailable: 'log.why.ssh_signer_unavailable', public_url_unset: 'log.why.public_url_unset',
+  exec_setup_failed: 'log.why.exec_setup_failed', run_dir_unset: 'log.why.exec_setup_failed', runs_not_installed: 'log.why.exec_setup_failed',
+  cli_env_conflict: 'log.why.cli_env_conflict', ssh_public_key_unavailable: 'log.why.ssh_public_key_unavailable',
+  connection_changed: 'log.why.connection_changed', cancelled: null,
+  // the SSH signer (rust/src/signer.rs): the agent protocol's own refusals
+  agent_forwarding_not_allowed: 'log.why.agent_forwarding_not_allowed', host_key_unsupported: 'log.why.host_key_unsupported',
+  host_signature_invalid: 'log.why.host_signature_invalid', host_signature_malformed: 'log.why.host_signature_invalid',
+  session_already_bound: 'log.why.session_already_bound', no_session_bind: 'log.why.no_session_bind',
+  session_mismatch: 'log.why.session_mismatch', hostbound_key_mismatch: 'log.why.session_mismatch',
+  unknown_key: 'log.why.ssh_key_mismatch', userauth_key_mismatch: 'log.why.ssh_key_mismatch',
+  key_metadata_mismatch: 'log.why.key_metadata_mismatch', key_unavailable: 'log.why.credential_unavailable',
+  not_userauth_request: 'log.why.not_userauth_request', too_many_agent_clients: 'log.why.too_many_agent_clients',
+  malformed_agent_message: 'log.why.malformed_request', malformed_extension: 'log.why.malformed_request',
+  malformed_session_bind: 'log.why.malformed_request', malformed_sign_request: 'log.why.malformed_request',
+  unsupported_agent_message: 'log.why.unsupported_request', unsupported_extension: 'log.why.unsupported_request',
+  unsupported_sign_flags: 'log.why.unsupported_request',
   // who asked (rust/src/errors.rs `auth_failed`)
   admin_reauth_failed: 'log.why.admin_reauth_failed', admin_reauth_stale: 'log.why.admin_reauth_stale',
   passphrase_missing: 'log.why.passphrase_missing', bad_passphrase: 'log.why.admin_reauth_failed',
