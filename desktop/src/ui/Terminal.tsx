@@ -4,6 +4,7 @@ import { FitAddon } from '@xterm/addon-fit';
 import { t } from '../copy';
 import { call, outputChannel } from '../ipc/client';
 import { useApp } from './context';
+import { fontReady } from './fonts';
 import { TerminalInput } from './terminalInput';
 
 const THEME = {
@@ -19,6 +20,11 @@ const VERIFIED = /"connections"\s*:/;
 /** How long the "input was dropped" notice stays after input goes through again, and the
  *  "paste too large" notice after it is shown. */
 const DROPPED_NOTE_MS = 6000;
+const FONT_SIZE = 12;
+/** xterm measures its cells once, when it opens: it waits for this font (bundled, loaded on first
+ *  use) up to FONT_WAIT_MS, or a fallback measured first spaces the letters apart (desktop E2E F17). */
+const FONT = `${FONT_SIZE}px "JetBrains Mono"`;
+const FONT_WAIT_MS = 1500;
 
 /** Open a new shell for a caller token, or reattach to one that is still running. */
 export type TerminalSource =
@@ -85,15 +91,22 @@ export function AppTerminal({ domId, name, source, onOpened, onVerified, onFaile
     if (!el) return;
     let disposed = false;
     const term = new Terminal({
-      fontFamily: '"JetBrains Mono", "Pretendard Variable", Menlo, monospace', fontSize: 12, lineHeight: 1.45,
+      fontFamily: '"JetBrains Mono", "Pretendard Variable", Menlo, monospace', fontSize: FONT_SIZE, lineHeight: 1.45,
       cursorBlink: motionOn, cursorStyle: 'block', allowTransparency: false, scrollback: 2000, theme: THEME,
       convertEol: false,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
-    term.open(el);
     termRef.current = term;
-    try { fit.fit(); } catch { /* not laid out yet */ }
+    // output that arrives first is kept by xterm and drawn when it opens
+    void fontReady(typeof document === 'undefined' ? undefined : document.fonts, FONT, FONT_WAIT_MS).then(() => {
+      if (disposed) return;
+      term.open(el);
+      try { fit.fit(); } catch { /* not laid out yet */ }
+      // focus asked for before the terminal opened (focusTerminalIn)
+      const root = el.closest<HTMLElement>('[data-focus-pending]');
+      if (root) { root.removeAttribute('data-focus-pending'); term.focus(); }
+    });
 
     // a fresh shell gets its first suggestion typed in once the prompt settles; a reattached one does not
     const autoType = source.kind === 'open';
@@ -213,7 +226,10 @@ export function AppTerminal({ domId, name, source, onOpened, onVerified, onFaile
   );
 }
 
-/** Focus a terminal's input (xterm keeps a hidden textarea inside the body). */
+/** Focus a terminal's input (xterm keeps a hidden textarea inside the body); a terminal still
+ *  waiting for its font takes the focus when it opens. */
 export function focusTerminalIn(domId: string): void {
-  document.querySelector<HTMLTextAreaElement>(`#${CSS.escape(domId)} .xterm-helper-textarea`)?.focus();
+  const input = document.querySelector<HTMLTextAreaElement>(`#${CSS.escape(domId)} .xterm-helper-textarea`);
+  if (input) input.focus();
+  else document.getElementById(domId)?.setAttribute('data-focus-pending', '');
 }
