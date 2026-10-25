@@ -723,6 +723,71 @@ fn two_callers_with_http_signals_escalate_to_runtime() {
     assert_eq!(i.principals, vec!["agent-1", "agent-2"]);
 }
 
+/// An agent still using a revoked grant is a `revoked_use` signal even when a
+/// used-up grant for the same connection sits beside it: the denial names the
+/// revoked grant whichever of the two sorts first by its random id.
+#[test]
+fn revoked_grant_beside_an_exhausted_one_is_revoked_use_in_either_id_order() {
+    for exhausted_first in [true, false] {
+        let (_tmp, ctx) = fixture();
+        ctx.policy.create_principal("agent-1", "box-1").unwrap();
+        ctx.policy
+            .create_connection(connection("gh", "gh-token"))
+            .unwrap();
+        let mut ids: Vec<String> = (0..2)
+            .map(|_| {
+                ctx.policy
+                    .create_grant("agent-1", "gh", Some(3600), Some(2))
+                    .unwrap()
+                    .id
+            })
+            .collect();
+        ids.sort();
+        let (exhausted, revoked) = if exhausted_first {
+            (&ids[0], &ids[1])
+        } else {
+            (&ids[1], &ids[0])
+        };
+        for _ in 0..2 {
+            ctx.policy
+                .consume(exhausted, None, None, None, None)
+                .unwrap();
+        }
+        ctx.policy.revoke_grant(revoked).unwrap();
+        // One `revoked_use` (3 points) reaches this threshold.
+        let cfg = DetectorConfig {
+            weak_threshold: 3.into(),
+            ..DetectorConfig::default()
+        };
+        let _detector = intrusion::install(Arc::clone(&ctx), Some(cfg)).unwrap();
+        let reply = zeropw::tools::request(
+            &ctx,
+            "agent-1",
+            "gh",
+            "GET",
+            "/repos",
+            &Vec::new(),
+            b"",
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            (reply["status"].clone(), reply["reason"].clone()),
+            (json!(403), json!("grant_revoked")),
+            "exhausted grant sorted first: {exhausted_first}"
+        );
+        let id = ctx
+            .policy
+            .open_incident_id()
+            .unwrap()
+            .unwrap_or_else(|| panic!("no incident, exhausted first: {exhausted_first}"));
+        assert_eq!(
+            incident::get_incident(&ctx, &id).unwrap().rule.as_deref(),
+            Some("revoked_use")
+        );
+    }
+}
+
 #[test]
 fn email_render_has_ordered_sections_and_no_detail_or_value() {
     let (_tmp, ctx) = fixture();

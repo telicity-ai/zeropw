@@ -6119,6 +6119,23 @@ impl<'a> Policy<'a> {
         Ok(None)
     }
 
+    /// Which [`Policy::grant_state`] reason a denial reports when no
+    /// candidate grant is usable: the highest rank, not whichever grant sorts
+    /// last by its random id. A grant that was taken away (`grant_revoked`,
+    /// `grant_stale`) outranks one that merely ran out, so a caller still
+    /// using it is counted as `revoked_use` by `intrusion` even when an
+    /// exhausted or expired grant for the same connection sits beside it.
+    fn failure_rank(reason: &str) -> u8 {
+        match reason {
+            "grant_revoked" => 5,
+            "grant_stale" => 4,
+            "grant_inactive" => 3,
+            "grant_expired" => 2,
+            "grant_exhausted" => 1,
+            _ => 0,
+        }
+    }
+
     /// Full decision for one operation (lock-free read).
     ///
     /// An allowed decision is remembered for the current thread so that the
@@ -6285,7 +6302,10 @@ impl<'a> Policy<'a> {
                     chosen = Some(grant);
                     break;
                 }
-                Some(state) => failure = state,
+                Some(state) if Self::failure_rank(state) > Self::failure_rank(failure) => {
+                    failure = state;
+                }
+                Some(_) => {}
             }
         }
         let Some(chosen) = chosen else {

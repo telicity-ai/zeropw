@@ -97,7 +97,7 @@ Register work before spawn so cancellation can reach it, then recheck policy imm
 
 Inspect captured stdout/stderr for known encodings of secrets/handles; replace blocked output with a fixed marker and state `blocked`. This is supplemental credential defense because the child must not hold original values. Arbitrary rearrangements/splitting are not universally detected. Duplicate exec registration/lookup uses one lock and yields one execution.
 
-Default-deny grants bind caller/connection/expiry/usage/policy version and are evaluated before relay/sign/spawn. Destination/authentication/scope widening makes grants stale rather than automatically extending them. Narrowing and credential rotation reevaluate in place. Policy-version changes invalidate old handles.
+Default-deny grants bind caller/connection/expiry/usage/policy version and are evaluated before relay/sign/spawn. Destination/authentication/scope widening makes grants stale rather than automatically extending them. Narrowing and credential rotation reevaluate in place. Policy-version changes invalidate old handles. When none of a caller's grants for a connection is usable, the denial names the strongest reason among them, in the order `grant_revoked`, `grant_stale`, `grant_inactive`, `grant_expired`, `grant_exhausted`, not whichever grant sorts last by its random id: a revoked grant still in use is then a `revoked_use` signal (section 7) even beside a used-up one (`response::revoked_grant_beside_an_exhausted_one_is_revoked_use_in_either_id_order`).
 
 Global stop denies new authentication/spawns, cancels live/queued runs and closes sockets, but cannot terminate already-authenticated remote work.
 
