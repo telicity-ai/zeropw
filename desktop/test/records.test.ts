@@ -2,27 +2,33 @@ import { describe, expect, it } from 'vitest';
 import { t } from '../src/copy';
 import { recordView } from '../src/lib/records';
 
-// The CLI's Rust source, read so that a code added there shows up here. Each `#[cfg(test)] mod`
-// is left out (its braces counted; the Rust here keeps them balanced), so only what the product
-// writes counts.
+// The CLI's Rust source, read so that a code added there shows up here. Each top-level
+// `#[cfg(test)] mod` is left out, so only what the product writes counts.
 const rust = import.meta.glob('../../rust/src/**/*.rs', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
-/** The index just past the `}` that closes the `{` at `open`. */
-function closing(text: string, open: number): number {
-  let depth = 0;
-  for (let i = open; i < text.length; i++) {
-    if (text[i] === '{') depth++;
-    else if (text[i] === '}' && --depth === 0) return i + 1;
+/** The index just past the `}` that closes the item whose first line holds `at`: rustfmt (checked
+ *  by rust/verify.sh) closes it with a `}` alone on a line at the item's own indentation. Counting
+ *  braces does not work: test data such as `b"{not json"` leaves them unbalanced. */
+function itemEnd(text: string, at: number): number {
+  const line = text.lastIndexOf('\n', at) + 1;
+  const indent = /^[ \t]*/.exec(text.slice(line))?.[0] ?? '';
+  const close = new RegExp(`\\n${indent}\\}(?=\\r?\\n|$)`, 'g');
+  close.lastIndex = at;
+  const m = close.exec(text);
+  return m ? m.index + m[0].length : text.length;
+}
+/** Where each top-level `#[cfg(test)] mod … { }` of a file starts and ends. */
+function testModules(text: string): Array<[number, number]> {
+  const head = /^#\[cfg\(test\)\]\r?\n(?:pub(?:\(crate\))? )?mod \w+ \{/gm;
+  const spans: Array<[number, number]> = [];
+  for (let m = head.exec(text); m; m = head.exec(text)) {
+    spans.push([m.index, itemEnd(text, m.index)]);
+    head.lastIndex = spans[spans.length - 1]?.[1] ?? text.length;
   }
-  return text.length;
+  return spans;
 }
 function withoutTests(text: string): string {
-  const head = /^#\[cfg\(test\)\]\r?\n(?:pub(?:\(crate\))? )?mod \w+ \{/gm;
   let out = '', from = 0;
-  for (let m = head.exec(text); m; m = head.exec(text)) {
-    out += text.slice(from, m.index);
-    from = closing(text, m.index + m[0].length - 1);
-    head.lastIndex = from;
-  }
+  for (const [start, end] of testModules(text)) { out += text.slice(from, start); from = end; }
   return out + text.slice(from);
 }
 const rs = (path: string): string => withoutTests(Object.entries(rust).find(([k]) => k.endsWith(`/rust/src/${path}`))?.[1] ?? '');
@@ -30,8 +36,7 @@ const rs = (path: string): string => withoutTests(Object.entries(rust).find(([k]
 const fnBody = (text: string, name: string): string => {
   const at = text.search(new RegExp(`\\bfn ${name}\\b`));
   if (at < 0) return '';
-  const open = text.indexOf('{', at);
-  return text.slice(open, closing(text, open));
+  return text.slice(text.indexOf('{', at), itemEnd(text, at));
 };
 const all = (text: string, re: RegExp): string[] => [...text.matchAll(re)].map((m) => m[1] ?? '');
 const unique = (xs: string[]): string[] => [...new Set(xs)];
@@ -113,7 +118,16 @@ describe('records and alerts in plain words', () => {
     ]));
     for (const [name, text] of Object.entries({ audit, gateway, policy, signer, tools, runs, server, adminCli, membership })) {
       expect(text.length, name).toBeGreaterThan(1000);
-      expect(text, name).not.toContain('#[test]');
+    }
+    // only test modules are left out, whole: no test is read, and no product item after a test
+    // module is lost with it (rust/src/team/sync.rs keeps product code after `mod retry_tests`)
+    expect(product).not.toContain('#[test]');
+    const ITEM = /^(?:pub(?:\([a-z]+\))? )?(?:fn|struct|enum|impl|const|static|mod|use|type|trait)\b|^#\[/;
+    for (const [file, text] of Object.entries(rust)) {
+      for (const [start, end] of testModules(text)) {
+        const inside = text.slice(start, end).split('\n').slice(2, -1).filter((l) => ITEM.test(l));
+        expect(inside, file).toEqual([]);
+      }
     }
   });
 
