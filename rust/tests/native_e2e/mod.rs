@@ -151,6 +151,7 @@ impl Admin {
             env: self.env.clone(),
             state: self.state.clone(),
             cwd: None,
+            umask: None,
         }
     }
 
@@ -221,6 +222,7 @@ pub struct AdminCall<'a> {
     env: Vec<(String, String)>,
     state: PathBuf,
     cwd: Option<PathBuf>,
+    umask: Option<&'static str>,
 }
 
 impl AdminCall<'_> {
@@ -257,6 +259,14 @@ impl AdminCall<'_> {
         self
     }
 
+    /// Run under this umask (octal, e.g. `"022"`): through `/bin/sh -c
+    /// 'umask ...; exec zeropw-admin ...'`, since the test process's own
+    /// umask is shared by every test thread.
+    pub fn umask(mut self, mask: &'static str) -> Self {
+        self.umask = Some(mask);
+        self
+    }
+
     /// Run; returns (exit code, stdout, stderr). Stdin is the given bytes,
     /// else empty (never a terminal, so no prompt).
     pub fn run(self) -> (i32, String, String) {
@@ -266,7 +276,16 @@ impl AdminCall<'_> {
             argv.push(self.state.to_string_lossy().into_owned());
         }
         argv.extend(self.args.iter().cloned());
-        let mut command = Command::new(ADMIN_BIN);
+        let mut command = match self.umask {
+            Some(mask) => {
+                let mut sh = Command::new("/bin/sh");
+                sh.arg("-c")
+                    .arg(format!("umask {mask} && exec \"$0\" \"$@\""))
+                    .arg(ADMIN_BIN);
+                sh
+            }
+            None => Command::new(ADMIN_BIN),
+        };
         command
             .args(&argv)
             .env_clear()
