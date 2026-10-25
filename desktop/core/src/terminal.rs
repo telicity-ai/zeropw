@@ -9,9 +9,9 @@
 //!   first) rebuild `PATH` after that. For zsh, the macOS default, `ZDOTDIR` points at the
 //!   app's own startup files ([`TerminalManager::with_zsh_dir`]), as VS Code's shell
 //!   integration does: each runs the user's file of the same name, and the last ones put the
-//!   bundle folder first again and give `ZDOTDIR` back to the user. Other shells keep the
-//!   order their startup files leave, which is why the suggested commands name the bundled
-//!   binaries by absolute path.
+//!   bundle folder first again and give `ZDOTDIR` back to the user. Other shells, and a zsh
+//!   started again inside the session (tmux, `zsh -l`), keep the order their startup files
+//!   leave, which is why the suggested commands name the bundled binaries by absolute path.
 //! - The rest of the environment is an allowlist taken from the app process (`HOME`, `USER`,
 //!   locale, …); anything else, including any `ZEROPW_*` variable, is dropped.
 //! - Suggested commands are returned for the UI to place at the prompt; nothing runs until the
