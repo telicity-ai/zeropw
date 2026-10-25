@@ -535,6 +535,7 @@ export const COPY = {
   'team.share.warn': '합류한 기기는 역할과 상관없이 이 환경의 키를 모두 열 수 있어요. 공유는 되돌릴 수 없어요',
   'team.err.shared': '이미 공유한 환경이에요',
   'team.err.used': '이미 쓰인 링크예요',
+  'team.err.adminOnly': '이 팀 환경에는 관리자 기기만 넣을 수 있어요',
   'team.join.sub': '링크를 확인하고 합류해요. 누르기 전에는 아무 일도 없어요',
   'team.join.confirm': '합류하기',
   'join.err.failed': '합류하지 못했어요. 링크를 다시 확인해 주세요',

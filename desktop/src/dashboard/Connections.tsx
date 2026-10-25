@@ -7,7 +7,7 @@ import {
   methodsPayload, nextMethodState, parsePathPrefixes, parsePort, publicKeyOf, splitEnv, SSH_PROGRAM, summarizeConnection, teamEnvPairs,
   writeConsequences, type EnvPair, type Method, type MethodStates,
 } from '../lib/dash';
-import { sshProgramError } from '../lib/reasons';
+import { sshProgramError, teamWriteErrorKey } from '../lib/reasons';
 import { isValidName, parseTarget } from '../lib/validators';
 import { useApp } from '../ui/context';
 import { PassField, SelectField, TextField, useSelectDefault } from '../ui/fields';
@@ -318,7 +318,9 @@ export function CreateConnectionSheet({ open, pairs, connections, secrets, onClo
         secret_kind_mismatch: ['key', 'conn.key.err.kind'], secret_scope_mismatch: ['key', 'conn.key.err.pick'],
         secret_version_unusable: ['key', 'conn.key.err.unusable'], secret_not_found: ['key', 'conn.key.err.pick'],
       };
-      const hit = ipc.error === 'AuthFailed' ? (['pass', passErrorKey(e)] as [ErrKey, CopyKey]) : map[r];
+      // a team environment this device may not write to (not one of its admins) is said under it
+      const team = teamWriteErrorKey(r);
+      const hit = ipc.error === 'AuthFailed' ? (['pass', passErrorKey(e)] as [ErrKey, CopyKey]) : team ? (['env', team] as [ErrKey, CopyKey]) : map[r];
       if (hit) { setErrs({ [hit[0]]: hit[1] }); focusErr(hit[0]); }
       else setErrs({ form: 'error.generic' });
     } finally { setBusy(false); }

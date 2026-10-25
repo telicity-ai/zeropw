@@ -53,6 +53,17 @@ export function sshProgramError(reason: string): { field: CopyKey } | { form: Co
   return null;
 }
 
+/** A key or a connection refused in a team environment for this device's place in that team: the
+ *  team commit behind it is refused to a device that is not one of the team's admins (`not_admin`,
+ *  whatever role it joined with) or was removed from it (`member_removed`), and waits while the
+ *  team's key is replaced (`team_rekey_pending`; rust/src/team/membership.rs `author_commit`).
+ *  The line goes under the environment; null for anything else. */
+export function teamWriteErrorKey(reason: string): CopyKey | null {
+  if (reason === 'not_admin' || reason === 'member_removed') return 'team.err.adminOnly';
+  if (reason === 'team_rekey_pending') return 'imp.err.rekey';
+  return null;
+}
+
 /** The sidecar could not open other-device access at the saved team address
  *  (rust/src/team/transport.rs). The gateway and the SSH signer run in the same process, so the
  *  whole relay stays off; the core passes the sidecar's reason on. */
