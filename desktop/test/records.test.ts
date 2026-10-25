@@ -2,57 +2,99 @@ import { describe, expect, it } from 'vitest';
 import { t } from '../src/copy';
 import { recordView } from '../src/lib/records';
 
-// The CLI's own list of events and the alerts it writes (rust/src/audit.rs), read from the source
-// so a new event or alert there shows up here.
-const audit = Object.values(import.meta.glob('../../rust/src/audit.rs', { query: '?raw', import: 'default', eager: true }) as Record<string, string>)[0] ?? '';
-const block = (name: string): string => audit.slice(audit.indexOf(`pub const ${name}`), audit.indexOf('];', audit.indexOf(`pub const ${name}`)));
-const quoted = (text: string): string[] => [...text.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1] ?? '');
-const EVENTS = quoted(block('EVENTS'));
-const maybeAlert = audit.slice(audit.indexOf('fn maybe_alert'), audit.indexOf('pub fn tail'));
-const ALERTS = [...new Set([...maybeAlert.matchAll(/self\.alert\(\s*"([a-z_]+)"/g)].map((m) => m[1] ?? ''))];
-// fixed English details: the ones written with an alert, and the exposure and failure tables
-const DETAILS = [
-  ...[...maybeAlert.matchAll(/self\.alert\(\s*"[a-z_]+",\s*record,\s*"([^"]+)"/g)].map((m) => m[1] ?? ''),
-  ...[...block('CREDENTIAL_EXPOSURE_REASONS').matchAll(/\(\s*"[a-z_]+",\s*"([^"]+)",?\s*\)/g)].map((m) => m[1] ?? ''),
-  ...[...block('FAILURE_ALERT_REASONS').matchAll(/\(\s*"[a-z_]+",\s*"([^"]+)",?\s*\)/g)].map((m) => m[1] ?? ''),
-];
-const HANGUL = /[가-힣]/;
-
-// The results and reasons the relay, the SSH signer and an agent's commands record, read the same
-// way (each file's `mod tests` left out).
-const sources = import.meta.glob(['../../rust/src/gateway.rs', '../../rust/src/signer.rs', '../../rust/src/tools.rs', '../../rust/src/runs.rs'], { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
-const rs = (name: string): string => {
-  const text = Object.entries(sources).find(([k]) => k.endsWith(`/${name}`))?.[1] ?? '';
-  const tests = text.search(/^#\[cfg\(test\)\]\r?\nmod tests\b/m);
-  return tests < 0 ? text : text.slice(0, tests);
+// The CLI's Rust source, read so that a code added there shows up here. Each `#[cfg(test)] mod`
+// is left out (its braces counted; the Rust here keeps them balanced), so only what the product
+// writes counts.
+const rust = import.meta.glob('../../rust/src/**/*.rs', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
+/** The index just past the `}` that closes the `{` at `open`. */
+function closing(text: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < text.length; i++) {
+    if (text[i] === '{') depth++;
+    else if (text[i] === '}' && --depth === 0) return i + 1;
+  }
+  return text.length;
+}
+function withoutTests(text: string): string {
+  const head = /^#\[cfg\(test\)\]\r?\n(?:pub(?:\(crate\))? )?mod \w+ \{/gm;
+  let out = '', from = 0;
+  for (let m = head.exec(text); m; m = head.exec(text)) {
+    out += text.slice(from, m.index);
+    from = closing(text, m.index + m[0].length - 1);
+    head.lastIndex = from;
+  }
+  return out + text.slice(from);
+}
+const rs = (path: string): string => withoutTests(Object.entries(rust).find(([k]) => k.endsWith(`/rust/src/${path}`))?.[1] ?? '');
+/** The body of `fn name`. */
+const fnBody = (text: string, name: string): string => {
+  const at = text.search(new RegExp(`\\bfn ${name}\\b`));
+  if (at < 0) return '';
+  const open = text.indexOf('{', at);
+  return text.slice(open, closing(text, open));
 };
 const all = (text: string, re: RegExp): string[] => [...text.matchAll(re)].map((m) => m[1] ?? '');
-const gateway = rs('gateway.rs'), signer = rs('signer.rs'), tools = rs('tools.rs'), runs = rs('runs.rs');
-const RESULTS = [...new Set([
-  ...all(gateway + signer + tools + runs, /result: Some\("([a-z_]+)"\)/g),
+const unique = (xs: string[]): string[] => [...new Set(xs)];
+
+// The events the CLI lists, the alerts it writes and their fixed English details
+// (rust/src/audit.rs).
+const audit = rs('audit.rs');
+const constList = (name: string): string => audit.slice(audit.indexOf(`pub const ${name}`), audit.indexOf('];', audit.indexOf(`pub const ${name}`)));
+const quoted = (text: string): string[] => [...text.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1] ?? '');
+const EVENTS = quoted(constList('EVENTS'));
+const maybeAlert = fnBody(audit, 'maybe_alert');
+const ALERTS = unique(all(maybeAlert, /self\.alert\(\s*"([a-z_]+)"/g));
+// fixed English details: the ones written with an alert, and the exposure and failure tables
+const DETAILS = [
+  ...all(maybeAlert, /self\.alert\(\s*"[a-z_]+",\s*record,\s*"([^"]+)"/g),
+  ...all(constList('CREDENTIAL_EXPOSURE_REASONS'), /\(\s*"[a-z_]+",\s*"([^"]+)",?\s*\)/g),
+  ...all(constList('FAILURE_ALERT_REASONS'), /\(\s*"[a-z_]+",\s*"([^"]+)",?\s*\)/g),
+];
+// the details made from a format: an incident's scope, the denials in a window
+const FORMATS = all(maybeAlert, /self\.alert\(\s*"[a-z_]+",\s*record,\s*&format!\(\s*"([^"]+)"/g);
+const THRESHOLD = /pub const DENIAL_THRESHOLD: usize = (\d+);/.exec(audit)?.[1] ?? '';
+const WINDOW = /pub const DENIAL_WINDOW_SECONDS: f64 = (\d+)\.0;/.exec(audit)?.[1] ?? '';
+const HANGUL = /[가-힣]/;
+
+// Every result the CLI records, and the reasons the relay (its requests, its policy and the
+// service behind a connection), the SSH signer and an agent's commands and runs record.
+const product = Object.keys(rust).map((k) => withoutTests(rust[k] ?? '')).join('\n');
+const gateway = rs('gateway.rs'), policy = rs('policy.rs'), signer = rs('signer.rs'), tools = rs('tools.rs'), runs = rs('runs.rs'), server = rs('server.rs');
+const RESULTS = unique([
+  ...all(product, /result: Some\("([a-z_]+)"\)/g),
   ...all(gateway, /result: "([a-z_]+)"/g), ...all(gateway, /self\.audit\("([a-z_]+)"/g),
   ...all(tools, /refuse_exec\(\s*ctx,\s*caller,\s*id,\s*req,\s*"([a-z_]+)"/g), ...all(tools, /Some\(\("([a-z_]+)", Error::/g),
   ...all(runs, /(?:COMPLETED|CANCELLED|BLOCKED|_) => "([a-z]+)",/g),
-])];
-const REASONS = [...new Set([
+]);
+const REASONS = unique([
+  // written as a record's reason
+  ...all(gateway + signer + tools + runs + server, /reason: Some\("([a-z_]+)"\)/g),
+  ...all(gateway + runs, /Some\("([a-z_]+)"\.(?:to_string|into)\(\)\)/g),
+  // the relay: a refused request or key, the service's failures
+  ...all(gateway, /self\.refuse\(\s*\d+,\s*"([a-z_]+)"/g), ...all(gateway, /Invalid\("([a-z_]+)"\)/g),
+  ...all(gateway, /UpstreamFailure::(?:denied|error|blocked)\(\s*"([a-z_]+)"/g),
+  ...all(gateway, /fn (classify_\w+)/g).flatMap((name) => all(fnBody(gateway, name), /"([a-z_]+)"/g)),
+  // its policy's denials
+  ...all(policy, /Decision::denied(?:_with_connection)?\(\s*"([a-z_]+)"/g),
+  ...['grant_state', 'scope_reason', 'address_block_reason'].flatMap((name) => all(fnBody(policy, name), /Some\("([a-z_]+)"\)/g)),
+  // the SSH signer
   ...all(signer, /safe_audit\(\s*"[a-z_]+",\s*"[a-z_]+",\s*Some\("([a-z_]+)"\)/g),
-  ...all(gateway, /UpstreamFailure::(?:denied|error|blocked)\("([a-z_]+)"/g),
-  ...all(gateway, /self\.refuse\(\s*\d+,\s*"([a-z_]+)"/g),
+  // an agent's commands, and why a run failed or was cancelled
   ...all(tools, /refuse_exec\(\s*ctx,\s*caller,\s*id,\s*req,\s*"[a-z_]+",\s*"([a-z_]+)"/g),
   ...all(tools, /Error::(?:unsupported|state)\("([a-z_]+)"\)/g),
-])];
+  ...all(runs, /Outcome::failed\("([a-z_]+)"\)/g), ...all(fnBody(runs, 'on_revoke'), /=> "([a-z_]+)"/g),
+  ...all(product, /\.cancel\([^;]*?,\s*"([a-z_]+)"\)/g), ...all(product, /\b(?:cancel_all|shutdown)\("([a-z_]+)"/g),
+]);
 
 // The events the administrator's CLI records with the caller `admin`: its record helpers and
 // refusals (rust/src/admin_cli.rs) and the team commands (rust/src/team/membership.rs `audit`).
-const adminSources = import.meta.glob(['../../rust/src/admin_cli.rs', '../../rust/src/team/membership.rs'], { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
-const adminCli = Object.entries(adminSources).find(([k]) => k.endsWith('/admin_cli.rs'))?.[1] ?? '';
-const membership = Object.entries(adminSources).find(([k]) => k.endsWith('/membership.rs'))?.[1] ?? '';
-const ADMIN_WRITTEN = [...new Set([
+const adminCli = rs('admin_cli.rs'), membership = rs('team/membership.rs');
+const ADMIN_WRITTEN = unique([
   ...all(adminCli, /admin_record(?:_for)?\(\s*&?ctx,\s*"([a-z_]+)"/g),
   ...all(adminCli, /refuse_cli_env\([^;]*?,\s*"([a-z_]+)"\)/g),
   ...all(adminCli + membership, /\.record\(\s*"([a-z_]+)",\s*RecordArgs \{\s*caller: Some\("admin"\)/g),
   ...all(membership, /\baudit\(\s*ctx,\s*"([a-z_]+)"/g),
-])];
+]);
 
 describe('records and alerts in plain words', () => {
   it('reads the CLI source it follows', () => {
@@ -60,11 +102,22 @@ describe('records and alerts in plain words', () => {
     expect(EVENTS).toContain('http_relay');
     expect(ALERTS).toEqual(expect.arrayContaining(['secret_reveal', 'intrusion', 'revoked_use_attempt', 'repeated_denials', 'failure', 'credential_exposure']));
     expect(DETAILS.length).toBeGreaterThanOrEqual(13);
-    expect(RESULTS).toEqual(expect.arrayContaining(['ok', 'denied', 'failed', 'attempt', 'error', 'blocked', 'cancelled', 'unsupported']));
-    expect(REASONS).toEqual(expect.arrayContaining(['unknown_key', 'no_session_bind', 'upstream_unreachable', 'request_in_flight', 'cli_not_supported', 'cli_program_missing']));
+    expect(FORMATS).toHaveLength(3);
+    expect([THRESHOLD, WINDOW]).toEqual([expect.stringMatching(/^\d+$/), expect.stringMatching(/^\d+$/)]);
+    // pr69-frontend-records-a11y-2: `skipped` is written only by the team fold, the policy's
+    // denials only in rust/src/policy.rs, and gateway.rs's test modules are not named `tests`
+    expect(RESULTS).toEqual(expect.arrayContaining(['ok', 'denied', 'failed', 'attempt', 'error', 'blocked', 'cancelled', 'unsupported', 'skipped']));
+    expect(REASONS).toEqual(expect.arrayContaining([
+      'unknown_key', 'no_session_bind', 'upstream_unreachable', 'request_in_flight', 'cli_not_supported', 'cli_program_missing',
+      'grant_revoked', 'global_stop', 'path_not_allowed', 'upstream_timeout', 'replay_body_unavailable', 'cancelled_by_caller',
+    ]));
+    for (const [name, text] of Object.entries({ audit, gateway, policy, signer, tools, runs, server, adminCli, membership })) {
+      expect(text.length, name).toBeGreaterThan(1000);
+      expect(text, name).not.toContain('#[test]');
+    }
   });
 
-  it('says every result in words, and every reason the relay, the SSH signer and a command record', () => {
+  it('says every result in words, and every reason the relay, its policy, the SSH signer and a command record', () => {
     for (const result of RESULTS) {
       const v = recordView({ ts: 't', event: 'http_relay', result }, 'audit');
       expect(v.raw, result).toEqual([]);
@@ -141,13 +194,15 @@ describe('records and alerts in plain words', () => {
     expect(v.raw).toEqual([]);
   });
 
-  it('reads the scope of an incident alert and the count of repeated denials from their fixed formats', () => {
-    expect(recordView({ ts: 't', alert: 'intrusion', event: 'incident_open', reason: 'auto', detail: 'incident opened: scope=runtime reason=auto' }, 'alert'))
+  it('reads the scope of an incident alert and the count of repeated denials from the formats the CLI writes', () => {
+    const format = (head: string, scope = 'runtime') => (FORMATS.find((f) => f.includes(head)) ?? '')
+      .replace('{scope}', scope).replace('{reason_display}', 'auto').replace('{DENIAL_THRESHOLD}', THRESHOLD).replace('{}', WINDOW);
+    expect(recordView({ ts: 't', alert: 'intrusion', event: 'incident_open', reason: 'auto', detail: format('incident opened') }, 'alert'))
       .toMatchObject({ title: '사고가 열렸어요', meta: ['실행 계정 범위', '자동 감지'], raw: [] });
-    expect(recordView({ ts: 't', alert: 'intrusion', event: 'incident_widen', reason: 'widen', detail: 'incident widened to scope=all' }, 'alert'))
+    expect(recordView({ ts: 't', alert: 'intrusion', event: 'incident_widen', reason: 'widen', detail: format('incident widened', 'all') }, 'alert'))
       .toMatchObject({ title: '사고 범위가 넓어졌어요', meta: ['전체 범위'], raw: [] });
-    expect(recordView({ ts: 't', alert: 'repeated_denials', caller: 'agent-1', event: 'http_relay', reason: 'path_not_allowed', detail: '5 denials within 60s' }, 'alert').meta)
-      .toEqual(['agent-1', 'API 중계', '60초 안에 5번', '허용하지 않은 경로']);
+    expect(recordView({ ts: 't', alert: 'repeated_denials', caller: 'agent-1', event: 'http_relay', reason: 'path_not_allowed', detail: format('denials within') }, 'alert').meta)
+      .toEqual(['agent-1', 'API 중계', t('log.denials', { n: THRESHOLD, s: WINDOW }), '허용하지 않은 경로']);
     // a scope this table does not know is not read out of the text
     expect(recordView({ ts: 't', alert: 'intrusion', event: 'incident_open', detail: 'incident opened: scope=fleet reason=manual' }, 'alert').raw)
       .toEqual(['detail=incident opened: scope=fleet reason=manual']);
