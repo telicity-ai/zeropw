@@ -36,7 +36,7 @@ All paths below are under `rust/src/`.
 | `incident.rs`, `intrusion.rs` | Incident state, assessment and synchronous detection/containment | Trusted |
 | `notify.rs`, `smtp.rs` | Rotation guidance, SMTP/TLS delivery and retries | Trusted |
 | `admin_cli.rs` | Administration and `serve` | Human administrator |
-| `context.rs`, `store.rs`, `projects.rs` | 0700/0600 state, atomic replacement, flock, projects/environments and components | Trusted |
+| `context.rs`, `store.rs`, `projects.rs` | 0700/0600 state (a write that creates several directories, such as `team/<env>/commits/<fp>/<seq>.json`, makes each one 0700, not only the last, under the desktop app's umask 022 too; `native_team_cli::team_share_under_umask_022_keeps_every_state_directory_private`), atomic replacement, flock, projects/environments and components | Trusted |
 | `fake_upstream.rs`, `demo.rs` | Synthetic upstream and demonstration | Tests/demos |
 | `team/identity.rs`, `team/envelope.rs` | Device signing/agreement keys, fingerprints and wrapped DEK generations | Trusted |
 | `team/commit.rs`, `team/fold.rs`, `team/humanview.rs` | Signed commits, HLC ordering, deterministic folding, derivation, snapshots and display | Trusted |
