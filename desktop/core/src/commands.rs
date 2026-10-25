@@ -1984,14 +1984,15 @@ fn show_serve(
 /// as stopped without waiting for the window to ask. Starts, stops and the startup report
 /// under the supervisor's lock too, so a look never comes between one of them and its
 /// report: a stale look never overrides a newer start or stop, and a start is never reported
-/// after a newer look found its sidecar gone. Ends once the core is gone.
+/// after a newer look found its sidecar gone. Ends once the core is gone. Without this thread
+/// (the system refused it) the window learns only when it asks, and the core says so.
 fn watch_serve(
     serve: Weak<ServeSupervisor>,
     shown: Arc<Mutex<ServeStatus>>,
     events: Arc<dyn EventSink>,
     every: Duration,
 ) {
-    let _ = thread::Builder::new()
+    let spawned = thread::Builder::new()
         .name("serve-watch".into())
         .spawn(move || {
             loop {
@@ -2002,6 +2003,13 @@ fn watch_serve(
                 serve.watch(|status| show_serve(&shown, events.as_ref(), &status, false));
             }
         });
+    if let Err(e) = spawned {
+        eprintln!(
+            "zeropw: serve watch did not start ({:?}): the window learns that serve stopped \
+             only when it asks",
+            e.kind()
+        );
+    }
 }
 
 fn digest(text: &str) -> [u8; 32] {
