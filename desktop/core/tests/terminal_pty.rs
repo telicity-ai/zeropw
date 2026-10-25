@@ -223,7 +223,9 @@ fn write_files(dir: &Path, files: &[(&str, &str)]) {
 /// puts Homebrew first) rebuilt PATH after the app had put the bundle folder first, so
 /// `zeropw-agent` ran another build. For zsh the app's own startup files run the user's and
 /// then put the bundle folder first again, once; ZDOTDIR, history and the rest stay as the
-/// user's files set them, and no helper variable is left behind. Another shell is left alone.
+/// user's files set them, and no helper variable is left behind, also when the user's
+/// `.zshenv` stops zsh reading further files (`unsetopt rcs`). A program the user's files
+/// start never sees the helpers. Another shell is left alone.
 #[test]
 fn zsh_keeps_the_bundle_folder_first_after_the_user_startup_files() {
     use std::os::unix::fs::PermissionsExt;
@@ -234,13 +236,15 @@ fn zsh_keeps_the_bundle_folder_first_after_the_user_startup_files() {
     std::fs::create_dir_all(&bin).unwrap();
     let bin_text = bin.to_string_lossy().into_owned();
     let zsh_dir = dir.path().join("app/zsh");
+    // What a program started from the user's `.zshenv` sees of the helpers.
+    let child = "ZPW_CHILD=$(/bin/sh -c 'echo \"${ZEROPW_TERMINAL_BIN-none}\"')\n";
 
     // Startup files in HOME, the most common setup.
     let plain = dir.path().join("home plain");
     write_files(
         &plain,
         &[
-            (".zshenv", "ZPW_MARKS=env\n"),
+            (".zshenv", &format!("ZPW_MARKS=env\n{child}")),
             (
                 ".zprofile",
                 "ZPW_MARKS+=,profile\nPATH=/synthetic/brew/bin:$PATH\n",
@@ -257,7 +261,7 @@ fn zsh_keeps_the_bundle_folder_first_after_the_user_startup_files() {
         &[
             (
                 ".zshenv",
-                "ZPW_MARKS=env\nexport ZDOTDIR=$HOME/.config/zsh\n",
+                &format!("ZPW_MARKS=env\n{child}export ZDOTDIR=$HOME/.config/zsh\n"),
             ),
             (".zprofile", "ZPW_MARKS+=,home-profile\n"),
             (
@@ -268,6 +272,18 @@ fn zsh_keeps_the_bundle_folder_first_after_the_user_startup_files() {
             (
                 ".config/zsh/.zlogin",
                 "ZPW_MARKS+=,login\nPATH=/synthetic/login/bin:$PATH\n",
+            ),
+        ],
+    );
+    // A `.zshenv` that turns RCS off: zsh reads none of the later files, the app's included.
+    let norcs = dir.path().join("home-norcs");
+    write_files(
+        &norcs,
+        &[
+            (".zshenv", &format!("ZPW_MARKS=env\n{child}unsetopt rcs\n")),
+            (
+                ".zprofile",
+                "ZPW_MARKS+=,profile\nPATH=/synthetic/brew/bin:$PATH\n",
             ),
         ],
     );
@@ -283,12 +299,15 @@ fn zsh_keeps_the_bundle_folder_first_after_the_user_startup_files() {
         r#"print -r -- "$((6*7))P=$PATH"; print -r -- "$((6*7))M=${ZPW_MARKS-}"; "#,
         r#"print -r -- "$((6*7))Z=${ZDOTDIR-none}"; print -r -- "$((6*7))H=${HISTFILE-none}"; "#,
         r#"print -r -- "$((6*7))X=${+ZEROPW_TERMINAL_BIN}${+ZEROPW_USER_ZDOTDIR}${+ZEROPW_ZDOTDIR}"; "#,
+        r#"print -r -- "$((6*7))C=${ZPW_CHILD-unset}"; "#,
         "exit\n"
     );
 
-    for (home, zdotdir) in [
-        (&plain, "none".to_owned()),
-        (&xdg, xdg_zdotdir.to_string_lossy().into_owned()),
+    let all = "env,profile,rc,login";
+    for (home, zdotdir, marks, brew) in [
+        (&plain, "none".to_owned(), all, true),
+        (&xdg, xdg_zdotdir.to_string_lossy().into_owned(), all, true),
+        (&norcs, "none".to_owned(), "env", false),
     ] {
         let manager = TerminalManager::new(TerminalProgram::LoginShell)
             .with_zsh_dir(&zsh_dir)
@@ -303,8 +322,8 @@ fn zsh_keeps_the_bundle_folder_first_after_the_user_startup_files() {
         let dirs: Vec<&str> = path.split(':').collect();
         assert_eq!(dirs[0], bin_text, "{path}");
         assert_eq!(dirs.iter().filter(|d| **d == bin_text).count(), 1, "{path}");
-        assert!(dirs.contains(&"/synthetic/brew/bin"), "{path}");
-        assert_eq!(printed(&text, "M"), "env,profile,rc,login");
+        assert_eq!(dirs.contains(&"/synthetic/brew/bin"), brew, "{path}");
+        assert_eq!(printed(&text, "M"), marks);
         assert_eq!(printed(&text, "Z"), zdotdir);
         let history = printed(&text, "H");
         assert!(
@@ -312,6 +331,7 @@ fn zsh_keeps_the_bundle_folder_first_after_the_user_startup_files() {
             "history in the app's folder: {history}"
         );
         assert_eq!(printed(&text, "X"), "000");
+        assert_eq!(printed(&text, "C"), "none");
         assert!(!text.contains(TOKEN), "token printed: {text}");
     }
 

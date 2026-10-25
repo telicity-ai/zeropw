@@ -297,6 +297,17 @@ const ZSH_HEADER: &str = "\
 # folder first on PATH and gives ZDOTDIR back to you.
 ";
 
+/// Note this folder, and keep the helper variables to these files: the programs the shell
+/// and the user's files start do not get them.
+const ZSH_START: &str = r#"ZEROPW_ZDOTDIR=$ZDOTDIR
+if (( ${+ZEROPW_TERMINAL_BIN} )); then
+  builtin typeset +x ZEROPW_TERMINAL_BIN
+fi
+if (( ${+ZEROPW_USER_ZDOTDIR} )); then
+  builtin typeset +x ZEROPW_USER_ZDOTDIR
+fi
+"#;
+
 /// Run the user's own startup file `@FILE@` with `ZDOTDIR` as the user has it (unset when
 /// they have none), note the user's `ZDOTDIR` afterwards (a `.zshenv` often sets it), then
 /// point zsh back here for its next file. Top level, not a function, so that the user's
@@ -344,32 +355,37 @@ fi
 builtin unset ZEROPW_USER_ZDOTDIR ZEROPW_TERMINAL_BIN ZEROPW_ZDOTDIR ZEROPW_PATH ZEROPW_DIR
 "#;
 
-/// One of the app's zsh startup files. A login shell (the app's) finishes in `.zlogin`, the
-/// last file it reads; any other interactive shell in `.zshrc`.
+/// One of the app's zsh startup files. The last file zsh reads puts the bundle folder first
+/// and finishes: `.zlogin` for a login shell (the app's), `.zshrc` for any other interactive
+/// shell, or an earlier one when the user's file turned `RCS` off, after which zsh reads no
+/// more startup files.
 fn zsh_startup_file(name: &str) -> String {
     let mut text = String::from(ZSH_HEADER);
     match name {
-        ".zshenv" => text.push_str("ZEROPW_ZDOTDIR=$ZDOTDIR\n"),
+        ".zshenv" => text.push_str(ZSH_START),
         ".zshrc" => text.push_str(ZSH_HISTORY),
         _ => {}
     }
     text.push_str(&ZSH_USER_FILE.replace("@FILE@", name));
-    match name {
-        ".zshrc" => {
+    let last = match name {
+        ".zlogin" => None,
+        ".zshrc" => Some("! -o login || ! -o rcs"),
+        _ => Some("! -o rcs"),
+    };
+    match last {
+        None => {
             text.push_str(ZSH_PATH_FIRST);
-            text.push_str("if [[ ! -o login ]]; then\n");
-            for line in ZSH_FINISH.lines() {
+            text.push_str(ZSH_FINISH);
+        }
+        Some(condition) => {
+            text.push_str(&format!("if [[ {condition} ]]; then\n"));
+            for line in ZSH_PATH_FIRST.lines().chain(ZSH_FINISH.lines()) {
                 text.push_str("  ");
                 text.push_str(line);
                 text.push('\n');
             }
             text.push_str("fi\n");
         }
-        ".zlogin" => {
-            text.push_str(ZSH_PATH_FIRST);
-            text.push_str(ZSH_FINISH);
-        }
-        _ => {}
     }
     text
 }
