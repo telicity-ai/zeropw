@@ -1,11 +1,11 @@
 import { useRef, useState } from 'react';
 import { t, type CopyKey } from '../copy';
 import { call, toIpcError } from '../ipc/client';
-import type { ConnectionView, Project, SecretKind, SecretSource, SecretView } from '../ipc/contract';
+import type { ConnectionView, SecretKind, SecretSource, SecretView } from '../ipc/contract';
 import {
-  defaultMethodStates, envPairs, isBasicUser, isCliPath, isHeaderName, isHostKey, isPlainText, isSshHost, isSshUser, keyChoices, METHODS,
-  methodsPayload, nextMethodState, parsePathPrefixes, parsePort, publicKeyOf, splitEnv, SSH_PROGRAM, summarizeConnection, writeConsequences,
-  type Method, type MethodStates,
+  defaultMethodStates, isBasicUser, isCliPath, isHeaderName, isHostKey, isPlainText, isSshHost, isSshUser, keyChoices, METHODS,
+  methodsPayload, nextMethodState, parsePathPrefixes, parsePort, publicKeyOf, splitEnv, SSH_PROGRAM, summarizeConnection, teamEnvPairs,
+  writeConsequences, type EnvPair, type Method, type MethodStates,
 } from '../lib/dash';
 import { sshProgramError } from '../lib/reasons';
 import { isValidName, parseTarget } from '../lib/validators';
@@ -19,6 +19,7 @@ import { ListCard, metaLine, Row, SectionHead, Tag } from './parts';
 import { Sheet } from './Sheet';
 
 type ConnSheet = { kind: 'create' } | { kind: 'disable'; id: string } | { kind: 'ssh-cli'; id: string };
+const NO_PAIRS: EnvPair[] = [];
 const CONSQ: Record<'POST' | 'PUT' | 'PATCH' | 'DELETE', CopyKey> = {
   POST: 'conn.consq.POST', PUT: 'conn.consq.PUT', PATCH: 'conn.consq.PATCH', DELETE: 'conn.consq.DELETE',
 };
@@ -29,7 +30,8 @@ export function ConnectionsPage({ intent, onIntent }: { intent?: Intent; onInten
   const [n, setN] = useState(0);
   const load = useLoad(async () => {
     const [c, p, s] = await Promise.all([call('connection_list'), call('project_list'), call('secret_list', {})]);
-    return { connections: c.connections, projects: p.projects, secrets: s.secrets };
+    // a team environment this device joined is offered too (the CLI refuses a role that may not)
+    return { connections: c.connections, pairs: teamEnvPairs(p), secrets: s.secrets };
   }, [tick, n]);
   const reload = () => setN((x) => x + 1);
   const sheets = useSheets<ConnSheet>();
@@ -63,7 +65,7 @@ export function ConnectionsPage({ intent, onIntent }: { intent?: Intent; onInten
         })}
       </ListCard>
 
-      <CreateConnectionSheet key={sheets.key('create')} open={sheets.isOpen('create')} projects={load.data?.projects ?? []}
+      <CreateConnectionSheet key={sheets.key('create')} open={sheets.isOpen('create')} pairs={load.data?.pairs ?? NO_PAIRS}
         connections={list ?? []} secrets={load.data?.secrets ?? []} onClose={sheets.close} onCreated={() => { reload(); bump(); }} />
       <DisableSheet key={sheets.key('disable')} open={sheets.isOpen('disable')} id={sheets.data('disable')?.id ?? ''}
         onClose={sheets.close} onDone={() => { sheets.close(); reload(); }} />
@@ -131,12 +133,12 @@ type Errs = Partial<Record<ErrKey, CopyKey>>;
  *  same project/environment (Keys page) or a new one: a new key is stored first (`secret_put`,
  *  named after the connection), then the connection is created with the admin passphrase. A typed
  *  key leaves the screen as soon as it is stored. A generated SSH key's public half is kept until
- *  the connection exists, so it is shown even when the first try failed. */
-function CreateConnectionSheet({ open, projects, connections, secrets, onClose, onCreated }: {
-  open: boolean; projects: Project[]; connections: ConnectionView[]; secrets: SecretView[]; onClose(): void; onCreated(): void;
+ *  the connection exists, so it is shown even when the first try failed. The environments are the
+ *  local ones and the team ones this device joined (`teamEnvPairs`). */
+export function CreateConnectionSheet({ open, pairs, connections, secrets, onClose, onCreated }: {
+  open: boolean; pairs: readonly EnvPair[]; connections: ConnectionView[]; secrets: SecretView[]; onClose(): void; onCreated(): void;
 }) {
   const { toast, field, announce } = useApp();
-  const pairs = envPairs(projects);
   const secretIds = secrets.map((s) => s.id);
   const [type, setType] = useState<ConnType>('http');
   const [src, setSrc] = useState<KeySrc>('new');

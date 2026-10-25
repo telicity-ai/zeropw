@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { t, type CopyKey } from '../copy';
 import { call, toIpcError } from '../ipc/client';
 import type { Commands, EnvFileRef, SecretKind, SecretSource, SecretView } from '../ipc/contract';
-import { envPairs, groupSecrets, olderVersionCount, publicKeyOf, REVEAL_SECONDS, sortedVersions, splitEnv, type VersionId, teamEnvPairs, type EnvPair } from '../lib/dash';
+import { groupSecrets, olderVersionCount, publicKeyOf, REVEAL_SECONDS, sortedVersions, splitEnv, type VersionId, teamEnvPairs, type EnvPair } from '../lib/dash';
 import { dropErrorKey } from '../lib/envimport';
 import { shortTime } from '../lib/format';
 import { DEFAULT_ENVIRONMENTS, isValidName } from '../lib/validators';
@@ -48,7 +48,8 @@ export function KeysPage({ intent, onIntent, incomingFile, onFileTaken }: {
   const [n, setN] = useState(0);
   const load = useLoad(async () => {
     const [p, s] = await Promise.all([call('project_list'), call('secret_list', {})]);
-    // a team environment this device joined is listed apart from its projects: a .env can go there too
+    // a team environment this device joined is listed apart from its projects: keys and a .env can
+    // go there too (the CLI refuses a device whose role may not)
     return { projects: p.projects, envs: teamEnvPairs(p), secrets: s.secrets };
   }, [tick, n]);
   const reload = () => setN((x) => x + 1);
@@ -109,7 +110,7 @@ export function KeysPage({ intent, onIntent, incomingFile, onFileTaken }: {
             ))}
       </div>
 
-      <AddKeySheet key={sheets.key('add')} open={sheets.isOpen('add')} data={sheets.data('add')} projects={load.data?.projects ?? []}
+      <AddKeySheet key={sheets.key('add')} open={sheets.isOpen('add')} data={sheets.data('add')} pairs={load.data?.envs ?? NO_PAIRS}
         taken={load.data?.secrets.map((s) => s.id) ?? []} onClose={sheets.close} onSaved={reload} />
       <VersionsSheet key={sheets.key('versions')} open={sheets.isOpen('versions')} id={sheets.data('versions')?.id ?? ''} onClose={sheets.close}
         onAction={(action, id, version) => sheets.open({ kind: 'confirm', action, id, version })}
@@ -130,13 +131,14 @@ export function KeysPage({ intent, onIntent, incomingFile, onFileTaken }: {
 
 type Kind3 = 'api_key' | 'password' | 'env_var';
 
-function AddKeySheet({ open, data, projects, taken, onClose, onSaved }: {
-  open: boolean; data: Extract<KeySheet, { kind: 'add' }> | undefined; projects: Parameters<typeof envPairs>[0]; taken: string[];
+/** A new key, or a new value for one (`replace`). The environments are the local ones and the
+ *  team ones this device joined (`teamEnvPairs`). */
+export function AddKeySheet({ open, data, pairs, taken, onClose, onSaved }: {
+  open: boolean; data: Extract<KeySheet, { kind: 'add' }> | undefined; pairs: readonly EnvPair[]; taken: string[];
   onClose(): void; onSaved(): void;
 }) {
   const { toast, field } = useApp();
   const replace = data?.replace;
-  const pairs = envPairs(projects);
   const [env, setEnv] = useState(replace ? `${replace.project}/${replace.environment}` : pairs[0]?.key ?? '');
   const [kind, setKind] = useState<SecretKind>(replace?.kind ?? 'api_key');
   const [id, setId] = useState(replace?.id ?? '');
