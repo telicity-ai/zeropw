@@ -74,6 +74,9 @@ const BUNDLE = '/Applications/ZeroPW.app/Contents/MacOS';
 const B32 = 'abcdefghijklmnopqrstuvwxyz234567';
 const HEX = '0123456789abcdef';
 const KINDS: readonly SecretKind[] = ['api_key', 'password', 'env_var', 'ssh_private_key'];
+/** The ssh programs this pretend machine has: the core refuses a path with no executable there
+ *  (`cli_program_not_found`). */
+const SSH_PATHS: ReadonlySet<string> = new Set(['/usr/bin/ssh', '/bin/ssh', '/usr/local/bin/ssh', '/opt/homebrew/bin/ssh']);
 const RING = 64 * 1024;
 
 const fail = (error: string, reason: string, detail?: string): AppError => (detail ? { error, reason, detail } : { error, reason });
@@ -773,6 +776,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       // desktop/core/src/commands.rs SshConnectionIn: the agent cannot use an SSH connection without its ssh
       if (typeof input.cli_program !== 'string') throw fail('InvalidInput', 'invalid_payload');
       if (!input.cli_program) throw fail('InvalidInput', 'cli_program_required');
+      if (!SSH_PATHS.has(input.cli_program)) throw fail('InvalidInput', 'cli_program_not_found');
       checkSecretFor('ssh', input.secret_id, input.project, input.environment);
       if (!isSshHost(input.host)) throw fail('InvalidInput', 'invalid_host');
       if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535) throw fail('InvalidInput', 'invalid_port');
@@ -792,10 +796,13 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     // rust/src/admin_cli.rs update_connection_cli: fills a missing ssh only; the grants go stale
     connection_set_cli_program: async (input) => {
       needInit(); await wait(300);
-      if (typeof input.cli_program !== 'string') throw fail('InvalidInput', 'invalid_payload');
-      // the core's order: a missing passphrase, an empty path, then the CLI checks the passphrase
-      if (typeof input.admin_passphrase !== 'string' || !input.admin_passphrase) throw fail('AuthFailed', 'passphrase_missing');
+      // a payload without either field is not read at all (serde: `invalid_payload`); then the
+      // core's order: an empty passphrase, an empty path, a path with no executable there, and
+      // only then the CLI, which checks the passphrase
+      if (typeof input.cli_program !== 'string' || typeof input.admin_passphrase !== 'string') throw fail('InvalidInput', 'invalid_payload');
+      if (!input.admin_passphrase) throw fail('AuthFailed', 'passphrase_missing');
       if (!input.cli_program) throw fail('InvalidInput', 'cli_program_required');
+      if (!SSH_PATHS.has(input.cli_program)) throw fail('InvalidInput', 'cli_program_not_found');
       checkAdmin(input.admin_passphrase);
       const c = connections.get(input.id);
       if (!c) throw fail('NotFound', 'connection_not_found');

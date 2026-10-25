@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { COPY, hasCopy } from '../src/copy';
 import { call, toIpcError, useMockBackend } from '../src/ipc/client';
 import { createMockBackend, INVITE_TTL_MS, type MockBackend } from '../src/ipc/mock';
-import { finaleJoinErrorKey, invitePreviewErrorKey, isStaleRef, joinErrorKey, listenFailureLines, offersListenOff, relayError } from '../src/lib/reasons';
+import { finaleJoinErrorKey, invitePreviewErrorKey, isStaleRef, joinErrorKey, listenFailureLines, offersListenOff, relayError, sshProgramError } from '../src/lib/reasons';
 import { holdSecureView, protectionOf } from '../src/ui/secure';
 
 let backend: MockBackend | null = null;
@@ -105,6 +105,23 @@ describe('relay start failures', () => {
     expect(COPY['listen.err.port']).not.toContain('{address}');
     expect(listenFailureLines({ ...base, reason: 'invalid_listen', detail: 'team_listen' })[0]?.key).toBe('set.listen.port.err');
     expect(listenFailureLines({ ...base, reason: 'team_invalid_listen_address', detail: 'team_listen' })[0]).toEqual({ key: 'listen.err.open', vars: { address: base.address } });
+  });
+});
+
+describe('the ssh of an SSH connection', () => {
+  it('puts a refused path under the path field, a missing program included', () => {
+    expect(sshProgramError('cli_program_not_found')).toEqual({ field: 'conn.cli.err.notFound' });
+    expect(sshProgramError('cli_program_required')).toEqual({ field: 'conn.cli.err' });
+    expect(sshProgramError('invalid_cli_program')).toEqual({ field: 'conn.cli.err' });
+    expect(COPY['conn.cli.err.notFound']).toContain('없어요');
+  });
+
+  it('reads the list again for a connection that changed, and calls only a disabled one off', () => {
+    expect(sshProgramError('cli_already_set')).toEqual({ form: 'conns.sshcli.err.set', stale: true });
+    expect(sshProgramError('connection_disabled')).toEqual({ form: 'conns.sshcli.err.off', stale: true });
+    // a connection that is gone (a restore while the list was open) was never turned off
+    expect(sshProgramError('connection_not_found')).toEqual({ form: null, stale: true });
+    expect(sshProgramError('bad_passphrase')).toBeNull();
   });
 });
 

@@ -7,6 +7,7 @@ import {
   methodsPayload, nextMethodState, parsePathPrefixes, parsePort, publicKeyOf, splitEnv, SSH_PROGRAM, summarizeConnection, writeConsequences,
   type Method, type MethodStates,
 } from '../lib/dash';
+import { sshProgramError } from '../lib/reasons';
 import { isValidName, parseTarget } from '../lib/validators';
 import { useApp } from '../ui/context';
 import { PassField, SelectField, TextField, useSelectDefault } from '../ui/fields';
@@ -74,7 +75,8 @@ export function ConnectionsPage({ intent, onIntent }: { intent?: Intent; onInten
 
 /** Gives an SSH connection made without an ssh the one its agents run (`connection_set_cli_program`).
  *  The CLI fills a missing ssh only, and the connection's grants go stale, so the sheet says the
- *  path cannot be changed later and that the agents' permissions must be given again. */
+ *  path cannot be changed later and that the agents' permissions must be given again. A path the
+ *  core refuses (none there on this device included) is shown under the field. */
 function SshCliSheet({ open, id, onClose, onStale, onDone }: { open: boolean; id: string; onClose(): void; onStale(): void; onDone(): void }) {
   const { toast } = useApp();
   const [path, setPath] = useState(SSH_PROGRAM);
@@ -94,12 +96,11 @@ function SshCliSheet({ open, id, onClose, onStale, onDone }: { open: boolean; id
         onDone();
       }}
       errorFor={(e) => {
-        const r = toIpcError(e).reason;
-        if (r === 'cli_program_required' || r === 'invalid_cli_program') return 'conn.cli.err';
+        const why = sshProgramError(toIpcError(e).reason);
+        if (why && 'field' in why) { setPathErr(why.field); pathRef.current?.focus(); return false; }
         // the list was out of date: show the connection as it is now
-        if (r === 'cli_already_set') { onStale(); return 'conns.sshcli.err.set'; }
-        if (r === 'connection_disabled' || r === 'connection_not_found') { onStale(); return 'conns.sshcli.err.off'; }
-        return null;
+        if (why?.stale) onStale();
+        return why?.form ?? null;
       }}
       onClose={onClose}>
       <TextField id="conn-sshcli-path" label={t('conn.ssh.cli')} mono value={path} inputRef={pathRef} placeholder={SSH_PROGRAM}
@@ -311,6 +312,7 @@ function CreateConnectionSheet({ open, projects, connections, secrets, onClose, 
         invalid_secret_value: ['key', 'keys.err.value'], file_token_unknown: ['key', 'keys.err.value'],
         host_key_required: ['hostKey', 'conn.ssh.hostkey.err'],
         cli_program_required: ['sshCli', 'conn.cli.err'], invalid_cli_program: [ssh ? 'sshCli' : 'cli', 'conn.cli.err'],
+        cli_program_not_found: [ssh ? 'sshCli' : 'cli', 'conn.cli.err.notFound'],
         secret_kind_mismatch: ['key', 'conn.key.err.kind'], secret_scope_mismatch: ['key', 'conn.key.err.pick'],
         secret_version_unusable: ['key', 'conn.key.err.unusable'], secret_not_found: ['key', 'conn.key.err.pick'],
       };

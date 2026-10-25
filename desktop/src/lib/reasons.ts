@@ -38,6 +38,21 @@ export function restoreErrorKey(reason: string): CopyKey | null {
   return null;
 }
 
+/** Why the ssh of an SSH connection was refused (`connection_create_ssh`,
+ *  `connection_set_cli_program`): a path problem goes under the path field (`field`): empty or
+ *  malformed, or no executable at that path on this device (`cli_program_not_found`). A problem
+ *  with the connection itself is one line for the sheet (`form`, the generic line when null) and
+ *  the list is out of date (`stale`): a connection that is gone (a restore while the list was
+ *  open) is not called off. null for anything else. */
+export function sshProgramError(reason: string): { field: CopyKey } | { form: CopyKey | null; stale: true } | null {
+  if (reason === 'cli_program_required' || reason === 'invalid_cli_program') return { field: 'conn.cli.err' };
+  if (reason === 'cli_program_not_found') return { field: 'conn.cli.err.notFound' };
+  if (reason === 'cli_already_set') return { form: 'conns.sshcli.err.set', stale: true };
+  if (reason === 'connection_disabled') return { form: 'conns.sshcli.err.off', stale: true };
+  if (reason === 'connection_not_found') return { form: null, stale: true };
+  return null;
+}
+
 /** The sidecar could not open other-device access at the saved team address
  *  (rust/src/team/transport.rs). The gateway and the SSH signer run in the same process, so the
  *  whole relay stays off; the core passes the sidecar's reason on. */

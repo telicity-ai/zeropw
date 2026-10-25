@@ -7,7 +7,7 @@ import { holdSecureView, secureViewHolders } from '../src/ui/secure';
 import { declareOutcome, grantState, liveGrants, olderVersionCount, pendingApprovals, runtimeStopsAll, SSH_PROGRAM, teamEnvPairs } from '../src/lib/dash';
 import { watchRecords } from '../src/dashboard/watch';
 import type { Control } from '../src/ipc/contract';
-import { isTeamListenReason, listenFailureLines, offersListenOff, relayError, restoreErrorKey } from '../src/lib/reasons';
+import { isTeamListenReason, listenFailureLines, offersListenOff, relayError, restoreErrorKey, sshProgramError } from '../src/lib/reasons';
 
 // The browser mock stands in for the core while the dashboard is reviewed. These flows pin the
 // rules the pages rely on: values never come back except through one-time references, the admin
@@ -139,6 +139,10 @@ describe('connections', () => {
     // the contract requires the field; the core does not even read a payload without it
     expect((await rejection(call('connection_create_ssh', ssh as typeof ssh & { cli_program: string }))).reason).toBe('invalid_payload');
     expect((await rejection(call('connection_create_ssh', { ...ssh, cli_program: '' }))).reason).toBe('cli_program_required');
+    // a path with no executable on this device (a typo) is refused before anything is made
+    const typo = await rejection(call('connection_create_ssh', { ...ssh, cli_program: '/usr/bin/sshh' }));
+    expect([typo.error, typo.reason]).toEqual(['InvalidInput', 'cli_program_not_found']);
+    expect(sshProgramError(typo.reason)).toEqual({ field: 'conn.cli.err.notFound' });
     expect((await call('connection_list')).connections.some((c) => c.id === 'box')).toBe(false);
 
     const c = await call('connection_create_ssh', { ...ssh, cli_program: SSH_PROGRAM });
@@ -160,13 +164,25 @@ describe('connections', () => {
     expect(grant?.status).toBe('active');
 
     expect((await rejection(call('connection_set_cli_program', { ...fill, admin_passphrase: 'wrong' }))).error).toBe('AuthFailed');
+    // a payload missing a field is not read at all, as serde refuses it in the core
     expect((await rejection(call('connection_set_cli_program', { id: 'deploy-ssh', admin_passphrase: PASS } as typeof fill))).reason).toBe('invalid_payload');
+    const noPass = await rejection(call('connection_set_cli_program', { id: 'deploy-ssh', cli_program: SSH_PROGRAM } as typeof fill));
+    expect([noPass.error, noPass.reason]).toEqual(['InvalidInput', 'invalid_payload']);
     expect((await rejection(call('connection_set_cli_program', { ...fill, cli_program: '' }))).reason).toBe('cli_program_required');
-    // the core's order: no passphrase, then an empty path, and only then the CLI's passphrase check
-    expect((await rejection(call('connection_set_cli_program', { ...fill, cli_program: '', admin_passphrase: '' }))).reason).toBe('passphrase_missing');
+    // the core's order: an empty passphrase, an empty path, a path with nothing there, and only
+    // then the CLI's passphrase check
+    const empty = await rejection(call('connection_set_cli_program', { ...fill, cli_program: '', admin_passphrase: '' }));
+    expect([empty.error, empty.reason]).toEqual(['AuthFailed', 'passphrase_missing']);
     expect((await rejection(call('connection_set_cli_program', { ...fill, cli_program: '', admin_passphrase: 'wrong' }))).reason).toBe('cli_program_required');
+    expect((await rejection(call('connection_set_cli_program', { ...fill, cli_program: '/usr/bin/sshh', admin_passphrase: 'wrong' }))).reason).toBe('cli_program_not_found');
+    // the fill cannot be undone, so a typo must not get through
+    const typo = await rejection(call('connection_set_cli_program', { ...fill, cli_program: '/usr/bin/sshh' }));
+    expect(typo.reason).toBe('cli_program_not_found');
+    expect(sshProgramError(typo.reason)).toEqual({ field: 'conn.cli.err.notFound' });
     expect((await rejection(call('connection_set_cli_program', { ...fill, id: 'example-api' }))).reason).toBe('cli_requires_ssh');
-    expect((await rejection(call('connection_set_cli_program', { ...fill, id: 'ghost' }))).reason).toBe('connection_not_found');
+    const ghost = await rejection(call('connection_set_cli_program', { ...fill, id: 'ghost' }));
+    expect(ghost.reason).toBe('connection_not_found');
+    expect(sshProgramError(ghost.reason)).toEqual({ form: null, stale: true });
     expect((await call('connection_list')).connections.find((x) => x.id === 'deploy-ssh')).toEqual(before);
 
     const out = await call('connection_set_cli_program', fill);
@@ -178,7 +194,7 @@ describe('connections', () => {
     expect(stale?.status).toBe('stale');
     expect(grantState(stale!, Date.now())).not.toBe('live');
 
-    expect((await rejection(call('connection_set_cli_program', { ...fill, cli_program: '/bin/false' }))).reason).toBe('cli_already_set');
+    expect((await rejection(call('connection_set_cli_program', { ...fill, cli_program: '/bin/ssh' }))).reason).toBe('cli_already_set');
     await call('connection_disable', { id: 'deploy-ssh' });
     expect((await rejection(call('connection_set_cli_program', fill))).reason).toBe('connection_disabled');
   });
