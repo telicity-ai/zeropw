@@ -7,6 +7,7 @@ import type { InvitePreview } from '../src/ipc/contract';
 import { Sheet } from '../src/dashboard/Sheet';
 import { ConfirmSheet } from '../src/dashboard/Confirm';
 import { ListenSetup } from '../src/dashboard/ListenSetup';
+import { Dashboard } from '../src/dashboard/Dashboard';
 import { TeamPage } from '../src/dashboard/Team';
 import { JoinStep } from '../src/onboarding/JoinStep';
 import { AppContext, type AppApi } from '../src/ui/context';
@@ -14,11 +15,11 @@ import { DashContext, type DashApi, type Intent } from '../src/dashboard/context
 import { t } from '../src/copy';
 import { TextField } from '../src/ui/fields';
 
-vi.mock('../src/ipc/client', async (original) => ({ ...await original<typeof import('../src/ipc/client')>(), call: vi.fn() }));
+vi.mock('../src/ipc/client', async (original) => ({ ...await original<typeof import('../src/ipc/client')>(), call: vi.fn(), on: vi.fn(async () => () => undefined) }));
 const ipc = vi.mocked(call);
 const future = () => new Date(Date.now() + 3600_000).toISOString();
 const preview = (inviter = 'abcdefghijklmnopqrstuvwxyz'): InvitePreview => ({ inviter, env_id: 'environment', role: 'user', name: 'member', addresses: ['192.168.1.2:47420'], expires_at: future(), expired: false, invite_id: 'invite' });
-const app = { field: { ripple: vi.fn(), set: vi.fn(), chipText: vi.fn() }, desktop: true, toast: vi.fn(), announce: vi.fn(), setPill: vi.fn() } as unknown as AppApi;
+const app = { field: { ripple: vi.fn(), set: vi.fn(), chipText: vi.fn(), setMode: vi.fn(), setStopped: vi.fn() }, desktop: true, toast: vi.fn(), announce: vi.fn(), setPill: vi.fn() } as unknown as AppApi;
 const dash = { tick: 0, go: vi.fn(), bump: vi.fn(), relay: { run: (fn: () => Promise<unknown>) => fn(), report: vi.fn() } } as unknown as DashApi;
 let animationFrames: Map<number, FrameRequestCallback>, frameId: number;
 let root: Root, host: HTMLDivElement, shared: boolean;
@@ -71,6 +72,7 @@ async function invite() {
   await input('inv-pass', 'synthetic-only');
 }
 function defaultIpc(command: string): unknown {
+  if (command === 'audit_tail') return { records: [] };
   if (command === 'project_list') return { projects: [{ name: 'demo', environments: ['dev'], created_at: '' }] };
   if (command === 'settings_get') return { team_listen: '192.168.1.2:47420', gateway_port: 47380 };
   if (command === 'net_interfaces') return [{ ip: '192.168.1.2', kind: 'lan', name: 'en0' }];
@@ -215,6 +217,23 @@ describe('invite component confirmation and failure recovery', () => {
     await click(button(t('inv.done')));
     expect(host.querySelector('#sheet-join:not(.away)')).not.toBeNull();
     expect(ipc.mock.calls.filter(([command]) => command === 'team_invite_create')).toHaveLength(1);
+  });
+  it('opens an initial Dashboard deep link as a join instead of synthesizing an invite action', async () => {
+    const incoming = { ref: 'received-before-dashboard', preview: preview() };
+    await render(h(Dashboard, {
+      startPage: 'team', incoming,
+      initialStatus: {
+        initialized: true, state_dir: '/synthetic/state',
+        serve: { running: true, url: 'http://127.0.0.1:47380', pid: 1, team_listen: '192.168.1.2:47420' },
+        control: { stopped: false, restore_pending: false, incident_open: false },
+      },
+    }));
+    expect(host.querySelector('#sheet-join:not(.away)')).not.toBeNull();
+    expect(host.querySelector('#sheet-invite:not(.away)')).toBeNull();
+    expect(ipc).not.toHaveBeenCalledWith('onetime_discard', { ref: incoming.ref });
+    expect(ipc.mock.calls.filter(([command]) => command === 'team_join')).toHaveLength(0);
+    expect((host.querySelector('#join-link') as HTMLInputElement).value).toBe('');
+    expect(host.querySelector('#sheet-join')?.textContent).toContain(t('join.fromLink'));
   });
   it('surfaces a deferred incoming link after import navigation replaced the transient intent', async () => {
     await render(); await invite();

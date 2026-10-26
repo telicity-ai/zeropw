@@ -40,7 +40,7 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
 }) {
   const { field, toast, announce, setPill } = useApp();
   const [page, setPage] = useState<PageId>(startPage);
-  const [intent, setIntent] = useState<Intent | null>(startPage === 'team' ? 'invite' : null);
+  const [intent, setIntent] = useState<Intent | null>(!incoming && startPage === 'team' ? 'invite' : null);
   const [serve, setServe] = useState<ServeStatus>(initialStatus.serve);
   const [control, setControl] = useState<Control>(initialStatus.control ?? NO_CONTROL);
   const [sheet, setSheet] = useState<'stop' | 'resume' | 'listenOff' | null>(null);
