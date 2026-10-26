@@ -1,0 +1,232 @@
+{
+  "base_sha": "8bd1d8340bc633067539df2b3b4e2ad35250486e",
+  "review_mode": "Tool-free static review. Hooks, MCP, skills and session persistence disabled. Not test execution or release acceptance.",
+  "reviews": [
+    {
+      "round": 1,
+      "requested_model_alias": "opus",
+      "actual_init_model": "claude-opus-5-5",
+      "actual_assistant_models": [
+        "claude-opus-5-5"
+      ],
+      "result_subtype": "success",
+      "is_error": false,
+      "input_sha256": "06cf0dc1c388296a6a5fe2ffa397168db59696dfb4b9161e307f7a8b0e613e28",
+      "raw_output_sha256": "851eda49d2a0c788e471ce2a86dc069ff80be42215d465910e127fa61c9e6a5a",
+      "verdict": "REVISE",
+      "artifact_directory": "/private/tmp/zeropw-codex-ux-review",
+      "reviewed_source_sha256": {
+        "DESIGN.md": "093fee4c45bbda8373d17feb9dcda0fc9de486659036cd31ca9b7865f2194167",
+        "desktop/src/copy.ts": "486bc15c4a5d31088f65122bf837fe759ed9406162e2878394522fc3e279fd0f",
+        "desktop/src/dashboard/ListenSetup.tsx": "5bf8ae474bd469e135638ae0f93c8a0e289eb399bdf86c9249096dbfed6d7de3",
+        "desktop/src/dashboard/Team.tsx": "b4cf9676828b3152c8522b19a76038e6b9f602868ad84f38f643927ab90e38a6",
+        "desktop/src/onboarding/JoinStep.tsx": "78b2e1fb1946bdb461b5fe4aa03be53296a57c7e58f0800cd27ae0e449ca5873",
+        "desktop/src/onboarding/Onboarding.tsx": "0d57388964b4c56cc0ee4c4b348fac4713bc52c9b25766630b3b2645de21cc06",
+        "desktop/src/onboarding/flow.ts": "74bfe8f36ed226897f63c9d2a2a972b7124775d0b69130fc20297eecae1956f4",
+        "desktop/test/copy.test.ts": "27c8220e134ce77f402f14acc76ac5ebaf89d29a9c1f32b61e38b696219d811a",
+        "desktop/test/validators.test.ts": "4b1128e1dde7cb16de42d1cf3e27e5a24b9ff72762629a2d8cef7903c6d67cbb",
+        "docs/desktop-app.md": "96b430ea9d3c64211aa410d53b86206a805c398c5e4700648c605b8df5a9e165",
+        "desktop/src/dashboard/invite.ts": "a96735b00b3a917c2e0e986f2d7d48740121a21c4b2c8dc71de3fc0eb62c8f38",
+        "desktop/src/lib/invitePreview.ts": "b1d036e61730fdd53df3b5fe5ca6dc900878570bbde5892a32d39ab8436b2eb6",
+        "desktop/test/invite-preview.test.ts": "df9341f1c757745f0b66884ec1f3abb631341620a4d0b46d78580c5a5a9a7483",
+        "desktop/test/invite.test.ts": "cffd50a6254e06860206157f33bf84584234a3032ff5fff8e47a6d64afd7c890",
+        "docs/desktop-ux-e2e-2026-10-26.md": "1b61f6f6c8c8e591a03f4f4847fcaa54c53740a9a7eec190c9856d5d59f3d9fe"
+      }
+    },
+    {
+      "round": 2,
+      "requested_model_alias": "opus",
+      "actual_init_model": "claude-opus-5-5",
+      "actual_assistant_models": [
+        "claude-opus-5-5"
+      ],
+      "result_subtype": "success",
+      "is_error": false,
+      "input_sha256": "24acaf96e8e6769cf525131d0e5bf529491f590be1335ae65e653e39ed13c4cd",
+      "raw_output_sha256": "3aacb59b50db42b1b02ebbad075847a4bbf18c4fe1389aba369cbc5f28a251a6",
+      "verdict": "REVISE",
+      "artifact_directory": "/private/tmp/zeropw-codex-ux-review/round2",
+      "reviewed_source_sha256": {
+        "DESIGN.md": "18195ab76a49313415768effc0448e327c45361febb7615e0506f94da0d91dbe",
+        "desktop/package-lock.json": "91110a467c1ce30e93a89840fbe4ac05c71434cc61669d55c0e8d1b1e69b17cd",
+        "desktop/package.json": "f6508027e1f9b4625427855c929206a41877e990e4f9542121219f829a321e8c",
+        "desktop/src/copy.ts": "784d772e426cef7cc2a1adcdf0406e5c2251099973cb0abc0b33e2bfd4211c04",
+        "desktop/src/dashboard/Confirm.tsx": "ac227e2e7d6f78ba009fc28a6b4e1783829adf66c2cc39e0d48beed4a2bf1f5b",
+        "desktop/src/dashboard/ListenSetup.tsx": "7de27d60538af2b2c40656157a9b2a29f4024c4300e1bcf8a2c22b906e5f9590",
+        "desktop/src/dashboard/Team.tsx": "56698be5b2eff72dded81183fa66024f51bae32b24924369df6a304056b09e11",
+        "desktop/src/onboarding/JoinStep.tsx": "ab45f55cf41e22059bc856c1a2a982802e9e3ca5c66fd7f04dc5ed72265bea6b",
+        "desktop/src/onboarding/Onboarding.tsx": "9b4d2933cd0e902c31a2555831f6e8ff346f33642f9de563df5493ddaa9994c9",
+        "desktop/src/onboarding/flow.ts": "04c8ea6dadc56621710934a13fd3c52a2c72d3ca2c532c544f79684b13342b2a",
+        "desktop/src/ui/fields.tsx": "ff647ed5dffd7b81af2e223bd3a8ca10be39af176d01048ffc9050ff6c6e6c75",
+        "desktop/test/copy.test.ts": "27c8220e134ce77f402f14acc76ac5ebaf89d29a9c1f32b61e38b696219d811a",
+        "desktop/test/validators.test.ts": "4b1128e1dde7cb16de42d1cf3e27e5a24b9ff72762629a2d8cef7903c6d67cbb",
+        "docs/desktop-app.md": "d766e090f62334d5b9546e0c4e9527945bc2c431ce03f15efda258a81c973e39",
+        "desktop/src/dashboard/invite.ts": "0464c15c14f0976d847c08555a0eaae61debd3cf9267ce763831434778bcaa98",
+        "desktop/src/lib/invitePreview.ts": "b1d036e61730fdd53df3b5fe5ca6dc900878570bbde5892a32d39ab8436b2eb6",
+        "desktop/test/invite-preview.test.ts": "df9341f1c757745f0b66884ec1f3abb631341620a4d0b46d78580c5a5a9a7483",
+        "desktop/test/invite.test.ts": "cffd50a6254e06860206157f33bf84584234a3032ff5fff8e47a6d64afd7c890",
+        "desktop/test/team-components.test.ts": "5b6a106dab49f1d17b41ec17dfe039753e04a2e68befafaa085f23fbc1b37eed",
+        "docs/desktop-ux-e2e-2026-10-26.md": "e1beb19d27d09bab47f4bf969ac3018301639b5430481ab88e1e019f1ab144b6"
+      }
+    },
+    {
+      "round": 3,
+      "requested_model_alias": "opus",
+      "actual_init_model": "claude-opus-5-5",
+      "actual_assistant_models": [
+        "claude-opus-5-5"
+      ],
+      "result_subtype": "success",
+      "is_error": false,
+      "input_sha256": "f002176beab392b20a6c82161756e643b399f026b0c9d52ae0836bc454efbc7a",
+      "raw_output_sha256": "8d7ed9bc2d7f975707554eeb562d30759fe6404d190b674d5ae4710e0f8894ed",
+      "verdict": "PASS",
+      "artifact_directory": "/private/tmp/zeropw-codex-ux-review/round3",
+      "reviewed_source_sha256": {
+        "DESIGN.md": "18195ab76a49313415768effc0448e327c45361febb7615e0506f94da0d91dbe",
+        "desktop/package-lock.json": "91110a467c1ce30e93a89840fbe4ac05c71434cc61669d55c0e8d1b1e69b17cd",
+        "desktop/package.json": "f6508027e1f9b4625427855c929206a41877e990e4f9542121219f829a321e8c",
+        "desktop/src/copy.ts": "6c1d4899f7c20833051bfb752064fbd0c3e4a0264c011ad67f5a56e403e5098a",
+        "desktop/src/dashboard/Confirm.tsx": "f4a0931a6ca7253b83ceee3c4e20b337c43afcb16b35f9706021cfcc8c77ee61",
+        "desktop/src/dashboard/ListenSetup.tsx": "7de27d60538af2b2c40656157a9b2a29f4024c4300e1bcf8a2c22b906e5f9590",
+        "desktop/src/dashboard/Sheet.tsx": "c8d41188b8a496263b03f158b632c7dca397a59ae879e5c3b9bdc78815a9739f",
+        "desktop/src/dashboard/Team.tsx": "9cfcdb6b817806af83e8c468a17e30c54265a3f6503b5c0850e1cea33d2feb10",
+        "desktop/src/onboarding/JoinStep.tsx": "ab45f55cf41e22059bc856c1a2a982802e9e3ca5c66fd7f04dc5ed72265bea6b",
+        "desktop/src/onboarding/Onboarding.tsx": "9b4d2933cd0e902c31a2555831f6e8ff346f33642f9de563df5493ddaa9994c9",
+        "desktop/src/onboarding/flow.ts": "04c8ea6dadc56621710934a13fd3c52a2c72d3ca2c532c544f79684b13342b2a",
+        "desktop/src/ui/fields.tsx": "3a8ee73252fb8809f0709707a0862b000cb7967e8bfef0298d2f2c47760bb6a2",
+        "desktop/test/copy.test.ts": "27c8220e134ce77f402f14acc76ac5ebaf89d29a9c1f32b61e38b696219d811a",
+        "desktop/test/validators.test.ts": "4b1128e1dde7cb16de42d1cf3e27e5a24b9ff72762629a2d8cef7903c6d67cbb",
+        "docs/desktop-app.md": "d766e090f62334d5b9546e0c4e9527945bc2c431ce03f15efda258a81c973e39",
+        "desktop/src/dashboard/invite.ts": "0464c15c14f0976d847c08555a0eaae61debd3cf9267ce763831434778bcaa98",
+        "desktop/src/lib/invitePreview.ts": "b1d036e61730fdd53df3b5fe5ca6dc900878570bbde5892a32d39ab8436b2eb6",
+        "desktop/test/invite-preview.test.ts": "df9341f1c757745f0b66884ec1f3abb631341620a4d0b46d78580c5a5a9a7483",
+        "desktop/test/invite.test.ts": "cffd50a6254e06860206157f33bf84584234a3032ff5fff8e47a6d64afd7c890",
+        "desktop/test/team-components.test.ts": "8fbfbf25d2d8b49aae32d2a284d0c9dcf2e5d66b58dc903ff5149d9df95c6ab9",
+        "docs/desktop-ux-e2e-2026-10-26.md": "a142e40994394cba691143462474f8cf448286ce9b03c239b004ce9f0faa8ae6"
+      }
+    },
+    {
+      "round": 4,
+      "requested_model_alias": "opus",
+      "actual_init_model": "claude-opus-5-5",
+      "actual_assistant_models": [
+        "claude-opus-5-5"
+      ],
+      "result_subtype": "success",
+      "is_error": false,
+      "input_sha256": "6586606efbc8a21679f6704426d25857e2ca5f63add273acf8c0afcbfdc92542",
+      "raw_output_sha256": "7fdc5734faae15cef7457fcc81c61b954930aee419a11ba673fdac43267f0fa9",
+      "verdict": "PASS",
+      "artifact_directory": "/private/tmp/zeropw-codex-ux-review/round4",
+      "reviewed_source_sha256": {
+        "desktop/src/dashboard/Team.tsx": "6fb6cc2d6aafeb6b7fadc4811c071d083b0c3fb11b49c609e0ed7b9f8dbafb26",
+        "desktop/src/dashboard/Dashboard.tsx": "0bf129fff456f35ef476ebae4ed87a6dc91c1219658b6b1a50c9d56cc84e58e8",
+        "desktop/src/dashboard/pendingInvite.ts": "53d3885681348dd7e9d5e723c3fe865aab4924a9cb16e012b0e16ba08152246c",
+        "desktop/test/team-components.test.ts": "25cf285e605aa5932f5f71a6bd8656fd2ca2a14d48e719893292b505db83c694",
+        "desktop/test/pending-invite.test.ts": "5b85d7f290be2fea9cf60223c746b0236b5c1d3124523bd47a4f4c052676ce22",
+        "desktop/src/copy.ts": "a9f1b125b27b1357468ef83c589083e5a597b15811e0856414871e1a417f5be0",
+        "DESIGN.md": "c9db06b0f8a64a985b52261810fd3109b9e9a12e656c02f7c61279f3e79ee91e"
+      }
+    },
+    {
+      "round": 5,
+      "requested_model_alias": "opus",
+      "actual_init_model": "claude-opus-5-5",
+      "actual_assistant_models": [
+        "claude-opus-5-5"
+      ],
+      "result_subtype": "success",
+      "is_error": false,
+      "input_sha256": "cb724a19d14ea17a9123e6479818d662ac94d9ee893b28bba872755e056b42bf",
+      "raw_output_sha256": "6bdd9c3c41c11bd0b1baefe96d466652211e0aac7afd3400af04a340e7fb7da1",
+      "verdict": "PASS",
+      "artifact_directory": "/private/tmp/zeropw-codex-ux-review/round5",
+      "reviewed_source_sha256": {
+        "desktop/src/ui/disclosure.ts": "47e2f72088cfb76c3d5d96f93c665f767b612d305581aaf5aa387c1972288aea",
+        "desktop/src/dashboard/Team.tsx": "27beceff5919100bda3e7777f2a5caba47a3b97eb01ce5c9a9dc971ce1952fad",
+        "desktop/src/dashboard/ListenSetup.tsx": "1353b9c98a82ee19a863e988262ff489a84df06ebdce26ad452bd3541282bce1",
+        "desktop/src/onboarding/JoinStep.tsx": "a1c6b53b44a8f3af2c392e8fa607f851552c2b305065bb8d0b8258ab90531bab",
+        "desktop/test/team-components.test.ts": "3d3f23d0935d87f5a6ef786388f945663d841bc6dd07cfef216376358637fc97",
+        "desktop/src/dashboard/Sheet.tsx": "c8d41188b8a496263b03f158b632c7dca397a59ae879e5c3b9bdc78815a9739f",
+        "desktop/src/ui/fields.tsx": "3a8ee73252fb8809f0709707a0862b000cb7967e8bfef0298d2f2c47760bb6a2",
+        "desktop/src/lib/validators.ts": "dfc3d84196e07309acaeda7c1663cb1f3211b8b0a8ca2bf09e16e9c90fd7f9d5",
+        "desktop/src/copy.ts": "a9f1b125b27b1357468ef83c589083e5a597b15811e0856414871e1a417f5be0"
+      }
+    },
+    {
+      "round": 6,
+      "requested_model_alias": "opus",
+      "actual_init_model": "claude-opus-5-5",
+      "actual_assistant_models": [
+        "claude-opus-5-5"
+      ],
+      "result_subtype": "success",
+      "is_error": false,
+      "input_sha256": "04484a5741b005fd1f3a4a66bd78060a3012bb7546a56b22d7cc435fe20f472e",
+      "raw_output_sha256": "8fd91fac40190d6d6f2d35b05dc8a1599a6371b12fc04e979bc7a294f37c878a",
+      "verdict": "PASS",
+      "artifact_directory": "/private/tmp/zeropw-codex-ux-review/round6",
+      "reviewed_source_sha256": {
+        "desktop/src/ui/disclosure.ts": "47e2f72088cfb76c3d5d96f93c665f767b612d305581aaf5aa387c1972288aea",
+        "desktop/src/dashboard/Team.tsx": "2e7f42f18936467c971811e30e38a2757ff00890dd3fda5f398005257ad61fc6",
+        "desktop/src/dashboard/ListenSetup.tsx": "a51ae014b24774ba327260b62dee2b07683506830219ffce599acb0b02efd329",
+        "desktop/src/onboarding/JoinStep.tsx": "54be7eabbced96cba5176075bcda30f0f4f8dfeac5d6c29c81e8c65f03087980",
+        "desktop/test/team-components.test.ts": "0b9da58b48e8fbba9b40b1f120d9da5d85a338202515e363bfcfc32d959a2759",
+        "desktop/src/dashboard/Sheet.tsx": "c8d41188b8a496263b03f158b632c7dca397a59ae879e5c3b9bdc78815a9739f",
+        "desktop/src/ui/fields.tsx": "3a8ee73252fb8809f0709707a0862b000cb7967e8bfef0298d2f2c47760bb6a2",
+        "desktop/src/lib/validators.ts": "dfc3d84196e07309acaeda7c1663cb1f3211b8b0a8ca2bf09e16e9c90fd7f9d5",
+        "desktop/src/copy.ts": "a9f1b125b27b1357468ef83c589083e5a597b15811e0856414871e1a417f5be0"
+      }
+    },
+    {
+      "round": 7,
+      "requested_model_alias": "opus",
+      "actual_init_model": "claude-opus-5-5",
+      "actual_assistant_models": [
+        "claude-opus-5-5"
+      ],
+      "result_subtype": "success",
+      "is_error": false,
+      "input_sha256": "4004b85cc7a9d8346fd02c640ec2555a1965f3c799b3fb711a9b8a038c6bfb77",
+      "raw_output_sha256": "78efe4b4a488e2e171479d1ce24efbf5a52056534b111ff8faf9d46021a1bc84",
+      "verdict": "PASS",
+      "artifact_directory": "/private/tmp/zeropw-codex-ux-review/round7",
+      "reviewed_source_sha256": {
+        "desktop/src/dashboard/Team.tsx": "05b47f0936e01cff671a0091fe884cea5c055fae0cc700b348bc39877e5d2ac2",
+        "desktop/test/team-components.test.ts": "cef3f55fce371d67fdbb695a3e1b75bddc4bcda9335b9cf3bec6d635d181f9d4"
+      }
+    }
+  ],
+  "product_source_sha256": {
+    "desktop/package-lock.json": "91110a467c1ce30e93a89840fbe4ac05c71434cc61669d55c0e8d1b1e69b17cd",
+    "desktop/package.json": "f6508027e1f9b4625427855c929206a41877e990e4f9542121219f829a321e8c",
+    "desktop/src/copy.ts": "a9f1b125b27b1357468ef83c589083e5a597b15811e0856414871e1a417f5be0",
+    "desktop/src/dashboard/Confirm.tsx": "f4a0931a6ca7253b83ceee3c4e20b337c43afcb16b35f9706021cfcc8c77ee61",
+    "desktop/src/dashboard/Dashboard.tsx": "0bf129fff456f35ef476ebae4ed87a6dc91c1219658b6b1a50c9d56cc84e58e8",
+    "desktop/src/dashboard/ListenSetup.tsx": "a51ae014b24774ba327260b62dee2b07683506830219ffce599acb0b02efd329",
+    "desktop/src/dashboard/Sheet.tsx": "c8d41188b8a496263b03f158b632c7dca397a59ae879e5c3b9bdc78815a9739f",
+    "desktop/src/dashboard/Team.tsx": "05b47f0936e01cff671a0091fe884cea5c055fae0cc700b348bc39877e5d2ac2",
+    "desktop/src/dashboard/invite.ts": "0464c15c14f0976d847c08555a0eaae61debd3cf9267ce763831434778bcaa98",
+    "desktop/src/dashboard/pendingInvite.ts": "53d3885681348dd7e9d5e723c3fe865aab4924a9cb16e012b0e16ba08152246c",
+    "desktop/src/lib/invitePreview.ts": "b1d036e61730fdd53df3b5fe5ca6dc900878570bbde5892a32d39ab8436b2eb6",
+    "desktop/src/onboarding/JoinStep.tsx": "54be7eabbced96cba5176075bcda30f0f4f8dfeac5d6c29c81e8c65f03087980",
+    "desktop/src/onboarding/Onboarding.tsx": "9b4d2933cd0e902c31a2555831f6e8ff346f33642f9de563df5493ddaa9994c9",
+    "desktop/src/onboarding/flow.ts": "04c8ea6dadc56621710934a13fd3c52a2c72d3ca2c532c544f79684b13342b2a",
+    "desktop/src/ui/disclosure.ts": "47e2f72088cfb76c3d5d96f93c665f767b612d305581aaf5aa387c1972288aea",
+    "desktop/src/ui/fields.tsx": "3a8ee73252fb8809f0709707a0862b000cb7967e8bfef0298d2f2c47760bb6a2",
+    "desktop/test/copy.test.ts": "27c8220e134ce77f402f14acc76ac5ebaf89d29a9c1f32b61e38b696219d811a",
+    "desktop/test/invite-preview.test.ts": "df9341f1c757745f0b66884ec1f3abb631341620a4d0b46d78580c5a5a9a7483",
+    "desktop/test/invite.test.ts": "cffd50a6254e06860206157f33bf84584234a3032ff5fff8e47a6d64afd7c890",
+    "desktop/test/pending-invite.test.ts": "5b85d7f290be2fea9cf60223c746b0236b5c1d3124523bd47a4f4c052676ce22",
+    "desktop/test/team-components.test.ts": "cef3f55fce371d67fdbb695a3e1b75bddc4bcda9335b9cf3bec6d635d181f9d4",
+    "desktop/test/validators.test.ts": "4b1128e1dde7cb16de42d1cf3e27e5a24b9ff72762629a2d8cef7903c6d67cbb"
+  },
+  "unresolved": [
+    "F9: macOS restricted Rust failures and native AX validation unavailable; see executed E2E report for final Linux evidence.",
+    "N7 (Info): unknown listener setting conservatively prompts explicit setup; optional copy refinement.",
+    "N11-info (Info): optional test-strength additions for N10; source behavior accepted. Native disclosure/error-retention checks recorded separately."
+  ],
+  "implementation_model_selection_recorded": "gpt-6.1-sol",
+  "implementation_model_provenance": "Coordinator record identifies gpt-6.1-sol for the implementation worker. The subagent API exposes no independently verifiable served-model receipt. This is distinct from the actual Claude init/assistant model receipts below."
+}

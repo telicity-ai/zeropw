@@ -1,0 +1,116 @@
+{
+  "base_sha": "8bd1d8340bc633067539df2b3b4e2ad35250486e",
+  "source_manifest_sha256": "18f670ad42aafaa2e87afe8fde98329fc9b6524c43761a6b4909424af8e50913",
+  "test_app_binary_sha256": "41e01057bdf0302ce65361c345b879fb40cfe3c6b4fbf1d088519f6bdff8cfcd",
+  "frontend": "260/260 PASS across 15 files; static checks, TypeScript and production frontend build PASS",
+  "native_build": "final260 PASS; embedded frontend, debug/no-bundle",
+  "native_ui": "UNAVAILABLE: prior exact-ID/path CUA AX attachment timed out. Final260 bundle built and signed only; no macOS visual E2E PASS.",
+  "rust_matrix": {
+    "steps": 97,
+    "passed_steps": 76,
+    "failed_steps": 21,
+    "passed_test_executions": 1518,
+    "failed_test_executions": 47,
+    "ignored_at_initial_library_stage": 4,
+    "failed_step_names": [
+      "lib-and-bins",
+      "test:admin_expanduser_parity",
+      "test:admin_sigint_cleanup_boundaries",
+      "test:admin_sigint_exit",
+      "test:astra_cli_runtime_round2",
+      "test:astra_cli_runtime_round3",
+      "test:astra_cli_runtime_round4",
+      "test:astra_pty_portability",
+      "test:astra_response_review",
+      "test:astra_runtime_final",
+      "test:astra_runtime_review",
+      "test:cli_commands",
+      "test:cli_parity",
+      "test:native_cli_e2e",
+      "test:native_response_cli",
+      "test:native_team_e2e",
+      "test:runs",
+      "test:signer_e2e",
+      "test:signer_oracle",
+      "test:sshwire",
+      "signer-probes"
+    ],
+    "full_script_exit": 1,
+    "all92integrationtargets_executed": true,
+    "signer_probes": "3PASS1FAIL (setuid ps EPERM); all4initiallyignoredprobes executed",
+    "doctests": "PASS (0tests)"
+  },
+  "desktop_matrix": {
+    "full_script": "FAIL at initial frontend focus (fixed later) and core process-info",
+    "supplemental_all_targets": {
+      "passed": 125,
+      "failed": 17,
+      "ignored": 0,
+      "targets": 10,
+      "failed_targets": 7
+    },
+    "confirmed_environment_failures": {
+      "pty_unavailable": 11,
+      "setuid_ps_and_serve_attachment": 4
+    },
+    "unresolved_restricted_environment": {
+      "real_sshd_connection_reset": 2
+    },
+    "native_shell_unit": "10/10 PASS",
+    "real_binary_env_import": "1/1 PASS"
+  },
+  "profiles": {
+    "build.sb": "8e33c429f5352758ebb169e0353584cde6d6bffaadef7a6c753e2c9e0795df28",
+    "test.sb": "072d00f528d016acb31a0ebc1ddf1f3169833a42c06764c5b683aa42cb52cbc7",
+    "gui.sb": "717ff757152fef80e8d21422a1462996f1d198fe8a757f9a3557818374983554"
+  },
+  "supplemental": {
+    "NSS_lib_openssh": "3PASS",
+    "NSS_lib_expanduser": "1PASS",
+    "NSS_lib_sshwire": "1PASS",
+    "NSS_integration_expanduser": "1PASS",
+    "NSS_cli_parity": "77/78cases match; remaining /tmp directory read returns PermissionError under sandbox vs IsADirectoryError expected",
+    "http_content_length_timing": "isolated retry PASS; initial elapsed2.265s against1.8s threshold",
+    "setuid_probe": "requested04600 observed0600 under sandbox",
+    "runtime_session": "isolated corrected-profile retry PASS",
+    "ssh_public_helpers": "Exact public sshd-session/sshd-auth read/execute allowance did not resolve connection reset; temporary allowance removed; no broader privilege/filesystem change.",
+    "NSS_sshwire_integration": "86/86PASS",
+    "NSS_signer_e2e": "3PASS3FAIL; remaining real-sshd reset2cases and missing host_key_not_allowed audit1case in restricted environment; original6NSSfail preserved",
+    "Rust_bin_units": "all5binarytesttargets PASS (0tests each)"
+  },
+  "source_manifest": "source-manifest-final260.json",
+  "bundle_codesign_verify": "PASS deep+strict, final260",
+  "prior_frontend_validation": {
+    "source_manifest": "source-manifest-final255.json",
+    "source_manifest_sha256": "20b47690de62d79fe6e51d688a568d91eefbba8c76e5e5d059ae01e3ea565986",
+    "test_app_binary_sha256": "db73dd8b4dc6d88e1e71d044db4764d7155f2261ca67c4e429ddc36d34fbd977",
+    "frontend": "255/255 PASS across15files; static/type/production frontend build PASS",
+    "native_build": "final255 PASS custom-protocol embedded frontend, debug/no-bundle"
+  },
+  "source_file_count": 552,
+  "temporary_app_status": "Closed. Previous final255 process stopped; final260 bundle has not been launched.",
+  "matrix_reuse": {
+    "rust_native_source_identical_to_prior_run": true,
+    "rust_matrix_rerun": false,
+    "desktop_rust_matrix_rerun": false,
+    "reason": "UX-05 and N8/N9/N10 change TypeScript only. Every rust/, desktop/core/ and desktop/src-tauri/ source hash matches the earlier fully exercised snapshot; original failures and limits remain unchanged."
+  },
+  "final_patch_source_hashes": {
+    "desktop/src/dashboard/Team.tsx": "05b47f0936e01cff671a0091fe884cea5c055fae0cc700b348bc39877e5d2ac2",
+    "desktop/src/dashboard/ListenSetup.tsx": "a51ae014b24774ba327260b62dee2b07683506830219ffce599acb0b02efd329",
+    "desktop/src/onboarding/JoinStep.tsx": "54be7eabbced96cba5176075bcda30f0f4f8dfeac5d6c29c81e8c65f03087980",
+    "desktop/src/ui/disclosure.ts": "47e2f72088cfb76c3d5d96f93c665f767b612d305581aaf5aa387c1972288aea",
+    "desktop/test/team-components.test.ts": "cef3f55fce371d67fdbb695a3e1b75bddc4bcda9335b9cf3bec6d635d181f9d4"
+  },
+  "final_logs": {
+    "frontend-final260.log": "c828cf58fcd732e75bb5630cdeb3fae2353164eb65d85471f2c7fe8417e7e6a7",
+    "native-build-final260.log": "9ce3799ae4b559655b30346bc8171e239fcd697f36610562c7863bf6f488513c",
+    "app-bundle-verify-final260.log": "57507ad6c3ac9958efb6c8d7a7b3383578fe7c33e088f966bcd48f0b19d343a9"
+  },
+  "ux05_typecheck_repair": {
+    "observed": "Initial 258-test attempt passed unit tests but failed TypeScript: network interface fixtures lacked required name.",
+    "resolution": "Sol added synthetic en0/utun0 names; final260 static/type/build/tests PASS.",
+    "preserved_log": "logs/frontend-ux05-typescript-failure.log",
+    "preserved_manifest": "source-manifest-ux05-typescript-failure.json"
+  }
+}

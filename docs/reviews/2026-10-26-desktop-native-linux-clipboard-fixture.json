@@ -1,0 +1,20 @@
+{
+  "stage": "after_native_clipboard_test_and_extra_invite_revocation",
+  "fixture_only": true,
+  "own_invite_count": 2,
+  "pending_count": 1,
+  "invites": [
+    {
+      "invite_id": "62bf66edf99204a2b391ef300f9466d7",
+      "name": "Codex E2E teammate",
+      "role": "admin",
+      "status": "pending"
+    },
+    {
+      "invite_id": "8ac90073f1b3091f401cc04600414942",
+      "name": "Clipboard E2E",
+      "role": "user",
+      "status": "revoked"
+    }
+  ]
+}

@@ -1,0 +1,60 @@
+{
+  "stage": "after_native_join_before_intentional_self_removal",
+  "fixture_only": true,
+  "native_binary_sha256": "42f448eef08b32d7e12d5bba885c87502ac0ea2fe27ac40c37abe960d8e71366",
+  "source_manifest_sha256": "d8127e84297a03d0bde088c5385dc1dfb2a9264d17ab4bce6aedf95ad8ff65b6",
+  "frontend_tests": {
+    "passed": 255,
+    "files": 15
+  },
+  "native_projects": [
+    {
+      "name": "codex-ux",
+      "environments": [
+        "dev"
+      ]
+    }
+  ],
+  "native_own_env": {
+    "alias": "codex-ux/dev",
+    "owner": "zr2y4isbejlwc5bciih2jbhq5y",
+    "members": 1,
+    "issued_invites": [
+      {
+        "invite_id": "62bf66edf99204a2b391ef300f9466d7",
+        "name": "Codex E2E teammate",
+        "role": "admin",
+        "status": "pending"
+      }
+    ]
+  },
+  "joined_env": {
+    "native_alias": "team-p2wkw6up/shared",
+    "peer_alias": "ux-peer/dev",
+    "env_id": "p2wkw6upzpklkjndadhjeh75qi-1d52a794ffee9a46119af7aff6e374e7",
+    "both_states_members": [
+      {
+        "name": "SyntheticPeerB",
+        "fingerprint": "p2wkw6upzpklkjndadhjeh75qi",
+        "owner": true,
+        "role": "admin",
+        "status": "active"
+      },
+      {
+        "name": "NativeAppA",
+        "fingerprint": "zr2y4isbejlwc5bciih2jbhq5y",
+        "owner": false,
+        "role": "user",
+        "status": "active"
+      }
+    ],
+    "native_issued_invites": 0
+  },
+  "peer_b_invite": {
+    "invite_id": "d7188314901be031f1f2bc0a07c31a33",
+    "status": "used",
+    "used_at": "2026-10-25T18:19:45Z",
+    "used_by": "zr2y4isbejlwc5bciih2jbhq5y"
+  },
+  "verification": "Read-only zeropw-admin project list, team members, team invites; filtered public metadata only; no mutation."
+}

@@ -1,0 +1,60 @@
+{
+  "fixture_only": true,
+  "source_manifest_sha256": "7d91a115ea273b5b185a2afea50730036fe4a423f86d99cf2261aedd1e291d86",
+  "native_binary_sha256": "323122830c3f985774e0729d38e5d20025e69fde193b62953536772b1a64a4ef",
+  "frontend_tests": 260,
+  "observed": [
+    "Home loads existing synthetic vault with four quick actions, including add agent and invite teammate.",
+    "Team page preserves the existing pending invitation and its administrator role.",
+    "Invalid alias with details collapsed reopens and focuses the field.",
+    "Actual single x key changes invalid alias to invalid aliasx; validation error clears while details stays open and input retains focus (UX-05 native PASS).",
+    "Repeated invalid submission with details already open refocuses the alias input.",
+    "Used invite is rejected again in the final build; link input is cleared and its inline error is displayed.",
+    "With the join error present, opening local-name details leaves visible focus on the summary instead of replaying link focus.",
+    "Clicking the local field, then a separate real x key event changes codex-final/dev to codex-final/devx. Details stays open, caret stays in local field, and the link error remains visible (N8/N10 native coverage).",
+    "Home Add agent shortcut navigates to Agents and opens its connection sheet; optional setup remains available after shorter onboarding.",
+    "Keys and Connections show their empty-state actions; Records renders actual synthetic audit entries; Incidents shows its empty state; Settings renders the persisted gateway and team-listener configuration. No mutation was performed in those smoke checks.",
+    "NoVNC task clipboard was cleared, the browser viewport was reset, and the temporary browser tab was closed after native checks.",
+    "Additional bounded sharing check: Home Invite teammate opens the combined sheet. Created a deliberately separate Clipboard E2E invite with user role on the already shared environment.",
+    "Clicked native Copy, then opened Join and sent native Ctrl+V without writing to the noVNC clipboard between those actions. The pasted value produced the expected own-device fingerprint zr2y4isbejlwc5bciih2jbhq5y, user role and 192.168.5.15:47430 address. This verifies actual native clipboard delivery, not only the success toast. No Join was submitted.",
+    "The additional Clipboard E2E invite was explicitly revoked in the UI; its row changed to canceled, while the original Codex E2E teammate invite remained pending.",
+    "More than 60 seconds after the successful native copy/paste, the same native Ctrl+V into a fresh focused Join input left it empty. No clipboard write occurred between the positive paste and this check, consistent with the announced timed clearing. Exact 60-second boundary timing was not measured.",
+    "After the additional check, the noVNC clipboard was explicitly cleared, viewport restored and temporary browser tab closed again."
+  ],
+  "in_progress": [],
+  "screenshots": [
+    "../evidence/desktop-ux-2026-10-26/final-home.jpg",
+    "../evidence/desktop-ux-2026-10-26/join-repair-open-after-fix.jpg",
+    "../evidence/desktop-ux-2026-10-26/join-error-retained-after-edit.jpg",
+    "../evidence/desktop-ux-2026-10-26/final-home-agent-shortcut.jpg",
+    "../evidence/desktop-ux-2026-10-26/final-keys.jpg",
+    "../evidence/desktop-ux-2026-10-26/final-connections.jpg",
+    "../evidence/desktop-ux-2026-10-26/final-records.jpg",
+    "../evidence/desktop-ux-2026-10-26/final-incidents.jpg",
+    "../evidence/desktop-ux-2026-10-26/final-settings.jpg",
+    "../evidence/desktop-ux-2026-10-26/final-native-copy.jpg",
+    "../evidence/desktop-ux-2026-10-26/final-native-paste-preview.jpg",
+    "../evidence/desktop-ux-2026-10-26/final-clipboard-invite-revoked.jpg",
+    "../evidence/desktop-ux-2026-10-26/final-native-clipboard-cleared.jpg"
+  ],
+  "limitations": [
+    "Tab/Space forwarding through the noVNC toolbar was not reliable; no keyboard-only traversal PASS is claimed. Actual single-character edits after confirmed native field focus were observed.",
+    "The expiry-specific N10 case is covered by component tests; native error retention used a consumed-invite server rejection."
+  ],
+  "status": "bounded native checks complete",
+  "screenshot_sha256": {
+    "../evidence/desktop-ux-2026-10-26/final-home.jpg": "b60a3dea2dabe6108f941b1abce4c4cc74b3f51b1214ad9126f20eb77fba12b3",
+    "../evidence/desktop-ux-2026-10-26/join-repair-open-after-fix.jpg": "eb3e3acbab780c3db209e7848b42d781cf9435339096fa4cd69ecb6c9e83c27c",
+    "../evidence/desktop-ux-2026-10-26/join-error-retained-after-edit.jpg": "12a7071bc51507409998c7ab72fd6c7cfc5969b68ada83537f760f845524d855",
+    "../evidence/desktop-ux-2026-10-26/final-home-agent-shortcut.jpg": "be24533ec6c12dc8f5331e67521def8bcfabb6692931a7a6a1777ef9311f48a1",
+    "../evidence/desktop-ux-2026-10-26/final-keys.jpg": "20f1c8a018a9f90be3f88d0192a47c3ab8a6385fca1aca08dc4d4bfa5e85758f",
+    "../evidence/desktop-ux-2026-10-26/final-connections.jpg": "560765d21e689c07c2663b4357a5c3ee99c102d517cc05bc34b5f6c804c26396",
+    "../evidence/desktop-ux-2026-10-26/final-records.jpg": "c4caeb851953d8a0e023f40ae8252c7bda4c13cfcce6dae7467d244532c41efa",
+    "../evidence/desktop-ux-2026-10-26/final-incidents.jpg": "3bdde7f10a9fca62e1277ab8fbf5715bca884b51eb06a1226113a2c28511a0ab",
+    "../evidence/desktop-ux-2026-10-26/final-settings.jpg": "ddfedae4f2dab440a0a0b5cee5bbfbf97e9a4bbb1f420649c0665e23fd45e78a",
+    "../evidence/desktop-ux-2026-10-26/final-native-copy.jpg": "0da40fa628cee12344d790c776fca76b9054a5cdaeb16e3bce122ebe9eee1787",
+    "../evidence/desktop-ux-2026-10-26/final-native-paste-preview.jpg": "38030a96ba6de71dd893932a53b131243e1240803dde4b89eab7aab48a4eccb6",
+    "../evidence/desktop-ux-2026-10-26/final-clipboard-invite-revoked.jpg": "30ace18c9473bb3d577cec04e7d6512ff838a25ea39ee85c2402ecbaa18a369d",
+    "../evidence/desktop-ux-2026-10-26/final-native-clipboard-cleared.jpg": "9cd56c7888b23e3f017d6295725e94a433430567d261810eef9bf439a871bed0"
+  }
+}

@@ -1,0 +1,120 @@
+{
+  "actual_init_model": "claude-opus-5-5",
+  "actual_assistant_models": [
+    "claude-opus-5-5"
+  ],
+  "requested_model": "opus",
+  "effort": "medium",
+  "input_sha256": "06cf0dc1c388296a6a5fe2ffa397168db59696dfb4b9161e307f7a8b0e613e28",
+  "source_hashes": {
+    "DESIGN.md": "093fee4c45bbda8373d17feb9dcda0fc9de486659036cd31ca9b7865f2194167",
+    "desktop/src/copy.ts": "486bc15c4a5d31088f65122bf837fe759ed9406162e2878394522fc3e279fd0f",
+    "desktop/src/dashboard/ListenSetup.tsx": "5bf8ae474bd469e135638ae0f93c8a0e289eb399bdf86c9249096dbfed6d7de3",
+    "desktop/src/dashboard/Team.tsx": "b4cf9676828b3152c8522b19a76038e6b9f602868ad84f38f643927ab90e38a6",
+    "desktop/src/onboarding/JoinStep.tsx": "78b2e1fb1946bdb461b5fe4aa03be53296a57c7e58f0800cd27ae0e449ca5873",
+    "desktop/src/onboarding/Onboarding.tsx": "0d57388964b4c56cc0ee4c4b348fac4713bc52c9b25766630b3b2645de21cc06",
+    "desktop/src/onboarding/flow.ts": "74bfe8f36ed226897f63c9d2a2a972b7124775d0b69130fc20297eecae1956f4",
+    "desktop/test/copy.test.ts": "27c8220e134ce77f402f14acc76ac5ebaf89d29a9c1f32b61e38b696219d811a",
+    "desktop/test/validators.test.ts": "4b1128e1dde7cb16de42d1cf3e27e5a24b9ff72762629a2d8cef7903c6d67cbb",
+    "docs/desktop-app.md": "96b430ea9d3c64211aa410d53b86206a805c398c5e4700648c605b8df5a9e165",
+    "desktop/src/dashboard/invite.ts": "a96735b00b3a917c2e0e986f2d7d48740121a21c4b2c8dc71de3fc0eb62c8f38",
+    "desktop/src/lib/invitePreview.ts": "b1d036e61730fdd53df3b5fe5ca6dc900878570bbde5892a32d39ab8436b2eb6",
+    "desktop/test/invite-preview.test.ts": "df9341f1c757745f0b66884ec1f3abb631341620a4d0b46d78580c5a5a9a7483",
+    "desktop/test/invite.test.ts": "cffd50a6254e06860206157f33bf84584234a3032ff5fff8e47a6d64afd7c890",
+    "docs/desktop-ux-e2e-2026-10-26.md": "1b61f6f6c8c8e591a03f4f4847fcaa54c53740a9a7eec190c9856d5d59f3d9fe"
+  },
+  "review": {
+    "verdict": "REVISE",
+    "summary": "The invariants that matter most hold in the source. Share and invite each go through their own core command with the passphrase, so each is independently reauthenticated. Nothing joins automatically. Replacing a link synchronously clears the held preview, so an older pending preview cannot be joined. An IpcError-class failure suppresses resubmission. Several problems still need fixing before acceptance. Uncertain outcomes are detected by a denylist, so a core timeout is reported as a definite failure and the UI invites a retry. A deep link can replace a busy sheet and bypass its busy guard. The combined flow drops the notice that sharing makes agent grants stale. Several focus and error-recovery regressions come from the new disabled fields and collapsed sections. Some docs still describe the removed onboarding agent step.",
+    "findings": [
+      {
+        "id": "F1",
+        "severity": "Medium",
+        "file": "desktop/src/dashboard/Team.tsx",
+        "line": 310,
+        "title": "Only IpcError counts as uncertain, so a core timeout is reported as a definite failure and invites a retry",
+        "evidence": "In the catch block of create(): `const uncertain = toIpcError(err).error === 'IpcError'`. The core's AdminRunner kills `zeropw-admin` after 60 s (docs/desktop-app.md §4.1) and returns a typed AppError, for example class `Timeout` (compare `serve_start_timeout`). The CLI may already have committed `team share` or `team invite --link` by then. That error is not `IpcError`, so the code takes the definite-failure path. The form shows either 'error.generic' ('하지 못했어요. 다시 해 주세요', i.e. 'Couldn't do it, please try again') or 'inv.failedShared'. The primary button returns to its normal create action. A user who follows the message runs a second team_invite_create, which may leave a duplicate pending one-use invite whose link was never delivered. The message also asserts failure when the outcome is unknown. Only one IpcError case is unit-tested, and only in the helper, not in this classification code.",
+        "fix": "Invert the logic to an allowlist. Treat a failure as definite only for known pre-mutation rejections: AuthFailed, InvalidInput/UsageError validation reasons, `team_env_already_shared`, `onetime_store_full` and similar. Treat everything else, including Timeout, Unavailable and IoError, as uncertain and switch to the 'check invites' path. Base the 'shared' wording on whether team_share actually returned. Add tests for the classification."
+      },
+      {
+        "id": "F2",
+        "severity": "Medium",
+        "file": "desktop/src/dashboard/Team.tsx",
+        "line": 63,
+        "title": "A deep-link 'join' intent replaces a busy invite or join sheet, bypassing the new busy close guards",
+        "evidence": "The busy guards only wrap the Sheet's own onClose. useIntent's 'join' handler calls `sheets.open({kind:'join', incoming})` unconditionally. useSheets keeps a single `cur` and gives each open a fresh key.\n(a) While JoinSheet is awaiting team_join, a new deep link remounts the sheet. The old instance's unmount cleanup discards the in-flight held ref. The old `join()` continues and on success calls the parent's `onJoined()` → `sheets.close()`. That closes the newer sheet, whose useClearOnClose then discards the newer preview. The user sees '합류했어요' ('Joined') while the new link is the one on screen. The success is attributed to the wrong team and the new invite preview is lost.\n(b) While InviteSheet is busy, the replacement sets open=false. useClearOnClose clears the password, but `create()` continues. `setMade` then runs while `open` is false, so the effect that discards an unhanded `link_ref` never registers. The link stays in the one-time store until its TTL expires, and the success or uncertain outcome is never shown.",
+        "fix": "Defer or queue incoming join intents while any team sheet reports busy, or have sheets.open refuse to replace a busy sheet. Capture the sheet generation at the start of join()/create(). After the await, do not call parent close or navigation callbacks if the generation changed. Always discard a `link_ref` returned to a closed or unmounted sheet. Surface the late result through a toast tied to that environment."
+      },
+      {
+        "id": "F3",
+        "severity": "Medium",
+        "file": "desktop/src/dashboard/Team.tsx",
+        "line": 294,
+        "title": "The combined share-and-invite flow no longer tells the user that sharing requires re-approving agent grants",
+        "evidence": "The separate share sheet toasts 'toast.share.done' ('공유했어요. 에이전트 권한은 다시 승인하세요', i.e. 'Shared. Re-approve agent permissions'). In the new path, the onShared callback only updates `sharedHere` and calls onChanged(). The visible callout 'team.share.warn' mentions irreversibility and member key access, not grant re-approval. On success, only 'inv.created.toast' appears. A user who shares through the new single button is never told that existing agent grants for the environment need re-approval, so agents fail later without explanation. This is a regression in honest consequence disclosure for the irreversible action.",
+        "fix": "Include the grant-reapproval consequence in the pre-confirmation text for an unshared environment (for example, reuse 'inv.pre2.note'). Also announce 'toast.share.done' (or a combined toast) from onShared. Add a test that the combined path surfaces it."
+      },
+      {
+        "id": "F4",
+        "severity": "Medium",
+        "file": "desktop/src/dashboard/Team.tsx",
+        "line": 527,
+        "title": "Error focus targets a disabled input or a collapsed section; disabled buttons drop keyboard focus",
+        "evidence": "JoinSheet: on an invalid local name, `localRef.current?.focus()` runs while `<details open={!!localErr}>` is still closed, because the state has not rendered yet. The focus call fails and the error is not focused. On a team_join failure, `linkRef.current?.focus()` runs in the catch block before `finally setBusy(false)`. The link field has just been made `disabled={busy}`, so focus fails.\nListenSetup and the InviteSheet listen button now use `disabled={busy...}`. That drops focus to body while focused, and on failure focus does not return. DESIGN §5.4 and §7 require keeping focus (aria-disabled) and moving it to the error. InviteSheet handles the port case with a rAF effect, but the other fields do not.\nOnboarding JoinStep also never focuses the local-name input when its section opens on error.",
+        "fix": "Move error focus into effects keyed on the error state (or a post-render rAF), and run them after busy clears. Use aria-disabled plus handler guards instead of `disabled` on the focused action buttons and the link input. In both JoinStep and JoinSheet, focus the local-name input once its details section opens."
+      },
+      {
+        "id": "F5",
+        "severity": "Low",
+        "file": "desktop/src/dashboard/Team.tsx",
+        "line": 467,
+        "title": "The new unmount cleanup discards incoming deep-link refs under development StrictMode double effects",
+        "evidence": "Both JoinSheet and JoinStep register a mount-only cleanup that discards `heldRef.current`. The incoming effect runs after it and holds `incoming.ref`. If the dev build uses React StrictMode, the setup, cleanup, setup sequence discards the incoming ref in the core and then re-holds the same now-dead ref. The later join fails as a stale reference. Production is unaffected. Native E2E via `tauri dev` could see false failures. I could not confirm whether StrictMode is enabled.",
+        "fix": "Discard on unmount only refs this instance received and not re-held, for example by tracking an 'alive' flag set in setup. Alternatively, have the incoming effect re-fetch the preview instead of trusting a possibly discarded ref. Confirm the StrictMode configuration."
+      },
+      {
+        "id": "F6",
+        "severity": "Low",
+        "file": "docs/desktop-app.md",
+        "line": 0,
+        "title": "Specs still describe the removed onboarding agent step",
+        "evidence": "These places still describe the agent step:\n- docs/desktop-app.md §6 onboarding row ('에이전트 연결(터미널)', 'Connect agent (terminal)', with principal_create and terminal_open)\n- §7 step 6 ('에이전트 연결(나중에 가능)', 'Connect agent (possible later)')\n- DESIGN.md §7 ('n/5 · 제목', 'n/5 · title')\n- the flow.ts afterRelayFailure comment ('the agent step needs a running relay')\n\nAgentStep is still mounted, along with the Enter-key and fieldExtras branches for 'agent', but the step is unreachable.",
+        "fix": "Update §6 and §7 and DESIGN §7 to the four-step flow. Remove the dead AgentStep mount and its agent-only branches, or document them as intentionally retained."
+      },
+      {
+        "id": "F7",
+        "severity": "Low",
+        "file": "desktop/src/dashboard/Team.tsx",
+        "line": 276,
+        "title": "The blocked guidance is wrong when the share state is unknown",
+        "evidence": "`ready` requires `shared !== null`. Shared state is null while the team data loads, and stays null if the team query failed with a reason other than not-found. With listen on, `blocked()` toasts 'inv.blocked' ('환경을 고르고 다른 기기 접속을 켜세요', i.e. 'Choose an environment and turn on other-device access') and focuses the name field. Neither action helps. The button also reads 'shareCreate' even though the share state is unknown.",
+        "fix": "Show a loading or 'couldn't read share state' message, distinguish the load-failure case, and do not label the action as 'share' until the state is known."
+      },
+      {
+        "id": "F8",
+        "severity": "Low",
+        "file": "desktop/src/dashboard/Team.tsx",
+        "line": 459,
+        "title": "A customized local name inside the collapsed section is silently reset by a replacement preview",
+        "evidence": "`hold(h)` always calls `setLocal(defaultLocalName(...))`. The field now sits in `<details>`, which is closed unless there is an error. A user-edited project/environment is overwritten without visible notice when the link is replaced. The summary does show the new value, which partly mitigates this.",
+        "fix": "Keep a user-edited local name across previews, or open the details section and announce when it is reset."
+      },
+      {
+        "id": "F9",
+        "severity": "Low",
+        "file": "desktop/test/invite.test.ts",
+        "line": 0,
+        "title": "Tests cover helpers only, not the UI lifecycle and classification",
+        "evidence": "invite.test.ts and invite-preview.test.ts exercise shareAndInvite and InvitePreviewRequests in isolation. No tests cover:\n- InviteSheet error classification\n- `uncertainInvite` behavior\n- busy guards\n- JoinSheet and JoinStep unmount or close behavior\n- the expiry pre-check\n\nThe reported 230-pass run predates the final lifecycle cleanup.",
+        "fix": "Add component tests (mock IPC) for F1–F4. Re-run the frontend suite, desktop-core tests and native E2E on the final snapshot before acceptance."
+      }
+    ],
+    "limitations": [
+      "Review is static source reading only. No tests, type checks, builds or native/E2E runs were executed by this reviewer.",
+      "Core/CLI behavior (reauthentication via --require-admin for team_share and team_invite_create, timeout error classes, one-time store TTLs) is taken from the provided docs and contract, not verified against Rust source.",
+      "The rendering behavior of Callout (warn vs info default) and whether StrictMode is enabled were not available.",
+      "Line numbers are approximate, derived from the provided full-file text.",
+      "The E2E record correctly states that verification is pending; no acceptance is implied or granted by this review."
+    ]
+  }
+}

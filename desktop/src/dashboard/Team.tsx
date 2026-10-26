@@ -7,24 +7,27 @@ import {
 } from '../lib/dash';
 import { shortTime } from '../lib/format';
 import { invitePreviewErrorKey, isStaleRef, joinErrorKey } from '../lib/reasons';
+import { InvitePreviewRequests } from '../lib/invitePreview';
 import { defaultLocalName, formatCountdown, formatFingerprint, isInviteLink, parseLocalName } from '../lib/validators';
 import { useApp } from '../ui/context';
+import { useDisclosure } from '../ui/disclosure';
 import { PassField, SelectField, TextField } from '../ui/fields';
 import { Callout, Segmented } from '../ui/form';
 import { Sigil } from '../ui/pixels';
 import { useSecureGate } from '../ui/secure';
 import { ConfirmSheet } from './Confirm';
-import { passErrorKey, useClearOnClose, useDash, useIntent, useLoad, useNow, useSheets, type Intent } from './context';
+import { passErrorKey, useClearOnClose, useDash, useLoad, useNow, useSheets, type Intent } from './context';
 import { ListenSetup } from './ListenSetup';
 import { Empty, ListCard, metaLine, Row, SectionHead, Tag } from './parts';
 import { ListenError, listenErrorLines, readSettings, relayLeftOff, turnOnListen } from './relay';
 import { Sheet } from './Sheet';
+import { definiteInviteFailure, shareAndInvite } from './invite';
 
 type Incoming = { ref: string; preview: InvitePreview };
 type Role = 'user' | 'admin';
 type TeamSheet =
   | { kind: 'invite' }
-  | { kind: 'share'; env: string; then?: 'invite' }
+  | { kind: 'share'; env: string }
   | { kind: 'remove'; env: string; member: Member }
   | { kind: 'join'; incoming?: Incoming };
 const NOT_SHARED = new Set(['team_env_not_found']);
@@ -70,11 +73,16 @@ export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
   const hasPending = !!td?.invites.some((i) => i.status === 'pending');
   const now = useNow(hasPending);
 
-  useIntent(intent, onIntent, (i) => {
-    if (i === 'invite') { sheets.open({ kind: 'invite' }); return true; }
-    if (i === 'join') { sheets.open({ kind: 'join', ...(incoming ? { incoming } : {}) }); onIncomingTaken(); return true; }
-    return false;
-  });
+  const [sheetBusy, setSheetBusy] = useState(false);
+  const sheetBusyRef = useRef(false);
+  const reportBusy = (busy: boolean) => { sheetBusyRef.current = busy; setSheetBusy(busy); };
+  useEffect(() => {
+    const requested = intent === 'invite' ? 'invite' : incoming ? 'join' : intent;
+    if (!requested || sheetBusyRef.current || sheets.isOpen('invite')) return;
+    if (requested === 'invite') { sheets.open({ kind: 'invite' }); onIntent(); }
+    if (requested === 'join') { sheets.open({ kind: 'join', ...(incoming ? { incoming } : {}) }); onIncomingTaken(); onIntent(); }
+  }, [intent, incoming, sheetBusy, sheets.cur]);
+
 
   const revokeInvite = async (inv: InviteListItem) => {
     try {
@@ -93,8 +101,8 @@ export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
   return (
     <>
       <SectionHead title={t('team.env')}>
-        <button className="btn btn-ghost btn-sm" type="button" onClick={() => sheets.open({ kind: 'join' })}>{t('join.title')}</button>
-        <button className="btn btn-primary btn-sm" type="button" onClick={() => sheets.open({ kind: 'invite' })}>{t('inv.title')}</button>
+        <button className="btn btn-ghost btn-sm" type="button" onClick={() => { if (!sheetBusyRef.current) sheets.open({ kind: 'join' }); }}>{t('join.title')}</button>
+        <button className="btn btn-primary btn-sm" type="button" onClick={() => { if (!sheetBusyRef.current) sheets.open({ kind: 'invite' }); }}>{t('inv.title')}</button>
       </SectionHead>
       <p className="page-help">{t('team.help')}</p>
       {/* the team mapping could not be read: the projects load, the team environments do not */}
@@ -109,14 +117,14 @@ export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
                 <span className="px" aria-hidden="true" />
                 <span>{td ? t(td.shared ? 'inv.pre2.on' : 'inv.pre2.off') : t('boot.loading')}</span>
                 {td && !td.shared && (
-                  <button className="btn btn-ghost btn-sm" type="button" onClick={() => sheets.open({ kind: 'share', env: cur })}>{t('inv.pre2.btn')}</button>
+                  <button className="btn btn-ghost btn-sm" type="button" onClick={() => { if (!sheetBusyRef.current) sheets.open({ kind: 'share', env: cur }); }}>{t('inv.pre2.btn')}</button>
                 )}
               </div>
             </div>
           )}
         {/* a shared environment syncs only while other-device access is on */}
         {td?.shared && base.data?.settings && !parseListen(base.data.settings.team_listen) && (
-          <ListenSetup id="team-listen" interfaces={base.data.interfaces} run={relay.run}
+          <ListenSetup onBusy={reportBusy} id="team-listen" interfaces={base.data.interfaces} run={relay.run}
             onDone={() => { toast(t('toast.listen.on')); reload(); bump(); }}
             onFailed={(down) => { if (down) relay.report(down); reload(); bump(); }} />
         )}
@@ -136,7 +144,7 @@ export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
                 meta={metaLine(roleText(String(m.role)), formatFingerprint(String(m.fingerprint)))}>
                 {!m.owner && m.status === 'active' && (
                   <button className="btn btn-text btn-sm" type="button" aria-label={t('team.remove.aria', { name: String(m.name ?? '') })}
-                    onClick={() => sheets.open({ kind: 'remove', env: cur, member: m })}>{t('team.remove')}</button>
+                    onClick={() => { if (!sheetBusyRef.current) sheets.open({ kind: 'remove', env: cur, member: m }); }}>{t('team.remove')}</button>
                 )}
               </Row>
             ))}
@@ -167,11 +175,10 @@ export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
       )}
 
       <InviteSheet key={sheets.key('invite')} open={sheets.isOpen('invite')} env={cur} pairs={pairs.map((p) => p.key)} onEnv={setEnv}
-        shared={!!td?.shared} settings={base.data?.settings ?? null} interfaces={base.data?.interfaces ?? []}
-        onShare={() => sheets.open({ kind: 'share', env: cur, then: 'invite' })} onChanged={reload} onClose={sheets.close} />
-      <ConfirmSheet key={sheets.key('share')} id="sheet-share" open={sheets.isOpen('share')} title={t('inv.pre2')} confirmLabel={t('inv.pre2.btn')}
+        shared={td ? td.shared : null} loadFailed={team.failed || base.failed} onRetry={() => { team.reload(); base.reload(); }} onBusy={reportBusy} settings={base.data?.settings ?? null} interfaces={base.data?.interfaces ?? []}
+        onChanged={reload} onClose={sheets.close} />
+      <ConfirmSheet key={sheets.key('share')} onBusy={reportBusy} id="sheet-share" open={sheets.isOpen('share')} title={t('inv.pre2')} confirmLabel={t('inv.pre2.btn')}
         chips={shareData ? [shareData.env] : []} warn={t('team.share.warn')} needPass onClose={sheets.close}
-        back={shareData?.then === 'invite' ? { label: t('inv.title'), onClick: () => sheets.open({ kind: 'invite' }) } : undefined}
         errorFor={(e) => (toIpcError(e).reason === 'team_env_already_shared' ? 'team.err.shared' : null)}
         run={async (pass) => {
           const pair = shareData ? splitEnv(shareData.env) : null;
@@ -179,9 +186,9 @@ export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
           await call('team_share', { project: pair.project, environment: pair.environment, admin_passphrase: pass });
           toast(t('toast.share.done'));
           reload();
-          if (shareData?.then === 'invite') sheets.open({ kind: 'invite' }); else sheets.close();
+          sheets.close();
         }} />
-      <ConfirmSheet key={sheets.key('remove')} id="sheet-remove" open={sheets.isOpen('remove')} title={t('team.remove.title')} lead={t('team.remove.sub')}
+      <ConfirmSheet key={sheets.key('remove')} onBusy={reportBusy} id="sheet-remove" open={sheets.isOpen('remove')} title={t('team.remove.title')} lead={t('team.remove.sub')}
         confirmLabel={t('team.remove.confirm')} needPass onClose={sheets.close} warn={t('team.remove.warn')}
         chips={removeData ? [String(removeData.member.name ?? ''), formatFingerprint(String(removeData.member.fingerprint))] : []}
         run={async (pass) => {
@@ -190,7 +197,7 @@ export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
           toast(t('toast.team.removed'), 'warn'); sheets.close(); reload();
         }} />
       <JoinSheet key={sheets.key('join')} open={sheets.isOpen('join')} incoming={sheets.data('join')?.incoming ?? null}
-        onClose={sheets.close} onEnv={setEnv} onChanged={() => { reload(); bump(); }} onJoined={() => { sheets.close(); reload(); bump(); }} />
+        onBusy={reportBusy} onClose={sheets.close} onEnv={setEnv} onChanged={() => { reload(); bump(); }} onJoined={() => { sheets.close(); reload(); bump(); }} />
     </>
   );
 }
@@ -217,18 +224,33 @@ function Ring({ fraction }: { fraction: number }) {
 /** The mockup's invite step as a sheet: other-device access and sharing first, then role and
  *  name, then a 24-hour one-use link. The link stays in the core until it is copied or shown,
  *  and either hands it over once. */
-function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, onShare, onChanged, onClose }: {
-  open: boolean; env: string; pairs: string[]; onEnv(v: string): void; shared: boolean; settings: Settings | null; interfaces: NetInterface[];
-  onShare(): void; onChanged(): void; onClose(): void;
+function InviteSheet({ open, env: pageEnv, pairs, onEnv, shared: pageShared, settings, interfaces, loadFailed, onRetry, onBusy, onChanged, onClose }: {
+  open: boolean; env: string; pairs: string[]; onEnv(v: string): void; shared: boolean | null; settings: Settings | null; interfaces: NetInterface[];
+  loadFailed: boolean; onRetry(): void; onBusy(busy: boolean): void; onChanged(): void; onClose(): void;
 }) {
   const { toast, field, announce } = useApp();
   const { relay } = useDash();
   const listen = parseListen(settings?.team_listen);
   const [ip, setIp] = useState(listen?.ip ?? defaultListenIp(interfaces));
   const [port, setPort] = useState(String(listen?.port ?? DEFAULT_TEAM_PORT));
+  const networkDetails = useDisclosure(interfaces.length !== 1);
   const [role, setRole] = useState<Role>('user');
   const [name, setName] = useState('');
   const [pass, setPass] = useState('');
+  const [sharedHere, setSharedHere] = useState<string[]>([]);
+  // A page reload may choose another listed environment. A submitted operation keeps its
+  // actual target until the result is acknowledged or the user explicitly picks a new one.
+  const [operation, setOperation] = useState<{ env: string; shared: boolean } | null>(null);
+  const env = operation?.env ?? pageEnv;
+  const shared = operation?.shared ?? pageShared;
+  const [uncertainInvite, setUncertainInvite] = useState(false);
+  const [readResult, setReadResult] = useState<{ key: CopyKey; n?: number } | null>(null);
+  const formErrorRef = useRef<HTMLDivElement>(null);
+  const readResultRef = useRef<HTMLDivElement>(null);
+  const running = useRef(false);
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
+  const isShared = shared === true || sharedHere.includes(env);
   const [errs, setErrs] = useState<{ port?: CopyKey; name?: CopyKey; pass?: CopyKey; form?: CopyKey }>({});
   const [listenErr, setListenErr] = useState<CopyLine[] | null>(null);
   const [busy, setBusy] = useState(false);
@@ -240,7 +262,7 @@ function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, on
   const passRef = useRef<HTMLInputElement>(null);
   const portRef = useRef<HTMLInputElement>(null);
   const listenBtn = useRef<HTMLButtonElement>(null);
-  const shareBtn = useRef<HTMLButtonElement>(null);
+
   const boxRef = useRef<HTMLDivElement>(null);
   const now = useNow(!!made && open);
   const openRef = useRef(open);
@@ -262,42 +284,95 @@ function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, on
     return () => { if (!handedRef.current) call('onetime_discard', { ref: m.link_ref }).catch(() => undefined); };
   }, [open, made]);
 
+  useEffect(() => {
+    if (!errs.port || !networkDetails.open) return;
+    const frame = requestAnimationFrame(() => portRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [errs.port, networkDetails.open]);
+
   const turnOn = async () => {
+    if (running.current) return;
     const p = parsePort(port);
-    if (p === null || !ip) { setErrs({ port: 'set.listen.port.err' }); portRef.current?.focus(); return; }
-    setListenBusy(true); setListenErr(null);
+    if (p === null || !ip) { networkDetails.reveal(); setErrs({ port: 'set.listen.port.err' }); portRef.current?.focus(); return; }
+    running.current = true; onBusy(true); setListenBusy(true); setListenErr(null);
     try {
       await relay.run(() => turnOnListen(ip, p));
       toast(t('toast.listen.on')); field.ripple(0.05);
       onChanged();
-      setTimeout(() => (shared ? nameRef.current : shareBtn.current)?.focus(), 60);
+      setTimeout(() => nameRef.current?.focus(), 60);
     } catch (e) {
       // an address the relay cannot open is taken back (./relay.ts); say which and what is running
+      networkDetails.reveal();
       setListenErr(listenErrorLines(e));
       const down = relayLeftOff(e);
       if (down) relay.report(down);
       if (e instanceof ListenError) onChanged();
-    } finally { setListenBusy(false); }
+    } finally { running.current = false; if (alive.current) { onBusy(false); setListenBusy(false); } }
   };
 
-  const ready = !!listen && shared && !!env;
+  const ready = !!listen && shared !== null && !!env;
   const blocked = () => {
+    if (shared === null) { toast(t(loadFailed ? 'error.load' : 'boot.loading'), 'warn'); return; }
     toast(t('inv.blocked'), 'warn');
-    (listen ? shareBtn.current : listenBtn.current)?.focus();
+    (listen ? nameRef.current : listenBtn.current)?.focus();
   };
+
+  const recheckState = async () => {
+    running.current = true; onBusy(true); setBusy(true); setReadResult(null);
+    setErrs((old) => ({ ...old, form: undefined }));
+    try {
+      try { await call('team_members', { env }); }
+      catch (e) {
+        if (!NOT_SHARED.has(toIpcError(e).reason)) throw e;
+        if (alive.current) { setOperation((current) => current ? { ...current, shared: false } : current); setReadResult({ key: 'inv.read.unshared' }); }
+        return;
+      }
+      const result = await call('team_invites', { env });
+      if (alive.current) { setOperation((current) => current ? { ...current, shared: true } : current); setReadResult({ key: 'inv.read.shared', n: result.invites.length }); }
+    } catch {
+      if (alive.current) setReadResult({ key: 'inv.read.failed' });
+    } finally {
+      running.current = false;
+      if (alive.current) { onBusy(false); setBusy(false); onChanged(); }
+    }
+  };
+
+  useEffect(() => {
+    if (busy) return;
+    const frame = requestAnimationFrame(() => { if (errs.form) formErrorRef.current?.focus(); else if (readResult) readResultRef.current?.focus(); });
+    return () => cancelAnimationFrame(frame);
+  }, [busy, errs.form, readResult]);
 
   const create = async () => {
+    if (running.current) return;
     if (made) { onClose(); return; }
-    if (!listen) { blocked(); return; }
+    if (uncertainInvite) { await recheckState(); return; }
+    if (!ready || !listen) { blocked(); return; }
     const e: typeof errs = {};
     if (!name.trim() || name.length > 64 || /[\x00-\x1f\x7f]/.test(name)) e.name = 'inv.name.err';
     if (!pass) e.pass = 'pass.err.empty';
     setErrs(e);
     if (e.name) { nameRef.current?.focus(); return; }
     if (e.pass) { passRef.current?.focus(); return; }
-    setBusy(true);
+    setOperation({ env, shared: isShared });
+    running.current = true; onBusy(true); setBusy(true);
+    let sharingCommitted = isShared;
+    let sharedThisAttempt = false;
     try {
-      const r = await call('team_invite_create', { env, role, name: name.trim(), address: `${listen.ip}:${listen.port}`, admin_passphrase: pass });
+      const r = await shareAndInvite({ env, role, name: name.trim(), address: `${listen.ip}:${listen.port}`, admin_passphrase: pass }, isShared, () => {
+        sharingCommitted = true;
+        sharedThisAttempt = true;
+        setOperation({ env, shared: true });
+        toast(t('toast.share.done'));
+        announce(t('toast.share.done'));
+        setSharedHere((xs) => xs.includes(env) ? xs : [...xs, env]);
+        onChanged();
+      });
+      if (!alive.current || !openRef.current) {
+        void call('onetime_discard', { ref: r.link_ref }).catch(() => undefined);
+        toast(t('inv.late', { env }));
+        return;
+      }
       setPass('');
       setMade({ ...r, env });
       field.ripple(0.08);
@@ -306,10 +381,22 @@ function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, on
       onChanged();
       setTimeout(() => boxRef.current?.focus({ preventScroll: true }), 60);
     } catch (err) {
+      if (!alive.current || !openRef.current) { toast(t('inv.lateUnknown', { env }), 'warn'); return; }
       setPass('');
-      if (toIpcError(err).error === 'AuthFailed') { setErrs({ pass: passErrorKey(err) }); passRef.current?.focus(); }
-      else setErrs({ form: 'error.generic' });
-    } finally { setBusy(false); }
+      if (toIpcError(err).reason === 'team_env_already_shared') {
+        setOperation({ env, shared: true });
+        setErrs({ form: 'team.err.shared' });
+        onChanged();
+      } else if (toIpcError(err).error === 'AuthFailed') {
+        setErrs(sharedThisAttempt ? { pass: 'inv.pass.again', form: 'inv.failedShared' } : { pass: passErrorKey(err) });
+        passRef.current?.focus();
+      } else {
+        const uncertain = !definiteInviteFailure(err);
+        setUncertainInvite(uncertain);
+        onChanged();
+        setErrs({ form: uncertain ? 'inv.unknown' : sharingCommitted ? 'inv.failedShared' : 'error.generic' });
+      }
+    } finally { running.current = false; if (alive.current) { onBusy(false); setBusy(false); } }
   };
 
   const copy = async () => {
@@ -349,32 +436,34 @@ function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, on
   const hash = link && linkVisible ? link.slice(link.indexOf('#') + 1) : '';
 
   return (
-    <Sheet id="sheet-invite" open={open} title={t('inv.title')} lead={t('inv.sub')} primaryLabel={t(made ? 'inv.done' : 'inv.create')} busy={busy}
-      ready={!!made || ready} onBlocked={blocked} onPrimary={() => void create()} onClose={onClose} noCancel={!!made}>
-      <SelectField id="inv-env" label={t('inv.env')} mono value={env} disabled={!!made} options={pairs.map((p) => ({ value: p, label: p }))} onChange={onEnv} />
+    <Sheet id="sheet-invite" open={open} title={t('inv.title')} lead={t('inv.sub')} primaryLabel={t(made ? 'inv.done' : uncertainInvite ? 'inv.recheckState' : shared === null ? loadFailed ? 'inv.retryRead' : 'boot.loading' : isShared ? 'inv.create' : 'inv.shareCreate')} busy={busy || listenBusy}
+      ready={!!made || uncertainInvite || ready} onBlocked={() => { if (shared === null && loadFailed) onRetry(); else blocked(); }} onPrimary={() => void create()} onClose={() => { if (!running.current) onClose(); }} noCancel={!!made}>
+      <SelectField id="inv-env" label={t('inv.env')} mono value={env} ariaDisabled={!!made || uncertainInvite || busy || listenBusy} options={[...(env && !pairs.includes(env) ? [{ value: env, label: `${env} · ${t('set.listen.unlisted')}` }] : []), ...pairs.map((p) => ({ value: p, label: p }))]} onChange={(v) => { if (!running.current && !made && !uncertainInvite) { setOperation(null); onEnv(v); } }} />
       {!made && (
         <ol className="prereq">
           <li className={listen ? 'done' : undefined}>
             <div className="ph"><span className="px" aria-hidden="true" /><span>{t('inv.pre1')}</span>
               <span className="st">{listen ? `${listen.ip}:${listen.port}` : t('inv.pre1.off')}</span></div>
             <div className="pb">
+              {!listen && <>
+                <details open={networkDetails.open} onToggle={networkDetails.onToggle}>
+                  <summary onClick={networkDetails.onSummaryClick}>{t('sync.address')} <span className="mono">{ip ? `${ip}:${port}` : t('inv.pre1.off')}</span></summary>
               <div className="inline">
-                <SelectField id="inv-if" label={t('set.listen.iface')} mono value={ip} options={addressChoices(interfaces, ip, listen?.ip)}
-                  onChange={(v) => { setIp(v); setListenErr(null); }} style={{ flex: 1.7 }} />
+                <SelectField id="inv-if" label={t('set.listen.iface')} mono value={ip} options={addressChoices(interfaces, ip)}
+                  onChange={(v) => { networkDetails.reveal(); setIp(v); setListenErr(null); }} style={{ flex: 1.7 }} />
                 <TextField id="inv-port" label={t('conn.ssh.port')} mono value={port} inputRef={portRef} inputMode="numeric" maxLength={5} style={{ flex: '0 0 84px' }}
-                  error={errs.port ? t(errs.port) : null} onChange={(v) => { setPort(v); setErrs((x) => ({ ...x, port: undefined })); setListenErr(null); }} />
-                <button className="btn btn-ghost btn-sm tall" type="button" ref={listenBtn} aria-busy={listenBusy || undefined} onClick={() => void turnOn()}>{t('inv.pre1.btn')}</button>
+                  error={errs.port ? t(errs.port) : null} onChange={(v) => { networkDetails.reveal(); setPort(v); setErrs((x) => ({ ...x, port: undefined })); setListenErr(null); }} />
               </div>
+                </details>
+                <button className="btn btn-ghost btn-sm" type="button" ref={listenBtn} aria-disabled={busy || listenBusy || undefined} aria-busy={listenBusy || undefined} onClick={() => void turnOn()}>{t('inv.pre1.btn')}</button>
+              </>}
               <div className="help">{t('inv.pre1.note')}</div>
               {listenErr && <div className="help err" role="alert">{tLines(listenErr)}</div>}
             </div>
           </li>
-          <li className={shared ? 'done' : undefined}>
-            <div className="ph"><span className="px" aria-hidden="true" /><span>{t('inv.pre2')}</span><span className="st">{t(shared ? 'inv.pre2.on' : 'inv.pre2.off')}</span></div>
-            <div className="pb">
-              <div className="help" style={{ margin: '0 0 10px' }}>{t('team.share.warn')}</div>
-              <button className="btn btn-ghost btn-sm" type="button" ref={shareBtn} onClick={onShare}>{t('inv.pre2.btn')}</button>
-            </div>
+          <li className={isShared ? 'done' : undefined}>
+            <div className="ph"><span className="px" aria-hidden="true" /><span>{t('inv.pre2')}</span><span className="st">{t(isShared ? 'inv.pre2.on' : 'inv.pre2.off')}</span></div>
+            {!isShared && <div className="pb"><Callout>{t('inv.pre2.note')}</Callout><div className="help">{t('inv.shareOnCreate')}</div></div>}
           </li>
         </ol>
       )}
@@ -383,15 +472,18 @@ function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, on
           <div className="row">
             <div className="field">
               <div className="label"><span id="inv-role-lbl">{t('inv.role')}</span></div>
-              <Segmented<Role> name="inv-role" labelledBy="inv-role-lbl" value={role} onChange={setRole}
+              <Segmented<Role> name="inv-role" labelledBy="inv-role-lbl" value={role} onChange={(v) => { if (!running.current) setRole(v); }}
                 options={[{ value: 'user', label: t('inv.role.user') }, { value: 'admin', label: t('inv.role.admin') }]} />
             </div>
-            <TextField id="inv-name" label={t('inv.name')} value={name} inputRef={nameRef} maxLength={64} placeholder={t('inv.name.ph')}
-              error={errs.name ? t(errs.name) : null} onChange={(v) => { setName(v); setErrs((x) => ({ ...x, name: undefined })); }} />
+            <TextField id="inv-name" label={t('inv.name')} value={name} ariaDisabled={busy} inputRef={nameRef} maxLength={64} placeholder={t('inv.name.ph')}
+              error={errs.name ? t(errs.name) : null} onChange={(v) => { if (running.current) return; setName(v); setErrs((x) => ({ ...x, name: undefined })); }} />
           </div>
           <PassField id="inv-pass" value={pass} inputRef={passRef} error={errs.pass ? t(errs.pass) : null}
-            onChange={(v) => { setPass(v); setErrs((x) => ({ ...x, pass: undefined })); }} />
-          {errs.form && <div className="help err" role="alert">{t(errs.form)}</div>}
+            onChange={(v) => { if (running.current) return; setPass(v); setErrs((x) => ({ ...x, pass: undefined })); }} />
+          {sharedHere.includes(env) && <Callout kind="info">{t('toast.share.done')}</Callout>}
+          {shared === null && <div className="help" role="status">{t(loadFailed ? 'error.load' : 'boot.loading')}</div>}
+          {errs.form && <div className="help err" role="alert" tabIndex={-1} ref={formErrorRef}>{t(errs.form)}</div>}
+          {readResult && <div className="help" role="status" tabIndex={-1} ref={readResultRef}>{t(readResult.key, { n: readResult.n ?? 0 })}</div>}
         </>
       )}
       {made && (
@@ -432,21 +524,28 @@ function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, on
  *  is untrusted and shown as text; nothing joins until the button is pressed. After joining, this
  *  device syncs only with other-device access on, so the sheet offers to turn it on right there.
  *  The pasted link leaves the sheet's state when the join is tried and when the sheet closes. */
-function JoinSheet({ open, incoming, onClose, onEnv, onChanged, onJoined }: {
-  open: boolean; incoming: Incoming | null; onClose(): void; onEnv(key: string): void; onChanged(): void; onJoined(): void;
+function JoinSheet({ open, incoming, onBusy, onClose, onEnv, onChanged, onJoined }: {
+  open: boolean; incoming: Incoming | null; onBusy(busy: boolean): void; onClose(): void; onEnv(key: string): void; onChanged(): void; onJoined(): void;
 }) {
   const { desktop, toast, field, announce } = useApp();
   const [text, setText] = useState('');
   const [err, setErr] = useState<CopyKey | null>(null);
   const [held, setHeld] = useState<{ ref: string; preview: InvitePreview; fromLink: boolean } | null>(null);
   const [local, setLocal] = useState('');
+  const localEdited = useRef(false);
+  const localDetails = useDisclosure(false);
   const [localErr, setLocalErr] = useState<CopyKey | null>(null);
+  const [focusRequest, setFocusRequest] = useState<{ target: 'local' | 'link'; sequence: number } | null>(null);
+  const focusSequence = useRef(0);
+  const requestFocus = (target: 'local' | 'link') => setFocusRequest({ target, sequence: ++focusSequence.current });
   const [busy, setBusy] = useState(false);
   const { relay, go } = useDash();
   const [joined, setJoined] = useState<{ interfaces: NetInterface[]; settingsCorrupt: boolean } | null>(null);
   const heldRef = useRef(held);
   heldRef.current = held;
-  const seq = useRef(0);
+  const previews = useRef(new InvitePreviewRequests());
+  const running = useRef(false);
+  const alive = useRef(true);
   const linkRef = useRef<HTMLInputElement>(null);
   const localRef = useRef<HTMLInputElement>(null);
   const now = useNow(!!held && open);
@@ -455,38 +554,55 @@ function JoinSheet({ open, incoming, onClose, onEnv, onChanged, onJoined }: {
     const old = heldRef.current;
     if (old && old.ref !== h?.ref) call('onetime_discard', { ref: old.ref }).catch(() => undefined);
     heldRef.current = h; setHeld(h);
-    if (h) { setLocal(defaultLocalName(h.preview.inviter)); setLocalErr(null); field.ripple(0.05); }
+    if (h) { if (!localEdited.current) setLocal(defaultLocalName(h.preview.inviter)); setLocalErr(null); field.ripple(0.05); }
   };
 
   useEffect(() => {
+    const requests = previews.current;
+    alive.current = true;
+    return () => {
+      alive.current = false;
+      requests.invalidate();
+      queueMicrotask(() => {
+        if (alive.current || running.current) return; // joining retains its ref until the IPC call settles
+        const held = heldRef.current;
+        heldRef.current = null;
+        if (held) call('onetime_discard', { ref: held.ref }).catch(() => undefined);
+      });
+    };
+  }, []);
+
+  useEffect(() => {
     if (!incoming) return;
-    if (incoming.preview.expired) { call('onetime_discard', { ref: incoming.ref }).catch(() => undefined); setErr('join.err.expired'); return; }
+    previews.current.invalidate();
+    setText(''); setErr(null);
+    if (incoming.preview.expired) { call('onetime_discard', { ref: incoming.ref }).catch(() => undefined); setErr('join.err.expired'); requestFocus('link'); hold(null); return; }
     hold({ ref: incoming.ref, preview: incoming.preview, fromLink: true });
   }, [incoming]); // a new deep link only
 
   // the held reference is the core's; give it back when the sheet goes away without joining, and
   // drop the pasted link from the sheet's state
   useClearOnClose(open, () => {
-    seq.current++;
+    previews.current.invalidate();
     setText('');
     const h = heldRef.current;
-    if (h) { heldRef.current = null; call('onetime_discard', { ref: h.ref }).catch(() => undefined); }
+    if (h && !running.current) { heldRef.current = null; call('onetime_discard', { ref: h.ref }).catch(() => undefined); }
   });
 
   const onLink = (v: string) => {
+    setFocusRequest(null);
     setText(v);
-    const s = v.trim(), k = ++seq.current;
+    const s = v.trim();
+    previews.current.invalidate();
     if (!s) { setErr(null); hold(null); return; }
     if (!isInviteLink(s)) { setErr('join.err'); hold(null); return; }
     setErr(null);
-    call('team_invite_preview', { text: s }).then(
+    void previews.current.preview(s, () => hold(null),
       (r) => {
-        if (k !== seq.current) { call('onetime_discard', { ref: r.ref }).catch(() => undefined); return; }
         if (r.preview.expired) { call('onetime_discard', { ref: r.ref }).catch(() => undefined); setErr('join.err.expired'); hold(null); return; }
         hold({ ref: r.ref, preview: r.preview, fromLink: false });
       },
       (e) => {
-        if (k !== seq.current) return;
         setErr(invitePreviewErrorKey(toIpcError(e).reason));
         hold(null);
       },
@@ -501,29 +617,46 @@ function JoinSheet({ open, incoming, onClose, onEnv, onChanged, onJoined }: {
     toast(t('toast.paste.mock'));
   };
 
+  useEffect(() => {
+    if (!focusRequest || busy || (focusRequest.target === 'local' && !localDetails.open)) return;
+    const frame = requestAnimationFrame(() => {
+      (focusRequest.target === 'local' ? localRef.current : linkRef.current)?.focus();
+      setFocusRequest(null); // focus belongs to this validation event, never a later toggle/edit
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focusRequest, busy, localDetails.open]);
+
   const join = async () => {
+    if (running.current) return;
     if (joined) { onJoined(); return; }
     const h = heldRef.current;
-    if (!h) { linkRef.current?.focus(); return; }
+    if (!h) { requestFocus('link'); linkRef.current?.focus(); return; }
     const parsed = parseLocalName(local);
-    if (!parsed) { setLocalErr('join.local.err'); localRef.current?.focus(); return; }
-    setBusy(true);
-    seq.current++;
+    if (!parsed) { setErr(null); requestFocus('local'); localDetails.reveal(); setLocalErr('join.local.err'); localRef.current?.focus(); return; }
+    running.current = true; onBusy(true); setBusy(true);
+    previews.current.invalidate();
     setText('');   // the core holds the invite behind the reference; the link is not needed any more
     try {
       const out = await call('team_join', { ref: h.ref, project: parsed.project, environment: parsed.environment });
-      heldRef.current = null; setHeld(null);
-      // the page shows the environment just joined
-      onEnv(envKey(String(out.project), String(out.environment)));
-      field.ripple(0.1);
-      // sync needs other-device access on this device (no team listener, no team sync); a damaged
-      // settings file keeps it off until it is reset on the Settings page
+      heldRef.current = null;
+      if (alive.current) {
+        setHeld(null);
+        // the page shows the environment just joined
+        onEnv(envKey(String(out.project), String(out.environment)));
+        field.ripple(0.1);
+      }
+      // sync needs other-device access; damaged settings must be reset on the Settings page
       const [s, i] = await Promise.all([
         readSettings().catch(() => null),
         call('net_interfaces').catch(() => [] as NetInterface[]),
       ]);
-      if (s && (s.corrupt || !parseListen(s.settings.team_listen))) {
-        setJoined({ interfaces: i, settingsCorrupt: s.corrupt });
+      const listenerOn = !!s && !s.corrupt && !!parseListen(s.settings.team_listen);
+      if (!alive.current) {
+        toast(t(listenerOn ? 'toast.join.done' : 'toast.join.needListen'));
+        return;
+      }
+      if (!listenerOn) {
+        setJoined({ interfaces: i, settingsCorrupt: s?.corrupt ?? false });
         toast(t('toast.join.needListen'));
         announce(t('team.joined.sub'));
         onChanged();
@@ -533,12 +666,19 @@ function JoinSheet({ open, incoming, onClose, onEnv, onChanged, onJoined }: {
       }
     } catch (e) {
       const reason = toIpcError(e).reason;
+      if (!alive.current) {
+        heldRef.current = null;
+        void call('onetime_discard', { ref: h.ref }).catch(() => undefined);
+        toast(t(joinErrorKey(reason)), 'warn');
+        return;
+      }
       // the core keeps a previewed invite until the join succeeds: a failed try can be repeated,
       // unless the invite expired or the preview itself is gone
       if (reason === 'invite_expired' || isStaleRef(reason)) { heldRef.current = null; setHeld(null); call('onetime_discard', { ref: h.ref }).catch(() => undefined); }
       setErr(joinErrorKey(reason));
+      requestFocus('link');
       linkRef.current?.focus();
-    } finally { setBusy(false); }
+    } finally { running.current = false; if (alive.current) { onBusy(false); setBusy(false); } }
   };
 
   if (joined) {
@@ -547,7 +687,7 @@ function JoinSheet({ open, incoming, onClose, onEnv, onChanged, onJoined }: {
         {joined.settingsCorrupt
           ? <Callout kind="info">{t('listen.err.settings')} <ToSettings onClick={() => { onJoined(); go('settings'); }} /></Callout>
           : (
-            <ListenSetup id="join-listen" interfaces={joined.interfaces} run={relay.run}
+            <ListenSetup onBusy={onBusy} id="join-listen" interfaces={joined.interfaces} run={relay.run}
               onDone={() => { toast(t('toast.listen.on')); onJoined(); }}
               onFailed={(down) => { if (down) relay.report(down); onChanged(); }} />
           )}
@@ -560,11 +700,11 @@ function JoinSheet({ open, incoming, onClose, onEnv, onChanged, onJoined }: {
 
   return (
     <Sheet id="sheet-join" open={open} title={t('join.title')} lead={t('team.join.sub')} primaryLabel={t('team.join.confirm')} busy={busy}
-      ready={!!held} onBlocked={() => linkRef.current?.focus()} onPrimary={() => void join()} onClose={onClose}>
-      <TextField id="join-link" label={t('join.field')} type="password" mono value={text} inputRef={linkRef} placeholder="zeropw://join#…"
+      ready={!!held} onBlocked={() => linkRef.current?.focus()} onPrimary={() => void join()} onClose={() => { if (!running.current) onClose(); }}>
+      <TextField id="join-link" label={t('join.field')} type="password" mono value={text} ariaDisabled={busy} inputRef={linkRef} placeholder="zeropw://join#…"
         error={err ? t(err) : null} help={held?.fromLink ? t('join.fromLink') : undefined}
         suffix={desktop ? undefined : <button className="icon-btn" type="button" onClick={paste}>{t('join.paste')}</button>}
-        onChange={onLink} />
+        onChange={(v) => { if (!running.current) onLink(v); }} />
       {p && (
         <>
           <div className="preview" role="region" aria-label={t('join.pv.region')}>
@@ -577,10 +717,11 @@ function JoinSheet({ open, incoming, onClose, onEnv, onChanged, onJoined }: {
               <dt>{t('join.pv.left')}</dt><dd>{formatCountdown(msLeft(p.expires_at, now))}</dd>
             </dl>
           </div>
-          <div style={{ marginTop: 12 }}>
-            <TextField id="join-local" label={t('join.local')} mono value={local} inputRef={localRef} error={localErr ? t(localErr) : null}
-              onChange={(v) => { setLocal(v); setLocalErr(null); }} />
-          </div>
+          <details open={localDetails.open} onToggle={localDetails.onToggle} style={{ marginTop: 12 }}>
+            <summary onClick={() => { localDetails.onSummaryClick(); setFocusRequest(null); }}>{t('join.local')} <span className="mono">{local}</span></summary>
+            <TextField id="join-local" label={t('join.local')} mono value={local} disabled={busy} inputRef={localRef} error={localErr ? t(localErr) : null}
+              onChange={(v) => { setFocusRequest(null); localEdited.current = true; setLocal(v); setLocalErr(null); }} />
+          </details>
           <Callout>{t('join.check')}</Callout>
         </>
       )}

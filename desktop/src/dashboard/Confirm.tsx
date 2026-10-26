@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { t, type CopyKey } from '../copy';
 import { toIpcError } from '../ipc/client';
 import { PassField } from '../ui/fields';
@@ -13,23 +13,27 @@ import { Sheet } from './Sheet';
  *  field in `children` when `errorFor` shows it there itself (it returns false). A typed
  *  passphrase is dropped when the action ends and when the sheet closes. `check` runs first and
  *  stops the action when a field in `children` is not ready (it shows why itself). */
-export function ConfirmSheet({ id, open, title, lead, confirmLabel, chips, details, warn, info, notes, needPass, check, run, onClose, back, errorFor, children }: {
+export function ConfirmSheet({ id, open, title, lead, confirmLabel, chips, details, warn, info, notes, needPass, check, run, onClose, back, errorFor, children, onBusy }: {
   id: string; open: boolean; title: string; lead?: string; confirmLabel: string;
   chips?: string[]; details?: Array<[string, string]>; warn?: string; info?: string; notes?: string[]; needPass?: boolean;
   check?(): boolean; run(pass: string): Promise<void>; onClose(): void; back?: { label: string; onClick(): void }; errorFor?(e: unknown): CopyKey | null | false;
-  children?: ReactNode;
+  children?: ReactNode; onBusy?(busy: boolean): void;
 }) {
   const [pass, setPass] = useState('');
   const [passErr, setPassErr] = useState<CopyKey | null>(null);
   const [err, setErr] = useState<CopyKey | null>(null);
   const [busy, setBusy] = useState(false);
+  const running = useRef(false);
+  const alive = useRef(true);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
   const passRef = useRef<HTMLInputElement>(null);
   useClearOnClose(open, () => setPass(''));
 
   const go = async () => {
+    if (running.current) return;
     if (check && !check()) return;
     if (needPass && !pass) { setPassErr('pass.err.empty'); passRef.current?.focus(); return; }
-    setBusy(true); setErr(null);
+    running.current = true; onBusy?.(true); setBusy(true); setErr(null);
     try {
       await run(pass);
       setPass('');
@@ -40,11 +44,14 @@ export function ConfirmSheet({ id, open, title, lead, confirmLabel, chips, detai
         const key = errorFor?.(e);
         if (key !== false) setErr(key ?? 'error.generic');
       }
-    } finally { setBusy(false); }
+    } finally {
+      running.current = false;
+      if (alive.current) { onBusy?.(false); setBusy(false); }
+    }
   };
 
   return (
-    <Sheet id={id} open={open} title={title} lead={lead} primaryLabel={confirmLabel} busy={busy} onPrimary={() => void go()} onClose={onClose} back={back}>
+    <Sheet id={id} open={open} title={title} lead={lead} primaryLabel={confirmLabel} busy={busy} onPrimary={() => void go()} onClose={() => { if (!running.current) onClose(); }} back={back}>
       {chips && chips.length > 0 && <div className="agent-sum">{chips.map((c, i) => <span key={`${i}-${c}`}>{c}</span>)}</div>}
       {details && details.length > 0 && (
         <dl className="kv sheet-kv">

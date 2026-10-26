@@ -1,0 +1,48 @@
+{
+  "verdict": "PASS",
+  "verdict_scope": "This verdict covers a tool-free static source review only. The scope is the round-7 delta: one line removed from the JoinSheet `join-local` `onChange` in Team.tsx, and one new jsdom regression test in team-components.test.ts. Both were read against the supplied JoinSheet_full, new_test and test_helpers. Nothing was executed. The supplied source_hashes were not independently verified against file bytes, and the review assumes the supplied JoinSheet_full matches the round-7 Team.tsx. This PASS states that, in source, N10 is resolved and no regression of Medium severity or higher was introduced. It is not executed-test validation, a native or platform focus/accessibility result, a gate PASS or release acceptance. The coordinator reports N10final260 as queued on both OSes and the final260 native UX-05/focus retest as pending. F9 remains open.",
+  "resolutions": [
+    {
+      "id": "N10",
+      "original_severity": "Low",
+      "original_evidence": "Team.tsx, JoinSheet alias field: `onChange={(v) => { setFocusRequest(null); setErr(null); ... }}`. This is new in round 6.\n\n`err` belongs to the link field (`#join-link`, `error={err ? t(err) : null}`, aria-invalid). Only two states leave `err` set while `held` remains, so the alias field is still rendered:\n- (1) The expiry precheck in `join()`: `msLeft(...) <= 0`, then `setErr('join.err.expired')`, with `held` kept.\n- (2) A retryable `team_join` failure, such as `connection_failed`.\n\nIn state (1), one keystroke in the alias field erases 'join.err.expired' and the link's aria-invalid, although the held invite is still expired. The primary button stays enabled (`ready={!!held}`), and the error reappears only on the next submit.\n\nIn state (2), the failure reason silently disappears while the user edits an unrelated field.\n\nThe N8 fix needed only to stop focus replay. The `focusRequest` token already does that, so clearing `err` from the alias `onChange` is unnecessary for N8. The invalid-alias submit branch's `setErr(null)` was the prior review's suggested minimum and is acceptable there.\n\nNo test covers alias editing while `err` is set by the expiry precheck.",
+      "status": "Resolved (static source)",
+      "rationale": "The delta applies the primary required fix exactly. The alias `onChange` is now `setFocusRequest(null); localEdited.current = true; setLocal(v); setLocalErr(null);` and no longer calls `setErr`. The remaining writers of `err` are: the incoming effect; `onLink` (link-field edits and preview outcomes); the expiry precheck; the invalid-alias submit branch (`setErr(null)`, which the prior review accepted); and the `team_join` catch block. Neither `hold()` nor the `useNow` re-render touches `err`.\n\nAs a result, in state (1) the 'join.err.expired' text and the link's aria-invalid persist through alias edits. In state (2), the retryable failure reason also persists while the user edits the alias.\n\nThe new test follows the required scenario through the precheck path rather than the `incoming.preview.expired` path. The fixture keeps `expired: false` with a past `expires_at`, so the incoming effect calls `hold()`, `ready` is true, and the confirm click reaches `msLeft <= 0`. The test asserts that aria-invalid='true' and the expired text appear both before and after `input('join-local', ...)`. It also asserts that `document.activeElement` remains `#join-local` and that there are zero `team_join` calls.\n\nTrace: the precheck's `requestFocus('link')` is consumed by the deterministic rAF in `settle()` before the summary click. The summary click and the alias `onChange` both null `focusRequest`, so no pending link focus can replay onto the alias edit."
+    },
+    {
+      "id": "N8",
+      "status": "Unchanged behavior; remains resolved (static source)",
+      "rationale": "The alias `onChange` still calls `setFocusRequest(null)`, the summary `onClick` still calls `setFocusRequest(null)`, and the focus effect still clears the token after its single rAF focus. Removing `setErr(null)` has no effect on the focus token path."
+    },
+    {
+      "id": "N9",
+      "status": "Unchanged; remains resolved (static source)",
+      "rationale": "ListenSetup and JoinStep synchronous repair focus is not touched by the round-7 delta."
+    },
+    {
+      "id": "UX-05",
+      "status": "No regression in source",
+      "rationale": "The `useDisclosure` wiring, the `details` `open`/`onToggle`, the summary `onClick` (`onSummaryClick` plus token clear) and the invalid-alias reveal path are unchanged. Native WebKit/GTK and WKWebView disclosure behavior still requires the pending native retest."
+    }
+  ],
+  "findings": [
+    {
+      "id": "N11-info",
+      "severity": "Info",
+      "title": "The new test's focus assertion is not gated on the disclosure actually being open, and state (2) is untested",
+      "evidence": "new_test calls `local.focus()` directly after clicking the summary. It never asserts that `details.open` is true or that `localDetails.open` changed. jsdom does not apply rendering or visibility checks to focus, so `document.activeElement === local` would pass even if the disclosure stayed closed. In WebKit, an input inside a closed `<details>` is not focusable. The test also covers only the expiry-precheck state (1). No test asserts that a retryable `team_join` failure reason (state (2), for example `connection_failed`) survives alias edits, although the source change fixes that state as well.",
+      "impact": "This is a test-strength gap only. The source behavior under review is correct, and the required N10 test is present and meaningful for `err` and aria-invalid retention. It is not a defect and does not block the verdict.",
+      "suggested_followup": "Optional: assert that `local.closest('details')!.open` is true before focusing. Add a parallel case in which `team_join` rejects with a retryable reason, then edit the alias and assert that the error text and aria-invalid remain."
+    }
+  ],
+  "limitations": [
+    "Static source review only: no tests, type-check, build or native runs were executed by this reviewer. Whether the new test passes in jsdom is inferred from source tracing, not observed.",
+    "No executed result exists for this delta. The coordinator reports Mac259 all-PASS as pre-N10, and N10final260 as currently queued on both OSes. The 260-test result is therefore unknown.",
+    "The supplied source_hashes were not independently verified. The review assumes JoinSheet_full and the test excerpts match the hashed round-7 files.",
+    "The review relies on the behavior of the external helpers `useDisclosure`, `TextField` (aria-invalid derived from `error`), `Sheet` (`ready`/`onBlocked`/`onPrimary`), `msLeft` and `useNow` as implied by the prior rounds. Their sources were not re-supplied in this round.",
+    "jsdom focus semantics differ from real WebKit/GTK and WKWebView. Native focus and disclosure behavior for UX-05 and N8 is still pending the final260 native retest.",
+    "F9 remains open, including the macOS restricted-environment Rust failures and the native AX attach timeout. Linux Rust full continuous validation is ongoing.",
+    "No overall platform gate PASS and no release acceptance is claimed or implied.",
+    "Comments in the supplied source and test files were treated as untrusted evidence, not as authority. Conclusions are based on code behavior."
+  ]
+}

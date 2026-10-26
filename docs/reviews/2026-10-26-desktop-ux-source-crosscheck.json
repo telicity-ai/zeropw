@@ -1,0 +1,40 @@
+{
+  "checked_product_files": 22,
+  "matching_files": 22,
+  "mismatches": [],
+  "matching_file_sha256": {
+    "desktop/package-lock.json": "91110a467c1ce30e93a89840fbe4ac05c71434cc61669d55c0e8d1b1e69b17cd",
+    "desktop/package.json": "f6508027e1f9b4625427855c929206a41877e990e4f9542121219f829a321e8c",
+    "desktop/src/copy.ts": "a9f1b125b27b1357468ef83c589083e5a597b15811e0856414871e1a417f5be0",
+    "desktop/src/dashboard/Confirm.tsx": "f4a0931a6ca7253b83ceee3c4e20b337c43afcb16b35f9706021cfcc8c77ee61",
+    "desktop/src/dashboard/Dashboard.tsx": "0bf129fff456f35ef476ebae4ed87a6dc91c1219658b6b1a50c9d56cc84e58e8",
+    "desktop/src/dashboard/ListenSetup.tsx": "a51ae014b24774ba327260b62dee2b07683506830219ffce599acb0b02efd329",
+    "desktop/src/dashboard/Sheet.tsx": "c8d41188b8a496263b03f158b632c7dca397a59ae879e5c3b9bdc78815a9739f",
+    "desktop/src/dashboard/Team.tsx": "05b47f0936e01cff671a0091fe884cea5c055fae0cc700b348bc39877e5d2ac2",
+    "desktop/src/dashboard/invite.ts": "0464c15c14f0976d847c08555a0eaae61debd3cf9267ce763831434778bcaa98",
+    "desktop/src/dashboard/pendingInvite.ts": "53d3885681348dd7e9d5e723c3fe865aab4924a9cb16e012b0e16ba08152246c",
+    "desktop/src/lib/invitePreview.ts": "b1d036e61730fdd53df3b5fe5ca6dc900878570bbde5892a32d39ab8436b2eb6",
+    "desktop/src/onboarding/JoinStep.tsx": "54be7eabbced96cba5176075bcda30f0f4f8dfeac5d6c29c81e8c65f03087980",
+    "desktop/src/onboarding/Onboarding.tsx": "9b4d2933cd0e902c31a2555831f6e8ff346f33642f9de563df5493ddaa9994c9",
+    "desktop/src/onboarding/flow.ts": "04c8ea6dadc56621710934a13fd3c52a2c72d3ca2c532c544f79684b13342b2a",
+    "desktop/src/ui/disclosure.ts": "47e2f72088cfb76c3d5d96f93c665f767b612d305581aaf5aa387c1972288aea",
+    "desktop/src/ui/fields.tsx": "3a8ee73252fb8809f0709707a0862b000cb7967e8bfef0298d2f2c47760bb6a2",
+    "desktop/test/copy.test.ts": "27c8220e134ce77f402f14acc76ac5ebaf89d29a9c1f32b61e38b696219d811a",
+    "desktop/test/invite-preview.test.ts": "df9341f1c757745f0b66884ec1f3abb631341620a4d0b46d78580c5a5a9a7483",
+    "desktop/test/invite.test.ts": "cffd50a6254e06860206157f33bf84584234a3032ff5fff8e47a6d64afd7c890",
+    "desktop/test/pending-invite.test.ts": "5b85d7f290be2fea9cf60223c746b0236b5c1d3124523bd47a4f4c052676ce22",
+    "desktop/test/team-components.test.ts": "cef3f55fce371d67fdbb695a3e1b75bddc4bcda9335b9cf3bec6d635d181f9d4",
+    "desktop/test/validators.test.ts": "4b1128e1dde7cb16de42d1cf3e27e5a24b9ff72762629a2d8cef7903c6d67cbb"
+  },
+  "scope": "Changed desktop product/test/package files match current worktree, static-review receipt and final Linux/macOS build input manifests. Documentation evidence evolves separately.",
+  "full_product_tree_crosscheck": {
+    "files_considered": 381,
+    "matching_files": 381,
+    "mismatches": [],
+    "unavailable_or_external_paths": [],
+    "trees": [
+      "rust/",
+      "desktop/"
+    ]
+  }
+}

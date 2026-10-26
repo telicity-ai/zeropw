@@ -130,16 +130,16 @@ describe('agents', () => {
 
 describe('onboarding flow (v0.5)', () => {
   it('has no service connection step', () => {
-    expect(FULL).toEqual(['admin', 'recovery', 'create', 'project', 'agent']);
+    expect(FULL).toEqual(['admin', 'recovery', 'create', 'project']);
     expect(JOIN_FLOW).toEqual(['admin', 'recovery', 'create']);
     expect(counted(false)).not.toContain('connect');
   });
   it('steps back and forward inside the flow', () => {
     expect(neighbour('admin', false, -1)).toBe('welcome');
     expect(neighbour('project', false, -1)).toBe('create');
-    expect(neighbour('agent', false, 1)).toBe('done');
+    expect(neighbour('project', false, 1)).toBe('done');
     expect(neighbour('create', true, 1)).toBe('done');
-    expect(progressOf('recovery', false)).toEqual({ index: 1, total: 5 });
+    expect(progressOf('recovery', false)).toEqual({ index: 1, total: 4 });
     expect(progressOf('create', true)).toEqual({ index: 2, total: 3 });
     expect(progressOf('done', false)).toBeNull();
   });
