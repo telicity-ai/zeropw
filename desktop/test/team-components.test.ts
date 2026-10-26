@@ -308,7 +308,7 @@ describe('combined upstream recovery and UX behavior', () => {
       const [error, setError] = useState<string | null>(null);
       return h(ConfirmSheet, {
         id: 'child-confirm', open: true, title: 'Confirm', confirmLabel: 'Confirm', run, onBusy: busy, onClose: vi.fn(),
-        errorFor: () => { setError(t('conn.cli.err.notFound')); return false; },
+        errorFor: (): false => { setError(t('conn.cli.err.notFound')); return false; },
       }, h(TextField, { id: 'child-path', label: 'Path', value: '/synthetic/missing', onChange: vi.fn(), error }));
     }
     await render(h(FieldErrorConfirm));

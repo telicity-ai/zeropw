@@ -449,7 +449,7 @@ function InviteSheet({ open, env: pageEnv, pairs, onEnv, shared: pageShared, set
                 <details open={networkDetails.open} onToggle={networkDetails.onToggle}>
                   <summary onClick={networkDetails.onSummaryClick}>{t('sync.address')} <span className="mono">{ip ? `${ip}:${port}` : t('inv.pre1.off')}</span></summary>
               <div className="inline">
-                <SelectField id="inv-if" label={t('set.listen.iface')} mono value={ip} options={addressChoices(interfaces, ip, listen?.ip)}
+                <SelectField id="inv-if" label={t('set.listen.iface')} mono value={ip} options={addressChoices(interfaces, ip)}
                   onChange={(v) => { networkDetails.reveal(); setIp(v); setListenErr(null); }} style={{ flex: 1.7 }} />
                 <TextField id="inv-port" label={t('conn.ssh.port')} mono value={port} inputRef={portRef} inputMode="numeric" maxLength={5} style={{ flex: '0 0 84px' }}
                   error={errs.port ? t(errs.port) : null} onChange={(v) => { networkDetails.reveal(); setPort(v); setErrs((x) => ({ ...x, port: undefined })); setListenErr(null); }} />
