@@ -23,10 +23,15 @@ const dash = { tick: 0, go: vi.fn(), bump: vi.fn(), relay: { run: (fn: () => Pro
 let animationFrames: Map<number, FrameRequestCallback>, frameId: number;
 let root: Root, host: HTMLDivElement, shared: boolean;
 let requestIncoming: (ref: string, p?: InvitePreview) => void;
+let leaveTeamForImport: () => void, returnToTeam: () => void;
 function Driver() {
   const [intent, setIntent] = useState<Intent>();
   const [incoming, setIncoming] = useState<{ ref: string; preview: InvitePreview } | null>(null);
+  const [showTeam, setShowTeam] = useState(true);
+  leaveTeamForImport = () => { setShowTeam(false); setIntent('import'); };
+  returnToTeam = () => { setShowTeam(true); setIntent(undefined); };
   requestIncoming = (ref, p = preview()) => { setIncoming({ ref, preview: p }); setIntent('join'); };
+  if (!showTeam) return h('div', { id: 'import-page' });
   return h(TeamPage, { intent, onIntent: () => setIntent(undefined), incoming, onIncomingTaken: () => setIncoming(null) });
 }
 const providers = (child: ReactNode) => h(AppContext, { value: app }, h(DashContext, { value: dash }, child));
@@ -189,6 +194,9 @@ describe('invite component confirmation and failure recovery', () => {
     expect(admin.checked).toBe(true);
     expect(app.announce).toHaveBeenCalledWith(t('toast.share.done'));
     expect(host.textContent).toContain(t('toast.share.done'));
+    expect(host.textContent).toContain(t('inv.failedShared'));
+    expect(host.textContent).toContain(t('inv.pass.again'));
+    expect(host.textContent).not.toContain(t('error.auth'));
     expect(button(t('inv.create'))).toBeTruthy();
   });
   it('defers a deep link during invite creation and guards two submissions in the same tick', async () => {
@@ -208,6 +216,34 @@ describe('invite component confirmation and failure recovery', () => {
     expect(host.querySelector('#sheet-join:not(.away)')).not.toBeNull();
     expect(ipc.mock.calls.filter(([command]) => command === 'team_invite_create')).toHaveLength(1);
   });
+  it('surfaces a deferred incoming link after import navigation replaced the transient intent', async () => {
+    await render(); await invite();
+    await act(async () => requestIncoming('queued-before-import')); await settle();
+    expect(host.querySelector('#sheet-join:not(.away)')).toBeNull();
+    await act(async () => leaveTeamForImport()); await settle();
+    expect(host.querySelector('#import-page')).not.toBeNull();
+    await act(async () => returnToTeam()); await settle();
+    expect(host.querySelector('#sheet-join:not(.away)')).not.toBeNull();
+    expect(ipc).not.toHaveBeenCalledWith('onetime_discard', { ref: 'queued-before-import' });
+    expect(ipc.mock.calls.filter(([command]) => command === 'team_join')).toHaveLength(0);
+    await click(button(t('team.join.confirm')));
+    expect(ipc).toHaveBeenCalledWith('team_join', expect.objectContaining({ ref: 'queued-before-import' }));
+  });
+  it('maps an already-shared rejection and reloads without silently creating an invite', async () => {
+    ipc.mockImplementation(async (command) => {
+      if (command === 'team_share') { shared = true; throw { error: 'InvalidInput', reason: 'team_env_already_shared' }; }
+      return defaultIpc(command) as never;
+    });
+    await render(); await invite(); await click(button(t('inv.shareCreate')));
+    expect(host.textContent).toContain(t('team.err.shared'));
+    expect(host.textContent).not.toContain(t('error.generic'));
+    expect((host.querySelector('#inv-name') as HTMLInputElement).value).toBe('custom member');
+    expect(ipc.mock.calls.filter(([command]) => command === 'team_invite_create')).toHaveLength(0);
+    await input('inv-pass', 'synthetic-again');
+    await click(button(t('inv.create')));
+    expect(ipc.mock.calls.filter(([command]) => command === 'team_share')).toHaveLength(1);
+    expect(ipc.mock.calls.filter(([command]) => command === 'team_invite_create')).toHaveLength(1);
+  });
   it('discards an invite link delivered after unmount', async () => {
     const pending = deferred<unknown>();
     ipc.mockImplementation(async (command) => command === 'team_invite_create' ? pending.promise as never : defaultIpc(command) as never);
@@ -215,6 +251,8 @@ describe('invite component confirmation and failure recovery', () => {
     await act(async () => root.render(providers(h('div'))));
     await act(async () => pending.resolve(defaultIpc('team_invite_create'))); await settle();
     expect(ipc).toHaveBeenCalledWith('onetime_discard', { ref: 'new-link' });
+    expect(app.toast).toHaveBeenCalledWith(t('inv.late', { env: 'demo/dev' }));
+    expect(ipc.mock.calls.filter(([command]) => command === 'team_invite_create')).toHaveLength(1);
   });
   it('shows read failure and retries loading without authorizing an unknown share', async () => {
     let fail = true;
@@ -298,6 +336,44 @@ describe('combined upstream recovery and UX behavior', () => {
     await render();
     expect((host.querySelector('#team-env') as HTMLSelectElement).value).toBe('demo/dev');
     expect(ipc.mock.calls.filter(([command]) => command === 'team_members').at(-1)).toEqual(['team_members', { env: 'demo/dev' }]);
+  });
+  it.each(['success', 'uncertain'] as const)('keeps the submitted invite target after list fallback during a delayed %s outcome', async (outcome) => {
+    const pending = deferred<unknown>();
+    let mapped = true;
+    shared = true;
+    ipc.mockImplementation(async (command) => {
+      if (command === 'project_list') return {
+        projects: [{ name: 'demo', environments: ['dev'], created_at: '' }],
+        team_environments: mapped ? [{ project: 'joined', environment: 'shared', env_id: 'team-A' }] : [],
+        ...(mapped ? {} : { team_environments_error: 'mapping_unavailable' }),
+      } as never;
+      if (command === 'team_invite_create') return pending.promise as never;
+      return defaultIpc(command) as never;
+    });
+    await render(); await select('team-env', 'joined/shared'); await invite();
+    await click(button(t('inv.create')));
+    mapped = false; dash.tick++;
+    await render();
+    expect((host.querySelector('#team-env') as HTMLSelectElement).value).toBe('demo/dev');
+    const target = host.querySelector<HTMLSelectElement>('#inv-env')!;
+    expect(target.value).toBe('joined/shared');
+    expect(target.selectedOptions[0]?.textContent).toContain(t('set.listen.unlisted'));
+    if (outcome === 'success') {
+      await act(async () => pending.resolve(defaultIpc('team_invite_create'))); await settle();
+      expect(target.value).toBe('joined/shared');
+      await click(button(t('inv.revoke'), host.querySelector('#sheet-invite')!));
+      expect(ipc).toHaveBeenCalledWith('team_revoke_invite', { env: 'joined/shared', invite_id: 'i' });
+    } else {
+      await act(async () => pending.reject({ error: 'Timeout', reason: 'admin_timeout' })); await settle();
+      const before = ipc.mock.calls.length;
+      await click(button(t('inv.recheckState')));
+      const recheck = ipc.mock.calls.slice(before);
+      expect(recheck).toContainEqual(['team_members', { env: 'joined/shared' }]);
+      expect(recheck).toContainEqual(['team_invites', { env: 'joined/shared' }]);
+      expect(target.value).toBe('joined/shared');
+    }
+    expect(ipc.mock.calls.filter(([command]) => command === 'team_invite_create')).toHaveLength(1);
+    expect(ipc).toHaveBeenCalledWith('team_invite_create', expect.objectContaining({ env: 'joined/shared' }));
   });
   it('keeps an unlisted selected network address visible while disclosure repair stays open', async () => {
     const props = { id: 'unlisted', onDone: vi.fn() };
@@ -440,8 +516,8 @@ describe('join component ownership, busy intents and focus', () => {
     await click(button(t('team.join.confirm')));
     expect(ipc.mock.calls.filter(([command]) => command === 'team_join').at(-1)).toEqual(['team_join', expect.objectContaining({ ref: 'new' })]);
   });
-  it('prechecks expiry and returns error focus to the enabled link input after failed join', async () => {
-    const p = preview(); p.expires_at = new Date(Date.now() - 1).toISOString();
+  it('honors core-expired previews and returns error focus to the enabled link input after failed join', async () => {
+    const p = preview(); p.expires_at = new Date(Date.now() - 301_000).toISOString(); p.expired = true;
     await render(); await act(async () => requestIncoming('expired', p)); await settle();
     await click(button(t('team.join.confirm')));
     expect(ipc.mock.calls.filter(([command]) => command === 'team_join')).toHaveLength(0);
@@ -452,22 +528,36 @@ describe('join component ownership, busy intents and focus', () => {
     expect(document.activeElement?.id).toBe('join-link');
     expect((document.activeElement as HTMLInputElement).disabled).toBe(false);
   });
-  it('retains an expired-link error and aria-invalid while editing the unrelated alias', async () => {
-    const expired = preview();
-    expired.expires_at = new Date(Date.now() - 1).toISOString();
-    await render(); await act(async () => requestIncoming('expired-held', expired)); await settle();
+  it('retains a retryable link error and aria-invalid while editing the unrelated alias', async () => {
+    ipc.mockImplementation(async (command) => {
+      if (command === 'team_join') throw { error: 'IoError', reason: 'connection_failed' };
+      return defaultIpc(command) as never;
+    });
+    await render(); await act(async () => requestIncoming('retryable-held')); await settle();
     await click(button(t('team.join.confirm')));
     const link = host.querySelector<HTMLInputElement>('#join-link')!;
     expect(link.getAttribute('aria-invalid')).toBe('true');
-    expect(host.textContent).toContain(t('join.err.expired'));
+    expect(host.textContent).toContain(t('join.err.failed'));
     const local = host.querySelector<HTMLInputElement>('#join-local')!;
     await click(local.closest('details')!.querySelector('summary')!);
     local.focus();
     await input('join-local', 'custom/dev');
     expect(document.activeElement).toBe(local);
     expect(link.getAttribute('aria-invalid')).toBe('true');
-    expect(host.textContent).toContain(t('join.err.expired'));
-    expect(ipc.mock.calls.filter(([command]) => command === 'team_join')).toHaveLength(0);
+    expect(host.textContent).toContain(t('join.err.failed'));
+    expect(ipc.mock.calls.filter(([command]) => command === 'team_join')).toHaveLength(1);
+  });
+  it.each(['within-core-skew', 'browser-unparseable'] as const)('defers the %s expiry decision to core in both join paths', async (format) => {
+    const p = preview();
+    p.expires_at = format === 'within-core-skew' ? new Date(Date.now() - 120_000).toISOString() : 'core-only-timestamp';
+    p.expired = false; // the trusted preview, not browser date parsing, owns this decision
+    await render(); await act(async () => requestIncoming('core-authoritative', p)); await settle();
+    await click(button(t('team.join.confirm')));
+    expect(ipc).toHaveBeenCalledWith('team_join', expect.objectContaining({ ref: 'core-authoritative' }));
+    const next = vi.fn();
+    await render(h(JoinStep, { frame: { active: true, cls: 'in' as const }, sectionRef: null, incoming: { ref: 'onboarding-core', preview: p }, onBack: vi.fn(), onNext: next }));
+    await click(button(t('join.next')));
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({ ref: 'onboarding-core' }));
   });
   it.each(['on', 'off', 'unavailable'] as const)('retains an in-flight ref across unmount and announces late success with listener %s', async (listener) => {
     const pending = deferred<unknown>();

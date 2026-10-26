@@ -120,7 +120,6 @@ export function JoinStep({ frame, sectionRef, incoming, onBack, onNext }: {
   const next = () => {
     const h = heldRef.current;
     if (!h) { linkRef.current?.focus(); return; }
-    if (Date.parse(h.preview.expires_at) <= Date.now()) { setErr('join.err.expired'); linkRef.current?.focus(); return; }
     const parsed = parseLocalName(local);
     if (!parsed) { localDetails.reveal(); setLocalErr(true); localRef.current?.focus(); return; }
     heldRef.current = null; setHeld(null); previews.current.invalidate(); setLink(''); setErr(null);   // the plan owns the reference now

@@ -77,9 +77,10 @@ export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
   const sheetBusyRef = useRef(false);
   const reportBusy = (busy: boolean) => { sheetBusyRef.current = busy; setSheetBusy(busy); };
   useEffect(() => {
-    if (!intent || sheetBusyRef.current || sheets.isOpen('invite')) return;
-    if (intent === 'invite') { sheets.open({ kind: 'invite' }); onIntent(); }
-    if (intent === 'join') { sheets.open({ kind: 'join', ...(incoming ? { incoming } : {}) }); onIncomingTaken(); onIntent(); }
+    const requested = incoming ? 'join' : intent;
+    if (!requested || sheetBusyRef.current || sheets.isOpen('invite')) return;
+    if (requested === 'invite') { sheets.open({ kind: 'invite' }); onIntent(); }
+    if (requested === 'join') { sheets.open({ kind: 'join', ...(incoming ? { incoming } : {}) }); onIncomingTaken(); onIntent(); }
   }, [intent, incoming, sheetBusy, sheets.cur]);
 
 
@@ -223,7 +224,7 @@ function Ring({ fraction }: { fraction: number }) {
 /** The mockup's invite step as a sheet: other-device access and sharing first, then role and
  *  name, then a 24-hour one-use link. The link stays in the core until it is copied or shown,
  *  and either hands it over once. */
-function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, loadFailed, onRetry, onBusy, onChanged, onClose }: {
+function InviteSheet({ open, env: pageEnv, pairs, onEnv, shared: pageShared, settings, interfaces, loadFailed, onRetry, onBusy, onChanged, onClose }: {
   open: boolean; env: string; pairs: string[]; onEnv(v: string): void; shared: boolean | null; settings: Settings | null; interfaces: NetInterface[];
   loadFailed: boolean; onRetry(): void; onBusy(busy: boolean): void; onChanged(): void; onClose(): void;
 }) {
@@ -237,6 +238,11 @@ function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, lo
   const [name, setName] = useState('');
   const [pass, setPass] = useState('');
   const [sharedHere, setSharedHere] = useState<string[]>([]);
+  // A page reload may choose another listed environment. A submitted operation keeps its
+  // actual target until the result is acknowledged or the user explicitly picks a new one.
+  const [operation, setOperation] = useState<{ env: string; shared: boolean } | null>(null);
+  const env = operation?.env ?? pageEnv;
+  const shared = operation?.shared ?? pageShared;
   const [uncertainInvite, setUncertainInvite] = useState(false);
   const [readResult, setReadResult] = useState<{ key: CopyKey; n?: number } | null>(null);
   const formErrorRef = useRef<HTMLDivElement>(null);
@@ -318,11 +324,11 @@ function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, lo
       try { await call('team_members', { env }); }
       catch (e) {
         if (!NOT_SHARED.has(toIpcError(e).reason)) throw e;
-        if (alive.current) setReadResult({ key: 'inv.read.unshared' });
+        if (alive.current) { setOperation((current) => current ? { ...current, shared: false } : current); setReadResult({ key: 'inv.read.unshared' }); }
         return;
       }
       const result = await call('team_invites', { env });
-      if (alive.current) setReadResult({ key: 'inv.read.shared', n: result.invites.length });
+      if (alive.current) { setOperation((current) => current ? { ...current, shared: true } : current); setReadResult({ key: 'inv.read.shared', n: result.invites.length }); }
     } catch {
       if (alive.current) setReadResult({ key: 'inv.read.failed' });
     } finally {
@@ -348,11 +354,15 @@ function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, lo
     setErrs(e);
     if (e.name) { nameRef.current?.focus(); return; }
     if (e.pass) { passRef.current?.focus(); return; }
+    setOperation({ env, shared: isShared });
     running.current = true; onBusy(true); setBusy(true);
     let sharingCommitted = isShared;
+    let sharedThisAttempt = false;
     try {
       const r = await shareAndInvite({ env, role, name: name.trim(), address: `${listen.ip}:${listen.port}`, admin_passphrase: pass }, isShared, () => {
         sharingCommitted = true;
+        sharedThisAttempt = true;
+        setOperation({ env, shared: true });
         toast(t('toast.share.done'));
         announce(t('toast.share.done'));
         setSharedHere((xs) => xs.includes(env) ? xs : [...xs, env]);
@@ -373,8 +383,14 @@ function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, lo
     } catch (err) {
       if (!alive.current || !openRef.current) { toast(t('inv.lateUnknown', { env }), 'warn'); return; }
       setPass('');
-      if (toIpcError(err).error === 'AuthFailed') { setErrs({ pass: passErrorKey(err) }); passRef.current?.focus(); }
-      else {
+      if (toIpcError(err).reason === 'team_env_already_shared') {
+        setOperation({ env, shared: true });
+        setErrs({ form: 'team.err.shared' });
+        onChanged();
+      } else if (toIpcError(err).error === 'AuthFailed') {
+        setErrs(sharedThisAttempt ? { pass: 'inv.pass.again', form: 'inv.failedShared' } : { pass: passErrorKey(err) });
+        passRef.current?.focus();
+      } else {
         const uncertain = !definiteInviteFailure(err);
         setUncertainInvite(uncertain);
         onChanged();
@@ -422,7 +438,7 @@ function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, lo
   return (
     <Sheet id="sheet-invite" open={open} title={t('inv.title')} lead={t('inv.sub')} primaryLabel={t(made ? 'inv.done' : uncertainInvite ? 'inv.recheckState' : shared === null ? loadFailed ? 'inv.retryRead' : 'boot.loading' : isShared ? 'inv.create' : 'inv.shareCreate')} busy={busy || listenBusy}
       ready={!!made || uncertainInvite || ready} onBlocked={() => { if (shared === null && loadFailed) onRetry(); else blocked(); }} onPrimary={() => void create()} onClose={() => { if (!running.current) onClose(); }} noCancel={!!made}>
-      <SelectField id="inv-env" label={t('inv.env')} mono value={env} ariaDisabled={!!made || uncertainInvite || busy || listenBusy} options={pairs.map((p) => ({ value: p, label: p }))} onChange={(v) => { if (!running.current && !made && !uncertainInvite) onEnv(v); }} />
+      <SelectField id="inv-env" label={t('inv.env')} mono value={env} ariaDisabled={!!made || uncertainInvite || busy || listenBusy} options={[...(env && !pairs.includes(env) ? [{ value: env, label: `${env} · ${t('set.listen.unlisted')}` }] : []), ...pairs.map((p) => ({ value: p, label: p }))]} onChange={(v) => { if (!running.current && !made && !uncertainInvite) { setOperation(null); onEnv(v); } }} />
       {!made && (
         <ol className="prereq">
           <li className={listen ? 'done' : undefined}>
@@ -615,7 +631,6 @@ function JoinSheet({ open, incoming, onBusy, onClose, onEnv, onChanged, onJoined
     if (joined) { onJoined(); return; }
     const h = heldRef.current;
     if (!h) { requestFocus('link'); linkRef.current?.focus(); return; }
-    if (msLeft(h.preview.expires_at, Date.now()) <= 0) { setErr('join.err.expired'); requestFocus('link'); linkRef.current?.focus(); return; }
     const parsed = parseLocalName(local);
     if (!parsed) { setErr(null); requestFocus('local'); localDetails.reveal(); setLocalErr('join.local.err'); localRef.current?.focus(); return; }
     running.current = true; onBusy(true); setBusy(true);

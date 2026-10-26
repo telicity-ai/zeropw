@@ -1,5 +1,7 @@
 # Desktop onboarding and team sharing follow-up — 2026-10-26
 
+This is the historical record for the UX source committed as `35408eb` on base `8bd1d83`. The later integration with main `d6ecf0e` requires its own review and validation, bound to that candidate's exact source. The results below do not certify the later integration.
+
 ## Request and scope
 
 The user requested independent desktop E2E testing based on the active Claude session, bug fixes, and simpler onboarding, sharing and joining teams. The user confirmed that the currently installed app contains synthetic test data only.
