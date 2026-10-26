@@ -28,10 +28,11 @@ fn pass() -> SecretString {
 }
 
 /// The fake CLI's keys for the commands that must carry `--require-admin`.
-const REQUIRE_ADMIN_KEYS: [&str; 8] = [
+const REQUIRE_ADMIN_KEYS: [&str; 9] = [
     "resume",
     "connection_create-http",
     "connection_create-ssh",
+    "connection_update",
     "grant_create",
     "approvals_approve",
     "team_invite",
@@ -63,6 +64,7 @@ fn require_admin_goes_with_exactly_the_reauth_commands() {
         team_listen: None,
     })
     .unwrap();
+    let ssh = fx.synthetic_ssh();
 
     let code = core.recovery_generate().unwrap();
     core.vault_init(VaultInitIn {
@@ -140,8 +142,14 @@ fn require_admin_goes_with_exactly_the_reauth_commands() {
         port: 22,
         username: "deploy".into(),
         host_keys: vec!["ssh-ed25519 AAAAsynthetic".into()],
-        cli_program: "/usr/bin/ssh".into(),
+        cli_program: ssh.clone(),
         description: None,
+        admin_passphrase: pass(),
+    })
+    .unwrap();
+    core.connection_set_cli_program(CliProgramIn {
+        id: "prod".into(),
+        cli_program: ssh,
         admin_passphrase: pass(),
     })
     .unwrap();

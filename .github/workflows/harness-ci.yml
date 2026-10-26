@@ -100,11 +100,11 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Install the Linux webview build dependencies
+      - name: Install the Linux webview build dependencies and zsh for the terminal test
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev librsvg2-dev
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev librsvg2-dev zsh
 
       - name: Use Homebrew OpenSSL on macOS
         if: runner.os == 'macOS'

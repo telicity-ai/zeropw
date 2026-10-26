@@ -1,5 +1,6 @@
 import type { CopyKey } from '../copy';
 import type { ModeTargets } from '../field/field';
+import type { Pill } from '../ui/context';
 
 // Onboarding v0.5 (DESIGN.md §5.2, docs/desktop-app.md §7): no service connection step.
 // 'agent' remains a valid frame for the retained AgentStep component; first-run flow never mounts it.
@@ -34,6 +35,14 @@ export function neighbour(s: Step, joining: boolean, dir: -1 | 1): Step {
  *  on without it: a join still happens on the finale; otherwise the dashboard, which has the
  *  relay's start button and port setting. */
 export const afterRelayFailure = (joining: boolean): 'done' | 'dashboard' => (joining ? 'done' : 'dashboard');
+
+/** The title bar's status during the onboarding: no vault until `vault_init` made one, then the
+ *  relay off (also while a relay that would not start waits for a retry or for the user to go on
+ *  without it), then the relay's address once it runs (desktop E2E F1). */
+export function onboardingPill(vaultMade: boolean, relay: { addr: string | null } | null): Pill {
+  if (relay) return { kind: 'live', addr: relay.addr };
+  return vaultMade ? { kind: 'off' } : { kind: 'none' };
+}
 
 /** Progress label "n/total" for the live region, or null outside the counted steps. */
 export function progressOf(s: Step, joining: boolean): { index: number; total: number } | null {

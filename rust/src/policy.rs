@@ -5421,10 +5421,19 @@ impl<'a> Policy<'a> {
     /// (PORTING.md has no primitive for an arbitrary JSON `detail`), so
     /// [`python_str_for_error`] reproduces that `str()` formatting -- see
     /// `rust/DEVIATIONS.md`.
+    ///
+    /// A pointer to an incident whose record says it was closed refuses
+    /// nothing ([`Policy::open_incident_id`]).
     pub fn resume(&self) -> Result<(), Error> {
         let _lock = self.state.lock()?;
         let mut control = self.control()?;
-        let open_incident = control.get("incident_open").cloned();
+        let open_incident = control
+            .get("incident_open")
+            .filter(|v| {
+                !v.as_str()
+                    .is_some_and(|id| crate::incident::recorded_closed(self.state, id))
+            })
+            .cloned();
         if json_truthy(open_incident.as_ref()) {
             let open_incident = open_incident.expect("truthy implies present");
             return Err(Error::new(
@@ -5444,13 +5453,33 @@ impl<'a> Policy<'a> {
     // ------------------ compromise-response incidents (docs/compromise-response.md)
     /// The currently open incident's id, or `None` while `resume()` is
     /// allowed.
+    ///
+    /// A pointer to an incident whose record says it was closed is none:
+    /// `close_incident` saves the record before it clears the pointer, so a
+    /// crash between the two, or a restore by a build that brought an
+    /// archived pointer back, leaves one that no `incident close` could clear
+    /// again. Declaring then opens a new incident instead of answering with
+    /// the closed one, and `resume` is not refused for it.
     pub fn open_incident_id(&self) -> Result<Option<String>, Error> {
         Ok(self
             .control()?
             .get("incident_open")
             .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
+            .filter(|s| !s.is_empty() && !crate::incident::recorded_closed(self.state, s))
             .map(str::to_string))
+    }
+
+    /// Clear the open-incident pointer if it still names `incident_id`, in one
+    /// state lock: an incident another process opened meanwhile keeps its
+    /// pointer.
+    pub fn clear_open_incident(&self, incident_id: &str) -> Result<(), Error> {
+        let _lock = self.state.lock()?;
+        let mut control = self.control()?;
+        if control.get("incident_open").and_then(Value::as_str) != Some(incident_id) {
+            return Ok(());
+        }
+        control.insert("incident_open".into(), Value::Null);
+        self.state.write_json(CONTROL, &Value::Object(control))
     }
 
     /// Record (or clear) the open incident. While set, `resume` is refused.
@@ -6119,6 +6148,23 @@ impl<'a> Policy<'a> {
         Ok(None)
     }
 
+    /// Which [`Policy::grant_state`] reason a denial reports when no
+    /// candidate grant is usable: the highest rank, not whichever grant sorts
+    /// last by its random id. A grant that was taken away (`grant_revoked`,
+    /// `grant_stale`) outranks one that merely ran out, so a caller still
+    /// using it is counted as `revoked_use` by `intrusion` even when an
+    /// exhausted or expired grant for the same connection sits beside it.
+    fn failure_rank(reason: &str) -> u8 {
+        match reason {
+            "grant_revoked" => 5,
+            "grant_stale" => 4,
+            "grant_inactive" => 3,
+            "grant_expired" => 2,
+            "grant_exhausted" => 1,
+            _ => 0,
+        }
+    }
+
     /// Full decision for one operation (lock-free read).
     ///
     /// An allowed decision is remembered for the current thread so that the
@@ -6285,7 +6331,10 @@ impl<'a> Policy<'a> {
                     chosen = Some(grant);
                     break;
                 }
-                Some(state) => failure = state,
+                Some(state) if Self::failure_rank(state) > Self::failure_rank(failure) => {
+                    failure = state;
+                }
+                Some(_) => {}
             }
         }
         let Some(chosen) = chosen else {

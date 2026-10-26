@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { ConnectionView, Control, Grant, Project, SecretView, ServeStatus, TeamEnvironment } from '../src/ipc/contract';
+import { t } from '../src/copy';
 import {
-  blockText, countOf, declarableScopes, declareOutcome, defaultListenIp, defaultMethodStates, envPairs, grantState, groupSecrets, interfaceLabel, inviteFraction, isBasicUser,
+  addressChoices, blockText, countOf, declarableScopes, declareOutcome, defaultListenIp, defaultMethodStates, envPairs, grantState, groupSecrets, interfaceLabel, inviteFraction, isBasicUser,
   isCliPath, isHeaderName, isHostKey, isPlainText, isSshHost, isSshUser, keyChoices, lineText, liveGrants, methodsPayload, msLeft,
-  newRecordCount, nextMethodState, openIncident, parseListen, parseMaxUses, parsePathPrefixes, parsePort, pendingApprovals, publicKeyOf, recordFields,
-  recordSig, relayBlocked, relayPill, relayState, runtimeStopsAll, sameControl, shortHash, sortedVersions, splitEnv, SSH_PROGRAM, summarizeConnection,
-  teamEnvPairs, valueText, writeConsequences,
+  newRecordCount, nextMethodState, olderVersionCount, openIncident, openIncidentScope, parseListen, parseMaxUses, parsePathPrefixes, parsePort, pendingApprovals, publicKeyOf,
+  recordSig, relayBlocked, relayPill, relayState, runtimeStopsAll, sameControl, settingsFields, shortHash, shownChoice, sortedVersions, splitEnv, SSH_PROGRAM, summarizeConnection,
+  teamEnvPairs, teamEnvsUnread, valueText, writeConsequences,
 } from '../src/lib/dash';
 
 const projects: Project[] = [
@@ -37,11 +38,41 @@ describe('projects and environments', () => {
     expect(teamEnvPairs({ projects, team_environments: [{ project: 7, environment: 'x', env_id: 'e' } as unknown as TeamEnvironment] })).toEqual(envPairs(projects));
   });
 
+  // pr69-frontend-flows-mock-4: the team page kept loading a joined environment the picker no
+  // longer listed (its mapping could not be read), while the picker showed the first one
+  it('loads the environment the picker shows, the first one when the chosen one left the list', () => {
+    const team: TeamEnvironment[] = [{ project: 'team-abcdefgh', environment: 'shared', env_id: 'joined' }];
+    const joined = teamEnvPairs({ projects, team_environments: team }).map((p) => p.key);
+    const unread = teamEnvPairs({ projects }).map((p) => p.key);
+    expect(shownChoice('team-abcdefgh/shared', joined)).toBe('team-abcdefgh/shared');
+    expect(shownChoice('team-abcdefgh/shared', unread)).toBe('demo/dev');
+    expect(shownChoice('', unread)).toBe('demo/dev');
+    expect(shownChoice('shop/prod', unread)).toBe('shop/prod');
+    expect(shownChoice('team-abcdefgh/shared', [])).toBe('');
+  });
+
+  it('notices a project list that could not read the team environments', () => {
+    expect(teamEnvsUnread({ team_environments_error: 'state_corrupt' })).toBe(true);
+    expect(teamEnvsUnread({})).toBe(false);
+    expect(teamEnvsUnread({ team_environments_error: '' })).toBe(false);
+    expect(teamEnvsUnread({ team_environments_error: { reason: 'x' } })).toBe(false);
+  });
+
   it('groups secrets by pair, drops empty groups and keeps pairs the project list does not know', () => {
     const groups = groupSecrets([secret('zeta', 'shop', 'prod'), secret('alpha', 'demo', 'prod'), secret('beta', 'demo', 'prod'), secret('orphan', 'gone', 'x')], projects);
     expect(groups.map((g) => g.key)).toEqual(['demo/prod', 'shop/prod', 'gone/x']);
     expect(groups[0]?.secrets.map((s) => s.id)).toEqual(['alpha', 'beta']);
     expect(groupSecrets([], projects)).toEqual([]);
+  });
+
+  // desktop E2E F9: with both versions revoked the list said "이전 버전 1개"
+  it('counts every version as earlier when none is in use, and all but the one in use otherwise', () => {
+    expect(olderVersionCount(secret('a', 'demo', 'dev', [['1', 'retired'], ['2', 'active']]))).toBe(1);
+    expect(olderVersionCount(secret('a', 'demo', 'dev', [['1', 'revoked'], ['2', 'revoked']]))).toBe(2);
+    expect(olderVersionCount(secret('a', 'demo', 'dev', [['1', 'revoked']]))).toBe(1);
+    expect(olderVersionCount(secret('a', 'demo', 'dev', [['1', 'active']]))).toBe(0);
+    // versions as the CLI prints them: numbers
+    expect(olderVersionCount({ active_version: 3, versions: [{ version: 1 }, { version: 3 }, { version: 2 }] } as unknown as SecretView)).toBe(2);
   });
 
   it('sorts versions newest first by number, not text', () => {
@@ -200,6 +231,16 @@ describe('incident scope', () => {
     expect(openIncident([i('a', 'open', 'principal'), i('b', 'open', 'runtime'), i('c', 'open', 'principal')])?.id).toBe('b');
   });
 
+  // pr3-incident-1: the core goes by its pointer to the open incident, not by the files
+  it('meets an open incident only while the core says one is open', () => {
+    const list = [{ id: 'a', status: 'open', scope: 'all' }, { id: 'b', status: 'closed', scope: 'principal' }];
+    expect(openIncidentScope(list, { incident_open: true })).toBe('all');
+    expect(openIncidentScope(list, { incident_open: false })).toBeNull();
+    expect(declarableScopes(openIncidentScope(list, { incident_open: false }))).toEqual(['principal', 'runtime', 'all']);
+    expect(openIncidentScope(list, null)).toBeNull();
+    expect(openIncidentScope([], { incident_open: true })).toBeNull();
+  });
+
   it('reads a declaration that met an open incident as no lockdown unless it widened it', () => {
     expect(declareOutcome({})).toBe('opened');
     expect(declareOutcome({ existing: false })).toBe('opened');
@@ -245,12 +286,6 @@ describe('records rendered as text', () => {
     expect(valueText({ a: [1, 2] })).toBe('{"a":[1,2]}');
     expect(valueText('x'.repeat(500))).toHaveLength(160);
     expect(valueText('<img src=x onerror=alert(1)>')).toBe('<img src=x onerror=alert(1)>');   // kept verbatim, shown as text
-  });
-
-  it('keeps every field of a record except the title and time', () => {
-    const f = recordFields({ ts: '2026-10-15T10:00:00Z', event: 'proxy_request', caller: 'agent-1', status: 200, path: '/v1/<b>' });
-    expect(f).toEqual({ ts: '2026-10-15T10:00:00Z', title: 'proxy_request', fields: ['caller=agent-1', 'status=200', 'path=/v1/<b>'] });
-    expect(recordFields({ ts: 't', alert: 'grant_expired', caller: 'a' }, 'alert').title).toBe('grant_expired');
   });
 
   it('counts records that arrived since the last one seen', () => {
@@ -314,6 +349,40 @@ describe('team helpers', () => {
     expect(interfaceLabel({ ip: '100.64.1.7', name: 'utun4', kind: 'vpn' })).toBe('100.64.1.7 · VPN');
     expect(interfaceLabel({ ip: '10.0.0.2', name: 'bridge0', kind: 'other' })).toBe('10.0.0.2 · bridge0');
   });
+  const VPN = { name: 'utun4', ip: '100.64.1.7', kind: 'vpn' as const };
+  const LAN = { name: 'en0', ip: '192.168.0.145', kind: 'lan' as const };
+
+  // desktop E2E F16: a saved 127.0.0.1 (not in the list) showed as the LAN address but stayed saved
+  it('offers a saved address that is not in the list, marked, so the picker shows what is saved', () => {
+    const choices = addressChoices([LAN], '127.0.0.1');
+    expect(choices).toEqual([{ value: '127.0.0.1', label: `127.0.0.1 · ${t('set.listen.unlisted')}` }, { value: LAN.ip, label: '192.168.0.145 · LAN' }]);
+    // a listed address, or none picked yet: only the list
+    expect(addressChoices([VPN, LAN], LAN.ip).map((c) => c.value)).toEqual([VPN.ip, LAN.ip]);
+    expect(addressChoices([VPN, LAN], '')).toHaveLength(2);
+    expect(addressChoices([], '10.0.0.9').map((c) => c.value)).toEqual(['10.0.0.9']);
+    // whatever is picked is one of the options, so choosing another changes it
+    for (const [list, cur] of [[[LAN], '127.0.0.1'], [[VPN, LAN], VPN.ip], [[], '10.0.0.9']] as const) {
+      expect(addressChoices(list, cur).some((c) => c.value === cur)).toBe(true);
+    }
+    // once another address is picked, the saved one is still there to go back to
+    expect(addressChoices([LAN], LAN.ip, '127.0.0.1').map((c) => c.value)).toEqual(['127.0.0.1', LAN.ip]);
+    expect(addressChoices([LAN], '127.0.0.1', '127.0.0.1').map((c) => c.value)).toEqual(['127.0.0.1', LAN.ip]);
+    expect(addressChoices([VPN, LAN], '10.0.0.9', '127.0.0.1').map((c) => c.value)).toEqual(['127.0.0.1', '10.0.0.9', VPN.ip, LAN.ip]);
+    expect(addressChoices([VPN, LAN], LAN.ip, VPN.ip).map((c) => c.value)).toEqual([VPN.ip, LAN.ip]);
+  });
+
+  // desktop E2E F13: emptying the port field refilled it with the saved port
+  it('fills the settings fields from the saved settings once and keeps them as the user left them', () => {
+    const saved = { gateway_port: 47380, team_listen: '127.0.0.1:47421' };
+    const first = settingsFields(null, saved, [VPN, LAN]);
+    expect(first).toEqual({ port: '47380', ip: '127.0.0.1', tport: '47421' });
+    expect(settingsFields({ ...first, port: '' }, saved, [VPN, LAN])).toEqual({ ...first, port: '' });
+    expect(settingsFields({ ...first, port: '473', tport: '' }, { gateway_port: 48000, team_listen: null }, [LAN])).toEqual({ ...first, port: '473', tport: '' });
+    // without a saved address the picker starts on the likeliest one, and an empty pick takes one later
+    expect(settingsFields(null, { gateway_port: 47380, team_listen: null }, [LAN, VPN])).toEqual({ port: '47380', ip: VPN.ip, tport: '47420' });
+    expect(settingsFields({ port: '', ip: '', tport: '9' }, { gateway_port: 47380, team_listen: null }, [LAN])).toEqual({ port: '', ip: LAN.ip, tport: '9' });
+  });
+
   it('picks a VPN address first for other-device access, then the LAN', () => {
     expect(defaultListenIp([{ ip: '192.168.0.12', kind: 'lan' }, { ip: '100.64.1.7', kind: 'vpn' }])).toBe('100.64.1.7');
     expect(defaultListenIp([{ ip: '10.9.0.1', kind: 'other' }, { ip: '192.168.0.12', kind: 'lan' }])).toBe('192.168.0.12');

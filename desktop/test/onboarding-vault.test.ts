@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { COPY } from '../src/copy';
 import { call, toIpcError, useMockBackend, type IpcError } from '../src/ipc/client';
 import { createMockBackend, type MockBackend, type MockSeed } from '../src/ipc/mock';
-import { afterRelayFailure } from '../src/onboarding/flow';
+import { relayPill } from '../src/lib/dash';
+import { hostPort } from '../src/lib/format';
+import { afterRelayFailure, onboardingPill } from '../src/onboarding/flow';
 import { createVault, initFailureOf, InitError, type InitFailure } from '../src/onboarding/vault';
 
 // Vault creation during onboarding against the mock, which follows the core: `init` runs, then
@@ -58,6 +60,20 @@ describe('creating the vault', () => {
     expect(await call('serve_start')).toMatchObject({ running: true, url: 'http://127.0.0.1:48001' });
     expect(initCalls(b)).toBe(1);
     expect(COPY['create.relay.vaultOk']).toContain('대시보드');
+  });
+
+  // desktop E2E F1: the title bar said there was no vault while the step said it was made
+  it('shows the relay off, as the dashboard would, once the vault exists and the relay would not start', async () => {
+    fresh({ relayFails: 2 });
+    expect(onboardingPill(false, null)).toEqual({ kind: 'none' });
+    const rec = await call('recovery_generate');
+    await createVault({ admin: ADMIN, recovery: { ref: rec.ref } }, { unsure: false });
+    const status = await call('app_status');
+    expect(onboardingPill(true, null)).toEqual({ kind: 'off' });
+    expect(onboardingPill(true, null)).toEqual(relayPill(status.serve, status.control));
+    await rejection(call('serve_start'));                        // the retry fails too: still off
+    const s = await call('serve_start');
+    expect(onboardingPill(true, { addr: hostPort(s.url) })).toEqual(relayPill(s, (await call('app_status')).control));
   });
 
   it('still joins on the finale when the relay would not start during a join', async () => {

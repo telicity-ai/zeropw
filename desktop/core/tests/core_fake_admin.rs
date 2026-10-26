@@ -789,8 +789,8 @@ fn ssh_input(cli_program: &str) -> SshConnectionIn {
 fn ssh_connection_repeats_host_keys_and_names_its_ssh() {
     let fx = Fixture::new();
     let core = core(&fx);
-    core.connection_create_ssh(ssh_input("/usr/bin/ssh"))
-        .unwrap();
+    let ssh = fx.synthetic_ssh();
+    core.connection_create_ssh(ssh_input(&ssh)).unwrap();
     assert_eq!(
         fx.last("connection_create-ssh").args(),
         [
@@ -806,7 +806,7 @@ fn ssh_connection_repeats_host_keys_and_names_its_ssh() {
             "--username=deploy",
             "--host-key=ssh-ed25519 AAAAone",
             "--host-key=ssh-ed25519 AAAAtwo",
-            "--cli-program=/usr/bin/ssh",
+            &format!("--cli-program={ssh}"),
         ]
     );
 }
@@ -848,8 +848,8 @@ fn ssh_program_is_given_through_connection_update_behind_the_admin_password() {
         cli_program: program.into(),
         admin_passphrase: pass(),
     };
-    core.connection_set_cli_program(input("/usr/bin/ssh"))
-        .unwrap();
+    let ssh = fx.synthetic_ssh();
+    core.connection_set_cli_program(input(&ssh)).unwrap();
     let call = fx.last("connection_update");
     assert!(call.requires_admin());
     assert_eq!(
@@ -858,7 +858,7 @@ fn ssh_program_is_given_through_connection_update_behind_the_admin_password() {
             "connection",
             "update",
             "--id=prod",
-            "--cli-program=/usr/bin/ssh"
+            &format!("--cli-program={ssh}")
         ]
     );
     assert_eq!(call.stdin_json(), json!({"admin_passphrase": ADMIN_PASS}));
@@ -871,7 +871,7 @@ fn ssh_program_is_given_through_connection_update_behind_the_admin_password() {
     let e = core
         .connection_set_cli_program(CliProgramIn {
             admin_passphrase: SecretString::from(""),
-            ..input("/usr/bin/ssh")
+            ..input(&ssh)
         })
         .unwrap_err();
     assert_eq!(
@@ -893,13 +893,73 @@ fn ssh_program_is_given_through_connection_update_behind_the_admin_password() {
         1,
     );
     let e = core
-        .connection_set_cli_program(input("/bin/false"))
+        .connection_set_cli_program(input("/bin/sh"))
         .unwrap_err();
     assert_eq!(
         (e.error.as_str(), e.reason.as_str()),
         ("InvalidInput", "cli_already_set")
     );
     assert_argv_clean(&fx, &[ADMIN_PASS]);
+}
+
+/// The ssh path cannot be changed once given, so one that is not an absolute path to an
+/// executable file on this machine is refused before the CLI runs, by both the create and the
+/// fill (`cli_program_not_found`). The refusal does not repeat the path.
+#[test]
+fn an_ssh_path_that_names_no_executable_here_is_refused_before_the_cli() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fx = Fixture::new();
+    let core = core(&fx);
+    let plain = fx.dir.path().join("plain-file");
+    fs::write(&plain, "synthetic").unwrap();
+    fs::set_permissions(&plain, fs::Permissions::from_mode(0o644)).unwrap();
+    let plain = plain.to_string_lossy().into_owned();
+    let fill = |program: &str| CliProgramIn {
+        id: "prod".into(),
+        cli_program: program.into(),
+        admin_passphrase: pass(),
+    };
+    for bad in [
+        "/usr/bin/sshh",
+        "ssh",
+        "usr/bin/ssh",
+        "/usr/bin",
+        "/bin/sh/",
+        plain.as_str(),
+    ] {
+        for e in [
+            core.connection_create_ssh(ssh_input(bad)).unwrap_err(),
+            core.connection_set_cli_program(fill(bad)).unwrap_err(),
+        ] {
+            assert_eq!(
+                (e.error.as_str(), e.reason.as_str(), e.detail.as_deref()),
+                ("InvalidInput", "cli_program_not_found", None),
+                "{bad}"
+            );
+        }
+    }
+    assert_eq!(fx.count("connection_create-ssh"), 0);
+    assert_eq!(fx.count("connection_update"), 0);
+
+    // A real executable passes, also through a symlink, and reaches the CLI unchanged: the
+    // host's own ssh where it has one, and the shell every host has.
+    let link = fx.dir.path().join("ssh-link");
+    std::os::unix::fs::symlink("/bin/sh", &link).unwrap();
+    let link = link.to_string_lossy().into_owned();
+    let host_ssh = Some("/usr/bin/ssh").filter(|p| Path::new(p).is_file());
+    for good in host_ssh.into_iter().chain(["/bin/sh", link.as_str()]) {
+        core.connection_create_ssh(ssh_input(good)).unwrap();
+        let create = fx.last("connection_create-ssh");
+        assert!(
+            create
+                .args()
+                .contains(&format!("--cli-program={good}").as_str())
+        );
+        core.connection_set_cli_program(fill(good)).unwrap();
+        let update = fx.last("connection_update");
+        assert_eq!(update.args()[3], format!("--cli-program={good}"));
+    }
 }
 
 /// The envelopes of the `recover` calls after the first `skip`.
@@ -1480,6 +1540,47 @@ fn terminal_open_injects_the_principal_token_from_the_store() {
     assert_eq!(shown.expose(), token);
     core.shutdown();
     assert!(!core.serve_status().running);
+}
+
+/// Desktop E2E F18: a damaged settings.json is never reset quietly, so `settings_get` and
+/// `serve_start` refuse it with `settings_corrupt`. The settings screen repairs it by saving
+/// the defaults with `settings_set`, which replaces the file without reading it (0600 again);
+/// `settings_get` then returns what was saved.
+#[test]
+fn settings_set_replaces_a_damaged_settings_file() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let oversized = vec![b' '; 70 * 1024];
+    for damaged in [
+        &br#"{"gateway_port": 80}"#[..],
+        br#"{"gateway_port": 47380, "team_listen": "0.0.0.0:47390"}"#,
+        b"{not json",
+        &oversized,
+    ] {
+        let fx = Fixture::new();
+        let core = core(&fx);
+        let file = fx.paths.settings_file();
+        fs::create_dir_all(&fx.paths.app_data_dir).unwrap();
+        fs::write(&file, damaged).unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+        let reason = |e: zeropw_desktop_core::AppError| (e.error, e.reason);
+        let corrupt = ("StateError".to_owned(), "settings_corrupt".to_owned());
+        assert_eq!(reason(core.settings_get().unwrap_err()), corrupt);
+        assert_eq!(reason(core.serve_start().unwrap_err()), corrupt);
+
+        let defaults = Settings {
+            gateway_port: 47380,
+            team_listen: None,
+        };
+        assert_eq!(defaults, Settings::default());
+        assert_eq!(core.settings_set(defaults.clone()).unwrap(), defaults);
+        assert_eq!(core.settings_get().unwrap(), defaults);
+        assert_eq!(
+            fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(fx.count("serve"), 0);
+    }
 }
 
 #[test]

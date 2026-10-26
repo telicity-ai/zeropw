@@ -1,13 +1,16 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { COPY, t, tLines } from '../src/copy';
-import { ListenError, listenErrorLines, relayLeftOff, turnOffListen, turnOnListen } from '../src/dashboard/relay';
+import { ListenError, listenErrorLines, readSettings, relayLeftOff, resetSettings, restartRelay, turnOffListen, turnOnListen } from '../src/dashboard/relay';
 import { call, IpcError, outputChannel, toIpcError, useMockBackend } from '../src/ipc/client';
 import { createMockBackend, type MockBackend, type MockSeed } from '../src/ipc/mock';
 import { holdSecureView, secureViewHolders } from '../src/ui/secure';
-import { declareOutcome, grantState, liveGrants, pendingApprovals, runtimeStopsAll, SSH_PROGRAM, teamEnvPairs } from '../src/lib/dash';
+import {
+  declarableScopes, declareOutcome, grantState, liveGrants, olderVersionCount, openIncident, openIncidentScope, pendingApprovals, runtimeStopsAll, SSH_PROGRAM,
+  teamEnvPairs, teamEnvsUnread,
+} from '../src/lib/dash';
 import { watchRecords } from '../src/dashboard/watch';
 import type { Control } from '../src/ipc/contract';
-import { isTeamListenReason, listenFailureLines, offersListenOff, relayError, restoreErrorKey } from '../src/lib/reasons';
+import { isTeamListenReason, listenFailureLines, offersListenOff, relayError, restoreErrorKey, sshProgramError } from '../src/lib/reasons';
 
 // The browser mock stands in for the core while the dashboard is reviewed. These flows pin the
 // rules the pages rely on: values never come back except through one-time references, the admin
@@ -139,7 +142,22 @@ describe('connections', () => {
     // the contract requires the field; the core does not even read a payload without it
     expect((await rejection(call('connection_create_ssh', ssh as typeof ssh & { cli_program: string }))).reason).toBe('invalid_payload');
     expect((await rejection(call('connection_create_ssh', { ...ssh, cli_program: '' }))).reason).toBe('cli_program_required');
+    // a path with no executable on this device (a typo) is refused before anything is made
+    const typo = await rejection(call('connection_create_ssh', { ...ssh, cli_program: '/usr/bin/sshh' }));
+    expect([typo.error, typo.reason]).toEqual(['InvalidInput', 'cli_program_not_found']);
+    expect(sshProgramError(typo.reason)).toEqual({ field: 'conn.cli.err.notFound' });
     expect((await call('connection_list')).connections.some((c) => c.id === 'box')).toBe(false);
+    // pr69-frontend-flows-mock-5: the core's order, as the app answers: an empty passphrase, no
+    // host key, an empty path, a path with nothing there, and only then the CLI's passphrase check
+    const order = async (over: Partial<typeof ssh & { cli_program: string }>) => {
+      const e = await rejection(call('connection_create_ssh', { ...ssh, cli_program: SSH_PROGRAM, ...over }));
+      return [e.error, e.reason];
+    };
+    expect(await order({ admin_passphrase: '', host_keys: [], cli_program: '' })).toEqual(['AuthFailed', 'passphrase_missing']);
+    expect(await order({ admin_passphrase: 'wrong', host_keys: [], cli_program: '' })).toEqual(['InvalidInput', 'host_key_required']);
+    expect(await order({ admin_passphrase: 'wrong', cli_program: '' })).toEqual(['InvalidInput', 'cli_program_required']);
+    expect(await order({ admin_passphrase: 'wrong', cli_program: '/usr/bin/sshh' })).toEqual(['InvalidInput', 'cli_program_not_found']);
+    expect(await order({ admin_passphrase: 'wrong', id: 'Not A Name' })).toEqual(['AuthFailed', 'bad_passphrase']);
 
     const c = await call('connection_create_ssh', { ...ssh, cli_program: SSH_PROGRAM });
     expect(c.cli).toEqual({ program: '/usr/bin/ssh', kind: 'ssh', base_url_env: 'ZEROPW_API_BASE_URL', extra_env: {} });
@@ -160,13 +178,25 @@ describe('connections', () => {
     expect(grant?.status).toBe('active');
 
     expect((await rejection(call('connection_set_cli_program', { ...fill, admin_passphrase: 'wrong' }))).error).toBe('AuthFailed');
+    // a payload missing a field is not read at all, as serde refuses it in the core
     expect((await rejection(call('connection_set_cli_program', { id: 'deploy-ssh', admin_passphrase: PASS } as typeof fill))).reason).toBe('invalid_payload');
+    const noPass = await rejection(call('connection_set_cli_program', { id: 'deploy-ssh', cli_program: SSH_PROGRAM } as typeof fill));
+    expect([noPass.error, noPass.reason]).toEqual(['InvalidInput', 'invalid_payload']);
     expect((await rejection(call('connection_set_cli_program', { ...fill, cli_program: '' }))).reason).toBe('cli_program_required');
-    // the core's order: no passphrase, then an empty path, and only then the CLI's passphrase check
-    expect((await rejection(call('connection_set_cli_program', { ...fill, cli_program: '', admin_passphrase: '' }))).reason).toBe('passphrase_missing');
+    // the core's order: an empty passphrase, an empty path, a path with nothing there, and only
+    // then the CLI's passphrase check
+    const empty = await rejection(call('connection_set_cli_program', { ...fill, cli_program: '', admin_passphrase: '' }));
+    expect([empty.error, empty.reason]).toEqual(['AuthFailed', 'passphrase_missing']);
     expect((await rejection(call('connection_set_cli_program', { ...fill, cli_program: '', admin_passphrase: 'wrong' }))).reason).toBe('cli_program_required');
+    expect((await rejection(call('connection_set_cli_program', { ...fill, cli_program: '/usr/bin/sshh', admin_passphrase: 'wrong' }))).reason).toBe('cli_program_not_found');
+    // the fill cannot be undone, so a typo must not get through
+    const typo = await rejection(call('connection_set_cli_program', { ...fill, cli_program: '/usr/bin/sshh' }));
+    expect(typo.reason).toBe('cli_program_not_found');
+    expect(sshProgramError(typo.reason)).toEqual({ field: 'conn.cli.err.notFound' });
     expect((await rejection(call('connection_set_cli_program', { ...fill, id: 'example-api' }))).reason).toBe('cli_requires_ssh');
-    expect((await rejection(call('connection_set_cli_program', { ...fill, id: 'ghost' }))).reason).toBe('connection_not_found');
+    const ghost = await rejection(call('connection_set_cli_program', { ...fill, id: 'ghost' }));
+    expect(ghost.reason).toBe('connection_not_found');
+    expect(sshProgramError(ghost.reason)).toEqual({ form: null, stale: true });
     expect((await call('connection_list')).connections.find((x) => x.id === 'deploy-ssh')).toEqual(before);
 
     const out = await call('connection_set_cli_program', fill);
@@ -178,7 +208,7 @@ describe('connections', () => {
     expect(stale?.status).toBe('stale');
     expect(grantState(stale!, Date.now())).not.toBe('live');
 
-    expect((await rejection(call('connection_set_cli_program', { ...fill, cli_program: '/bin/false' }))).reason).toBe('cli_already_set');
+    expect((await rejection(call('connection_set_cli_program', { ...fill, cli_program: '/bin/ssh' }))).reason).toBe('cli_already_set');
     await call('connection_disable', { id: 'deploy-ssh' });
     expect((await rejection(call('connection_set_cli_program', fill))).reason).toBe('connection_disabled');
   });
@@ -337,9 +367,52 @@ describe('team', () => {
     expect(listed.projects).toEqual(before.projects);
     expect(listed.team_environments).toEqual([{ project: 'team-x', environment: 'shared', env_id: preview.env_id }]);
     expect(teamEnvPairs(listed).map((p) => p.key)).toContain('team-x/shared');
-    // keys go into it through the team, as the CLI's shared-environment branch does
-    await call('secret_put', { id: 'team-key', kind: 'api_key', project: 'team-x', environment: 'shared', source: { typed: 'synthetic-team-value' } });
     expect((await rejection(call('secret_put', { id: 'k2', kind: 'api_key', project: 'team-y', environment: 'shared', source: { typed: 'v' } }))).reason).toBe('project_unknown');
+  });
+
+  // pr69-frontend-flows-mock-2: the team commit behind a key or a connection in a team environment
+  // is refused to a device that is not an admin of that team (rust/src/team/membership.rs
+  // `require_editing_standing`); the mock let any role write
+  it('writes into a joined environment only as an admin of that team, as the CLI does', async () => {
+    ready();
+    const join = async (n: number, project: string) => {
+      const { ref, preview } = await call('team_invite_preview', { text: 'zeropw://join#' + 'abcdefghijklmnopqrstuvwxyz234567'.repeat(n) });
+      await call('team_join', { ref, project, environment: 'shared' });
+      return preview.role;
+    };
+    expect(await join(4, 'team-u')).toBe('user');
+    expect(await join(5, 'team-a')).toBe('admin');
+    const put = (project: string) => call('secret_put', { id: 'team-key', kind: 'api_key', project, environment: 'shared', source: { typed: 'synthetic-team-value' } });
+    const http = (project: string) => call('connection_create_http', {
+      id: 'team-api', project, environment: 'shared', service: 'team-api', secret_id: 'team-key', target: 'https://api.example.com', auth: 'bearer',
+      methods: ['GET'], confirm_methods: [], path_prefixes: [], allow_private_network: false, admin_passphrase: PASS,
+    });
+    const ssh = (project: string) => call('connection_create_ssh', {
+      id: 'team-box', project, environment: 'shared', service: 'team-box', secret_id: 'team-key', host: 'git.example.com', port: 22, username: 'git',
+      host_keys: [HOST_KEY], cli_program: SSH_PROGRAM, admin_passphrase: PASS,
+    });
+    for (const write of [put, http, ssh]) {
+      const refused = await rejection(write('team-u'));
+      expect([refused.error, refused.reason]).toEqual(['PolicyDenied', 'not_admin']);
+    }
+    expect((await call('secret_list', {})).secrets.some((s) => s.id === 'team-key')).toBe(false);
+    // as one of its admins, keys and connections go into it through the team
+    await put('team-a');
+    expect((await http('team-a')).project).toBe('team-a');
+  });
+
+  // pr4-state-display-1: a damaged team mapping no longer fails project list, which the keys,
+  // connections and team pages all load first; the team page says what is missing
+  it('lists the projects and names the team environments it could not read', async () => {
+    const b = createMockBackend({ latency: 0, initialized: true, teamEnvsCorrupt: true });
+    backend?.dispose(); backend = b; useMockBackend(b);
+    const listed = await call('project_list');
+    expect(listed.projects.map((p) => p.name)).toEqual(['demo']);
+    expect(listed.team_environments).toBeUndefined();
+    expect(teamEnvsUnread(listed)).toBe(true);
+    expect(teamEnvPairs(listed).map((p) => p.key)).toEqual(['demo/dev', 'demo/staging', 'demo/prod']);
+    ready();
+    expect(teamEnvsUnread(await call('project_list'))).toBe(false);
   });
 
   it('lists an environment shared from here once, among the projects and as a team environment', async () => {
@@ -362,6 +435,38 @@ describe('settings and window protection', () => {
     await call('serve_stop');
     const s = await call('serve_start');
     expect(s).toMatchObject({ running: true, url: 'http://127.0.0.1:48000', team_listen: '100.64.1.7:47420' });
+  });
+
+  // desktop E2E F18: a damaged settings file left the relay off with its raw reason, and nothing
+  // in the app could write over it
+  it('says a damaged settings file is damaged and writes the defaults over it, then the relay starts', async () => {
+    const b = createMockBackend({ latency: 0, initialized: true, settingsCorrupt: true });
+    backend?.dispose(); backend = b; useMockBackend(b);
+    expect((await call('serve_status')).running).toBe(false);
+    const e = await rejection(call('serve_start'));
+    expect([e.error, e.reason]).toEqual(['StateError', 'settings_corrupt']);
+    const shown = relayError(e.reason, e.detail);
+    expect(shown.key).toBe('relay.err.settings');
+    expect(t(shown.key, { reason: shown.reason })).not.toContain('settings_corrupt');
+    expect(await readSettings()).toEqual({ settings: null, corrupt: true });
+    expect(await resetSettings()).toEqual({ gateway_port: 47380, team_listen: null });
+    expect(await readSettings()).toEqual({ settings: { gateway_port: 47380, team_listen: null }, corrupt: false });
+    expect(await restartRelay()).toMatchObject({ running: true, url: 'http://127.0.0.1:47380' });
+    // any other failure to read the settings is not offered a reset
+    b.failNext('settings_get', { error: 'IoError', reason: 'settings_unreadable' });
+    expect((await rejection(readSettings())).reason).toBe('settings_unreadable');
+  });
+
+  // pr69-frontend-flows-mock-3: the team page loads with a damaged settings file, and turning on
+  // other-device access there ended in the generic error
+  it('sends turning on other-device access with a damaged settings file to the reset, changing nothing', async () => {
+    const b = createMockBackend({ latency: 0, initialized: true, settingsCorrupt: true });
+    backend?.dispose(); backend = b; useMockBackend(b);
+    const e = await rejection(turnOnListen('100.64.1.7', 47420));
+    expect(e.reason).toBe('settings_corrupt');
+    expect(listenErrorLines(e)).toEqual([{ key: 'listen.err.settings' }]);
+    expect(t('listen.err.settings')).toContain('설정 화면에서 기본값으로 되돌려');
+    expect(await readSettings()).toEqual({ settings: null, corrupt: true });
   });
 
   it('turns window protection on before a hold is ready and keeps it while any holder needs it', async () => {
@@ -415,6 +520,16 @@ describe('versions as the CLI prints them', () => {
     expect(revoked).toMatchObject({ secret_id: 'cli-shape', status: 'revoked', provider_revocation_required: true });
     expect(String(revoked.reminder)).toMatch(/provider/);
     expect((await rejection(call('secret_revoke', { id: 'cli-shape', version: 'v2' }))).reason).toBe('invalid_argument');
+  });
+
+  it('counts both versions as earlier once the one in use is revoked too', async () => {
+    ready();
+    const listed = async () => (await call('secret_list', {})).secrets.find((s) => s.id === 'example-api')!;
+    expect(olderVersionCount(await listed())).toBe(1);
+    await call('secret_revoke', { id: 'example-api', version: (await listed()).active_version! });
+    const after = await listed();
+    expect(after.active_version).toBeNull();
+    expect(olderVersionCount(after)).toBe(2);
   });
 
   it('lists a generated SSH key with its public half, so it can be shown again later', async () => {
@@ -516,15 +631,56 @@ describe('stop, incidents, restore and recovery as the CLI does them', () => {
     expect(await call('control_get')).toMatchObject({ stopped: true, incident_open: true });
   });
 
+  // pr3-incident-3: the mock restores the archived control as rust/src/vault.rs `restore` does,
+  // so these fail when the current incident is not kept
   it('keeps an open incident through a restore of an older backup (rust/src/vault.rs restore)', async () => {
     ready();
-    await call('backup_create');
-    await call('incident_declare', { scope: 'principal', principal: 'agent-1' });
+    await call('backup_create');                                 // no incident yet
+    const inc = await call('incident_declare', { scope: 'principal', principal: 'agent-1' });
     await call('backup_restore', { admin_passphrase: PASS });
     await call('restore_ack', { admin_passphrase: PASS });
     expect((await call('control_get')).incident_open).toBe(true);
+    expect((await call('incident_list')).incidents.find((i) => i.id === inc.id)?.status).toBe('open');
     const e = await rejection(call('resume', { admin_passphrase: PASS }));
     expect([e.error, e.reason]).toEqual(['InvalidInput', 'incident_open']);
+    // and the incident can still be closed, which lifts what it held
+    await call('incident_close', { id: inc.id, admin_passphrase: PASS });
+    expect((await call('control_get')).incident_open).toBe(false);
+  });
+
+  it('does not bring back an incident closed since the backup, but does bring back its stop', async () => {
+    ready();
+    const inc = await call('incident_declare', { scope: 'all', admin_passphrase: PASS });   // stops everything
+    await call('backup_create');                                 // archived while open and stopped
+    await call('incident_close', { id: inc.id, admin_passphrase: PASS });
+    await call('resume', { admin_passphrase: PASS });
+    expect(await call('control_get')).toMatchObject({ stopped: false, incident_open: false });
+    await call('backup_restore', { admin_passphrase: PASS });
+    // the archived pointer is ignored; the archived stop is restored and needs resuming
+    expect(await call('control_get')).toEqual({ stopped: true, restore_pending: true, incident_open: false });
+    await call('restore_ack', { admin_passphrase: PASS });
+    expect(await call('resume', { admin_passphrase: PASS })).toMatchObject({ stopped: false, incident_open: false });
+  });
+
+  // pr3-incident-1: a file left open while the core's pointer names no incident (a restore by an
+  // earlier build) is not met by a declaration; the sheet offers every scope, as the core allows
+  it('opens a new incident of any scope when only a stale file says one is open', async () => {
+    const b = createMockBackend({ latency: 0, initialized: true, staleOpenIncident: true });
+    backend?.dispose(); backend = b; useMockBackend(b);
+    const list = (await call('incident_list')).incidents;
+    const control = await call('control_get');
+    expect(openIncident(list)?.scope).toBe('all');                 // the files alone would say nothing can be widened
+    expect(control.incident_open).toBe(false);
+    expect(declarableScopes(openIncidentScope(list, control))).toEqual(['principal', 'runtime', 'all']);
+    const out = await call('incident_declare', { scope: 'principal', principal: 'agent-1' });
+    expect(declareOutcome(out)).toBe('opened');
+    expect(out.scope).toBe('principal');
+    expect((await call('principal_list')).principals.find((p) => p.id === 'agent-1')?.status).toBe('disabled');
+    expect((await call('control_get')).incident_open).toBe(true);
+    // closing the stale file does not touch the open one the pointer names
+    const stale = list.find((i) => i.status === 'open');
+    await call('incident_close', { id: stale?.id ?? '', admin_passphrase: PASS });
+    expect((await call('control_get')).incident_open).toBe(true);
   });
 
   it('keeps a global stop after acknowledging a restore', async () => {

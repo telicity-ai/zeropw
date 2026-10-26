@@ -38,6 +38,32 @@ export function restoreErrorKey(reason: string): CopyKey | null {
   return null;
 }
 
+/** Why the ssh of an SSH connection was refused (`connection_create_ssh`,
+ *  `connection_set_cli_program`): a path problem goes under the path field (`field`): empty or
+ *  malformed, or no executable at that path on this device (`cli_program_not_found`). A problem
+ *  with the connection itself is one line for the sheet (`form`, the generic line when null) and
+ *  the list is out of date (`stale`): a connection that is gone (a restore while the list was
+ *  open) is not called off. null for anything else. */
+export function sshProgramError(reason: string): { field: CopyKey } | { form: CopyKey | null; stale: true } | null {
+  if (reason === 'cli_program_required' || reason === 'invalid_cli_program') return { field: 'conn.cli.err' };
+  if (reason === 'cli_program_not_found') return { field: 'conn.cli.err.notFound' };
+  if (reason === 'cli_already_set') return { form: 'conns.sshcli.err.set', stale: true };
+  if (reason === 'connection_disabled') return { form: 'conns.sshcli.err.off', stale: true };
+  if (reason === 'connection_not_found') return { form: null, stale: true };
+  return null;
+}
+
+/** A key or a connection refused in a team environment for this device's place in that team: the
+ *  team commit behind it is refused to a device that is not one of the team's admins (`not_admin`,
+ *  whatever role it joined with) or was removed from it (`member_removed`), and waits while the
+ *  team's key is replaced (`team_rekey_pending`; rust/src/team/membership.rs `author_commit`).
+ *  The line goes under the environment; null for anything else. */
+export function teamWriteErrorKey(reason: string): CopyKey | null {
+  if (reason === 'not_admin' || reason === 'member_removed') return 'team.err.adminOnly';
+  if (reason === 'team_rekey_pending') return 'imp.err.rekey';
+  return null;
+}
+
 /** The sidecar could not open other-device access at the saved team address
  *  (rust/src/team/transport.rs). The gateway and the SSH signer run in the same process, so the
  *  whole relay stays off; the core passes the sidecar's reason on. */
@@ -47,9 +73,12 @@ export const isTeamListenReason = (reason: string): boolean => TEAM_LISTEN.has(r
 /** `serve_start` failures (desktop/core/src/serve.rs). `serve_exited` is the generic code for a
  *  sidecar that exited without saying why. When the sidecar could not open an address the core
  *  passes its reason on with `detail` naming the setting: `gateway_port` (`listen_failed`) or
- *  `team_listen`. Unknown codes are shown as they are. */
+ *  `team_listen`. A settings file the core cannot read as settings (`settings_corrupt`) stops the
+ *  start before the sidecar runs (desktop/core/src/settings.rs). Unknown codes are shown as they
+ *  are. */
 const RELAY: Record<string, CopyKey> = {
   serve_exited: 'relay.err.exited',
+  settings_corrupt: 'relay.err.settings',
   listen_failed: 'relay.err.portBusy',
   serve_start_timeout: 'relay.err.timeout',
   admin_binary_missing: 'relay.err.missing',

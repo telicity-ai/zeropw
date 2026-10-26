@@ -2,7 +2,9 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { t, tLines, type CopyKey, type CopyLine } from '../copy';
 import { call, toIpcError } from '../ipc/client';
 import type { InviteListItem, InvitePreview, Member, NetInterface, Settings } from '../ipc/contract';
-import { DEFAULT_TEAM_PORT, defaultListenIp, envKey, interfaceLabel, inviteFraction, msLeft, parseListen, parsePort, splitEnv, teamEnvPairs } from '../lib/dash';
+import {
+  addressChoices, DEFAULT_TEAM_PORT, defaultListenIp, envKey, inviteFraction, msLeft, parseListen, parsePort, shownChoice, splitEnv, teamEnvPairs, teamEnvsUnread,
+} from '../lib/dash';
 import { shortTime } from '../lib/format';
 import { invitePreviewErrorKey, isStaleRef, joinErrorKey } from '../lib/reasons';
 import { InvitePreviewRequests } from '../lib/invitePreview';
@@ -17,7 +19,7 @@ import { ConfirmSheet } from './Confirm';
 import { passErrorKey, useClearOnClose, useDash, useLoad, useNow, useSheets, type Intent } from './context';
 import { ListenSetup } from './ListenSetup';
 import { Empty, ListCard, metaLine, Row, SectionHead, Tag } from './parts';
-import { ListenError, listenErrorLines, relayLeftOff, turnOnListen } from './relay';
+import { ListenError, listenErrorLines, readSettings, relayLeftOff, turnOnListen } from './relay';
 import { Sheet } from './Sheet';
 import { definiteInviteFailure, shareAndInvite } from './invite';
 
@@ -39,17 +41,22 @@ const roleText = (r: string): string => (r === 'admin' ? t('inv.role.admin') : r
 export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
   intent?: Intent; onIntent(): void; incoming: Incoming | null; onIncomingTaken(): void;
 }) {
-  const { tick, bump, relay } = useDash();
+  const { tick, bump, relay, go } = useDash();
   const { toast } = useApp();
   const [n, setN] = useState(0);
   const reload = () => setN((x) => x + 1);
   const base = useLoad(async () => {
-    const [p, s, i] = await Promise.all([call('project_list'), call('settings_get'), call('net_interfaces').catch(() => [] as NetInterface[])]);
-    return { pairs: teamEnvPairs(p), settings: s, interfaces: i };
+    // a damaged settings file (settings_corrupt) is fixed on the Settings page; the environments still load
+    const [p, s, i] = await Promise.all([
+      call('project_list'), readSettings().catch(() => ({ settings: null, corrupt: false })), call('net_interfaces').catch(() => [] as NetInterface[]),
+    ]);
+    return { pairs: teamEnvPairs(p), envsUnread: teamEnvsUnread(p), settings: s.settings, settingsCorrupt: s.corrupt, interfaces: i };
   }, [tick, n]);
   const [env, setEnv] = useState('');
   const pairs = base.data?.pairs ?? [];
-  const cur = env || pairs[0]?.key || '';
+  // the environment loaded is the one the picker shows, also when the chosen one left the list
+  // (a team mapping that can no longer be read)
+  const cur = shownChoice(env, pairs.map((p) => p.key));
   const team = useLoad(async () => {
     if (!cur) return null;
     try {
@@ -97,6 +104,8 @@ export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
         <button className="btn btn-primary btn-sm" type="button" onClick={() => { if (!sheetBusyRef.current) sheets.open({ kind: 'invite' }); }}>{t('inv.title')}</button>
       </SectionHead>
       <p className="page-help">{t('team.help')}</p>
+      {/* the team mapping could not be read: the projects load, the team environments do not */}
+      {base.data?.envsUnread && <Callout kind="info">{t('team.envs.err')}</Callout>}
       <div className="glass pad">
         {pairs.length === 0
           ? <Empty text={base.failed ? t('error.load') : base.data ? t('keys.err.noEnv') : t('boot.loading')} />
@@ -113,10 +122,14 @@ export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
             </div>
           )}
         {/* a shared environment syncs only while other-device access is on */}
-        {td?.shared && base.data && !parseListen(base.data.settings.team_listen) && (
+        {td?.shared && base.data?.settings && !parseListen(base.data.settings.team_listen) && (
           <ListenSetup onBusy={reportBusy} id="team-listen" interfaces={base.data.interfaces} run={relay.run}
             onDone={() => { toast(t('toast.listen.on')); reload(); bump(); }}
             onFailed={(down) => { if (down) relay.report(down); reload(); bump(); }} />
+        )}
+        {/* nor can it be turned on until the damaged settings file is reset */}
+        {td?.shared && base.data?.settingsCorrupt && (
+          <Callout kind="info">{t('listen.err.settings')} <ToSettings onClick={() => go('settings')} /></Callout>
         )}
       </div>
 
@@ -186,6 +199,11 @@ export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
         onBusy={reportBusy} onClose={sheets.close} onEnv={setEnv} onChanged={() => { reload(); bump(); }} onJoined={() => { sheets.close(); reload(); bump(); }} />
     </>
   );
+}
+
+/** To the Settings page, where a damaged settings file is reset. */
+function ToSettings({ onClick }: { onClick(): void }) {
+  return <button className="btn btn-ghost btn-sm" type="button" onClick={onClick}>{t('listen.toSettings')}</button>;
 }
 
 // ---------------------------------------------------------------- invite
@@ -415,7 +433,7 @@ function InviteSheet({ open, env, pairs, onEnv, shared, settings, interfaces, lo
                 <details open={networkDetails.open} onToggle={networkDetails.onToggle}>
                   <summary onClick={networkDetails.onSummaryClick}>{t('sync.address')} <span className="mono">{ip ? `${ip}:${port}` : t('inv.pre1.off')}</span></summary>
               <div className="inline">
-                <SelectField id="inv-if" label={t('set.listen.iface')} mono value={ip} options={interfaces.map((i) => ({ value: i.ip, label: interfaceLabel(i) }))}
+                <SelectField id="inv-if" label={t('set.listen.iface')} mono value={ip} options={addressChoices(interfaces, ip, listen?.ip)}
                   onChange={(v) => { networkDetails.reveal(); setIp(v); setListenErr(null); }} style={{ flex: 1.7 }} />
                 <TextField id="inv-port" label={t('conn.ssh.port')} mono value={port} inputRef={portRef} inputMode="numeric" maxLength={5} style={{ flex: '0 0 84px' }}
                   error={errs.port ? t(errs.port) : null} onChange={(v) => { networkDetails.reveal(); setPort(v); setErrs((x) => ({ ...x, port: undefined })); setListenErr(null); }} />
@@ -505,8 +523,8 @@ function JoinSheet({ open, incoming, onBusy, onClose, onEnv, onChanged, onJoined
   const focusSequence = useRef(0);
   const requestFocus = (target: 'local' | 'link') => setFocusRequest({ target, sequence: ++focusSequence.current });
   const [busy, setBusy] = useState(false);
-  const { relay } = useDash();
-  const [joined, setJoined] = useState<{ interfaces: NetInterface[] } | null>(null);
+  const { relay, go } = useDash();
+  const [joined, setJoined] = useState<{ interfaces: NetInterface[]; settingsCorrupt: boolean } | null>(null);
   const heldRef = useRef(held);
   heldRef.current = held;
   const previews = useRef(new InvitePreviewRequests());
@@ -612,17 +630,18 @@ function JoinSheet({ open, incoming, onBusy, onClose, onEnv, onChanged, onJoined
         onEnv(envKey(String(out.project), String(out.environment)));
         field.ripple(0.1);
       }
-      // sync needs other-device access on this device (no team listener, no team sync)
+      // sync needs other-device access; damaged settings must be reset on the Settings page
       const [s, i] = await Promise.all([
-        call('settings_get').catch(() => null),
+        readSettings().catch(() => null),
         call('net_interfaces').catch(() => [] as NetInterface[]),
       ]);
+      const listenerOn = !!s && !s.corrupt && !!parseListen(s.settings.team_listen);
       if (!alive.current) {
-        toast(t(s && parseListen(s.team_listen) ? 'toast.join.done' : 'toast.join.needListen'));
+        toast(t(listenerOn ? 'toast.join.done' : 'toast.join.needListen'));
         return;
       }
-      if (!s || !parseListen(s.team_listen)) {
-        setJoined({ interfaces: i });
+      if (!listenerOn) {
+        setJoined({ interfaces: i, settingsCorrupt: s?.corrupt ?? false });
         toast(t('toast.join.needListen'));
         announce(t('team.joined.sub'));
         onChanged();
@@ -650,9 +669,13 @@ function JoinSheet({ open, incoming, onBusy, onClose, onEnv, onChanged, onJoined
   if (joined) {
     return (
       <Sheet id="sheet-join" open={open} title={t('join.title')} lead={t('team.joined.sub')} onClose={onJoined} closeLabel={t('sync.later')}>
-        <ListenSetup onBusy={onBusy} id="join-listen" interfaces={joined.interfaces} run={relay.run}
-          onDone={() => { toast(t('toast.listen.on')); onJoined(); }}
-          onFailed={(down) => { if (down) relay.report(down); onChanged(); }} />
+        {joined.settingsCorrupt
+          ? <Callout kind="info">{t('listen.err.settings')} <ToSettings onClick={() => { onJoined(); go('settings'); }} /></Callout>
+          : (
+            <ListenSetup onBusy={onBusy} id="join-listen" interfaces={joined.interfaces} run={relay.run}
+              onDone={() => { toast(t('toast.listen.on')); onJoined(); }}
+              onFailed={(down) => { if (down) relay.report(down); onChanged(); }} />
+          )}
       </Sheet>
     );
   }

@@ -96,7 +96,9 @@ export interface Commands {
   stop_all: [void, Control];
   resume: [{ admin_passphrase: string }, Control];
 
-  project_list: [void, { projects: Project[]; team_environments?: TeamEnvironment[] }];
+  /** When the team mapping (team/envs.json) cannot be read, the projects still come, with
+   *  `team_environments_error` (`state_corrupt`) in place of `team_environments`. */
+  project_list: [void, { projects: Project[]; team_environments?: TeamEnvironment[]; team_environments_error?: string }];
   project_create: [{ name: string; environments: string[] }, Project];
 
   secret_list: [{ project?: string; environment?: string }, { secrets: SecretView[] }];

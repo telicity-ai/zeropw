@@ -16,7 +16,7 @@ import type {
 } from './contract';
 import { fnv1a, mulberry32 } from '../lib/rng';
 import { containsAdmin, INVITE_LINK_MAX, isInviteLink, isValidName, MIN_PASSPHRASE_CHARS, parseTarget, sameAsAdmin } from '../lib/validators';
-import { CONNECTION_KEY_KINDS, countOf, declarableScopes, grantState, isHostKey, isSshHost, isSshUser, openIncident, parseListen, splitEnv } from '../lib/dash';
+import { CONNECTION_KEY_KINDS, countOf, declarableScopes, grantState, isHostKey, isSshHost, isSshUser, parseListen, splitEnv } from '../lib/dash';
 
 export interface MockChannel { onmessage: (data: string) => void }
 export interface MockSeed {
@@ -45,6 +45,15 @@ export interface MockSeed {
   /** With `initialized`: an SSH connection the app made before it sent an ssh (`cli: null`),
    *  with a grant for agent-1. */
   sshWithoutCli?: boolean;
+  /** With `initialized`: an incident file still marked open (scope `all`) while the core's pointer
+   *  to the open incident names none, as a restore by a build before the fix left it. */
+  staleOpenIncident?: boolean;
+  /** The team mapping (team/envs.json) cannot be read: `project list` still lists the projects,
+   *  with `team_environments_error` in place of the team environments. */
+  teamEnvsCorrupt?: boolean;
+  /** The settings file is damaged (desktop/core/src/settings.rs): reading it, and so starting the
+   *  relay, fails with `settings_corrupt` until `settings_set` writes over it. */
+  settingsCorrupt?: boolean;
 }
 export interface MockInspect {
   initialized: boolean; onetime: number; terminals: number; projects: string[]; principals: string[]; stopped: boolean;
@@ -71,6 +80,9 @@ const BUNDLE = '/Applications/ZeroPW.app/Contents/MacOS';
 const B32 = 'abcdefghijklmnopqrstuvwxyz234567';
 const HEX = '0123456789abcdef';
 const KINDS: readonly SecretKind[] = ['api_key', 'password', 'env_var', 'ssh_private_key'];
+/** The ssh programs this pretend machine has: the core refuses a path with no executable there
+ *  (`cli_program_not_found`). */
+const SSH_PATHS: ReadonlySet<string> = new Set(['/usr/bin/ssh', '/bin/ssh', '/usr/local/bin/ssh', '/opt/homebrew/bin/ssh']);
 const RING = 64 * 1024;
 
 const fail = (error: string, reason: string, detail?: string): AppError => (detail ? { error, reason, detail } : { error, reason });
@@ -231,16 +243,27 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
   const approvals = new Map<string, Record<string, unknown>>();
   const approvalHistory: Record<string, unknown>[] = [];
   const incidents: Incident[] = [];
+  /** The core's pointer to the open incident (policy/control.json `incident_open`); `control`
+   *  says only whether there is one, as `status` does. */
+  let openIncidentId: string | null = null;
   const teams = new Map<string, MockTeamEnv>();
   const files = new Map<string, MockFile>();
   let deviceFp: string | null = null;
   /** Which device key file is current (`recover` makes a new one), and which made the newest backup. */
   let deviceKey = 0;
   let lastBackupKey = 0;
+  /** The control document the newest backup archived (rust/src/vault.rs `BACKUP_DOCS`: control is
+   *  in the archive, the incidents are not). */
+  let backupControl: Control = { stopped: false, restore_pending: false, incident_open: false };
   let secureView = false;
   const audit: AuditRecord[] = [];
   const alerts: Alert[] = [];
   let settings: Settings = { gateway_port: 47380, team_listen: seed.teamListen ?? null };
+  let settingsCorrupt = seed.settingsCorrupt ?? false;
+  const readSettings = (): Settings => {
+    if (settingsCorrupt) throw fail('StateError', 'settings_corrupt');
+    return settings;
+  };
   const VPN = { name: 'utun4', ip: '100.64.1.7', kind: 'vpn' } as const;
   const LAN = { name: 'en0', ip: '192.168.0.12', kind: 'lan' } as const;
   const interfaces = () => (seed.vpnDown ? [LAN] : [VPN, LAN]).map((i) => ({ ...i }));
@@ -254,6 +277,8 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     if (p !== adminPass) throw fail('AuthFailed', 'bad_passphrase');
   };
   const startServe = () => {
+    // the core reads the settings before it starts the sidecar (desktop/core/src/commands.rs `start_serve`)
+    readSettings();
     // a sidecar that exits before it prints a reason gets the core's generic code
     if (relayExits > 0) { relayExits -= 1; throw fail('Unavailable', 'serve_exited'); }
     // the sidecar opens other-device access before the gateway, so an address this machine does
@@ -303,6 +328,16 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     if (!teams.has(`${String(project)}/${String(environment)}`)) requireEnv(project, environment);
   };
   const fingerprint = () => (deviceFp ??= randFrom(26, B32).toUpperCase());
+  /** The team commit that writes into a team environment is refused to a device removed from that
+   *  team or that is not one of its admins, whatever role it joined with (rust/src/team/membership.rs
+   *  `require_editing_standing`). A local environment passes. */
+  const requireTeamStanding = (project: unknown, environment: unknown) => {
+    const team = teams.get(`${String(project)}/${String(environment)}`);
+    if (!team) return;
+    const self = team.members.find((m) => m.fingerprint === fingerprint());
+    if (self?.status === 'removed') throw fail('PolicyDenied', 'member_removed');
+    if (self?.role !== 'admin') throw fail('PolicyDenied', 'not_admin');
+  };
   const inviteView = (i: MockInvite): InviteListItem => {
     const v: InviteListItem = {
       invite_id: i.invite_id, role: i.role, name: i.name, link: i.link, created_at: i.created_at, expires_at: i.expires_at, status: i.status,
@@ -369,6 +404,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       if (ids('elsewhere')) throw fail('InvalidInput', 'secret_identity_mismatch', ids('elsewhere'));
       if (ids('different') && !run.update) throw fail('InvalidInput', 'import_conflict', ids('different'));
       const writes = chosen.filter((r) => r.state === 'new' || r.state === 'different');
+      if (writes.length) requireTeamStanding(project, environment);
       for (const r of writes) addSecret(r.e.id, r.kind, project, environment, r.e.value);
       record({ ts: iso(), event: 'secret_import', count: writes.length, project, environment });
       onetime.delete(input.import_ref);
@@ -440,15 +476,22 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       id: 'inc_' + randFrom(12, HEX), status: 'closed', scope: 'principal', opened_at: ago(30 * HOUR), runtime: null, principals: ['agent-0'],
       trigger: 'manual', rule: null, detail: 'rotated after a test', actions: {}, assessment: {}, notification: {}, closed_at: ago(29 * HOUR), widened_from: [],
     });
+    if (seed.staleOpenIncident) {
+      incidents.push({
+        id: 'inc_' + randFrom(12, HEX), status: 'open', scope: 'all', opened_at: ago(26 * HOUR), runtime: null, principals: [],
+        trigger: 'manual', rule: null, detail: null, actions: {}, assessment: {}, notification: {}, closed_at: null, widened_from: [],
+      });
+    }
+    // alerts as rust/src/audit.rs `maybe_alert` writes them, with its fixed English detail
     alerts.push(
-      { ts: ago(HOUR), alert: 'grant_expired', caller: 'agent-1', connection: 'example-api' },
-      { ts: ago(600_000), alert: 'policy_denied', caller: 'agent-1', connection: 'example-api', reason: 'method_not_allowed' },
+      { ts: ago(HOUR), alert: 'revoked_use_attempt', caller: 'agent-1', connection: 'example-api', event: 'http_relay', reason: 'grant_revoked', detail: 'use attempted under a revoked, stale, or stopped grant' },
+      { ts: ago(600_000), alert: 'repeated_denials', caller: 'agent-1', connection: 'example-api', event: 'http_relay', reason: 'method_not_allowed', detail: '5 denials within 60s' },
     );
     for (const [ms, rec] of [
       [24 * HOUR, { event: 'init' }], [24 * HOUR, { event: 'project_create', project: 'demo' }],
       [22 * HOUR, { event: 'principal_create', principal: 'agent-1' }], [20 * HOUR, { event: 'connection_create', connection: 'example-api' }],
       [19 * HOUR, { event: 'grant_create', principal: 'agent-1', connection: 'example-api' }],
-      [3 * HOUR, { event: 'proxy_request', caller: 'agent-1', connection: 'example-api', method: 'GET', path: '/v1/items', status: 200 }],
+      [3 * HOUR, { event: 'http_relay', caller: 'agent-1', connection: 'example-api', action: 'GET', result: 'ok', path: '/v1/items', status: 200 }],
       [90_000, { event: 'approval_request', caller: 'agent-1', connection: 'example-api', method: 'POST', path: '/v1/items' }],
     ] as const) audit.push({ ts: ago(ms), ...rec });
     // a terminal left running by the onboarding, so the agents page has something to reattach
@@ -559,7 +602,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
   if (seed.activity && typeof window !== 'undefined') {
     activity = setInterval(() => {
       if (!initialized || !serve.running || control.stopped) return;
-      record({ ts: iso(), event: 'proxy_request', caller: 'agent-1', connection: 'example-api', method: 'GET', status: 200 });
+      record({ ts: iso(), event: 'http_relay', caller: 'agent-1', connection: 'example-api', action: 'GET', result: 'ok', status: 200 });
     }, 9000);
   }
 
@@ -622,10 +665,13 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
 
     // ---- projects
     // `project list`: the projects, and the team environments when there are any (one joined from
-    // another device is in no project)
+    // another device is in no project); a team mapping it cannot read is named, not fatal
     project_list: () => {
       needInit();
-      const out: { projects: Project[]; team_environments?: TeamEnvironment[] } = { projects: projects.map((p) => ({ ...p, environments: p.environments.slice() })) };
+      const out: { projects: Project[]; team_environments?: TeamEnvironment[]; team_environments_error?: string } = {
+        projects: projects.map((p) => ({ ...p, environments: p.environments.slice() })),
+      };
+      if (seed.teamEnvsCorrupt) { out.team_environments_error = 'state_corrupt'; return out; }
       const team = [...teams.values()]
         .map((x) => ({ project: x.project, environment: x.environment, env_id: x.env_id }))
         .sort((a, b) => (a.project < b.project ? -1 : a.project > b.project ? 1 : a.environment < b.environment ? -1 : a.environment > b.environment ? 1 : 0));
@@ -677,6 +723,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       } else {
         throw fail('InvalidInput', 'secret_source_required');
       }
+      requireTeamStanding(project, environment);
       await wait(300);
       const v = addSecret(id, kind, project, environment, value, pub);
       record({ ts: iso(), event: 'secret_put', secret: id, version: v.version, kind });
@@ -696,6 +743,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       if (v.status === 'revoked') throw fail('InvalidInput', 'version_revoked');
       const ref = putOnce({ kind: 'secret', text: v.value });
       record({ ts: iso(), event: 'secret_reveal', secret: id, version: v.version });
+      alerts.push({ ts: iso(), alert: 'secret_reveal', caller: 'admin', event: 'secret_reveal', detail: 'administrator revealed a single secret version' });
       return { ref, id, version: String(v.version) };
     },
     // rust/src/admin_cli.rs secret retire/revoke: output keyed `secret_id`, the version as a number,
@@ -732,6 +780,8 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       if (!isValidName(input.id)) throw fail('InvalidInput', 'invalid_connection_id');
       if (connections.has(input.id)) throw fail('InvalidInput', 'connection_exists');
       requireEnvOrTeam(input.project, input.environment);
+      // a team environment's connection is a team commit, refused before the key is looked at
+      requireTeamStanding(input.project, input.environment);
       checkSecretFor('http', input.secret_id, input.project, input.environment);
       const target = parseTarget(input.target);
       if (!target.ok) throw fail('InvalidInput', target.error === 'meta' ? 'metadata_address_not_allowed' : 'invalid_scheme');
@@ -753,14 +803,23 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     },
     connection_create_ssh: async (input) => {
       needInit(); await wait(400);
+      // desktop/core/src/commands.rs connection_create_ssh: a payload missing a field is not read
+      // (serde: `invalid_payload`); then an empty passphrase, no host key, an empty path (the agent
+      // cannot use an SSH connection without its ssh), a path with no executable there, and only
+      // then the CLI, which checks the passphrase before the connection
+      if (typeof input.cli_program !== 'string' || typeof input.admin_passphrase !== 'string' || !Array.isArray(input.host_keys)) {
+        throw fail('InvalidInput', 'invalid_payload');
+      }
+      if (!input.admin_passphrase) throw fail('AuthFailed', 'passphrase_missing');
+      if (!input.host_keys.length) throw fail('InvalidInput', 'host_key_required');
+      if (!input.cli_program) throw fail('InvalidInput', 'cli_program_required');
+      if (!SSH_PATHS.has(input.cli_program)) throw fail('InvalidInput', 'cli_program_not_found');
       checkAdmin(input.admin_passphrase);
       if (!isValidName(input.id)) throw fail('InvalidInput', 'invalid_connection_id');
       if (connections.has(input.id)) throw fail('InvalidInput', 'connection_exists');
       requireEnvOrTeam(input.project, input.environment);
-      if (!input.host_keys.length) throw fail('InvalidInput', 'host_key_required');
-      // desktop/core/src/commands.rs SshConnectionIn: the agent cannot use an SSH connection without its ssh
-      if (typeof input.cli_program !== 'string') throw fail('InvalidInput', 'invalid_payload');
-      if (!input.cli_program) throw fail('InvalidInput', 'cli_program_required');
+      // a team environment's connection is a team commit, refused before the key is looked at
+      requireTeamStanding(input.project, input.environment);
       checkSecretFor('ssh', input.secret_id, input.project, input.environment);
       if (!isSshHost(input.host)) throw fail('InvalidInput', 'invalid_host');
       if (!Number.isInteger(input.port) || input.port < 1 || input.port > 65535) throw fail('InvalidInput', 'invalid_port');
@@ -780,10 +839,13 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     // rust/src/admin_cli.rs update_connection_cli: fills a missing ssh only; the grants go stale
     connection_set_cli_program: async (input) => {
       needInit(); await wait(300);
-      if (typeof input.cli_program !== 'string') throw fail('InvalidInput', 'invalid_payload');
-      // the core's order: a missing passphrase, an empty path, then the CLI checks the passphrase
-      if (typeof input.admin_passphrase !== 'string' || !input.admin_passphrase) throw fail('AuthFailed', 'passphrase_missing');
+      // a payload without either field is not read at all (serde: `invalid_payload`); then the
+      // core's order: an empty passphrase, an empty path, a path with no executable there, and
+      // only then the CLI, which checks the passphrase
+      if (typeof input.cli_program !== 'string' || typeof input.admin_passphrase !== 'string') throw fail('InvalidInput', 'invalid_payload');
+      if (!input.admin_passphrase) throw fail('AuthFailed', 'passphrase_missing');
       if (!input.cli_program) throw fail('InvalidInput', 'cli_program_required');
+      if (!SSH_PATHS.has(input.cli_program)) throw fail('InvalidInput', 'cli_program_not_found');
       checkAdmin(input.admin_passphrase);
       const c = connections.get(input.id);
       if (!c) throw fail('NotFound', 'connection_not_found');
@@ -939,9 +1001,10 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       needInit(); await wait(400);
       if (scope === 'all') checkAdmin(admin_passphrase);
       else if (admin_passphrase) checkAdmin(admin_passphrase);
-      // rust/src/incident.rs `open_incident`: an open incident takes in a declaration that is not
-      // wider unchanged, and a wider one widens it
-      const current = openIncident(incidents);
+      // rust/src/incident.rs `open_incident`: the incident the pointer names takes in a declaration
+      // that is not wider unchanged, and a wider one widens it; a file marked open that the
+      // pointer does not name is not met
+      const current = openIncidentId ? incidents.find((i) => i.id === openIncidentId) ?? null : null;
       if (current && !declarableScopes(current.scope).includes(scope)) return { ...current, existing: true, widened: false };
       let affected: string[];
       if (scope === 'principal') {
@@ -974,6 +1037,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
         closed_at: null, widened_from: [],
       };
       incidents.push(inc);
+      openIncidentId = inc.id;
       record({ ts: iso(), event: 'incident_open', incident: inc.id, scope });
       setControl({ ...control, incident_open: true, stopped: stops ? true : control.stopped });
       return { ...inc };
@@ -986,7 +1050,8 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       if (x.status === 'closed') throw fail('InvalidInput', 'incident_already_closed');
       x.status = 'closed'; x.closed_at = iso();
       record({ ts: iso(), event: 'incident_close', incident: id });
-      setControl({ ...control, incident_open: incidents.some((i) => i.status === 'open') });
+      // the pointer is cleared only when it names this incident (rust/src/incident.rs `close_incident`)
+      if (openIncidentId === id) { openIncidentId = null; setControl({ ...control, incident_open: false }); }
       return { ...x };
     },
 
@@ -995,6 +1060,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     backup_create: async () => {
       needInit(); await wait(500);
       lastBackupKey = deviceKey;
+      backupControl = { ...control };
       record({ ts: iso(), event: 'backup' });
       return { path: '~/Desktop/zeropw-backup.zpwb', created_at: iso() };
     },
@@ -1003,7 +1069,9 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       checkAdmin(admin_passphrase);
       // the archive's data key is wrapped under the device key that made it (rust/src/vault.rs)
       if (lastBackupKey !== deviceKey) throw fail('StateError', 'backup_kms_mismatch');
-      setControl({ ...control, restore_pending: true });
+      // rust/src/vault.rs restore: the archived control comes back, except that a stop in force now
+      // stays and the open incident is the current one; the incidents themselves are untouched
+      setControl({ stopped: control.stopped || backupControl.stopped, incident_open: control.incident_open, restore_pending: true });
       record({ ts: iso(), event: 'restore' });
       return { restored: true, restore_pending: true };
     },
@@ -1057,7 +1125,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       const m = t.members.find((x) => x.fingerprint === device);
       if (!m) throw fail('InvalidInput', 'member_unknown');
       if (m.owner) throw fail('InvalidInput', 'cannot_remove_owner');
-      m.status = 'removed'; record({ ts: iso(), event: 'team_remove', device });
+      m.status = 'removed'; record({ ts: iso(), event: 'team_member_remove', device });
       return { env_id: t.env_id, fingerprint: device, status: 'removed' };
     },
     team_invite_create: async ({ env, role, name, address, admin_passphrase }) => {
@@ -1075,7 +1143,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       };
       t.invites.push(inv);
       const link_ref = putOnce({ kind: 'link', text: `zeropw://join#${secret}` });
-      record({ ts: iso(), event: 'team_invite', invite_id: inv.invite_id, role });
+      record({ ts: iso(), event: 'team_invite_create', invite_id: inv.invite_id, role });
       return { invite_id: inv.invite_id, link_ref, expires_at: inv.expires_at, inviter: fingerprint() };
     },
     team_invites: ({ env }) => {
@@ -1159,14 +1227,16 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     },
     secret_import_preview: (input) => importRun(input, null),
     secret_import: (input) => importRun(input, { selected: input.selected, update: input.update }),
-    settings_get: () => ({ ...settings }),
+    settings_get: () => ({ ...readSettings() }),
     settings_set: (next) => {
       if (!Number.isInteger(next.gateway_port) || next.gateway_port < 1024 || next.gateway_port > 65535) throw fail('InvalidInput', 'invalid_port', 'gateway_port');
       if (next.team_listen !== null) {
         const l = parseListen(next.team_listen);
         if (!l || l.ip === '0.0.0.0' || l.ip === '255.255.255.255' || l.port === 0) throw fail('InvalidInput', 'invalid_listen', 'team_listen');
       }
+      // written over the old file without reading it
       settings = { gateway_port: next.gateway_port, team_listen: next.team_listen };
+      settingsCorrupt = false;
       return { ...settings };
     },
     net_interfaces: () => interfaces(),

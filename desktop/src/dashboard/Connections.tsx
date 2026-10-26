@@ -1,12 +1,13 @@
 import { useRef, useState } from 'react';
 import { t, type CopyKey } from '../copy';
 import { call, toIpcError } from '../ipc/client';
-import type { ConnectionView, Project, SecretKind, SecretSource, SecretView } from '../ipc/contract';
+import type { ConnectionView, SecretKind, SecretSource, SecretView } from '../ipc/contract';
 import {
-  defaultMethodStates, envPairs, isBasicUser, isCliPath, isHeaderName, isHostKey, isPlainText, isSshHost, isSshUser, keyChoices, METHODS,
-  methodsPayload, nextMethodState, parsePathPrefixes, parsePort, publicKeyOf, splitEnv, SSH_PROGRAM, summarizeConnection, writeConsequences,
-  type Method, type MethodStates,
+  defaultMethodStates, isBasicUser, isCliPath, isHeaderName, isHostKey, isPlainText, isSshHost, isSshUser, keyChoices, METHODS,
+  methodsPayload, nextMethodState, parsePathPrefixes, parsePort, publicKeyOf, splitEnv, SSH_PROGRAM, summarizeConnection, teamEnvPairs,
+  writeConsequences, type EnvPair, type Method, type MethodStates,
 } from '../lib/dash';
+import { sshProgramError, teamWriteErrorKey } from '../lib/reasons';
 import { isValidName, parseTarget } from '../lib/validators';
 import { useApp } from '../ui/context';
 import { PassField, SelectField, TextField, useSelectDefault } from '../ui/fields';
@@ -18,6 +19,7 @@ import { ListCard, metaLine, Row, SectionHead, Tag } from './parts';
 import { Sheet } from './Sheet';
 
 type ConnSheet = { kind: 'create' } | { kind: 'disable'; id: string } | { kind: 'ssh-cli'; id: string };
+const NO_PAIRS: EnvPair[] = [];
 const CONSQ: Record<'POST' | 'PUT' | 'PATCH' | 'DELETE', CopyKey> = {
   POST: 'conn.consq.POST', PUT: 'conn.consq.PUT', PATCH: 'conn.consq.PATCH', DELETE: 'conn.consq.DELETE',
 };
@@ -28,7 +30,8 @@ export function ConnectionsPage({ intent, onIntent }: { intent?: Intent; onInten
   const [n, setN] = useState(0);
   const load = useLoad(async () => {
     const [c, p, s] = await Promise.all([call('connection_list'), call('project_list'), call('secret_list', {})]);
-    return { connections: c.connections, projects: p.projects, secrets: s.secrets };
+    // a team environment this device joined is offered too (the CLI refuses a role that may not)
+    return { connections: c.connections, pairs: teamEnvPairs(p), secrets: s.secrets };
   }, [tick, n]);
   const reload = () => setN((x) => x + 1);
   const sheets = useSheets<ConnSheet>();
@@ -62,7 +65,7 @@ export function ConnectionsPage({ intent, onIntent }: { intent?: Intent; onInten
         })}
       </ListCard>
 
-      <CreateConnectionSheet key={sheets.key('create')} open={sheets.isOpen('create')} projects={load.data?.projects ?? []}
+      <CreateConnectionSheet key={sheets.key('create')} open={sheets.isOpen('create')} pairs={load.data?.pairs ?? NO_PAIRS}
         connections={list ?? []} secrets={load.data?.secrets ?? []} onClose={sheets.close} onCreated={() => { reload(); bump(); }} />
       <DisableSheet key={sheets.key('disable')} open={sheets.isOpen('disable')} id={sheets.data('disable')?.id ?? ''}
         onClose={sheets.close} onDone={() => { sheets.close(); reload(); }} />
@@ -74,7 +77,8 @@ export function ConnectionsPage({ intent, onIntent }: { intent?: Intent; onInten
 
 /** Gives an SSH connection made without an ssh the one its agents run (`connection_set_cli_program`).
  *  The CLI fills a missing ssh only, and the connection's grants go stale, so the sheet says the
- *  path cannot be changed later and that the agents' permissions must be given again. */
+ *  path cannot be changed later and that the agents' permissions must be given again. A path the
+ *  core refuses (none there on this device included) is shown under the field. */
 function SshCliSheet({ open, id, onClose, onStale, onDone }: { open: boolean; id: string; onClose(): void; onStale(): void; onDone(): void }) {
   const { toast } = useApp();
   const [path, setPath] = useState(SSH_PROGRAM);
@@ -94,12 +98,11 @@ function SshCliSheet({ open, id, onClose, onStale, onDone }: { open: boolean; id
         onDone();
       }}
       errorFor={(e) => {
-        const r = toIpcError(e).reason;
-        if (r === 'cli_program_required' || r === 'invalid_cli_program') return 'conn.cli.err';
+        const why = sshProgramError(toIpcError(e).reason);
+        if (why && 'field' in why) { setPathErr(why.field); pathRef.current?.focus(); return false; }
         // the list was out of date: show the connection as it is now
-        if (r === 'cli_already_set') { onStale(); return 'conns.sshcli.err.set'; }
-        if (r === 'connection_disabled' || r === 'connection_not_found') { onStale(); return 'conns.sshcli.err.off'; }
-        return null;
+        if (why?.stale) onStale();
+        return why?.form ?? null;
       }}
       onClose={onClose}>
       <TextField id="conn-sshcli-path" label={t('conn.ssh.cli')} mono value={path} inputRef={pathRef} placeholder={SSH_PROGRAM}
@@ -130,12 +133,12 @@ type Errs = Partial<Record<ErrKey, CopyKey>>;
  *  same project/environment (Keys page) or a new one: a new key is stored first (`secret_put`,
  *  named after the connection), then the connection is created with the admin passphrase. A typed
  *  key leaves the screen as soon as it is stored. A generated SSH key's public half is kept until
- *  the connection exists, so it is shown even when the first try failed. */
-function CreateConnectionSheet({ open, projects, connections, secrets, onClose, onCreated }: {
-  open: boolean; projects: Project[]; connections: ConnectionView[]; secrets: SecretView[]; onClose(): void; onCreated(): void;
+ *  the connection exists, so it is shown even when the first try failed. The environments are the
+ *  local ones and the team ones this device joined (`teamEnvPairs`). */
+export function CreateConnectionSheet({ open, pairs, connections, secrets, onClose, onCreated }: {
+  open: boolean; pairs: readonly EnvPair[]; connections: ConnectionView[]; secrets: SecretView[]; onClose(): void; onCreated(): void;
 }) {
   const { toast, field, announce } = useApp();
-  const pairs = envPairs(projects);
   const secretIds = secrets.map((s) => s.id);
   const [type, setType] = useState<ConnType>('http');
   const [src, setSrc] = useState<KeySrc>('new');
@@ -311,10 +314,13 @@ function CreateConnectionSheet({ open, projects, connections, secrets, onClose, 
         invalid_secret_value: ['key', 'keys.err.value'], file_token_unknown: ['key', 'keys.err.value'],
         host_key_required: ['hostKey', 'conn.ssh.hostkey.err'],
         cli_program_required: ['sshCli', 'conn.cli.err'], invalid_cli_program: [ssh ? 'sshCli' : 'cli', 'conn.cli.err'],
+        cli_program_not_found: [ssh ? 'sshCli' : 'cli', 'conn.cli.err.notFound'],
         secret_kind_mismatch: ['key', 'conn.key.err.kind'], secret_scope_mismatch: ['key', 'conn.key.err.pick'],
         secret_version_unusable: ['key', 'conn.key.err.unusable'], secret_not_found: ['key', 'conn.key.err.pick'],
       };
-      const hit = ipc.error === 'AuthFailed' ? (['pass', passErrorKey(e)] as [ErrKey, CopyKey]) : map[r];
+      // a team environment this device may not write to (not one of its admins) is said under it
+      const team = teamWriteErrorKey(r);
+      const hit = ipc.error === 'AuthFailed' ? (['pass', passErrorKey(e)] as [ErrKey, CopyKey]) : team ? (['env', team] as [ErrKey, CopyKey]) : map[r];
       if (hit) { setErrs({ [hit[0]]: hit[1] }); focusErr(hit[0]); }
       else setErrs({ form: 'error.generic' });
     } finally { setBusy(false); }

@@ -12,13 +12,14 @@ import { JoinStep } from '../src/onboarding/JoinStep';
 import { AppContext, type AppApi } from '../src/ui/context';
 import { DashContext, type DashApi, type Intent } from '../src/dashboard/context';
 import { t } from '../src/copy';
+import { TextField } from '../src/ui/fields';
 
 vi.mock('../src/ipc/client', async (original) => ({ ...await original<typeof import('../src/ipc/client')>(), call: vi.fn() }));
 const ipc = vi.mocked(call);
 const future = () => new Date(Date.now() + 3600_000).toISOString();
 const preview = (inviter = 'abcdefghijklmnopqrstuvwxyz'): InvitePreview => ({ inviter, env_id: 'environment', role: 'user', name: 'member', addresses: ['192.168.1.2:47420'], expires_at: future(), expired: false, invite_id: 'invite' });
 const app = { field: { ripple: vi.fn(), set: vi.fn(), chipText: vi.fn() }, desktop: true, toast: vi.fn(), announce: vi.fn(), setPill: vi.fn() } as unknown as AppApi;
-const dash = { tick: 0, bump: vi.fn(), relay: { run: (fn: () => Promise<unknown>) => fn(), report: vi.fn() } } as unknown as DashApi;
+const dash = { tick: 0, go: vi.fn(), bump: vi.fn(), relay: { run: (fn: () => Promise<unknown>) => fn(), report: vi.fn() } } as unknown as DashApi;
 let animationFrames: Map<number, FrameRequestCallback>, frameId: number;
 let root: Root, host: HTMLDivElement, shared: boolean;
 let requestIncoming: (ref: string, p?: InvitePreview) => void;
@@ -53,6 +54,11 @@ async function input(id: string, value: string) {
   });
   await settle();
 }
+async function select(id: string, value: string) {
+  const el = host.querySelector<HTMLSelectElement>(`#${id}`)!;
+  await act(async () => { el.value = value; el.dispatchEvent(new Event('change', { bubbles: true })); });
+  await settle();
+}
 function deferred<T>() { let resolve!: (v: T) => void, reject!: (e: unknown) => void; const promise = new Promise<T>((a, b) => { resolve = a; reject = b; }); return { promise, resolve, reject }; }
 async function invite() {
   await click(button(t('inv.title')));
@@ -76,7 +82,7 @@ beforeEach(() => {
   animationFrames = new Map(); frameId = 0;
   vi.stubGlobal('requestAnimationFrame', (fn: FrameRequestCallback) => { const id = ++frameId; animationFrames.set(id, fn); return id; });
   vi.stubGlobal('cancelAnimationFrame', (id: number) => animationFrames.delete(id));
-  shared = false;
+  shared = false; dash.tick = 0;
   vi.clearAllMocks();
   ipc.mockImplementation(async (command) => defaultIpc(command) as never);
   host = document.createElement('div'); document.body.append(host); root = createRoot(host);
@@ -220,6 +226,92 @@ describe('invite component confirmation and failure recovery', () => {
     await click(button(t('inv.retryRead')));
     expect(button(t('inv.shareCreate'))).toBeTruthy();
     expect(ipc.mock.calls.filter(([command]) => command === 'team_share')).toHaveLength(0);
+  });
+});
+
+describe('combined upstream recovery and UX behavior', () => {
+  it('preserves child-field errorFor(false) and releases confirmation busy state for retry', async () => {
+    const run = vi.fn().mockRejectedValueOnce({ error: 'InvalidInput', reason: 'cli_program_not_found' }).mockResolvedValueOnce({});
+    const busy = vi.fn();
+    function FieldErrorConfirm() {
+      const [error, setError] = useState<string | null>(null);
+      return h(ConfirmSheet, {
+        id: 'child-confirm', open: true, title: 'Confirm', confirmLabel: 'Confirm', run, onBusy: busy, onClose: vi.fn(),
+        errorFor: () => { setError(t('conn.cli.err.notFound')); return false; },
+      }, h(TextField, { id: 'child-path', label: 'Path', value: '/synthetic/missing', onChange: vi.fn(), error }));
+    }
+    await render(h(FieldErrorConfirm));
+    await click(button('Confirm'));
+    expect(host.querySelector('#child-path-err')?.textContent).toBe(t('conn.cli.err.notFound'));
+    expect(host.textContent).not.toContain(t('error.generic'));
+    expect(busy.mock.calls).toEqual([[true], [false]]);
+    await click(button('Confirm'));
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(busy.mock.calls).toEqual([[true], [false], [true], [false]]);
+  });
+  it('keeps teams readable and settings reset guidance available when settings and team mapping are damaged', async () => {
+    shared = true;
+    ipc.mockImplementation(async (command) => {
+      if (command === 'settings_get') throw { error: 'StateError', reason: 'settings_corrupt' };
+      if (command === 'project_list') return { ...defaultIpc(command) as object, team_environments_error: 'team_state_corrupt' } as never;
+      return defaultIpc(command) as never;
+    });
+    await render();
+    expect((host.querySelector('#team-env') as HTMLSelectElement).value).toBe('demo/dev');
+    expect(host.textContent).toContain(t('team.envs.err'));
+    expect(host.textContent).toContain(t('team.members'));
+    expect(host.textContent).toContain(t('listen.err.settings'));
+    await click(button(t('listen.toSettings')));
+    expect(dash.go).toHaveBeenCalledWith('settings');
+    await invite();
+    await click(button(t('inv.pre1.btn'), host.querySelector('#sheet-invite')!));
+    expect(host.querySelector('#sheet-invite')?.textContent).toContain(t('listen.err.settings'));
+    expect((host.querySelector('#inv-name') as HTMLInputElement).value).toBe('custom member');
+    expect(ipc.mock.calls.filter(([command]) => command === 'settings_set' || command === 'team_invite_create')).toHaveLength(0);
+  });
+  it('routes a joined team with corrupt settings to reset instead of enabling access or misreporting join failure', async () => {
+    let joined = false;
+    ipc.mockImplementation(async (command) => {
+      if (command === 'team_join') { joined = true; return { project: 'joined', environment: 'dev' } as never; }
+      if (command === 'settings_get' && joined) throw { error: 'StateError', reason: 'settings_corrupt' };
+      return defaultIpc(command) as never;
+    });
+    await render(); await act(async () => requestIncoming('corrupt-after-join')); await settle();
+    await click(button(t('team.join.confirm')));
+    const sheet = host.querySelector('#sheet-join')!;
+    expect(sheet.textContent).toContain(t('listen.err.settings'));
+    expect(sheet.querySelector('#join-listen-port')).toBeNull();
+    await click(button(t('listen.toSettings'), sheet));
+    expect(dash.go).toHaveBeenCalledWith('settings');
+    expect(ipc.mock.calls.filter(([command]) => command === 'team_join')).toHaveLength(1);
+    expect(ipc.mock.calls.filter(([command]) => command === 'settings_set')).toHaveLength(0);
+  });
+  it('loads the environment actually shown after a selected environment disappears during reload', async () => {
+    let environments = ['dev', 'staging'];
+    ipc.mockImplementation(async (command) => command === 'project_list'
+      ? { projects: [{ name: 'demo', environments, created_at: '' }] } as never
+      : defaultIpc(command) as never);
+    await render();
+    await select('team-env', 'demo/staging');
+    expect(ipc).toHaveBeenCalledWith('team_members', { env: 'demo/staging' });
+    environments = ['dev']; dash.tick++;
+    await render();
+    expect((host.querySelector('#team-env') as HTMLSelectElement).value).toBe('demo/dev');
+    expect(ipc.mock.calls.filter(([command]) => command === 'team_members').at(-1)).toEqual(['team_members', { env: 'demo/dev' }]);
+  });
+  it('keeps an unlisted selected network address visible while disclosure repair stays open', async () => {
+    const props = { id: 'unlisted', onDone: vi.fn() };
+    await render(h(ListenSetup, { ...props, interfaces: [{ ip: '10.0.0.1', kind: 'vpn', name: 'utun0' }] }));
+    const details = host.querySelector('#unlisted-if')!.closest('details')!;
+    await click(details.querySelector('summary')!);
+    await render(h(ListenSetup, { ...props, interfaces: [{ ip: '192.168.1.2', kind: 'lan', name: 'en0' }] }));
+    const picker = host.querySelector<HTMLSelectElement>('#unlisted-if')!;
+    expect(picker.value).toBe('10.0.0.1');
+    expect([...picker.options].map((o) => o.value)).toEqual(['10.0.0.1', '192.168.1.2']);
+    expect(picker.options[0]?.textContent).toContain(t('set.listen.unlisted'));
+    expect(details.open).toBe(true);
+    await select('unlisted-if', '192.168.1.2');
+    expect(details.open).toBe(true);
   });
 });
 

@@ -693,6 +693,120 @@ fn test_restore_from_during_a_closed_incident_does_not_restore_its_lock() {
     );
 }
 
+/// The state a crash between `incident close`'s two writes leaves (or a
+/// restore by a build that brought an archived pointer back): the incident's
+/// record says closed while the control pointer still names it.
+fn leave_pointer_to(admin: &Admin, incident_id: &str) {
+    ctx(&admin.state)
+        .policy
+        .set_open_incident(Some(incident_id))
+        .unwrap();
+    let control: Value = serde_json::from_str(
+        &std::fs::read_to_string(admin.state.join("policy/control.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(control["incident_open"], incident_id);
+    let record = admin.ok(&["incident", "show", "--id", incident_id]);
+    assert_eq!(record["status"], "closed");
+}
+
+/// A pointer to a closed incident does not hold the stop: nothing could clear
+/// it, since `incident close` refuses a closed incident.
+#[test]
+fn test_a_pointer_to_a_closed_incident_does_not_refuse_resume() {
+    let (_tmp, admin) = admin_case();
+    seed_project(&admin);
+    admin.ok(&["principal", "create", "--id", "agent-1"]);
+    // The runtime holds every active principal, so the incident also stops all.
+    let declared = admin.ok(&[
+        "incident",
+        "declare",
+        "--scope",
+        "runtime",
+        "--runtime",
+        "default",
+    ]);
+    let incident_id = id_of(&declared);
+    admin.ok(&["incident", "close", "--id", &incident_id]);
+    leave_pointer_to(&admin, &incident_id);
+
+    assert_eq!(
+        admin.ok(&["status"]),
+        serde_json::json!({"stopped": true, "restore_pending": false, "incident_open": null})
+    );
+    let error = admin.fail(&["incident", "close", "--id", &incident_id]);
+    assert_eq!(reason(&error), "incident_already_closed");
+    assert_eq!(
+        admin.ok(&["resume"]),
+        serde_json::json!({"stopped": false, "restore_pending": false, "incident_open": null})
+    );
+}
+
+/// A declaration over a pointer to a closed incident opens a new incident and
+/// points at it, instead of answering with the closed one (an equal scope) or
+/// failing to widen it (a wider one).
+#[test]
+fn test_a_declare_over_a_pointer_to_a_closed_incident_opens_a_new_one() {
+    let (_tmp, admin) = admin_case();
+    seed_project(&admin);
+    admin.ok(&["principal", "create", "--id", "agent-1"]);
+    admin.ok(&["principal", "create", "--id", "agent-2"]);
+    let declare_principal = |principal: &str| {
+        admin.ok(&[
+            "incident",
+            "declare",
+            "--scope",
+            "principal",
+            "--principal",
+            principal,
+        ])
+    };
+    let first = id_of(&declare_principal("agent-1"));
+    admin.ok(&["incident", "close", "--id", &first]);
+    leave_pointer_to(&admin, &first);
+
+    let second = declare_principal("agent-2");
+    assert_ne!(id_of(&second), first);
+    assert_eq!(second["status"], "open");
+    assert!(second.get("existing").is_none(), "{second}");
+    assert_eq!(
+        ctx(&admin.state)
+            .policy
+            .get_principal("agent-2")
+            .unwrap()
+            .status,
+        "disabled"
+    );
+    assert_eq!(admin.ok(&["status"])["incident_open"], id_of(&second));
+
+    admin.ok(&["incident", "close", "--id", &id_of(&second)]);
+    leave_pointer_to(&admin, &id_of(&second));
+    let third = admin.ok(&[
+        "incident",
+        "declare",
+        "--scope",
+        "runtime",
+        "--runtime",
+        "default",
+    ]);
+    assert_ne!(id_of(&third), id_of(&second));
+    assert_eq!(
+        (third["scope"].as_str(), third["status"].as_str()),
+        (Some("runtime"), Some("open"))
+    );
+    assert!(third.get("existing").is_none(), "{third}");
+    assert_eq!(admin.ok(&["status"])["incident_open"], id_of(&third));
+    // Closing the new incident clears its pointer as before.
+    admin.ok(&["incident", "close", "--id", &id_of(&third)]);
+    assert_eq!(
+        ctx(&admin.state)
+            .state
+            .read_json("policy/control.json", Value::Null)
+            .unwrap()["incident_open"],
+        Value::Null
+    );
+}
+
 /// M1 branch 1: a second declare that is not wider than the open incident
 /// changes nothing.
 #[test]

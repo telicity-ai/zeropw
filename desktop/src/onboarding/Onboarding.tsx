@@ -9,7 +9,7 @@ import { useApp } from '../ui/context';
 import { AdminStep } from './AdminStep';
 import { CreateStep } from './CreateStep';
 import { Finale, type JoinOutcome } from './Finale';
-import { afterRelayFailure, counted, fieldExtras, isCard, neighbour, progressOf, TITLE, type Step } from './flow';
+import { afterRelayFailure, counted, fieldExtras, isCard, neighbour, onboardingPill, progressOf, TITLE, type Step } from './flow';
 import { JoinStep, type JoinPlan } from './JoinStep';
 import { ProjectStep } from './ProjectStep';
 import { RecoveryStep } from './RecoveryStep';
@@ -141,10 +141,12 @@ export function Onboarding({ onFlowChange, onFinish, incoming, onIncomingTaken }
   // (even when the relay failed right after `init`) is never created again; see ./vault.ts.
   const initVault = useCallback(async () => {
     await createVault(secrets.current, attempts.current);
+    // the vault exists: the title bar stops saying there is none, before the relay is tried
+    setPill(onboardingPill(true, null));
     secrets.current = { admin: '', recovery: null };
     setAdminForCheck('');
     setAdminKey((k) => k + 1); setRecoveryKey((k) => k + 1);   // drop the typed values with their steps
-  }, []);
+  }, [setPill]);
 
   // the recovery code has to change: back to its step, with the reason on screen
   const onRecoveryProblem = useCallback((kind: Extract<InitFailure, 'recovery_expired' | 'recovery_weak'>) => {
@@ -159,7 +161,7 @@ export function Onboarding({ onFlowChange, onFinish, incoming, onIncomingTaken }
     if (!s.running) s = await call('serve_start');
     if (!s.running) throw new IpcError({ error: 'Unavailable', reason: 'serve_not_running' });
     const addr = hostPort(s.url);
-    setPill({ kind: 'live', addr });
+    setPill(onboardingPill(true, { addr }));
     return addr;
   }, [setPill]);
 
@@ -167,7 +169,7 @@ export function Onboarding({ onFlowChange, onFinish, incoming, onIncomingTaken }
   // it; a join still happens on the finale, otherwise the dashboard has the start button and port
   const skipRelay = useCallback(() => {
     setCreated(true);
-    setPill({ kind: 'off' });
+    setPill(onboardingPill(true, null));
     if (afterRelayFailure(!!joinRef.current) === 'done') go('done');
     else onFinish('home');
   }, [go, onFinish, setPill]);

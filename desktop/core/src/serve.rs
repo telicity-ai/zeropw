@@ -16,7 +16,10 @@
 //!   instead of waiting out the 60 s start budget, so quitting the app is never held up.
 //! - Watch: [`ServeSupervisor::watch`] looks without waiting for a start or stop in progress,
 //!   so the core can check every [`WATCH_INTERVAL`] whether the sidecar is still there and tell
-//!   the window when it is gone (docs/desktop-app.md §4.2).
+//!   the window when it is gone (docs/desktop-app.md §4.2). It reports what it saw before the
+//!   state is unlocked, and so do the `*_reported` start, stop and attach, so the window is
+//!   told about them in the order they happened. An adopted sidecar is looked at with a
+//!   signal alone, and with `ps` only every [`WATCH_PS_EVERY`] looks.
 //! - Closing the window does not stop it; the app calls [`ServeSupervisor::stop`] on quit.
 
 use std::ffi::OsString;
@@ -44,6 +47,15 @@ pub const START_TIMEOUT: Duration = Duration::from_secs(60);
 pub const STOP_GRACE: Duration = Duration::from_secs(25);
 /// How often the core checks that a running sidecar is still there.
 pub const WATCH_INTERVAL: Duration = Duration::from_secs(2);
+/// The watch looks at an adopted sidecar with `kill(pid, 0)` alone, and with `ps` too only
+/// every this many looks (30 s at [`WATCH_INTERVAL`]), instead of forking `ps` every 2 s for
+/// the life of the app. An adopted sidecar's parent was an earlier app run, which is gone, so
+/// launchd or init reaps it as soon as it exits and the signal fails at the next look. Only a
+/// zombie still answers the signal, which needs its old parent alive and not reaping it; `ps`
+/// catches that at the next `ps` look. `status`, `attach`, `start` and `stop` run `ps` every
+/// time, and `stop` checks the command line before it signals an adopted sidecar, so a reused
+/// pid is not signalled.
+pub const WATCH_PS_EVERY: u32 = 15;
 /// `server.SERVER_HEADER` in the product crate.
 pub const SERVER_HEADER: &str = "zeropw-prototype";
 
@@ -99,6 +111,8 @@ enum Running {
         pid: u32,
         url: String,
         team_listen: Option<String>,
+        /// Watch looks since the last one that ran `ps` ([`WATCH_PS_EVERY`]).
+        signal_looks: u32,
     },
 }
 
@@ -144,22 +158,22 @@ impl ServeSupervisor {
     /// removed).
     pub fn status(&self) -> ServeStatus {
         let mut running = self.lock();
-        self.refresh(&mut running);
+        self.refresh(&mut running, false);
         status_of(&mut running)
     }
 
     /// Like [`status`](Self::status), for the core's watcher: never waits for a start or stop
     /// in progress (`None` then; that start or stop reports its own result). A sidecar that
-    /// died is noticed here: an owned one by its exit status, an attached one by its pid.
-    /// `report` runs before the state is unlocked, so no start or stop comes between this look
-    /// and what the caller does with it.
+    /// died is noticed here: an owned one by its exit status, an attached one by its pid
+    /// ([`WATCH_PS_EVERY`]). `report` runs before the state is unlocked, so no start or stop
+    /// comes between this look and what the caller does with it.
     pub fn watch<R>(&self, report: impl FnOnce(ServeStatus) -> R) -> Option<R> {
         let mut running = match self.running.try_lock() {
             Ok(running) => running,
             Err(TryLockError::Poisoned(e)) => e.into_inner(),
             Err(TryLockError::WouldBlock) => return None,
         };
-        self.refresh(&mut running);
+        self.refresh(&mut running, true);
         Some(report(status_of(&mut running)))
     }
 
@@ -170,44 +184,70 @@ impl ServeSupervisor {
 
     /// At app start: adopt a sidecar left by an earlier app run, without starting a new one.
     pub fn attach(&self) -> ServeStatus {
+        self.attach_reported(|_| {})
+    }
+
+    /// [`attach`](Self::attach), with `report` run on the result before the state is unlocked,
+    /// as [`watch`](Self::watch) does: no look comes between the two.
+    pub fn attach_reported(&self, report: impl FnOnce(&ServeStatus)) -> ServeStatus {
         let mut running = self.lock();
-        self.refresh(&mut running);
+        self.refresh(&mut running, false);
         if matches!(*running, Running::Stopped)
             && let Some(Recorded::Healthy(attached)) = self.recorded()
         {
             *running = attached;
         }
-        status_of(&mut running)
+        let status = status_of(&mut running);
+        report(&status);
+        status
     }
 
     /// Start (or attach to) the sidecar. Already running: returns the current status.
     pub fn start(&self, config: &ServeConfig) -> Result<ServeStatus, AppError> {
+        self.start_reported(config, |_| {})
+    }
+
+    /// [`start`](Self::start), with `report` run on a successful result before the state is
+    /// unlocked, as [`watch`](Self::watch) does: no look comes between the start and its
+    /// report, so a look made just before cannot be reported after it, nor the other way round.
+    pub fn start_reported(
+        &self,
+        config: &ServeConfig,
+        report: impl FnOnce(&ServeStatus),
+    ) -> Result<ServeStatus, AppError> {
         if config.port == 0 {
             return Err(AppError::invalid_input("invalid_port").with_detail("gateway_port"));
         }
         let mut running = self.lock();
         self.cancel_start.store(false, Ordering::SeqCst);
-        self.refresh(&mut running);
-        if !matches!(*running, Running::Stopped) {
-            return Ok(status_of(&mut running));
-        }
-        match self.recorded() {
-            Some(Recorded::Healthy(attached)) => {
-                *running = attached;
-                return Ok(status_of(&mut running));
+        self.refresh(&mut running, false);
+        if matches!(*running, Running::Stopped) {
+            match self.recorded() {
+                Some(Recorded::Healthy(attached)) => *running = attached,
+                recorded => {
+                    // Ours but not answering: replace it rather than fight it for the port.
+                    if let Some(Recorded::Unhealthy(pid)) = recorded {
+                        terminate_pid(pid, self.stop_grace);
+                    }
+                    self.remove_pid_file();
+                    *running = self.spawn(config)?;
+                }
             }
-            // Ours but not answering: replace it rather than fight it for the port.
-            Some(Recorded::Unhealthy(pid)) => terminate_pid(pid, self.stop_grace),
-            None => {}
         }
-        self.remove_pid_file();
-        *running = self.spawn(config)?;
-        Ok(status_of(&mut running))
+        let status = status_of(&mut running);
+        report(&status);
+        Ok(status)
     }
 
     /// SIGTERM, wait up to the grace period, then SIGKILL. Also stops a sidecar recorded by an
     /// earlier app run that this run never attached to.
     pub fn stop(&self) -> ServeStatus {
+        self.stop_reported(|_| {})
+    }
+
+    /// [`stop`](Self::stop), with `report` run on the result before the state is unlocked, as
+    /// [`watch`](Self::watch) does: no look or start comes between the stop and its report.
+    pub fn stop_reported(&self, report: impl FnOnce(&ServeStatus)) -> ServeStatus {
         // Before taking the lock: a start holding it notices and gives up.
         self.cancel_start.store(true, Ordering::SeqCst);
         let mut running = self.lock();
@@ -225,14 +265,28 @@ impl ServeSupervisor {
             },
         }
         self.remove_pid_file();
-        ServeStatus::stopped()
+        let status = ServeStatus::stopped();
+        report(&status);
+        status
     }
 
-    fn refresh(&self, running: &mut Running) {
+    /// Forget a sidecar that is gone. `watching` marks the watcher's look, which checks an
+    /// adopted sidecar with `ps` only every [`WATCH_PS_EVERY`] looks; every other look does.
+    fn refresh(&self, running: &mut Running, watching: bool) {
         let gone = match running {
             Running::Stopped => false,
             Running::Owned { child, .. } => !matches!(child.try_wait(), Ok(None)),
-            Running::Attached { pid, .. } => !alive(*pid),
+            Running::Attached {
+                pid, signal_looks, ..
+            } => {
+                if watching && *signal_looks + 1 < WATCH_PS_EVERY {
+                    *signal_looks += 1;
+                    !signalable(*pid)
+                } else {
+                    *signal_looks = 0;
+                    !alive(*pid)
+                }
+            }
         };
         if gone {
             *running = Running::Stopped;
@@ -260,6 +314,7 @@ impl ServeSupervisor {
                 pid: file.pid,
                 url: file.url,
                 team_listen: file.team_listen,
+                signal_looks: 0,
             })),
             _ => Some(Recorded::Unhealthy(file.pid)),
         }
@@ -475,6 +530,7 @@ fn status_of(running: &mut Running) -> ServeStatus {
             pid,
             url,
             team_listen,
+            ..
         } => ServeStatus {
             running: true,
             url: Some(url.clone()),
@@ -517,12 +573,14 @@ fn pid(pid: u32) -> Pid {
     Pid::from_raw(pid as i32)
 }
 
+/// The pid exists and we may signal it (a zombie counts).
+fn signalable(p: u32) -> bool {
+    kill(pid(p), None).is_ok()
+}
+
 /// Signalable by us and not a zombie.
 fn alive(p: u32) -> bool {
-    if kill(pid(p), None).is_err() {
-        return false;
-    }
-    !ps_info(p).is_some_and(|(stat, _)| stat.starts_with('Z'))
+    signalable(p) && !ps_info(p).is_some_and(|(stat, _)| stat.starts_with('Z'))
 }
 
 /// `(stat, full command line)` from `ps`, or `None` when the pid does not exist.

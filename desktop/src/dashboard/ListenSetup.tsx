@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { t, tLines, type CopyLine } from '../copy';
 import type { NetInterface, ServeStatus } from '../ipc/contract';
-import { DEFAULT_TEAM_PORT, defaultListenIp, interfaceLabel, parsePort } from '../lib/dash';
+import { addressChoices, DEFAULT_TEAM_PORT, defaultListenIp, parsePort } from '../lib/dash';
 import { useDisclosure } from '../ui/disclosure';
 import { SelectField, TextField } from '../ui/fields';
 import { Callout } from '../ui/form';
@@ -62,7 +62,7 @@ export function ListenSetup({ id, interfaces, onDone, onFailed, run, className, 
       <details open={networkDetails.open} onToggle={networkDetails.onToggle}>
         <summary onClick={networkDetails.onSummaryClick}>{t('sync.address')} <span className="mono">{ip ? `${ip}:${port}` : t('inv.pre1.off')}</span></summary>
       <div className="inline">
-        <SelectField id={`${id}-if`} label={t('set.listen.iface')} mono value={ip} options={interfaces.map((i) => ({ value: i.ip, label: interfaceLabel(i) }))}
+        <SelectField id={`${id}-if`} label={t('set.listen.iface')} mono value={ip} options={addressChoices(interfaces, ip)}
           onChange={(v) => { networkDetails.reveal(); setIp(v); setErr(null); }} style={{ flex: 1.7 }} />
         <TextField id={`${id}-port`} label={t('conn.ssh.port')} mono value={port} inputRef={portRef} inputMode="numeric" maxLength={5} style={{ flex: '0 0 84px' }}
           invalid={portInvalid} describedBy={`${id}-err`} onChange={(v) => { networkDetails.reveal(); setPort(v); setErr(null); }} />
