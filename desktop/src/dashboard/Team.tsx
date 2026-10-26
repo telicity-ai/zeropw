@@ -77,7 +77,7 @@ export function TeamPage({ intent, onIntent, incoming, onIncomingTaken }: {
   const sheetBusyRef = useRef(false);
   const reportBusy = (busy: boolean) => { sheetBusyRef.current = busy; setSheetBusy(busy); };
   useEffect(() => {
-    const requested = incoming ? 'join' : intent;
+    const requested = intent === 'invite' ? 'invite' : incoming ? 'join' : intent;
     if (!requested || sheetBusyRef.current || sheets.isOpen('invite')) return;
     if (requested === 'invite') { sheets.open({ kind: 'invite' }); onIntent(); }
     if (requested === 'join') { sheets.open({ kind: 'join', ...(incoming ? { incoming } : {}) }); onIncomingTaken(); onIntent(); }

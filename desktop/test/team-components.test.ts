@@ -23,13 +23,13 @@ const dash = { tick: 0, go: vi.fn(), bump: vi.fn(), relay: { run: (fn: () => Pro
 let animationFrames: Map<number, FrameRequestCallback>, frameId: number;
 let root: Root, host: HTMLDivElement, shared: boolean;
 let requestIncoming: (ref: string, p?: InvitePreview) => void;
-let leaveTeamForImport: () => void, returnToTeam: () => void;
+let leaveTeamForImport: () => void, returnToTeam: (intent?: Intent) => void;
 function Driver() {
   const [intent, setIntent] = useState<Intent>();
   const [incoming, setIncoming] = useState<{ ref: string; preview: InvitePreview } | null>(null);
   const [showTeam, setShowTeam] = useState(true);
   leaveTeamForImport = () => { setShowTeam(false); setIntent('import'); };
-  returnToTeam = () => { setShowTeam(true); setIntent(undefined); };
+  returnToTeam = (nextIntent) => { setShowTeam(true); setIntent(nextIntent); };
   requestIncoming = (ref, p = preview()) => { setIncoming({ ref, preview: p }); setIntent('join'); };
   if (!showTeam) return h('div', { id: 'import-page' });
   return h(TeamPage, { intent, onIntent: () => setIntent(undefined), incoming, onIncomingTaken: () => setIncoming(null) });
@@ -228,6 +228,20 @@ describe('invite component confirmation and failure recovery', () => {
     expect(ipc.mock.calls.filter(([command]) => command === 'team_join')).toHaveLength(0);
     await click(button(t('team.join.confirm')));
     expect(ipc).toHaveBeenCalledWith('team_join', expect.objectContaining({ ref: 'queued-before-import' }));
+  });
+  it('honors an explicit invite action before surfacing an already queued incoming join', async () => {
+    await render(); await invite();
+    await act(async () => requestIncoming('queued-for-later')); await settle();
+    await act(async () => leaveTeamForImport()); await settle();
+    await act(async () => returnToTeam('invite')); await settle();
+    expect(host.querySelector('#sheet-invite:not(.away)')).not.toBeNull();
+    expect(host.querySelector('#sheet-join:not(.away)')).toBeNull();
+    expect(ipc).not.toHaveBeenCalledWith('onetime_discard', { ref: 'queued-for-later' });
+    expect(ipc.mock.calls.filter(([command]) => command === 'team_join')).toHaveLength(0);
+    await click(button(t('common.cancel'), host.querySelector('#sheet-invite')!));
+    expect(host.querySelector('#sheet-join:not(.away)')).not.toBeNull();
+    await click(button(t('team.join.confirm')));
+    expect(ipc).toHaveBeenCalledWith('team_join', expect.objectContaining({ ref: 'queued-for-later' }));
   });
   it('maps an already-shared rejection and reloads without silently creating an invite', async () => {
     ipc.mockImplementation(async (command) => {
