@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Write the desktop app's THIRD_PARTY_LICENSES.md, or fail when a notice is missing.
 
-The desktop app redistributes four groups of third-party code, and the file covers each:
+The desktop app redistributes five groups of third-party code, and the file covers each:
 
 1. the Rust crates linked into the app executable (desktop/Cargo.toml, for --target),
    collected by scripts/dependency-licenses.py, with the reviewed notices of
@@ -13,7 +13,11 @@ The desktop app redistributes four groups of third-party code, and the file cove
    toolchain as this run;
 3. the Rust standard library linked into all four executables: the toolchain's own notices,
    which scripts/dependency-licenses.py adds to both collections; they must agree;
-4. the web interface: every package in package-lock.json that is not development-only, read
+4. the bundled zeropw-link daemon (remote sync between the user's Macs): the notices that
+   desktop/scripts/build-link-sidecar.py collected for it (--link-notices): zeropw-link itself,
+   the Go standard library and every Go module in the binary, for --target and for the commit
+   desktop/zeropw-link.json records;
+5. the web interface: every package in package-lock.json that is not development-only, read
    from node_modules (run `npm ci` first), plus the development-only build tools whose own
    code the production build emits into dist (Rolldown's runtime helper and its port of Vite's
    module-preload polyfill, which came from es-module-shims). The reviewed npm entries of
@@ -119,6 +123,30 @@ def sidecar_notices(path, target, rust_lock):
     current = hashlib.sha256(rust_lock.read_bytes()).hexdigest() if regular_file(rust_lock) else None
     if not recorded or recorded.group(1) != current:
         problems.append('sidecar notices: not collected from the current rust/Cargo.lock (run scripts/build-release.py --bin again)')
+    return text, problems
+
+
+def go_source(name, version):
+    return f'https://pkg.go.dev/{name}@{version}'
+
+
+def link_notices(path, target, record_path):
+    """The zeropw-link daemon's notices, checked against the target and the pinned commit."""
+    if not regular_file(path):
+        return None, [f'zeropw-link notices: {path.name} is missing (run desktop/scripts/build-link-sidecar.py first)']
+    text = path.read_text(encoding='utf-8')
+    problems = []
+    if f'Target: {target}.' not in text:
+        problems.append(f'zeropw-link notices: not collected for {target}')
+    try:
+        commit = json.loads(record_path.read_text(encoding='utf-8')).get('commit')
+    except (OSError, ValueError):
+        commit = None
+    if not commit or f'zeropw-link commit: {commit}.' not in text:
+        problems.append('zeropw-link notices: not collected for the commit desktop/zeropw-link.json records '
+                        '(run desktop/scripts/build-link-sidecar.py again)')
+    if not re.search(r'^## Go standard library \S+$', text, re.M):
+        problems.append('zeropw-link notices: no Go standard library notice')
     return text, problems
 
 
@@ -235,6 +263,8 @@ def main(argv=None):
     parser.add_argument('--target', required=True, help='target triple of the app build')
     parser.add_argument('--sidecar-notices', required=True, type=pathlib.Path,
                         help='THIRD_PARTY_LICENSES.md written by scripts/build-release.py --bin')
+    parser.add_argument('--link-notices', required=True, type=pathlib.Path,
+                        help='THIRD_PARTY_LICENSES.md written by desktop/scripts/build-link-sidecar.py')
     parser.add_argument('--output', required=True, type=pathlib.Path)
     parser.add_argument('--desktop-dir', type=pathlib.Path, default=DESKTOP, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
@@ -248,8 +278,9 @@ def main(argv=None):
     with tempfile.TemporaryDirectory() as temporary:
         cargo, problems = cargo_notices(desktop, args.target, pathlib.Path(temporary))
     sidecars, sidecar_problems = sidecar_notices(args.sidecar_notices, args.target, desktop.parent / 'rust/Cargo.lock')
+    link, link_problems = link_notices(args.link_notices, args.target, desktop / 'zeropw-link.json')
     npm, npm_problems, npm_count, tool_count = npm_notices(desktop, reviewed)
-    problems += sidecar_problems + npm_problems
+    problems += sidecar_problems + link_problems + npm_problems
     standard = None
     if cargo is not None and sidecars is not None:
         cargo, standard, problem = split_std(cargo, 'desktop Rust crates')
@@ -263,7 +294,7 @@ def main(argv=None):
             print('  ' + problem, file=sys.stderr)
         return 1
     mpl = sorted(set(mpl_components(cargo, crate_source) + mpl_components(sidecars, crate_source) +
-                     mpl_components(npm, npm_source)))
+                     mpl_components(link, go_source) + mpl_components(npm, npm_source)))
     parts = [
         '# ZeroPW desktop app: third-party notices\n',
         f'ZeroPW is under the MIT license (LICENSE, next to this file). The app for {args.target} '
@@ -273,15 +304,18 @@ def main(argv=None):
         '1. The app executable: Rust crates.\n'
         '2. The bundled zeropw-admin, zeropw_session and zeropw-agent: Rust crates and the '
         'statically linked OpenSSL.\n'
-        '3. The Rust standard library, statically linked into all four executables.\n'
-        f'4. The web interface: {npm_count} npm packages, including the Pretendard and JetBrains '
+        '3. The Rust standard library, statically linked into the app executable and those three.\n'
+        '4. The bundled zeropw-link daemon (remote sync between your Macs): Go modules and the Go '
+        'standard library.\n'
+        f'5. The web interface: {npm_count} npm packages, including the Pretendard and JetBrains '
         f'Mono fonts under the SIL Open Font License 1.1, and code from {tool_count} build tools.\n'
-        '5. Where to get the source of components under the Mozilla Public License 2.0.\n',
+        '6. Where to get the source of components under the Mozilla Public License 2.0.\n',
         '# 1. App executable: Rust crates\n', demote(cargo),
         '# 2. Bundled command-line binaries and OpenSSL\n', demote(sidecars),
         '# 3. Rust standard library\n', demote(standard),
-        '# 4. Web interface: npm packages\n', npm,
-        '# 5. Source code of MPL-2.0 components\n',
+        '# 4. Bundled zeropw-link daemon: Go modules and the Go standard library\n', demote(link),
+        '# 5. Web interface: npm packages\n', npm,
+        '# 6. Source code of MPL-2.0 components\n',
         'These components are distributed under the Mozilla Public License 2.0 in executable '
         'form, unmodified. Their source code is available at:\n',
         ''.join(f'- {name} {version}: {url}\n' for name, version, url in mpl) or 'None.\n',

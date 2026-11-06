@@ -19,12 +19,15 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 TARGET = 'aarch64-apple-darwin'
-SIDECARS = ('zeropw-admin', 'zeropw_session', 'zeropw-agent')
+RUST_SIDECARS = ('zeropw-admin', 'zeropw_session', 'zeropw-agent')
+SIDECARS = RUST_SIDECARS + ('zeropw-link',)
 EXECUTABLES = ('zeropw-desktop',) + SIDECARS
 BASE = 'zeropw-desktop-v0.1.0-aarch64-apple-darwin'
 DMG = BASE + '.dmg'
 LOG = BASE + '-verification.txt'
-SET_BY_PACKAGER = {'CI', 'MACOSX_DEPLOYMENT_TARGET', 'CARGO_TARGET_DIR', 'CARGO_ENCODED_RUSTFLAGS', 'CFLAGS'}
+SET_BY_PACKAGER = {'CI', 'MACOSX_DEPLOYMENT_TARGET', 'CARGO_TARGET_DIR', 'CARGO_ENCODED_RUSTFLAGS', 'CFLAGS', 'ZEROPW_LINK_SRC'}
+# The minimum macOS desktop/zeropw-link.json records for the Go-built zeropw-link daemon.
+LINK_MINIMUM = '13.0'
 
 
 def load_packager():
@@ -79,6 +82,8 @@ def write_tree(base, version='0.1.0', core_version=None, product_version=None):
         f'version = 4\n\n[[package]]\nname = "serde"\nversion = "1.0.0"\n\n'
         f'[[package]]\nname = "zeropw-desktop"\nversion = "{version}"\n\n'
         f'[[package]]\nname = "zeropw-desktop-core"\nversion = "{core_version or version}"\n')
+    (desktop / 'zeropw-link.json').write_text(json.dumps(
+        {'module': 'github.com/telicity-ai/zeropw-link', 'commit': 'b' * 40, 'go': 'go1.27.3', 'macos_minimum': LINK_MINIMUM}))
 
 
 class FakeRunner:
@@ -99,6 +104,8 @@ class FakeRunner:
         self.during_tauri = None  # called while "tauri build" runs
         self.private = set()      # Resources file names the image ships with mode 0600
         self.target = None
+        self.minos = {}           # executable name -> minos otool -l reports instead of the expected one
+        self.link_src = None      # the ZEROPW_LINK_SRC prepare-sidecars.sh received
 
     def result(self, command, code=0, stdout='', stderr=''):
         return subprocess.CompletedProcess(command, code, stdout, stderr)
@@ -137,7 +144,8 @@ class FakeRunner:
         if tool == 'otool' and command[1] == '-L':
             return self.result(command, stdout=self.otool.get(name, f'{relative}:\n\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0)\n'))
         if tool == 'otool':
-            return self.result(command, stdout='Load command 9\n      cmd LC_BUILD_VERSION\n  cmdsize 32\n platform 1\n    minos 11.0\n      sdk 26.0\n')
+            minos = self.minos.get(name, LINK_MINIMUM if name == 'zeropw-link' else '11.0')
+            return self.result(command, stdout=f'Load command 9\n      cmd LC_BUILD_VERSION\n  cmdsize 32\n platform 1\n    minos {minos}\n      sdk 26.0\n')
         if tool == 'lipo':
             return self.result(command, stdout='arm64\n')
         if tool == 'codesign' and '--remove-signature' in command:
@@ -167,10 +175,13 @@ class FakeRunner:
         notices = desktop / 'src-tauri/notices/THIRD_PARTY_LICENSES.md'
         notices.parent.mkdir(parents=True, exist_ok=True)
         notices.write_text('Synthetic third-party notices\n')
-        built = pathlib.Path(env['CARGO_TARGET_DIR']) / f'sidecars-{TARGET}/bin'
-        built.mkdir(parents=True, exist_ok=True)
+        self.link_src = env.get('ZEROPW_LINK_SRC')
+        target = pathlib.Path(env['CARGO_TARGET_DIR'])
         (desktop / 'src-tauri/binaries').mkdir(parents=True, exist_ok=True)
         for index, name in enumerate(SIDECARS):
+            # build-release.py writes the Rust sidecars, build-link-sidecar.py the zeropw-link daemon
+            built = target / (f'zeropw-link-{TARGET}/bin' if name == 'zeropw-link' else f'sidecars-{TARGET}/bin')
+            built.mkdir(parents=True, exist_ok=True)
             data = macho(b'synthetic sidecar ' + name.encode(), uuid=bytes([0x30 + index]) * 16)
             (built / name).write_bytes(data)
             bundled = data + (b'!' if self.bundled_differs else b'')
@@ -225,6 +236,8 @@ class PackageMacosTests(unittest.TestCase):
         self.work, self.out = self.base / 'work', self.base / 'out'
         self.module = load_packager()
         self.runner = FakeRunner(self)
+        self.link_src = self.base / 'zeropw-link'
+        (self.link_src / '.git').mkdir(parents=True)
         self.environ = {'PATH': '/usr/bin:/bin', 'HOME': str(self.base / 'home'), 'LANG': 'en_US.UTF-8',
                         'LC_CTYPE': 'UTF-8', 'TERM': 'xterm-256color',
                         # Not credentials, but not on the allowlist either: none reaches the build.
@@ -235,6 +248,7 @@ class PackageMacosTests(unittest.TestCase):
 
     def package(self, environ=None, extra=()):
         extra = list(extra) if '--tag' in extra else [*extra, '--tag', 'v0.1.0']
+        extra = extra if '--link-src' in extra else [*extra, '--link-src', str(self.link_src)]
         with contextlib.redirect_stdout(io.StringIO()):
             return self.module.main(['--work-dir', str(self.work), '--out-dir', str(self.out), *extra],
                                     environ=self.environ if environ is None else environ,
@@ -378,7 +392,10 @@ class PackageMacosTests(unittest.TestCase):
         log = (self.out / LOG).read_text()
         for name in EXECUTABLES:
             self.assertIn(f'{name}: local paths: none (checked: the home directory, the work directory, the checkout, '
-                          'CARGO_TARGET_DIR, CARGO_HOME, RUSTUP_HOME, /Volumes/, an account home (/Users/ or /home/))', log)
+                          'CARGO_TARGET_DIR, the zeropw-link checkout, CARGO_HOME, RUSTUP_HOME, /Volumes/, '
+                          'an account home (/Users/ or /home/))', log)
+        # the zeropw-link checkout reaches prepare-sidecars.sh only as the packager's own setting
+        self.assertEqual(self.runner.link_src, str(self.link_src))
 
     def test_bundled_executables_are_compared_with_the_built_ones(self):
         self.assertEqual(self.package(), 0)
@@ -386,8 +403,10 @@ class PackageMacosTests(unittest.TestCase):
         for name in EXECUTABLES:
             self.assertIn(f'{name}: unsigned, identical to the built binary (LC_UUID ', log)
         self.assertIn('zeropw-desktop (as linked by cargo, before bundling)', log)
-        for name in SIDECARS:
+        for name in RUST_SIDECARS:
             self.assertIn(f'  {name} (build-release.py --bin output; the src-tauri/binaries copy is identical)', log)
+        self.assertIn('  zeropw-link (build-link-sidecar.py output; the src-tauri/binaries copy is identical)', log)
+        self.assertIn(f'zeropw-link: LC_BUILD_VERSION minos {LINK_MINIMUM}', log)
         removals = [c for c, _, _ in self.runner.calls if c[0] == 'codesign' and '--remove-signature' in c]
         self.assertEqual(len(removals), 2 * len(EXECUTABLES))
         self.assertFalse((self.work / 'artifacts/unsigned').exists())
@@ -413,6 +432,34 @@ class PackageMacosTests(unittest.TestCase):
         self.runner.bundled_differs = True
         self.assertIn('is not the binary build-release.py produced', self.failure())
         self.assertNotIn('tauri', self.tools())
+
+    def test_the_link_daemon_is_checked_like_the_other_sidecars(self):
+        # its own minimum macOS (the Go toolchain's), and nothing older or newer passes
+        self.runner.minos = {'zeropw-link': '11.0'}
+        self.assertIn(f'zeropw-link minimum macOS is 11.0, not {LINK_MINIMUM}', self.failure())
+        shutil.rmtree(self.work, ignore_errors=True)
+        self.runner = FakeRunner(self)
+        self.runner.minos = {'zeropw-admin': LINK_MINIMUM}
+        self.assertIn(f'zeropw-admin minimum macOS is {LINK_MINIMUM}, not 11.0', self.failure())
+        shutil.rmtree(self.work, ignore_errors=True)
+        self.runner = FakeRunner(self)
+        self.runner.omit = {'zeropw-link'}
+        self.assertIn('ZeroPW.app/Contents/MacOS/zeropw-link is missing', self.failure())
+        shutil.rmtree(self.work, ignore_errors=True)
+        self.runner = FakeRunner(self)
+        self.runner.shipped = {'zeropw-link': macho(b'synthetic sidecar zeropw-linK', uuid=b'\x33' * 16)}
+        self.assertIn('zeropw-link is not the binary the build produced', self.failure())
+
+    def test_the_link_checkout_is_required_and_never_inherited(self):
+        with self.assertRaises(SystemExit) as raised:
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.module.main(['--work-dir', str(self.work), '--out-dir', str(self.out), '--tag', 'v0.1.0'],
+                                 environ=self.environ, runner=self.runner, system=('Darwin', 'arm64'))
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn('--link-src must be a git checkout', self.failure(extra=['--link-src', str(self.base)]))
+        # an inherited ZEROPW_LINK_SRC is refused with the other ZEROPW_* variables
+        self.assertIn('ZEROPW_LINK_SRC', self.failure(environ=dict(self.environ, ZEROPW_LINK_SRC=str(self.link_src))))
+        self.assertEqual(self.runner.calls, [])
 
     def test_entitlements_on_any_executable_or_the_bundle_fail(self):
         plist = plistlib.dumps({'com.apple.security.get-task-allow': True}).decode()
@@ -529,7 +576,7 @@ class PackageMacosTests(unittest.TestCase):
         self.assertEqual(self.runner.calls, [])
 
     def test_directories_inside_the_checkout_are_refused(self):
-        tag = ['--tag', 'v0.1.0']
+        tag = ['--tag', 'v0.1.0', '--link-src', str(self.link_src)]
         for argv, environ in ((['--work-dir', str(ROOT / 'desktop/target/package'), '--out-dir', str(self.out), *tag], self.environ),
                               (['--work-dir', str(self.work), '--out-dir', str(ROOT / 'dist'), *tag], self.environ),
                               (['--work-dir', str(self.work), '--out-dir', str(self.out), *tag],

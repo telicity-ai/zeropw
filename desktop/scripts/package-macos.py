@@ -2,7 +2,7 @@
 """Package the desktop app as a distributable Apple Silicon .dmg, with no signing credentials.
 
     env -i HOME="$HOME" PATH="$PATH" python3 desktop/scripts/package-macos.py \\
-        --work-dir DIR --out-dir DIR --tag vX.Y.Z
+        --work-dir DIR --out-dir DIR --tag vX.Y.Z --link-src ZEROPW_LINK_CHECKOUT
 
 Run it on an Apple Silicon Mac account that holds no vault, gateway, signer, coordinator,
 signing, notarization or release-publishing credentials, or on a host the owner authorized for
@@ -24,23 +24,27 @@ or logged-in tools. It:
    rust/Cargo.lock to agree on MAJOR.MINOR.PATCH, names the release vX.Y.Z after it, and refuses
    a --tag (required) other than vX.Y.Z; refuses to start without an absolute HOME;
 4. runs `npm ci --ignore-scripts`, then scripts/prepare-sidecars.sh (static OpenSSL sidecars
-   from scripts/build-release.py --bin, and THIRD_PARTY_LICENSES.md), then
+   from scripts/build-release.py --bin, the zeropw-link daemon that
+   scripts/build-link-sidecar.py builds offline from the --link-src checkout at the commit
+   desktop/zeropw-link.json records, passed to it as ZEROPW_LINK_SRC, and
+   THIRD_PARTY_LICENSES.md), then
    `tauri build --config src-tauri/tauri.bundle.conf.json --bundles app,dmg` with CI=true
    (no Finder layout step) and the release config's ad-hoc signature ("-"). Rust and C source
    paths are remapped (the checkout copy, the work directory, CARGO_TARGET_DIR, CARGO_HOME,
-   RUSTUP_HOME); the sidecars build-release.py produced must be byte-identical to the
-   src-tauri/binaries files Tauri bundles, and the SHA-256 of both and of the linked app
-   executable are recorded;
-5. verifies the image: `hdiutil verify`; mounted read-only, the app, the three sidecars,
+   RUSTUP_HOME); the sidecars build-release.py and build-link-sidecar.py produced must be
+   byte-identical to the src-tauri/binaries files Tauri bundles, and the SHA-256 of both and of
+   the linked app executable are recorded;
+5. verifies the image: `hdiutil verify`; mounted read-only, the app, the four sidecars,
    LICENSE and THIRD_PARTY_LICENSES.md are present; LICENSE and THIRD_PARTY_LICENSES.md are
    byte-identical to their sources; each of the four executables, with its code signature
    removed (`codesign --remove-signature` on copies), is byte-identical to the binary the build
    produced with its signature removed, except for the __LINKEDIT segment's vmsize, which
    codesign enlarges for its signature and signature removal leaves, and has the same LC_UUID;
    `otool -L` lists only /usr/lib and /System/Library libraries and no libssl or libcrypto;
-   each executable is arm64 with minimum macOS 11.0, ad hoc signed with the hardened runtime
+   each executable is arm64 with minimum macOS 11.0 (zeropw-link: the minimum
+   desktop/zeropw-link.json records, which the Go toolchain sets), ad hoc signed with the hardened runtime
    and no entitlements, and contains neither the home directory, the work directory, the
-   checkout, CARGO_TARGET_DIR, CARGO_HOME, RUSTUP_HOME, /Volumes/ nor any account home (/Users/,
+   checkout, the zeropw-link checkout, CARGO_TARGET_DIR, CARGO_HOME, RUSTUP_HOME, /Volumes/ nor any account home (/Users/,
    /home/); every file in Contents/MacOS and Contents/Resources is readable by every account; the bundle has no
    entitlements, sealed resources and passes `codesign --verify --deep --strict`; Info.plist
    has the version, minimum macOS and Local Network description; the image detaches.
@@ -69,7 +73,10 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 TARGET = 'aarch64-apple-darwin'
 PRODUCT = 'ZeroPW'
 APP = PRODUCT + '.app'
-SIDECARS = ('zeropw-admin', 'zeropw_session', 'zeropw-agent')
+RUST_SIDECARS = ('zeropw-admin', 'zeropw_session', 'zeropw-agent')
+# The remote-sync connection daemon, a Go program from the zeropw-link repository.
+LINK_SIDECAR = 'zeropw-link'
+SIDECARS = RUST_SIDECARS + (LINK_SIDECAR,)
 EXECUTABLES = ('zeropw-desktop',) + SIDECARS
 MINIMUM_MACOS = '11.0'
 RESOURCES = ('LICENSE', 'THIRD_PARTY_LICENSES.md')
@@ -174,6 +181,18 @@ def release_version(source):
         raise SystemExit('package-macos: the product and desktop version fields must agree on one '
                          'MAJOR.MINOR.PATCH:\n' + detail)
     return 'v' + values.pop()
+
+
+def link_minimum(source):
+    """The minimum macOS desktop/zeropw-link.json records for the zeropw-link daemon."""
+    try:
+        record = json.loads((source / 'desktop/zeropw-link.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        record = {}
+    minimum = record.get('macos_minimum') if isinstance(record, dict) else None
+    if not isinstance(minimum, str) or not re.fullmatch(r'[0-9]+\.[0-9]+', minimum):
+        raise SystemExit('package-macos: desktop/zeropw-link.json has no macos_minimum')
+    return minimum
 
 
 def artifact_names(version):
@@ -303,10 +322,11 @@ def no_entitlements(stdout):
         return False
 
 
-def verify_image(runner, staging, names, version, source, origins, needles):
+def verify_image(runner, staging, names, version, source, origins, needles, minimums=None):
     """Check the image as a user receives it. origins maps each executable to the binary the
-    build produced; needles are the local paths no executable may contain.
-    Returns (log text, problems)."""
+    build produced; needles are the local paths no executable may contain; minimums names an
+    executable's minimum macOS when it is not MINIMUM_MACOS. Returns (log text, problems)."""
+    minimums = minimums or {}
     check = Verification(runner, staging)
     result, _ = check.run(['hdiutil', 'verify', names['dmg']], staging)
     check.require(result.returncode == 0, 'hdiutil verify failed')
@@ -363,7 +383,8 @@ def verify_image(runner, staging, names, version, source, origins, needles):
             result = runner.run(['otool', '-l', relative], cwd=mount, check=False, capture=True)
             found = minimum_macos(result.stdout or '')
             check.lines.append(f'{name}: LC_BUILD_VERSION minos {found}\n')
-            check.require(found == MINIMUM_MACOS, f'{name} minimum macOS is {found}, not {MINIMUM_MACOS}')
+            wanted = minimums.get(name, MINIMUM_MACOS)
+            check.require(found == wanted, f'{name} minimum macOS is {found}, not {wanted}')
             result, output = check.run(['codesign', '-dv', '--verbose=4', relative], mount)
             flags = re.search(r'^CodeDirectory .*flags=0x[0-9a-f]+\(([^)]*)\)', output, re.M)
             check.require('Signature=adhoc' in output and flags is not None and {'adhoc', 'runtime'} <= set(flags.group(1).split(',')),
@@ -452,6 +473,8 @@ def main(argv=None, environ=None, runner=None, system=None):
                         help='directory outside the checkout that receives the verified artifacts')
     parser.add_argument('--tag', required=True,
                         help='the release tag the image is for; must be v<the product and desktop version>')
+    parser.add_argument('--link-src', required=True, type=pathlib.Path,
+                        help='git checkout of zeropw-link holding the commit desktop/zeropw-link.json records')
     args = parser.parse_args(argv)
     if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', args.tag):
         parser.error('--tag must be vMAJOR.MINOR.PATCH')
@@ -472,6 +495,9 @@ def main(argv=None, environ=None, runner=None, system=None):
     if (system or (platform.system(), platform.machine())) != ('Darwin', 'arm64'):
         raise SystemExit('package-macos: run on Apple Silicon macOS (target ' + TARGET + ')')
     work, out = args.work_dir.resolve(), args.out_dir.resolve()
+    link_src = args.link_src.resolve()
+    if not (link_src / '.git').exists():
+        raise SystemExit('package-macos: --link-src must be a git checkout of zeropw-link')
     cargo_target = pathlib.Path(environ.get('CARGO_TARGET_DIR') or work / 'target').resolve()
     for label, path in (('--work-dir', work), ('--out-dir', out), ('CARGO_TARGET_DIR', cargo_target)):
         if inside(path, ROOT) or inside(ROOT, path):
@@ -501,6 +527,8 @@ def main(argv=None, environ=None, runner=None, system=None):
 
     pairs = remap_pairs(environ, work, source, cargo_target)
     environment = build_environment(environ, cargo_target, pairs)
+    # Set here, after the credential check refused every inherited ZEROPW_* variable.
+    environment['ZEROPW_LINK_SRC'] = str(link_src)
     desktop = source / 'desktop'
     built = cargo_target / 'release/bundle/dmg' / f'{PRODUCT}_{version[1:]}_aarch64.dmg'
     notices = desktop / 'src-tauri/notices/THIRD_PARTY_LICENSES.md'
@@ -509,13 +537,15 @@ def main(argv=None, environ=None, runner=None, system=None):
     runner.run(['npm', 'ci', '--ignore-scripts', '--no-audit', '--no-fund'], cwd=desktop, env=environment)
     runner.run(['sh', 'scripts/prepare-sidecars.sh', TARGET], cwd=desktop, env=environment)
     # What Tauri bundles must be what build-release.py built and checked.
-    sidecar_build = cargo_target / f'sidecars-{TARGET}' / 'bin'
+    produced_by = {name: cargo_target / f'sidecars-{TARGET}' / 'bin' / name for name in RUST_SIDECARS}
+    produced_by[LINK_SIDECAR] = cargo_target / f'zeropw-link-{TARGET}' / 'bin' / LINK_SIDECAR
     origins = {'zeropw-desktop': cargo_target / 'release/zeropw-desktop'}
     sidecar_digests = {}
     for name in SIDECARS:
-        bundled, produced = desktop / 'src-tauri/binaries' / f'{name}-{TARGET}', sidecar_build / name
+        bundled, produced = desktop / 'src-tauri/binaries' / f'{name}-{TARGET}', produced_by[name]
+        builder = 'build-link-sidecar.py' if name == LINK_SIDECAR else 'build-release.py'
         if not bundled.is_file() or not produced.is_file() or bundled.read_bytes() != produced.read_bytes():
-            raise SystemExit(f'package-macos: src-tauri/binaries/{name}-{TARGET} is not the binary build-release.py produced')
+            raise SystemExit(f'package-macos: src-tauri/binaries/{name}-{TARGET} is not the binary {builder} produced')
         origins[name] = bundled
         sidecar_digests[name] = sha256(produced)
     runner.run([desktop / 'node_modules/.bin/tauri', 'build', '--config', 'src-tauri/tauri.bundle.conf.json',
@@ -529,7 +559,9 @@ def main(argv=None, environ=None, runner=None, system=None):
             raise SystemExit(f'package-macos: src-tauri/binaries/{name}-{TARGET} changed during the Tauri build')
     built_digests = [f'{sha256(origins["zeropw-desktop"])}  zeropw-desktop (as linked by cargo, before bundling)\n']
     built_digests += [f'{sidecar_digests[name]}  {name} (build-release.py --bin output; the src-tauri/binaries copy '
-                      'is identical)\n' for name in SIDECARS]
+                      'is identical)\n' for name in RUST_SIDECARS]
+    built_digests += [f'{sidecar_digests[LINK_SIDECAR]}  {LINK_SIDECAR} (build-link-sidecar.py output; the '
+                      'src-tauri/binaries copy is identical)\n']
     staging = work / 'artifacts'
     shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir()
@@ -538,8 +570,10 @@ def main(argv=None, environ=None, runner=None, system=None):
     (staging / names['checksum']).write_text(checksum_line(staging / names['dmg']))
 
     needles = BUILDER.local_path_needles(environment, [('the work directory', work), ('the checkout', ROOT),
-                                                       ('CARGO_TARGET_DIR', cargo_target)])
-    log, problems = verify_image(runner, staging, names, version, source, origins, needles)
+                                                       ('CARGO_TARGET_DIR', cargo_target),
+                                                       ('the zeropw-link checkout', link_src)])
+    log, problems = verify_image(runner, staging, names, version, source, origins, needles,
+                                 {LINK_SIDECAR: link_minimum(source)})
     header = (f'ZeroPW desktop {version} for {TARGET}\nsource commit: {commit}\n'
               f'product version: {version} (rust/Cargo.toml, rust/Cargo.lock and every desktop version field)\n'
               f'release tag: {args.tag} (matches)\n'
