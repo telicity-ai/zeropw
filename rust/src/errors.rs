@@ -62,6 +62,10 @@ pub struct Error {
     pub name: Cow<'static, str>,
     pub reason: Cow<'static, str>,
     pub detail: String,
+    /// A structured `detail` (identifiers only, never secret material):
+    /// when set, [`Error::to_dict`] prints this object as `detail` instead of
+    /// the text, which stays the [`Error::message`] form.
+    pub detail_fields: Option<Box<Map<String, Value>>>,
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -85,6 +89,7 @@ impl Error {
             name: Cow::Borrowed(class.class_name()),
             reason,
             detail: detail.into(),
+            detail_fields: None,
         }
     }
 
@@ -127,6 +132,21 @@ impl Error {
         self
     }
 
+    /// A structured detail of fixed keys and identifier values: printed as
+    /// the `detail` object, with `key=value` pairs as the text form.
+    pub fn with_detail_fields(mut self, fields: Map<String, Value>) -> Self {
+        self.detail = fields
+            .iter()
+            .map(|(key, value)| match value {
+                Value::String(text) => format!("{key}={text}"),
+                other => format!("{key}={}", if other.is_null() { "null" } else { "-" }),
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        self.detail_fields = Some(Box::new(fields));
+        self
+    }
+
     pub fn is(&self, class: ErrorClass) -> bool {
         self.class == class
     }
@@ -145,7 +165,9 @@ impl Error {
         let mut payload = Map::new();
         payload.insert("error".into(), Value::String(self.name.to_string()));
         payload.insert("reason".into(), Value::String(self.reason.to_string()));
-        if !self.detail.is_empty() {
+        if let Some(fields) = &self.detail_fields {
+            payload.insert("detail".into(), Value::Object((**fields).clone()));
+        } else if !self.detail.is_empty() {
             payload.insert("detail".into(), Value::String(self.detail.clone()));
         }
         Value::Object(payload)
@@ -178,6 +200,22 @@ mod tests {
         let err = Error::new(ErrorClass::StateError, "state_missing", "/tmp/x");
         assert_eq!(err.message(), "state_missing: /tmp/x");
         assert_eq!(err.to_dict()["detail"], "/tmp/x");
+    }
+
+    #[test]
+    fn structured_detail_prints_as_an_object() {
+        let mut fields = Map::new();
+        fields.insert("self_fingerprint".into(), Value::String("aaaa".into()));
+        fields.insert("inviter_fingerprint".into(), Value::String("bbbb".into()));
+        let err = Error::state("join_pending_approval").with_detail_fields(fields);
+        let dict = err.to_dict();
+        assert_eq!(dict["detail"]["self_fingerprint"], "aaaa");
+        assert_eq!(dict["detail"]["inviter_fingerprint"], "bbbb");
+        assert_eq!(
+            err.message(),
+            "join_pending_approval: self_fingerprint=aaaa inviter_fingerprint=bbbb"
+        );
+        assert!(Error::state("x").to_dict().get("detail").is_none());
     }
 
     #[test]
