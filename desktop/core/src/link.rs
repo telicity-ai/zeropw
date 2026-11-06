@@ -748,6 +748,11 @@ impl LinkSupervisor {
         self.bin.is_file()
     }
 
+    /// The app has asked for the daemon (a start or adoption) and not stopped it since.
+    pub fn wanted(&self) -> bool {
+        self.lock().wanted
+    }
+
     /// The process view; a daemon that died since the last look is noticed (not restarted).
     pub fn process(&self) -> LinkProcess {
         let mut run = self.lock();

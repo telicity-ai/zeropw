@@ -1175,3 +1175,38 @@ fn link_status_reports_a_mac_removed_at_the_service() {
     // enrolled already (and removed): no second enrolment is tried
     assert_eq!(e.reason, "link_already_enrolled");
 }
+
+#[test]
+fn a_vault_made_in_this_app_run_brings_the_link_daemon_up_with_the_relay() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    common::install_fake_link_daemon(&fx);
+    // no vault yet: nothing to sync, no daemon
+    assert!(common::link_spawns(&fx).is_empty());
+    let code = core.recovery_generate().unwrap();
+    core.vault_init(VaultInitIn {
+        admin_passphrase: pass(),
+        recovery: RecoveryInput::Ref(code.reference),
+    })
+    .unwrap();
+    let spawns = common::link_spawns(&fx);
+    assert_eq!(spawns.len(), 1);
+    assert_eq!(spawns[0][0], "daemon");
+    assert_eq!(spawns[0][1], "--state");
+    assert_eq!(
+        std::path::PathBuf::from(&spawns[0][2]),
+        fx.paths.link_state_dir()
+    );
+    // this fake daemon never answers on its socket: serve runs without the link socket
+    assert!(
+        !fx.last("serve")
+            .args()
+            .iter()
+            .any(|a| a.starts_with("--link-socket"))
+    );
+    // a later relay start does not start a second daemon
+    core.serve_stop();
+    core.serve_start().unwrap();
+    assert_eq!(common::link_spawns(&fx).len(), 1);
+    core.shutdown();
+}

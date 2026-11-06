@@ -991,6 +991,11 @@ impl Core {
     /// With `--link-socket` whenever the link daemon answers (docs/remote-sync.md §3.1).
     fn start_serve(&self) -> Result<ServeStatus, AppError> {
         let settings = self.settings_get()?;
+        // a vault made or restored in this app run: the link daemon comes up with the relay (at
+        // app start `link_startup` already ran; once wanted, the watch restarts it)
+        if !self.link.wanted() {
+            self.link_startup();
+        }
         let link_socket = self.link.ready().then(|| self.paths.link_socket());
         self.serve.start_reported(
             &ServeConfig {
