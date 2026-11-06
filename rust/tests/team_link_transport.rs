@@ -8,7 +8,8 @@
 //! peer's `zpl:` address from its inbound session, rotation between an
 //! unreachable `HOST:PORT` and a working `zpl:` address in both directions,
 //! a daemon that is absent, killed or restarted, malformed, oversized,
-//! partial and unanswered daemon replies, one inbound cap for TCP and link,
+//! partial and unanswered daemon replies, a bounded `accept` pool that backs
+//! off from a refusing daemon, one inbound cap for TCP and link,
 //! and that neither the wire capture nor the daemon ever sees plaintext.
 //! Synthetic credentials only.
 mod link_daemon;
@@ -556,6 +557,66 @@ fn malformed_daemon_replies_fail_closed() {
     da.set_fault(None);
     wait("the workers are waiting again", || da.waiting_accepts() > 0);
     assert_eq!(dial_reason(&b, &target, &env), "ok");
+}
+
+/// The `accept` pool holds exactly its configured number of requests at the
+/// daemon, retries a daemon that refuses every `accept` with the doubling
+/// backoff rather than in a hot loop, and sends nothing once shut down. A
+/// link-only listener needs a socket, and a transport listens once.
+#[test]
+fn the_accept_pool_is_bounded_backs_off_and_stops() {
+    use std::sync::atomic::Ordering::SeqCst;
+    let net = LinkNet::new();
+    let da = net.daemon("a");
+    let close_it = || -> zeropw::team::transport::OnSession {
+        Arc::new(|session: Arc<dyn Session>| session.close())
+    };
+
+    let unlinked = LinkTransport::new(DeviceKey::generate(), nobody(), 8, None).unwrap();
+    assert_eq!(
+        unlinked.listen("", close_it()).unwrap_err().reason,
+        "link_socket_required"
+    );
+
+    let transport = LinkTransport::with_config(
+        DeviceKey::generate(),
+        nobody(),
+        8,
+        Some(da.socket.clone()),
+        fast_link(),
+    )
+    .unwrap();
+    transport.listen("", close_it()).unwrap();
+    assert_eq!(
+        transport.listen("", close_it()).unwrap_err().reason,
+        "team_already_listening"
+    );
+    wait("the workers wait at the daemon", || {
+        da.waiting_accepts() == 2
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(da.waiting_accepts(), 2);
+    assert_eq!(da.accept_requests.load(SeqCst), 2);
+
+    // Every `accept` is refused from now on.
+    da.set_fault(Some(Fault::Reply(
+        b"{\"ok\":false,\"error\":\"not_enrolled\"}\n".to_vec(),
+    )));
+    da.kill();
+    da.start();
+    let before = da.accept_requests.load(SeqCst);
+    std::thread::sleep(Duration::from_secs(2));
+    let retried = da.accept_requests.load(SeqCst) - before;
+    // Two workers, 20 ms doubling to 200 ms: about 26 requests in 2 s; a
+    // loop without backoff would make thousands.
+    assert!((4..=60).contains(&retried), "{retried} accept retries");
+
+    let started = Instant::now();
+    transport.shutdown();
+    assert!(started.elapsed() < Duration::from_secs(5));
+    let after = da.accept_requests.load(SeqCst);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(da.accept_requests.load(SeqCst), after);
 }
 
 /// TCP and link inbound streams share the one connection cap; outbound and
