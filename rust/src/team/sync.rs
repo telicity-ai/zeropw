@@ -7694,6 +7694,10 @@ impl TeamSync {
                 .get_mut(env_id)
         {
             env.sync.written = Some(peers);
+            // The interval runs from the end of this write: an atomic replace
+            // slowed by a busy disk must not let the next one follow it
+            // closer than the interval.
+            env.sync.checked = Some(Instant::now());
         }
     }
     pub fn status(&self, env_id: &str) -> Result<Value> {
