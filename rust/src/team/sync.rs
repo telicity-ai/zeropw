@@ -4120,6 +4120,27 @@ mod retry_tests {
         assert_eq!(transport.take_dialed(), [LAN, LINK]);
     }
 
+    /// PEERS gossip stays free-form within its 128-byte bound: a `zpl:`
+    /// address of an active member becomes a dial candidate like any other.
+    #[test]
+    fn peers_gossip_carries_link_addresses_within_the_bound() {
+        let f = owner_with_admin_peer();
+        let peer = f.peer_key.fingerprint().unwrap();
+        f.team.poll().unwrap();
+        assert!(f.team.is_active_member(&f.env_id, &peer));
+        let long = format!("zpl:{}", "a".repeat(125));
+        assert_eq!(long.len(), 129);
+        f.team.handle_peers(
+            &f.env_id,
+            &json!({"type":"PEERS","peers":{(peer.clone()): [LINK, LAN, long, ""]}}),
+        );
+        let guard = f.team.envs.lock().unwrap();
+        assert_eq!(
+            guard[&f.env_id].candidate_addresses[&peer],
+            BTreeSet::from([LAN.to_owned(), LINK.to_owned()])
+        );
+    }
+
     /// A removed member's cursor goes with its addresses and backoff.
     #[test]
     fn member_removal_forgets_the_dial_cursor() {

@@ -53,9 +53,9 @@ pub type InviteProof = Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync>;
 pub struct SessionClosed(pub &'static str);
 
 #[derive(Debug, Clone)]
-pub(crate) struct HandshakeFailed {
-    pub(crate) reason: &'static str,
-    pub(crate) fingerprint: Option<String>,
+struct HandshakeFailed {
+    reason: &'static str,
+    fingerprint: Option<String>,
 }
 impl HandshakeFailed {
     fn new(reason: &'static str) -> Self {
@@ -137,7 +137,7 @@ pub(crate) trait ByteChannel: Send + Sync {
     fn close(&self);
 }
 
-pub(crate) struct EncryptedSession {
+struct EncryptedSession {
     channel: Arc<dyn ByteChannel>,
     peer: DeviceRecord,
     env_id: String,
@@ -1163,6 +1163,59 @@ mod deadline_tests {
         assert!(started.elapsed() < Duration::from_millis(200));
         drop(reader);
         writer.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod unix_channel_tests {
+    use super::*;
+
+    /// The link daemon's Unix stream gets the TCP channel's framing, frame
+    /// limit and absolute deadlines (docs/remote-sync.md §3.1).
+    #[test]
+    fn a_unix_stream_channel_frames_bounds_and_times_out_like_tcp() {
+        let (left, right) = UnixStream::pair().unwrap();
+        let (a, b) = (
+            socket_channel(left).unwrap(),
+            socket_channel(right).unwrap(),
+        );
+        a.send(b"synthetic-frame").unwrap();
+        assert_eq!(
+            b.recv(Duration::from_secs(2)).unwrap().as_deref(),
+            Some(&b"synthetic-frame"[..])
+        );
+        assert_eq!(b.recv(Duration::from_millis(50)), Ok(None));
+        assert_eq!(
+            a.send(&vec![0u8; WIRE_FRAME_LIMIT + 1]),
+            Err(SessionClosed("frame_too_large"))
+        );
+        a.close();
+        assert_eq!(
+            b.recv(Duration::from_secs(2)),
+            Err(SessionClosed("peer_closed"))
+        );
+
+        let (mut raw, right) = UnixStream::pair().unwrap();
+        let channel = socket_channel(right).unwrap();
+        raw.write_all(&((WIRE_FRAME_LIMIT + 1) as u32).to_be_bytes())
+            .unwrap();
+        assert_eq!(
+            channel.recv(Duration::from_secs(2)),
+            Err(SessionClosed("frame_too_large"))
+        );
+
+        // A header promising more than ever arrives: the frame deadline
+        // (the receive timeout plus one socket operation) ends it.
+        let (mut raw, mut right) = UnixStream::pair().unwrap();
+        raw.write_all(&8u32.to_be_bytes()).unwrap();
+        raw.write_all(b"abc").unwrap();
+        let mut target = [0u8; 10];
+        let started = Instant::now();
+        assert_eq!(
+            read_exact_until(&mut right, &mut target, started + Duration::from_millis(75)),
+            Err(SocketReadError::Timeout)
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 }
 

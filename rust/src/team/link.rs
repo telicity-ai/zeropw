@@ -61,6 +61,8 @@ pub const PATH_LABELS: [&str; 4] = ["direct", "relay-udp", "relay-tcp", "relay-t
 
 /// Beyond the daemon's own `timeout_ms`, how long a `dial` reply may take.
 const DIAL_REPLY_MARGIN: Duration = Duration::from_secs(5);
+/// The longest `timeout_ms` a dial asks the daemon for.
+const MAX_DIAL_TIMEOUT: Duration = Duration::from_secs(120);
 /// How long an `accept` reply may take once its first byte arrived.
 const REPLY_COMPLETION: Duration = Duration::from_secs(SOCKET_OP_TIMEOUT_SECONDS);
 /// How often a blocked `accept` wakes up to notice a stop.
@@ -296,7 +298,7 @@ impl LinkClient {
 
     /// `{"op":"dial","peer":ID,"svc":"zeropw-team","timeout_ms":N}`: a
     /// stream to link device `peer`, whose reply must arrive within
-    /// `timeout` plus a margin.
+    /// `timeout` (at most two minutes) plus a margin.
     pub fn dial(
         &self,
         peer: &str,
@@ -305,13 +307,14 @@ impl LinkClient {
         if !valid_link_device_id(peer) {
             return Err(SessionClosed(LINK_ADDRESS_INVALID));
         }
+        let timeout = timeout.min(MAX_DIAL_TIMEOUT);
         let timeout_ms = u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX);
         let mut stream = self.connect()?;
         Self::send_request(
             &mut stream,
             &json!({"op":"dial","peer":peer,"svc":LINK_SERVICE,"timeout_ms":timeout_ms}),
         )?;
-        let deadline = Instant::now() + timeout.saturating_add(DIAL_REPLY_MARGIN);
+        let deadline = Instant::now() + timeout + DIAL_REPLY_MARGIN;
         let line = read_reply_line(&mut stream, ReplyWait::Until(deadline))?;
         let Connected { path, peer } = parse_reply(&line, false)?;
         Ok(LinkStream { stream, path, peer })
