@@ -3,11 +3,12 @@
 //! - Paths: state and settings live in the core's app data folder
 //!   (`~/Library/Application Support/ZeroPW` on macOS). The zeropw binaries are the ones
 //!   shipped next to this executable; debug builds may point elsewhere with `ZEROPW_BIN_DIR`.
-//! - Launch: adopt a serve sidecar left by an earlier run, otherwise start one when a vault
-//!   exists. Closing the window keeps the app (and so serve and the agent terminals) running;
+//! - Launch: start (or adopt) the zeropw-link daemon when a vault exists, then adopt a serve
+//!   sidecar left by an earlier run, otherwise start one when a vault exists. Closing the window keeps the app (and so serve and the agent terminals) running;
 //!   the window comes back from the Dock (macOS) or by launching the app again. Quitting the
 //!   app (the app menu; on Linux also `zeropw-desktop --quit`) clears a copied value still on
-//!   the clipboard, stops the terminals and everything started in them, and SIGTERMs serve.
+//!   the clipboard, stops the terminals and everything started in them, and SIGTERMs serve and
+//!   then the link daemon.
 //! - The single main window is created here from tauri.conf.json. It may only navigate within
 //!   the app's own origin and may not open new windows. Before any page script runs,
 //!   `freeze_prototype.js` freezes `Object.prototype` with override taming. Tauri's own
@@ -228,10 +229,17 @@ fn setup(app: &mut App, quit_only: bool) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Adopt a sidecar from an earlier run; otherwise start one if a vault exists. Failures are
-/// left for the UI (`serve_status`, `serve_start`).
+/// The link daemon first (adopted or started when a vault exists), so serve gets
+/// `--link-socket` from the start; then adopt a serve sidecar from an earlier run, otherwise
+/// start one if a vault exists. Failures are left for the UI (`serve_status`, `serve_start`,
+/// `link_status`); an adopted serve without the link socket is restarted with it there.
 fn start_serve(core: &Core) {
-    if core.startup().running || !core.initialized() {
+    core.link_startup();
+    if core.startup().running {
+        core.relink_serve();
+        return;
+    }
+    if !core.initialized() {
         return;
     }
     if let Err(e) = core.serve_start() {

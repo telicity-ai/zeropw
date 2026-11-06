@@ -87,16 +87,43 @@ impl AppError {
                 return None;
             }
             let mut out = Self::new(error, reason);
-            if let Some(detail) = object.get("detail").and_then(|d| d.as_str()) {
-                out.detail = sanitize_detail(detail, secrets);
+            match object.get("detail") {
+                Some(serde_json::Value::String(detail)) => {
+                    out.detail = sanitize_detail(detail, secrets);
+                }
+                Some(serde_json::Value::Object(fields)) => out.detail = fingerprint_detail(fields),
+                _ => {}
             }
             Some(out)
         })
     }
 }
 
+/// An object `detail` keeps only its `*_fingerprint` fields with device fingerprint values
+/// (`team join` failing with `join_pending_approval` carries `self_fingerprint` and
+/// `inviter_fingerprint`, docs/remote-sync.md §3.2), as compact JSON with sorted keys. Those are
+/// public identifiers the user compares on both screens; any other field is dropped.
+fn fingerprint_detail(fields: &serde_json::Map<String, serde_json::Value>) -> Option<String> {
+    let kept: std::collections::BTreeMap<&str, &str> = fields
+        .iter()
+        .filter(|(key, _)| key.ends_with("_fingerprint") && key.len() <= MAX_CODE_CHARS)
+        .filter_map(|(key, value)| Some((key.as_str(), value.as_str()?)))
+        .filter(|(_, value)| is_fingerprint(value))
+        .collect();
+    if kept.is_empty() {
+        return None;
+    }
+    serde_json::to_string(&kept).ok()
+}
+
+/// A team device fingerprint: 26 characters of lowercase unpadded base32
+/// (rust/src/team/identity.rs `fingerprint`).
+pub fn is_fingerprint(text: &str) -> bool {
+    text.len() == 26 && text.bytes().all(|b| matches!(b, b'a'..=b'z' | b'2'..=b'7'))
+}
+
 /// Error classes and reason codes are short identifiers; anything else is not a CLI error line.
-fn is_code(text: &str) -> bool {
+pub(crate) fn is_code(text: &str) -> bool {
     !text.is_empty()
         && text.len() <= MAX_CODE_CHARS
         && text
@@ -169,6 +196,30 @@ mod tests {
         assert!(AppError::from_admin_stderr(br#"{"error":"A B","reason":"x"}"#, &[]).is_none());
         assert!(AppError::from_admin_stderr(br#"{"error":"A"}"#, &[]).is_none());
         assert!(AppError::from_admin_stderr(b"", &[]).is_none());
+    }
+
+    #[test]
+    fn an_object_detail_keeps_only_fingerprints() {
+        let stderr = br#"{"error":"StateError","reason":"join_pending_approval","detail":{"self_fingerprint":"abcdefghijklmnopqrstuvwxyz","inviter_fingerprint":"zyxwvutsrqponmlkjihgfedcba","invite":"synthetic-invite-secret","note_fingerprint":"not a fingerprint"}}"#;
+        let e = AppError::from_admin_stderr(stderr, &[]).unwrap();
+        assert_eq!(e.reason, "join_pending_approval");
+        assert_eq!(
+            e.detail.as_deref(),
+            Some(
+                r#"{"inviter_fingerprint":"zyxwvutsrqponmlkjihgfedcba","self_fingerprint":"abcdefghijklmnopqrstuvwxyz"}"#
+            )
+        );
+        assert!(!e.to_string().contains("synthetic-invite-secret"));
+        let only_other = br#"{"error":"X","reason":"y","detail":{"invite":"synthetic"}}"#;
+        assert_eq!(
+            AppError::from_admin_stderr(only_other, &[]).unwrap().detail,
+            None
+        );
+        let upper = br#"{"error":"X","reason":"y","detail":{"self_fingerprint":"ABCDEFGHIJKLMNOPQRSTUVWXYZ"}}"#;
+        assert_eq!(
+            AppError::from_admin_stderr(upper, &[]).unwrap().detail,
+            None
+        );
     }
 
     #[test]

@@ -8,6 +8,8 @@
 //! - [`terminal`]: the in-app PTY terminals (caller token in the environment), kept in a
 //!   registry with a bounded output ring so a view can reattach.
 //! - [`commands`]: [`Core`], one method per IPC command in desktop/src/ipc/contract.ts.
+//! - [`link`], [`pairing`], [`devices`]: remote sync between this user's Macs (the zeropw-link
+//!   daemon sidecar and its socket, pairing codes, the paired-Mac records).
 //! - [`settings`], [`strength`], [`recovery`], [`sshkey`], [`netif`]: supporting pieces.
 
 #![deny(unsafe_code)]
@@ -16,10 +18,13 @@ pub mod secret;
 
 pub mod admin;
 pub mod commands;
+pub mod devices;
 pub mod error;
 pub mod hooks;
+pub mod link;
 pub mod netif;
 pub mod onetime;
+pub mod pairing;
 pub mod paths;
 pub mod recovery;
 pub mod serve;

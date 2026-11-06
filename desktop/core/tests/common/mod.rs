@@ -103,6 +103,20 @@ impl Fixture {
         }
     }
 
+    /// Answer only the `nth` call (1-based) with this key.
+    pub fn respond_nth(&self, key: &str, nth: usize, stdout: &str) {
+        fs::write(self.response(&format!("{key}.{nth}"), "json"), stdout).unwrap();
+    }
+
+    pub fn respond_error_nth(&self, key: &str, nth: usize, stderr: &str, exit: i32) {
+        fs::write(self.response(&format!("{key}.{nth}"), "stderr"), stderr).unwrap();
+        fs::write(
+            self.response(&format!("{key}.{nth}"), "exit"),
+            exit.to_string(),
+        )
+        .unwrap();
+    }
+
     pub fn respond_sleep(&self, key: &str, seconds: u32) {
         fs::write(self.response(key, "sleep"), seconds.to_string()).unwrap();
     }
@@ -285,4 +299,139 @@ pub fn ok<T>(result: Result<T, AppError>) -> T {
         Ok(v) => v,
         Err(e) => panic!("unexpected error: {e}"),
     }
+}
+
+/// A stand-in for the zeropw-link daemon's socket (zeropw-link protocol §5): one JSON request
+/// line per connection, answered by `handler` (`None`: never answer). Every request line is
+/// recorded verbatim. Synthetic values only.
+pub struct FakeLink {
+    pub path: PathBuf,
+    pub lines: Arc<Mutex<Vec<String>>>,
+    stop: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl FakeLink {
+    pub fn start(
+        path: &Path,
+        handler: impl Fn(&Value) -> Option<Value> + Send + Sync + 'static,
+    ) -> Self {
+        use std::os::unix::net::UnixListener;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        if let Some(dir) = path.parent() {
+            fs::create_dir_all(dir).unwrap();
+            fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let _ = fs::remove_file(path);
+        let listener = UnixListener::bind(path).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let lines = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let handler = Arc::new(handler);
+        let (l, s) = (lines.clone(), stop.clone());
+        thread::spawn(move || {
+            while !s.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((stream, _)) => {
+                        let (l, h) = (l.clone(), handler.clone());
+                        thread::spawn(move || {
+                            use std::io::BufRead;
+                            stream.set_nonblocking(false).unwrap();
+                            let mut reader = std::io::BufReader::new(&stream);
+                            let mut line = String::new();
+                            if reader.read_line(&mut line).is_err() {
+                                return;
+                            }
+                            l.lock().unwrap().push(line.trim_end().to_owned());
+                            let request: Value =
+                                serde_json::from_str(line.trim()).unwrap_or(Value::Null);
+                            match h(&request) {
+                                Some(answer) => {
+                                    let mut out = serde_json::to_vec(&answer).unwrap();
+                                    out.push(b'\n');
+                                    let _ = (&stream).write_all(&out);
+                                }
+                                None => thread::sleep(Duration::from_secs(5)),
+                            }
+                        });
+                    }
+                    Err(_) => thread::sleep(Duration::from_millis(5)),
+                }
+            }
+        });
+        Self {
+            path: path.to_path_buf(),
+            lines,
+            stop,
+        }
+    }
+
+    pub fn requests(&self) -> Vec<Value> {
+        self.lines
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|l| serde_json::from_str(l).unwrap_or(Value::Null))
+            .collect()
+    }
+
+    pub fn ops(&self) -> Vec<String> {
+        self.requests()
+            .iter()
+            .map(|r| r["op"].as_str().unwrap_or("").to_owned())
+            .collect()
+    }
+
+    pub fn raw(&self) -> String {
+        self.lines.lock().unwrap().join("\n")
+    }
+}
+
+impl Drop for FakeLink {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+/// Copy a fake zeropw-link daemon into the fixture's bin folder: it records its argv and
+/// environment to `link-calls/<n>.{argv,env}`, exits on SIGTERM, and exits on its own after
+/// `responses/link.exit_after` seconds when that file exists.
+pub fn install_fake_link_daemon(fx: &Fixture) {
+    let script = r#"#!/bin/sh
+dir=$(cd "$(dirname "$0")" && pwd)
+calls="$dir/link-calls"
+mkdir -p "$calls"
+n=$(( $(cat "$calls/count" 2>/dev/null || echo 0) + 1 ))
+echo "$n" > "$calls/count.$$" && mv "$calls/count.$$" "$calls/count"
+: > "$calls/$n.argv"
+for a in "$@"; do printf '%s\n' "$a" >> "$calls/$n.argv"; done
+env > "$calls/$n.env"
+echo "fake link daemon $n started" >&2
+trap 'exit 0' TERM
+if [ -f "$dir/responses/link.exit_after" ]; then
+  sleep "$(cat "$dir/responses/link.exit_after")"
+  exit 3
+fi
+while :; do sleep 1; done
+"#;
+    let path = fx.paths.link_bin();
+    fs::write(&path, script).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// Daemon spawns recorded by the fake zeropw-link: argv per spawn.
+pub fn link_spawns(fx: &Fixture) -> Vec<Vec<String>> {
+    let calls = fx.paths.bin_dir.join("link-calls");
+    let count: usize = fs::read_to_string(calls.join("count"))
+        .map(|s| s.trim().parse().unwrap_or(0))
+        .unwrap_or(0);
+    (1..=count)
+        .map(|n| {
+            fs::read_to_string(calls.join(format!("{n}.argv")))
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_owned)
+                .collect()
+        })
+        .collect()
 }

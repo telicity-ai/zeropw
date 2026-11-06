@@ -6,6 +6,10 @@
 //!   settings.json        0600  app settings, never inside state/
 //!   serve.json           0600  pid file of the serve sidecar
 //!   serve.log            0600  serve's stderr
+//!   link/                0700  `zeropw-link daemon --state` (device key, link.sock)
+//!   link.json            0600  pid file of the zeropw-link daemon sidecar
+//!   link.log             0600  the daemon's stderr (it logs no codes, tokens or payloads)
+//!   devices.json         0600  which team member is which paired Mac (no secrets)
 //!   zsh/                 0700  the in-app terminal's zsh startup files (0600), no secrets
 //! ```
 
@@ -19,6 +23,9 @@ use crate::error::AppError;
 
 pub const ADMIN_BIN: &str = "zeropw-admin";
 pub const AGENT_BIN: &str = "zeropw-agent";
+/// The remote-sync connection daemon, a separate program shipped beside the others
+/// (docs/remote-sync.md §3.1). The core talks to it only through its socket.
+pub const LINK_BIN: &str = "zeropw-link";
 /// Development override for the folder holding zeropw-admin / zeropw-agent (§4.1).
 pub const BIN_DIR_ENV: &str = "ZEROPW_BIN_DIR";
 
@@ -53,6 +60,29 @@ impl AppPaths {
         self.app_data_dir.join("serve.log")
     }
 
+    /// `zeropw-link daemon --state <dir>`: the daemon's own folder (0700).
+    pub fn link_state_dir(&self) -> PathBuf {
+        self.app_data_dir.join("link")
+    }
+
+    /// The daemon's local socket (zeropw-link protocol §5).
+    pub fn link_socket(&self) -> PathBuf {
+        self.link_state_dir().join("link.sock")
+    }
+
+    pub fn link_pid_file(&self) -> PathBuf {
+        self.app_data_dir.join("link.json")
+    }
+
+    pub fn link_log_file(&self) -> PathBuf {
+        self.app_data_dir.join("link.log")
+    }
+
+    /// Paired Macs: team fingerprint, link device ID and environments, no secrets.
+    pub fn devices_file(&self) -> PathBuf {
+        self.app_data_dir.join("devices.json")
+    }
+
     /// `ZDOTDIR` of the in-app terminal's zsh (docs/desktop-app.md §4.4).
     pub fn zsh_dir(&self) -> PathBuf {
         self.app_data_dir.join("zsh")
@@ -64,6 +94,10 @@ impl AppPaths {
 
     pub fn agent_bin(&self) -> PathBuf {
         self.bin_dir.join(AGENT_BIN)
+    }
+
+    pub fn link_bin(&self) -> PathBuf {
+        self.bin_dir.join(LINK_BIN)
     }
 }
 
@@ -185,6 +219,15 @@ mod tests {
         assert!(!p.settings_file().starts_with(p.state_dir()));
         assert_eq!(p.admin_bin(), PathBuf::from("/bin/zp/zeropw-admin"));
         assert_eq!(p.agent_bin(), PathBuf::from("/bin/zp/zeropw-agent"));
+        assert_eq!(p.link_bin(), PathBuf::from("/bin/zp/zeropw-link"));
+        assert_eq!(
+            p.link_socket(),
+            PathBuf::from("/data/ZeroPW/link/link.sock")
+        );
+        for file in [p.link_pid_file(), p.link_log_file(), p.devices_file()] {
+            assert!(!file.starts_with(p.state_dir()));
+            assert!(!file.starts_with(p.link_state_dir()));
+        }
     }
 
     #[test]
