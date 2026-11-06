@@ -614,6 +614,9 @@ fn the_accept_pool_is_bounded_backs_off_and_stops() {
     let started = Instant::now();
     transport.shutdown();
     assert!(started.elapsed() < Duration::from_secs(5));
+    // A request written just before the shutdown may still be counted by
+    // the daemon's handler thread; give it time before the baseline.
+    std::thread::sleep(Duration::from_millis(200));
     let after = da.accept_requests.load(SeqCst);
     std::thread::sleep(Duration::from_millis(500));
     assert_eq!(da.accept_requests.load(SeqCst), after);
