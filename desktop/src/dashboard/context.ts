@@ -6,7 +6,7 @@ import type { PageId } from './pages';
 
 /** What a page should open when another page sends the user there (home quick actions, the
  *  home's recent alerts). */
-export type Intent = 'add-key' | 'add-connection' | 'add-agent' | 'add-grant' | 'invite' | 'join' | 'ack-restore' | 'import' | 'alerts';
+export type Intent = 'add-key' | 'add-connection' | 'add-agent' | 'add-grant' | 'invite' | 'join' | 'ack-restore' | 'import' | 'alerts' | 'pair-add' | 'pair-join';
 
 /** Why the relay did not start: a copy key and the core's reason code it may show. */
 export interface RelayProblem { key: CopyKey; reason: string }

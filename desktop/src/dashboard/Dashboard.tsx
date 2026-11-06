@@ -12,6 +12,7 @@ import { Callout } from '../ui/form';
 import { AgentsPage } from './Agents';
 import { ConfirmSheet } from './Confirm';
 import { ConnectionsPage } from './Connections';
+import { DevicesPage } from './Devices';
 import {
   DashContext, passErrorKey, SheetHostContext, type DashApi, type Intent, type RelayApi, type RelayProblem, type SheetHost,
 } from './context';
@@ -318,6 +319,7 @@ export function Dashboard({ initialStatus, startPage, incoming }: {
               {page === 'agents' && <AgentsPage intent={pageIntent} onIntent={clearIntent} />}
               {page === 'logs' && <LogsPage intent={pageIntent} onIntent={clearIntent} />}
               {page === 'team' && <TeamPage intent={pageIntent} onIntent={clearIntent} incoming={invite} onIncomingTaken={takeIncoming} />}
+              {page === 'devices' && <DevicesPage intent={pageIntent} onIntent={clearIntent} />}
               {page === 'settings' && <SettingsPage intent={pageIntent} onIntent={clearIntent} />}
             </div>
           </div>

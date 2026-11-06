@@ -11,6 +11,7 @@ import { CreateStep } from './CreateStep';
 import { Finale, type JoinOutcome } from './Finale';
 import { afterRelayFailure, counted, fieldExtras, isCard, neighbour, onboardingPill, progressOf, TITLE, type Step } from './flow';
 import { JoinStep, type JoinPlan } from './JoinStep';
+import { PairStep } from './PairStep';
 import { ProjectStep } from './ProjectStep';
 import { RecoveryStep } from './RecoveryStep';
 import { createVault, type InitAttempts, type InitFailure, type RecoveryChoice } from './vault';
@@ -68,7 +69,8 @@ export function Onboarding({ onFlowChange, onFinish, incoming, onIncomingTaken }
     onFlowChange(pr !== null);
     // a teammate is drawn as a ghost until this device has actually joined (DESIGN.md §3.2)
     field.setPeerGhost(!(to === 'done' && joining));
-    field.setMode(to, fieldExtras(to, { joining }));
+    // pairing with another Mac looks like joining: the other device appears beside the sphere
+    field.setMode(to === 'pair' ? 'join' : to, fieldExtras(to, { joining }));
     const card = isCard(to), cardBefore = from !== to && isCard(from), lateNow = card && (from === 'welcome' || from === 'done');
     setLate(lateNow);
     if (cardBefore) {
@@ -119,7 +121,7 @@ export function Onboarding({ onFlowChange, onFinish, incoming, onIncomingTaken }
       const tgt = e.target;
       if (!(tgt instanceof HTMLInputElement) || /^(checkbox|radio)$/.test(tgt.type)) return;
       const s = stepRef.current;
-      if (s === 'join') return;
+      if (s === 'join' || s === 'pair') return;
       const btn = s === 'welcome' ? startBtn.current : sections.current[s]?.querySelector<HTMLButtonElement>('.nav .btn-primary');
       if (btn) { e.preventDefault(); btn.click(); }
     };
@@ -225,7 +227,9 @@ export function Onboarding({ onFlowChange, onFinish, incoming, onIncomingTaken }
               onSkipRelay={skipRelay}
               onBack={() => go('recovery')} onNext={() => go(joinRef.current ? 'done' : 'project')} />
             <ProjectStep frame={frame('project')} sectionRef={secRef('project')} created={project} onBack={back('project')}
-              onNext={(p) => { setProject(p); field.ripple(0.06); go('done'); }} />
+              onNext={(p) => { setProject(p); field.ripple(0.06); go('done'); }} onPair={() => go('pair')} />
+            <PairStep frame={frame('pair')} sectionRef={secRef('pair')} onBack={() => go('project')}
+              onDone={() => { field.ripple(0.1); onFinish('devices'); }} />
             <JoinStep frame={frame('join')} sectionRef={secRef('join')} incoming={deepLink}
               onBack={() => { setDeepLink(null); go('welcome'); }}
               onNext={(plan) => {

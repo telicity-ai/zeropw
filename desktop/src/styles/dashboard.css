@@ -169,3 +169,20 @@
 .imp-line { flex: none; font-size: var(--fs-sm); font-weight: 600; color: var(--fg); }
 .sheet .step-body > .callout + .field, .sheet .step-body > .callout + .imp-list { margin-top: 14px; }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+/* The devices page: paired Macs, the pairing code and its requests, the paste-code flow */
+.nav-pair { display: flex; gap: 8px; align-items: center; }
+.enroll { display: grid; gap: 10px; }
+.enroll .section-title { margin: 0; }
+.enroll details summary { cursor: pointer; color: var(--fg-3); font-size: var(--fs-sm); }
+.device-detail { margin-top: 6px; }
+.device-detail summary { cursor: pointer; color: var(--fg-3); font-size: 12px; }
+.device-detail .kv { margin-top: 6px; }
+.request-card { display: grid; gap: 10px; margin-top: 12px; padding: 12px; border-radius: var(--radius-md); box-shadow: inset 0 0 0 1px var(--line); }
+.pair-faces { display: grid; gap: 10px; margin-top: 12px; }
+.pair-envs { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 6px; }
+.pair-env { display: flex; align-items: center; gap: 10px; font-size: var(--fs-sm); }
+.pair-env .px { width: 8px; height: 8px; background: var(--fg-4); flex: none; }
+.pair-env.joined .px { background: var(--iris); box-shadow: 0 0 8px var(--iris); }
+.pair-env.failed .px { background: var(--warn); }
+.pair-env .st { margin-left: auto; color: var(--fg-3); }

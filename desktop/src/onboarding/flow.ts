@@ -4,7 +4,8 @@ import type { Pill } from '../ui/context';
 
 // Onboarding v0.5 (DESIGN.md §5.2, docs/desktop-app.md §7): no service connection step.
 // 'agent' remains a valid frame for the retained AgentStep component; first-run flow never mounts it.
-export type Step = 'welcome' | 'admin' | 'recovery' | 'create' | 'project' | 'agent' | 'join' | 'done';
+// 'pair' (connect another Mac) is reached from the project step once the vault exists.
+export type Step = 'welcome' | 'admin' | 'recovery' | 'create' | 'project' | 'agent' | 'join' | 'pair' | 'done';
 export type CardStep = Exclude<Step, 'welcome' | 'done'>;
 
 export const FULL: readonly Step[] = ['admin', 'recovery', 'create', 'project'];
@@ -17,6 +18,7 @@ export const TITLE: Record<Exclude<Step, 'welcome'>, CopyKey> = {
   project: 'proj.title',
   agent: 'agent.title',
   join: 'join.title',
+  pair: 'pair.join.title',
   done: 'done.title',
 };
 
