@@ -369,7 +369,11 @@ fn deny_revokes_the_invitation() {
     assert_ne!(refused.reason, "join_pending_approval");
     assert_eq!(requests_file(&a, &env), before);
     assert_eq!(audit_events(&a, "team_join_denied").len(), 2);
-    assert_eq!(audit_events(&a, "team_invite_revoke").len(), 1);
+    // One revocation, recorded as `team revoke-invite` records it.
+    let revoked = audit_events(&a, "team_invite_revoke");
+    assert_eq!(revoked.len(), 1);
+    assert_eq!(revoked[0]["role"], "user");
+    assert_eq!(revoked[0]["detail"], created.invite_id);
     node.stop();
 }
 

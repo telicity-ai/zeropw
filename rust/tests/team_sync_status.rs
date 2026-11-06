@@ -304,6 +304,35 @@ fn a_restarted_serve_remembers_contact() {
     node.stop();
 }
 
+/// A serve stopped while it was retrying a peer schedules nothing any more:
+/// its last write leaves no `next_attempt_at`, so the peer reads as
+/// `offline`, not `retrying`, and the last error stays for diagnostics.
+#[test]
+fn a_stopped_serve_leaves_no_retry_scheduled() {
+    let root = TempDir::new().unwrap();
+    let (a, node, env, address) = serving(&root, 0.05);
+    let (_b, b_team, b_fp, _) = joined(&root, &a, &env, &address, 0.05);
+    wait_for("session", || {
+        (state_file(&a, &env)["peers"][&b_fp]["session"] == true).then_some(())
+    });
+    b_team.stop();
+    let closed = format!("127.0.0.1:{}", free_port());
+    node.set_peer_address(&env, &b_fp, &closed).unwrap();
+    wait_for("retrying", || {
+        let status = sync_status::status(&a, &env).unwrap();
+        (peer_of(&status, &b_fp)["state"] == "retrying").then_some(())
+    });
+    node.stop();
+    let entry = state_file(&a, &env)["peers"][&b_fp].clone();
+    assert_eq!(entry["session"], false);
+    assert!(entry["next_attempt_at"].is_null(), "{entry}");
+    assert!(entry["dial_failures"].as_u64().unwrap() >= 1);
+    let peer = peer_of(&sync_status::status(&a, &env).unwrap(), &b_fp);
+    assert_eq!(peer["state"], "offline");
+    assert_eq!(peer["last_error"], "team_dial_failed");
+    assert!(peer["next_attempt_at"].is_null());
+}
+
 fn mtime(path: &std::path::Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }

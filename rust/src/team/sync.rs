@@ -17,7 +17,7 @@ use super::identity::{DeviceKey, DeviceRecord};
 use super::sync_status::PeerState;
 use super::transport::{
     InviteCheck, InviteDecision, JOIN_PENDING_REASON, JOIN_PENDING_TYPE, MembershipCheck,
-    OnSession, Session, SessionClosed, Transport,
+    OnSession, Session, Transport,
 };
 use crate::audit::RecordArgs;
 use crate::context::Context;
@@ -4861,7 +4861,17 @@ impl TeamSync {
         for t in receivers {
             t.join_bounded(THREAD_JOIN_TIMEOUT);
         }
-        // The last word of a stopping serve: no session is open any more.
+        // The last word of a stopping serve: no session is open and no dial
+        // is scheduled any more (a receiver ending above may have scheduled
+        // one), so a stopped serve's peers never read as `retrying`.
+        for env in self
+            .envs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values_mut()
+        {
+            env.sync.next_attempt_at.clear();
+        }
         for id in self.known_envs() {
             self.write_sync_state(&id, true);
         }
@@ -5294,13 +5304,8 @@ impl TeamSync {
                 new_request,
                 attempts,
             }) => {
-                if !self
-                    .envs
-                    .lock()
-                    .is_ok_and(|envs| envs.contains_key(env_id))
-                {
-                    return InviteDecision::Reject;
-                }
+                // The request is stored: audit it and tell the prover so,
+                // whether or not this node has the environment loaded yet.
                 self.audit_join_request(env_id, &invite_id, &joiner, new_request, attempts);
                 InviteDecision::Pending
             }
@@ -7407,16 +7412,13 @@ impl TeamSync {
         let Some(address) = address else {
             return;
         };
-        let session = match self.transport.dial(&address, env_id, None) {
-            Ok(session) => session,
-            Err(SessionClosed(reason)) => {
-                self.record_dial_failure(env_id, fp, reason);
-                return;
-            }
+        let Ok(session) = self.transport.dial(&address, env_id, None) else {
+            self.record_dial_failure(env_id, fp);
+            return;
         };
         if session.peer().fingerprint() != fp {
             session.close();
-            self.record_dial_failure(env_id, fp, "team_dial_wrong_peer");
+            self.record_dial_failure(env_id, fp);
             return;
         }
         // The backoff resets only once the peer's first frame has been
@@ -7460,11 +7462,10 @@ impl TeamSync {
             }
         }
     }
-    fn record_dial_failure(&self, env_id: &str, fp: &str, reason: &str) {
+    fn record_dial_failure(&self, env_id: &str, fp: &str) {
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(env) = envs.get_mut(env_id) {
             self.note_dial_failure(env, fp);
-            env.sync.last_error.insert(fp.into(), reason.into());
         }
     }
     fn note_dial_failure(&self, env: &mut EnvState, fp: &str) {

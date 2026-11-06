@@ -428,7 +428,8 @@ pub fn deny_join(ctx: &Context, env_id: &str, fingerprint: &str) -> Result<Value
             changed |= entry.remove("wrapped_secret").is_some();
             if entry.get("revoked_at").is_none_or(Value::is_null) {
                 entry.insert("revoked_at".into(), json!(now));
-                newly.push(id.clone());
+                let role = entry.get("role").cloned().unwrap_or(Value::Null);
+                newly.push((id.clone(), role));
                 changed = true;
             }
             revoked.push(id.clone());
@@ -445,13 +446,18 @@ pub fn deny_join(ctx: &Context, env_id: &str, fingerprint: &str) -> Result<Value
     for id in &revoked {
         audit(ctx, "team_join_denied", env_id, fingerprint, id);
     }
-    for id in &newly {
+    // The same record `team revoke-invite` writes for each one it stops.
+    for (id, role) in newly {
         let _ = ctx.audit.record(
             "team_invite_revoke",
             RecordArgs {
                 caller: Some("admin"),
                 result: Some("ok"),
-                extra: vec![("env_id", json!(env_id)), ("detail", json!(id))],
+                extra: vec![
+                    ("env_id", json!(env_id)),
+                    ("role", role),
+                    ("detail", json!(id)),
+                ],
                 ..Default::default()
             },
         );
