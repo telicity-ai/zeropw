@@ -1061,3 +1061,117 @@ fn pairing_joins_one_at_a_time() {
             .any(|r| matches!(r, Err(e) if e.reason == "onetime_ref_unknown"))
     );
 }
+
+#[test]
+fn a_local_environment_of_the_same_name_is_not_joined_and_a_dial_failure_says_why() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    let daemon = Daemon::new(true, OWN_LINK);
+    daemon
+        .devices
+        .lock()
+        .unwrap()
+        .push(json!({"device_id": PEER_LINK, "name": "studio", "revoked_at": null}));
+    let _link = daemon.serve(&fx);
+    fx.respond(
+        "team_invite-info",
+        &invite_info(FP_A, &format!("zpl:{PEER_LINK}")),
+    );
+    let text = pairing_text(&[("demo/dev", INVITE_1), ("demo/prod", INVITE_2)]);
+    let preview = ok(core.pairing_preview(PairingTextIn {
+        text: text.as_str().into(),
+    }));
+    // this Mac has its own demo/dev and demo/prod: dev already is the same team environment
+    // (an earlier pairing), prod is a local environment that has nothing to do with the code
+    fx.respond(
+        "project_list",
+        r#"{"projects":[{"name":"demo","environments":["dev","prod"],"created_at":""}]}"#,
+    );
+    fx.respond_nth(
+        "team_members",
+        1,
+        r#"{"env_id":"envsynthetic","members":[]}"#,
+    );
+    fx.respond_error_nth(
+        "team_members",
+        2,
+        r#"{"error":"NotFound","reason":"team_env_not_found"}"#,
+        1,
+    );
+    // the other Mac is not reachable: the CLI's detail names why, as a code
+    fx.respond_error(
+        "team_join",
+        r#"{"error":"StateError","reason":"team_join_failed","detail":"link_peer_offline"}"#,
+        1,
+    );
+    let out = ok(core.pairing_join(RefIn {
+        reference: preview.reference.clone(),
+    }));
+    assert!(!out.done);
+    let dev = &out.environments[0];
+    assert_eq!(
+        (dev.state, dev.reason.as_deref(), dev.detail.as_deref()),
+        (
+            "failed",
+            Some("team_join_failed"),
+            Some("link_peer_offline")
+        )
+    );
+    let prod = &out.environments[1];
+    assert_eq!(
+        (prod.state, prod.reason.as_deref(), prod.detail.as_deref()),
+        ("failed", Some("pairing_env_exists"), None)
+    );
+    // only demo/dev was tried: nothing is joined into the unrelated local environment
+    let joins: Vec<_> = fx
+        .calls()
+        .into_iter()
+        .filter(|c| c.key == "team_join")
+        .collect();
+    assert_eq!(joins.len(), 1);
+    assert!(joins[0].args().contains(&"--environment=dev"));
+
+    // a detail that is not a code (free text from the CLI) is not passed on
+    fx.respond_nth(
+        "team_members",
+        3,
+        r#"{"env_id":"envsynthetic","members":[]}"#,
+    );
+    fx.respond_error(
+        "team_join",
+        r#"{"error":"StateError","reason":"team_join_failed","detail":"could not reach 192.0.2.7 for synthetic"}"#,
+        1,
+    );
+    let again = ok(core.pairing_join(RefIn {
+        reference: preview.reference,
+    }));
+    assert_eq!(
+        again.environments[0].reason.as_deref(),
+        Some("team_join_failed")
+    );
+    assert_eq!(again.environments[0].detail, None);
+}
+
+#[test]
+fn link_status_reports_a_mac_removed_at_the_service() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    let _link = FakeLink::start(&fx.paths.link_socket(), |req| {
+        Some(match req["op"].as_str() {
+            Some("status") => {
+                json!({"ok": true, "enrolled": true, "revoked": true, "service": SERVICE,
+                                     "device_id": OWN_LINK, "account_id": "acct_1", "online": false, "peers": []})
+            }
+            _ => json!({"ok": false, "error": "device_revoked"}),
+        })
+    });
+    let status = ok(core.link_status());
+    assert!(status.running && status.enrolled && status.revoked && !status.online);
+    let e = err(core.link_enroll(LinkEnrollIn {
+        invite_code: INVITE_CODE.into(),
+        service: None,
+        name: None,
+    }));
+    // enrolled already (and removed): no second enrolment is tried
+    assert_eq!(e.reason, "link_already_enrolled");
+}

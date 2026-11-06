@@ -215,24 +215,45 @@ pub fn is_link_token(token: &str) -> bool {
         && token.bytes().all(|b| b.is_ascii_graphic())
 }
 
+/// The daemon's error codes (zeropw-link protocol §5 and the daemon's fixed set) as fixed
+/// `(class, reason)` pairs. A code outside the set is `link_failed`: the daemon's text is never
+/// passed on, so nothing it wrote can reach the UI or a log.
 fn link_error(code: &str) -> AppError {
-    let reason = if is_code(code) && code.len() <= 48 {
-        format!("link_{code}")
-    } else {
-        "link_failed".to_owned()
+    let (class, reason) = match code {
+        "invalid_request" => ("InvalidInput", "link_invalid_request"),
+        "not_enrolled" => ("StateError", "link_not_enrolled"),
+        "already_enrolled" => ("StateError", "link_already_enrolled"),
+        // this Mac was removed at the service: it cannot open sessions or enrol again
+        "device_revoked" => ("PolicyDenied", "link_device_revoked"),
+        // a server invite code that is unknown, used up, expired or revoked
+        "invite_invalid" => ("PolicyDenied", "link_invite_invalid"),
+        // a pairing code's link token that is unknown, used or older than 10 minutes
+        "link_token_invalid" => ("PolicyDenied", "link_token_invalid"),
+        // the account already has its most devices
+        "device_limit" => ("PolicyDenied", "link_device_limit"),
+        "peer_unknown" => ("NotFound", "link_peer_unknown"),
+        "peer_revoked" => ("PolicyDenied", "link_peer_revoked"),
+        "peer_offline" => ("Unavailable", "link_peer_offline"),
+        "connect_failed" => ("Unavailable", "link_connect_failed"),
+        "timeout" => ("Timeout", "link_timeout"),
+        "service_unavailable" => ("Unavailable", "link_service_unavailable"),
+        "rate_limited" => ("Unavailable", "link_rate_limited"),
+        "busy" => ("Unavailable", "link_busy"),
+        "shutting_down" => ("Unavailable", "link_unavailable"),
+        _ => ("LinkError", "link_failed"),
     };
-    let class = match code {
-        "not_enrolled" | "already_enrolled" => "StateError",
-        "invalid_request" => "InvalidInput",
-        "timeout" => "Timeout",
-        "rate_limited" | "service_unavailable" | "peer_offline" | "connect_failed" => "Unavailable",
-        "peer_unknown" => "NotFound",
-        "peer_revoked" | "revoked" | "forbidden" | "invite_invalid" | "token_invalid" => {
-            "PolicyDenied"
-        }
-        _ => "LinkError",
-    };
-    AppError::new(class, &reason)
+    AppError::new(class, reason)
+}
+
+/// A reason code from the daemon's status (a peer's last error), for the connection details
+/// only: lowercase letters, digits and `_`, at most 48 characters, else `link_failed`.
+fn daemon_code(code: String) -> String {
+    let fine = !code.is_empty()
+        && code.len() <= 48
+        && code
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+    if fine { code } else { "link_failed".to_owned() }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -262,6 +283,10 @@ pub struct LinkPeer {
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct DaemonStatus {
     pub enrolled: bool,
+    /// This Mac was removed at the link service (by another of the user's Macs, or the
+    /// operator): it can no longer reach the others through the service.
+    #[serde(default)]
+    pub revoked: bool,
     #[serde(default)]
     pub service: Option<String>,
     #[serde(default)]
@@ -291,13 +316,7 @@ impl DaemonStatus {
                         "direct" | "relay-udp" | "relay-tcp" | "relay-tls"
                     )
                 });
-                p.last_error = p.last_error.map(|e| {
-                    if is_code(&e) && e.len() <= 48 {
-                        e
-                    } else {
-                        "link_failed".to_owned()
-                    }
-                });
+                p.last_error = p.last_error.map(daemon_code);
                 p
             })
             .collect();
@@ -1058,8 +1077,36 @@ mod tests {
         );
         assert_eq!(link_error("rate_limited").error, "Unavailable");
         assert_eq!(link_error("timeout").error, "Timeout");
-        assert_eq!(link_error("token for zpl secret").reason, "link_failed");
-        assert_eq!(link_error("").reason, "link_failed");
+        for (code, class, reason) in [
+            ("link_token_invalid", "PolicyDenied", "link_token_invalid"),
+            ("invite_invalid", "PolicyDenied", "link_invite_invalid"),
+            ("device_revoked", "PolicyDenied", "link_device_revoked"),
+            ("device_limit", "PolicyDenied", "link_device_limit"),
+            ("peer_offline", "Unavailable", "link_peer_offline"),
+            ("busy", "Unavailable", "link_busy"),
+            ("shutting_down", "Unavailable", "link_unavailable"),
+            ("internal", "LinkError", "link_failed"),
+        ] {
+            let e = link_error(code);
+            assert_eq!(
+                (e.error.as_str(), e.reason.as_str()),
+                (class, reason),
+                "{code}"
+            );
+        }
+        // codes outside the daemon's set are never passed on, whatever their shape
+        for code in [
+            "token for zpl secret",
+            "",
+            "zplt_synthetic_token",
+            "NOT_ENROLLED",
+            "peer.offline",
+        ] {
+            assert_eq!(link_error(code).reason, "link_failed", "{code}");
+        }
+        assert_eq!(daemon_code("connect_failed".into()), "connect_failed");
+        assert_eq!(daemon_code("a b".into()), "link_failed");
+        assert_eq!(daemon_code("x".repeat(49)), "link_failed");
     }
 
     #[test]
@@ -1104,6 +1151,7 @@ mod tests {
         let raw: DaemonStatus = serde_json::from_value(serde_json::json!({
             "ok": true, "enrolled": true, "service": "https://link.example.org",
             "device_id": "abcdefghijklmnopqrstuvwxyz", "account_id": "acct_1", "online": true,
+            "revoked": false,
             "peers": [
                 {"device_id": "bbbbbbbbbbbbbbbbbbbbbbbbbb", "name": "other\u{7}mac", "online": true,
                  "revoked": false, "path": "relay-tls", "rtt_ms": 40, "last_error": null},

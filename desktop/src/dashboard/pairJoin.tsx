@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type Ref } from 'react';
 import { t, type CopyKey } from '../copy';
 import { call, toIpcError } from '../ipc/client';
 import type { PairingJoinResult, PairingPreview } from '../ipc/contract';
-import { isFinalPairingReason, isPairingCode, pairingPreviewErrorKey, pairingStopKey, pairingWaitHintKey } from '../lib/pairing';
+import { finalJoinReason, isFinalPairingReason, isPairingCode, pairingPreviewErrorKey, pairingStopKey, pairingWaitHintKey } from '../lib/pairing';
 import { poll, type PollHandle } from '../lib/poll';
 import { formatCountdown, formatFingerprint } from '../lib/validators';
 import { useApp } from '../ui/context';
@@ -89,14 +89,18 @@ export function usePairJoin(onDone: (result: PairingJoinResult) => void) {
     if (p.kind !== 'preview') return;
     const { ref, preview } = p;
     setPhase({ kind: 'waiting', ref, preview, result: null, hint: null });
+    let last: PairingJoinResult | null = null;
     const handle = poll<PairingJoinResult>({
       step: () => call('pairing_join', { ref }),
       done: (r) => r.done,
-      final: (r) => r.environments.find((e) => e.state === 'failed' && e.reason && isFinalPairingReason(e.reason))?.reason ?? null,
+      // stop once nothing can change any more: every environment not joined failed for good
+      final: (r) => finalJoinReason(r.environments),
       finalError: (e) => { const reason = toIpcError(e).reason; return isFinalPairingReason(reason) ? reason : null; },
       onValue: (r) => {
+        last = r;
         if (!alive.current) return;
-        const hint = pairingWaitHintKey(r.environments.find((e) => e.state === 'failed')?.reason);
+        const failed = r.environments.find((e) => e.state === 'failed' && !(e.reason && isFinalPairingReason(e.reason)));
+        const hint = pairingWaitHintKey(failed?.reason, failed?.detail);
         setPhase((cur) => (cur.kind === 'waiting' && cur.ref === ref ? { ...cur, result: r, hint } : cur));
       },
       every: PAIR_POLL_MS,
@@ -106,13 +110,17 @@ export function usePairJoin(onDone: (result: PairingJoinResult) => void) {
     void handle.result.then((out) => {
       if (polling.current === handle) polling.current = null;
       if (!alive.current) return;
-      if (out.kind === 'done') {
-        setPhase({ kind: 'done', preview, result: out.value });
+      // every environment joined, or some did and the rest cannot: the joined ones sync now
+      const partial = out.kind === 'failed' && last?.environments.some((e) => e.state === 'joined') ? last : null;
+      if (out.kind === 'done' || partial) {
+        const result = out.kind === 'done' ? out.value : (partial as PairingJoinResult);
+        if (partial) discard(ref);
+        setPhase({ kind: 'done', preview, result });
         field.ripple(0.1);
         toast(t('toast.pair.done'));
-        done.current(out.value);
+        done.current(result);
       } else if (out.kind === 'cancelled') {
-        discard(ref);
+        // whoever cancelled (stop, reset, leaving) already discarded the code
       } else {
         discard(ref);
         setPhase({ kind: 'stopped', key: out.kind === 'expired' ? 'pair.expired' : pairingStopKey(out.reason) });
@@ -123,7 +131,13 @@ export function usePairJoin(onDone: (result: PairingJoinResult) => void) {
   const cancel = () => {
     const p = phaseRef.current;
     polling.current?.cancel(); polling.current = null;
-    if (p.kind === 'waiting') { discard(p.ref); setPhase({ kind: 'stopped', key: 'pair.cancelled' }); }
+    if (p.kind === 'waiting') {
+      discard(p.ref);
+      // the reference is gone now: a reset in the same event must not discard it again
+      const stopped: PairPhase = { kind: 'stopped', key: 'pair.cancelled' };
+      phaseRef.current = stopped;
+      setPhase(stopped);
+    }
   };
 
   return { text, setText, error, phase, start, cancel, reset };
@@ -139,6 +153,7 @@ export function PairJoinBody({ id, pj, inputRef }: { id: string; pj: PairJoin; i
   const now = useNow(p.kind === 'preview');
   if (p.kind === 'waiting' || p.kind === 'done') {
     const self = p.result?.environments.find((e) => e.self_fingerprint)?.self_fingerprint ?? null;
+    const failedEnvs = p.kind === 'done' ? p.result.environments.filter((e) => e.state === 'failed') : [];
     return (
       <>
         {p.kind === 'waiting'
@@ -170,6 +185,9 @@ export function PairJoinBody({ id, pj, inputRef }: { id: string; pj: PairJoin; i
           })}
         </ul>
         {p.kind === 'waiting' && p.hint && <div className="help">{t(p.hint)}</div>}
+        {p.kind === 'done' && failedEnvs.length > 0 && (
+          <div className="help err" role="alert">{t(failedEnvs.some((e) => e.reason === 'pairing_env_exists') ? 'pair.failed.exists' : 'pair.partial')}</div>
+        )}
       </>
     );
   }

@@ -632,9 +632,9 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
   const pairApproveAfter = seed.pairApproveAfterPolls ?? 2;
   const lowFp = (seedText: string) => { const r = mulberry32(fnv1a(seedText)); return Array.from({ length: 26 }, () => B32[Math.floor(r() * 32)]).join(''); };
   const linkStatus = (): LinkStatus => seed.linkMissing
-    ? { available: false, running: false, enrolled: false, device_id: null, online: false, service: MOCK_SERVICE, service_host: 'link.zeropw.invalid',
+    ? { available: false, running: false, enrolled: false, revoked: false, device_id: null, online: false, service: MOCK_SERVICE, service_host: 'link.zeropw.invalid',
         default_service: MOCK_SERVICE, device_name: 'this-mac', peers: [], problem: 'link_binary_missing' }
-    : { available: true, running: true, enrolled: linkEnrolled, device_id: linkId, online: linkEnrolled, service: linkService,
+    : { available: true, running: true, enrolled: linkEnrolled, revoked: false, device_id: linkId, online: linkEnrolled, service: linkService,
         service_host: linkService.replace(/^https?:\/\//, ''), default_service: MOCK_SERVICE, device_name: 'this-mac', peers: linkPeers.map((p) => ({ ...p })), problem: null };
   const linkRequest = (body: Record<string, unknown>) => { linkRequests.push(JSON.stringify(body)); };
   const needLink = () => { if (seed.linkMissing) throw fail('Unavailable', 'link_binary_missing'); };
@@ -1410,9 +1410,12 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       const environments = code.invites.map((inv, i): PairingJoinEnv => {
         const done = state.joined.get(i);
         if (done) return done;
+        // a local environment of the same name is never joined into unless it already is this
+        // team environment (the core's pairing_env_exists)
+        const localEnv = projects.some((p) => p.environments.some((e) => `${p.name}/${e}` === inv.env)) || teams.has(inv.env);
+        if (localEnv && teams.get(inv.env)?.env_id !== lowFp(inv.invite)) return { env: inv.env, state: 'failed', reason: 'pairing_env_exists' };
         if (state.polls <= pairApproveAfter) return { env: inv.env, state: 'pending', self_fingerprint: self, inviter_fingerprint: inviter };
         const [project, environment] = inv.env.split('/') as [string, string];
-        if (teams.has(inv.env)) return { env: inv.env, state: 'failed', reason: 'team_env_exists' };
         teams.set(inv.env, {
           env_id: lowFp(inv.invite), project, environment, invites: [],
           members: [

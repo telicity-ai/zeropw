@@ -22,7 +22,7 @@ import { Sheet } from './Sheet';
 
 /** How often the page re-reads the devices while it is visible, and the add-device sheet the
  *  join requests while its code is out. */
-export const DEVICES_POLL_MS = 5000;
+export const DEVICES_POLL_MS = 10_000;
 export const REQUESTS_POLL_MS = 3000;
 
 export const STATE_COPY: Record<DeviceState, CopyKey> = {
@@ -59,8 +59,10 @@ export function DevicesPage({ intent, onIntent }: { intent?: Intent; onIntent():
   }, [intent]);
 
   const link = o?.link ?? null;
+  const canAdd = !!link?.enrolled && !link.revoked;
   const add = () => {
     if (!link?.enrolled) { toast(t('pair.add.needEnroll'), 'warn'); return; }
+    if (link.revoked) { toast(t('devices.revoked'), 'warn'); return; }
     sheets.open({ kind: 'add' });
   };
   const removeData = sheets.data('remove');
@@ -77,7 +79,9 @@ export function DevicesPage({ intent, onIntent }: { intent?: Intent; onIntent():
               ? <Callout kind="info">{t('devices.down')}</Callout>
               : !link.enrolled
                 ? <EnrollCard link={link} onEnrolled={() => { toast(t('toast.devices.enrolled')); reload(); bump(); }} />
-                : (
+                : link.revoked
+                  ? <Callout kind="info">{t('devices.revoked')}</Callout>
+                  : (
                   <ul className="list" aria-label={t('devices.self')}>
                     <Row dot={link.online ? 'on' : 'idle'} name={link.device_name} tag={<Tag>{t('devices.self')}</Tag>}
                       meta={metaLine(link.service_host, t(link.online ? 'devices.self.online' : 'devices.self.offline'))} />
@@ -87,7 +91,7 @@ export function DevicesPage({ intent, onIntent }: { intent?: Intent; onIntent():
 
       <SectionHead title={t('devices.list')}>
         <button className="btn btn-ghost btn-sm" type="button" onClick={() => sheets.open({ kind: 'join' })}>{t('devices.join')}</button>
-        <button className="btn btn-primary btn-sm" type="button" aria-disabled={!link?.enrolled || undefined} onClick={add}>{t('devices.add')}</button>
+        <button className="btn btn-primary btn-sm" type="button" aria-disabled={!canAdd || undefined} onClick={add}>{t('devices.add')}</button>
       </SectionHead>
       {o?.devices_error && <Callout kind="info">{t('devices.err.records')}</Callout>}
       {conflict && (
@@ -303,7 +307,9 @@ export function AddDeviceSheet({ open, link, onClose, onChanged }: { open: boole
   };
   useEffect(() => { if (visible) announce(t('pair.code.shown')); }, [visible, announce]);
 
-  const groups = requestsByDevice(requests).filter((g) => !decided.includes(g.fingerprint));
+  // decided per Mac and environment: a request for another environment of the same code that
+  // arrives after a decision still shows up
+  const groups = requestsByDevice(requests.filter((r) => !decided.includes(`${r.fingerprint}|${r.env}`)));
   const left = made ? msLeft(made.expires_at, now) : 0;
   const hash = code && visible ? code.slice(code.indexOf('#') + 1) : '';
 
@@ -361,7 +367,7 @@ export function AddDeviceSheet({ open, link, onClose, onChanged }: { open: boole
             ? <div className="help" role="status">{t('pair.req.wait')}</div>
             : groups.map((g) => (
               <RequestCard key={g.fingerprint} fingerprint={g.fingerprint} envs={g.envs} attempts={g.attempts}
-                onDecided={(approved) => { setDecided((xs) => [...xs, g.fingerprint]); toast(t(approved ? 'toast.pair.approved' : 'toast.pair.denied'), approved ? 'info' : 'warn'); onChanged(); }} />
+                onDecided={(approved) => { setDecided((xs) => [...xs, ...g.envs.map((env) => `${g.fingerprint}|${env}`)]); toast(t(approved ? 'toast.pair.approved' : 'toast.pair.denied'), approved ? 'info' : 'warn'); onChanged(); }} />
             ))}
         </>
       )}

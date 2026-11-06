@@ -48,6 +48,8 @@ pub struct LinkStatusOut {
     pub available: bool,
     pub running: bool,
     pub enrolled: bool,
+    /// This Mac was removed at the link service: remote sync cannot reach the other Macs.
+    pub revoked: bool,
     pub device_id: Option<String>,
     pub online: bool,
     pub service: String,
@@ -135,13 +137,16 @@ pub struct PairingPreviewOut {
 }
 
 /// One environment of a pairing join: `joined`, `pending` (the other Mac has to approve this
-/// Mac's fingerprint) or `failed` (`reason`).
+/// Mac's fingerprint) or `failed` (`reason`, and for a dial that did not reach the other Mac
+/// the CLI's code for why in `detail`, such as `link_peer_offline`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PairingJoinEnv {
     pub env: String,
     pub state: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub self_fingerprint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -150,6 +155,21 @@ pub struct PairingJoinEnv {
     pub project: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub environment: Option<String>,
+}
+
+impl PairingJoinEnv {
+    fn failed(env: &str, reason: &str, detail: Option<&str>) -> Self {
+        Self {
+            env: env.to_owned(),
+            state: "failed",
+            reason: Some(reason.to_owned()),
+            detail: detail.map(str::to_owned),
+            self_fingerprint: None,
+            inviter_fingerprint: None,
+            project: None,
+            environment: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -317,6 +337,15 @@ fn id_text(value: &Value) -> Option<String> {
     value.as_str().filter(|s| is_code(s)).map(str::to_owned)
 }
 
+/// A reason code as the CLI prints them: lowercase letters, digits and `_`, at most 64.
+fn is_reason_code(text: &str) -> bool {
+    !text.is_empty()
+        && text.len() <= 64
+        && text
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+}
+
 /// The fingerprints a pending join reports in its `detail` (see `AppError::from_admin_stderr`).
 fn pending_fingerprints(error: &AppError) -> (Option<String>, Option<String>) {
     let detail: Option<Value> = error
@@ -376,6 +405,7 @@ impl Core {
             available: process.available,
             running: false,
             enrolled: false,
+            revoked: false,
             device_id: None,
             online: false,
             service: DEFAULT_SERVICE_URL.to_owned(),
@@ -389,6 +419,7 @@ impl Core {
             Ok(status) => {
                 out.running = true;
                 out.enrolled = status.enrolled;
+                out.revoked = status.revoked;
                 out.device_id = status.device_id;
                 out.online = status.online;
                 if let Some(service) = status.service {
@@ -842,9 +873,25 @@ impl Core {
         Ok(PairingPreviewOut { reference, preview })
     }
 
+    /// Whether the local `project/environment` already is the team environment `invite` is for
+    /// (`team members` names its env id; `team invite-info` reads the invitation's offline).
+    fn is_same_team_env(&self, env: &str, invite: &SecretString) -> Result<bool, AppError> {
+        let members = match self.team_members(super::EnvIn {
+            env: env.to_owned(),
+        }) {
+            Ok(members) => members,
+            Err(e) if e.reason == "team_env_not_found" => return Ok(false),
+            Err(e) => return Err(e),
+        };
+        let env_id = members.get("env_id").and_then(Value::as_str);
+        Ok(env_id.is_some() && env_id == Some(self.invite_info(invite)?.env_id.as_str()))
+    }
+
     /// `pairing_join`: enrol with the code's link token (or check that this Mac is already in
     /// the same account), then `team join --stdin --link-socket` for each environment not joined
-    /// yet. The UI calls it again every few seconds while some environment is `pending`; once
+    /// yet. An environment whose name is already a local environment other than this team
+    /// environment is not joined (`pairing_env_exists`): its keys would mix with the other
+    /// Mac's. The UI calls it again every few seconds while some environment is `pending`; once
     /// every environment joined the code is forgotten.
     pub fn pairing_join(&self, input: RefIn) -> Result<PairingJoinOut, AppError> {
         let _one_at_a_time = lock(&self.pairing_lock);
@@ -897,6 +944,9 @@ impl Core {
                 .cloned()
                 .unwrap_or_else(|| vec![None; code.invites.len()])
         };
+        // a local environment of the same name that is not this team environment would be
+        // mixed with the other Mac's keys: refuse it rather than join into it
+        let mut local: Option<BTreeSet<String>> = None;
         let mut results: Vec<PairingJoinEnv> = Vec::new();
         let mut joined_now: Vec<(String, String)> = Vec::new();
         let mut self_fp: Option<String> = None;
@@ -907,6 +957,19 @@ impl Core {
             }
             let (project, environment) = split_env(&invite.env)
                 .ok_or_else(|| AppError::invalid_input("pairing_code_malformed"))?;
+            if local.is_none() {
+                local = Some(self.local_envs()?.into_iter().collect());
+            }
+            if local.as_ref().is_some_and(|l| l.contains(&invite.env))
+                && !self.is_same_team_env(&invite.env, &invite.invite)?
+            {
+                results.push(PairingJoinEnv::failed(
+                    &invite.env,
+                    "pairing_env_exists",
+                    None,
+                ));
+                continue;
+            }
             let args = AdminArgs::command(&["team", "join"])
                 .flag("stdin")
                 .opt("link-socket", &socket)?
@@ -931,6 +994,7 @@ impl Core {
                         env: invite.env.clone(),
                         state: "joined",
                         reason: None,
+                        detail: None,
                         self_fingerprint: me,
                         inviter_fingerprint: inviter,
                         project: Some(local_project),
@@ -946,21 +1010,19 @@ impl Core {
                         env: invite.env.clone(),
                         state: "pending",
                         reason: None,
+                        detail: None,
                         self_fingerprint: me,
                         inviter_fingerprint: inviter,
                         project: None,
                         environment: None,
                     }
                 }
-                Err(e) => PairingJoinEnv {
-                    env: invite.env.clone(),
-                    state: "failed",
-                    reason: Some(e.reason),
-                    self_fingerprint: None,
-                    inviter_fingerprint: None,
-                    project: None,
-                    environment: None,
-                },
+                // `team_join_failed` names in its detail why no address answered
+                // (`link_peer_offline`, `link_unavailable`, …): kept only when it is a code
+                Err(e) => {
+                    let detail = e.detail.as_deref().filter(|d| is_reason_code(d));
+                    PairingJoinEnv::failed(&invite.env, &e.reason, detail)
+                }
             });
         }
         if !joined_now.is_empty() || self_fp.is_some() {

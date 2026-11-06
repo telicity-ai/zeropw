@@ -84,14 +84,26 @@ export function encodePairingCode(data: PairingCodeData): string {
   return PAIR_PREFIX + b64urlEncode(JSON.stringify(data));
 }
 
-/** Reasons after which retrying a pending join cannot succeed: the code or its invitations are
- *  gone, expired or refused, or this Mac is in another account. */
+/** Reasons after which trying a join again cannot succeed: the code or its invitations are gone,
+ *  expired or refused, this Mac is in another account or was removed at the service, or the
+ *  environment's name is already a local environment here. Codes are the core's and the CLI's
+ *  (desktop/core/src/link.rs `link_error`, desktop/core/src/commands/remote.rs, rust/src/team).
+ *  A refusal on the other Mac (deny) revokes its invitations; the joining Mac then only sees
+ *  joins that fail or time out, like an unreachable Mac, so those keep being retried. */
 const FINAL_REASONS = new Set([
-  'onetime_ref_unknown', 'onetime_ref_invalid', 'invite_expired', 'invite_revoked', 'invite_not_found', 'invite_already_used',
-  'pairing_expired', 'pairing_code_malformed', 'pairing_own_code', 'link_other_account', 'link_other_service',
-  'link_token_invalid', 'link_invite_invalid', 'link_revoked', 'link_forbidden', 'join_denied', 'team_env_exists',
+  'onetime_ref_unknown', 'onetime_ref_invalid', 'pairing_code_malformed', 'pairing_code_version', 'pairing_expired', 'pairing_own_code',
+  'pairing_env_exists', 'invite_expired', 'invite_malformed', 'link_other_account', 'link_other_service', 'link_token_invalid',
+  'link_device_revoked', 'link_device_limit', 'link_socket_required', 'link_binary_missing',
 ]);
 export const isFinalPairingReason = (reason: string): boolean => FINAL_REASONS.has(reason);
+
+/** The reason a join result cannot get any further: every environment not joined yet failed for
+ *  a final reason (null while one may still join). */
+export function finalJoinReason(environments: readonly { state: string; reason?: string }[]): string | null {
+  const open = environments.filter((e) => e.state !== 'joined');
+  if (open.length === 0 || open.some((e) => e.state !== 'failed' || !e.reason || !isFinalPairingReason(e.reason))) return null;
+  return open[0]?.reason ?? null;
+}
 
 // ---- reason codes to copy (the screens never show a code as text)
 
@@ -109,17 +121,20 @@ export function pairingStopKey(reason: string): CopyKey {
     case 'link_other_account': return 'pair.failed.account';
     case 'link_other_service': return 'pair.failed.service';
     case 'pairing_own_code': return 'pair.failed.own';
-    case 'join_denied': case 'invite_revoked': return 'pair.failed.denied';
-    case 'team_env_exists': return 'pair.failed.exists';
+    case 'pairing_env_exists': return 'pair.failed.exists';
+    case 'link_device_revoked': return 'devices.revoked';
+    case 'link_device_limit': return 'pair.failed.full';
     case 'pairing_expired': case 'invite_expired': case 'onetime_ref_unknown': case 'link_token_invalid': return 'pair.expired';
     default: return 'pair.failed';
   }
 }
 
-/** A failure that may pass while waiting (the other Mac asleep, the network): shown, then retried. */
-export function pairingWaitHintKey(reason: string | undefined): CopyKey | null {
+/** A failure that may pass while waiting (the other Mac asleep or closed, the network): said
+ *  plainly, then tried again. `detail` is the CLI's code for why no address answered. */
+export function pairingWaitHintKey(reason: string | undefined, detail?: string): CopyKey | null {
   if (!reason) return null;
-  return /offline|connect_failed|timeout|unavailable|peer_/.test(reason) ? 'pair.failed.offline' : null;
+  const why = `${reason} ${detail ?? ''}`;
+  return /offline|connect_failed|timeout|unavailable|peer_|team_join_failed/.test(why) ? 'pair.failed.offline' : null;
 }
 
 /** Server enrolment errors. */
@@ -127,9 +142,10 @@ export function enrollErrorKey(reason: string): CopyKey {
   switch (reason) {
     case 'link_invite_malformed': return 'devices.enroll.err.code';
     case 'link_service_invalid': return 'devices.enroll.err.service';
-    case 'link_invite_invalid': case 'link_forbidden': case 'link_revoked': return 'devices.enroll.err.refused';
-    case 'link_rate_limited': return 'devices.enroll.err.busy';
-    case 'link_service_unavailable': case 'link_timeout': case 'link_connect_failed': return 'devices.enroll.err.offline';
+    case 'link_invite_invalid': case 'link_device_revoked': return 'devices.enroll.err.refused';
+    case 'link_device_limit': return 'pair.failed.full';
+    case 'link_rate_limited': case 'link_busy': return 'devices.enroll.err.busy';
+    case 'link_service_unavailable': case 'link_timeout': case 'link_connect_failed': case 'link_unavailable': return 'devices.enroll.err.offline';
     default: return 'error.generic';
   }
 }

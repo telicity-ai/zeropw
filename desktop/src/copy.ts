@@ -944,6 +944,7 @@ export const COPY = {
   'devices.self.offline': '서버에 닿지 않음',
   'devices.unavailable': '이 앱에서는 다른 Mac 연결을 쓸 수 없어요',
   'devices.down': '연결 기능이 아직 켜지지 않았어요. 잠시 뒤 다시 확인하세요',
+  'devices.revoked': '이 Mac은 서버에서 연결이 해제됐어요. 다른 Mac과 동기화하지 않아요',
   'devices.add': '기기 추가',
   'devices.join': '다른 Mac과 연결',
   'devices.list': '연결한 Mac',
@@ -1053,6 +1054,8 @@ export const COPY = {
   'pair.failed.denied': '다른 Mac에서 거절했어요',
   'pair.failed.exists': '이 Mac에 같은 이름의 환경이 있어요',
   'pair.failed.offline': '다른 Mac에 닿지 못했어요. 그 Mac에서 ZeroPW가 켜져 있는지 확인하세요',
+  'pair.failed.full': '이 서버 계정에 연결할 수 있는 Mac 수를 넘었어요',
+  'pair.partial': '일부 환경은 받지 못했어요',
   'proj.pair': '다른 Mac과 연결',
 } as const;
 

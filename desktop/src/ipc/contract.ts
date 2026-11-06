@@ -87,7 +87,8 @@ export interface LinkPeer { device_id: string; name: string; online: boolean; re
  *  the enrolled service or the default (`default_service`, defined once in desktop/core/src/link.rs);
  *  `problem` is why the daemon does not answer (`link_binary_missing`, `link_unavailable`, …). */
 export interface LinkStatus {
-  available: boolean; running: boolean; enrolled: boolean; device_id: string | null; online: boolean;
+  /** `revoked`: this Mac was removed at the link service and reaches no other Mac through it. */
+  available: boolean; running: boolean; enrolled: boolean; revoked: boolean; device_id: string | null; online: boolean;
   service: string; service_host: string; default_service: string; device_name: string; peers: LinkPeer[]; problem: string | null;
 }
 export interface PairingEnv { env: string; invite_id: string; shared_now: boolean }
@@ -101,8 +102,10 @@ export interface PairingPreview {
   service: string; service_host: string; expires_at: string;
 }
 export type PairingJoinState = 'joined' | 'pending' | 'failed';
+/** `reason` for a failed environment; `detail` is the CLI's code for why no address answered
+ *  (`link_peer_offline`, …) when it gave one. */
 export interface PairingJoinEnv {
-  env: string; state: PairingJoinState; reason?: string; self_fingerprint?: string; inviter_fingerprint?: string; project?: string; environment?: string;
+  env: string; state: PairingJoinState; reason?: string; detail?: string; self_fingerprint?: string; inviter_fingerprint?: string; project?: string; environment?: string;
 }
 /** `done`: every environment joined and the core forgot the code. */
 export interface PairingJoinResult { done: boolean; peer: string; environments: PairingJoinEnv[] }
