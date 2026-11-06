@@ -271,20 +271,14 @@ fn invalid_fingerprint() -> Error {
         .with_detail("a device fingerprint is 26 characters of a-z and 2-7")
 }
 
-fn audit(ctx: &Context, event: &str, env_id: &str, fingerprint: &str, invite_id: &str) {
-    let _ = ctx.audit.record(
-        event,
-        RecordArgs {
-            caller: Some("admin"),
-            result: Some("ok"),
-            extra: vec![
-                ("env_id", json!(env_id)),
-                ("fingerprint", json!(fingerprint)),
-                ("detail", json!(invite_id)),
-            ],
-            ..Default::default()
-        },
-    );
+/// The fields of a `team_join_approved` / `team_join_denied` record:
+/// identifiers only.
+fn decision_fields(env_id: &str, fingerprint: &str, invite_id: &str) -> Vec<(&'static str, Value)> {
+    vec![
+        ("env_id", json!(env_id)),
+        ("fingerprint", json!(fingerprint)),
+        ("detail", json!(invite_id)),
+    ]
 }
 
 /// `team join-requests`: the join requests still waiting for a decision --
@@ -396,7 +390,15 @@ pub fn approve_join(
         approved
     };
     for id in &approved {
-        audit(ctx, "team_join_approved", env_id, fingerprint, id);
+        let _ = ctx.audit.record(
+            "team_join_approved",
+            RecordArgs {
+                caller: Some("admin"),
+                result: Some("ok"),
+                extra: decision_fields(env_id, fingerprint, id),
+                ..Default::default()
+            },
+        );
     }
     Ok(json!({"env_id": env_id, "fingerprint": fingerprint, "approved_invites": approved}))
 }
@@ -444,7 +446,15 @@ pub fn deny_join(ctx: &Context, env_id: &str, fingerprint: &str) -> Result<Value
         (revoked, newly)
     };
     for id in &revoked {
-        audit(ctx, "team_join_denied", env_id, fingerprint, id);
+        let _ = ctx.audit.record(
+            "team_join_denied",
+            RecordArgs {
+                caller: Some("admin"),
+                result: Some("ok"),
+                extra: decision_fields(env_id, fingerprint, id),
+                ..Default::default()
+            },
+        );
     }
     // The same record `team revoke-invite` writes for each one it stops.
     for (id, role) in newly {

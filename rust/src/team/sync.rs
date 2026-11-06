@@ -7548,7 +7548,9 @@ impl TeamSync {
         if !self.accept_session(env_id, session.clone(), false) {
             return Ok(false);
         }
-        if session.transport_kind().is_none() && address.starts_with("zpl:") {
+        // A session dialed at a `zpl:` address runs over the link, whatever
+        // byte channel carries it locally (the daemon's Unix stream).
+        if address.starts_with("zpl:") {
             let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(env) = envs.get_mut(env_id)
                 && env

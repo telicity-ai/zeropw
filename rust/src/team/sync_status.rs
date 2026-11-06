@@ -234,7 +234,8 @@ fn derive_state(peer: Option<&FilePeer>, local: &BTreeMap<String, PyInt>) -> &'s
 
 /// Unacknowledged `team_op_overridden` alerts of `env_id`: the override
 /// signatures this node alerted on (`overridden_alerted.json`, one per
-/// alert). No command acknowledges them yet, so every one counts.
+/// alert), read as `serve` reads them (the set of its strings). No command
+/// acknowledges them yet, so every one counts.
 fn conflicts(ctx: &Context, env_id: &str) -> Result<usize> {
     let alerted_path = format!("team/{env_id}/overridden_alerted.json");
     let alerted = ctx.state.read_json(&alerted_path, json!([]))?;
@@ -243,7 +244,9 @@ fn conflicts(ctx: &Context, env_id: &str) -> Result<usize> {
     }
     let list = super::sync::python_list(&alerted)
         .ok_or_else(|| Error::state("state_corrupt").with_detail(alerted_path))?;
-    Ok(list.iter().filter(|value| value.is_string()).count())
+    let signatures: std::collections::HashSet<&str> =
+        list.iter().filter_map(Value::as_str).collect();
+    Ok(signatures.len())
 }
 
 /// `team sync-status`: `{"env_id", "self", "serve_updated_at", "conflicts",

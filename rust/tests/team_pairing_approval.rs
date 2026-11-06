@@ -287,7 +287,12 @@ fn approval_flow_end_to_end() {
     assert_eq!(recorded.len(), 1, "{recorded:?}");
     assert_eq!(recorded[0]["fingerprint"], b_fp);
     assert_eq!(recorded[0]["detail"], created.invite_id);
-    assert_eq!(audit_events(&a, "team_join_approved").len(), 1);
+    let approvals = audit_events(&a, "team_join_approved");
+    assert_eq!(approvals.len(), 1);
+    assert_eq!(approvals[0]["caller"], "admin");
+    assert_eq!(approvals[0]["env_id"], env);
+    assert_eq!(approvals[0]["fingerprint"], b_fp);
+    assert_eq!(approvals[0]["detail"], created.invite_id);
     assert!(
         audit_events(&a, "team_handshake_failed")
             .iter()
@@ -368,7 +373,11 @@ fn deny_revokes_the_invitation() {
     let refused = join_attempt(&b, &created.invite, 1.0).unwrap_err();
     assert_ne!(refused.reason, "join_pending_approval");
     assert_eq!(requests_file(&a, &env), before);
-    assert_eq!(audit_events(&a, "team_join_denied").len(), 2);
+    let denials = audit_events(&a, "team_join_denied");
+    assert_eq!(denials.len(), 2);
+    assert!(denials.iter().all(|r| r["caller"] == "admin"
+        && r["fingerprint"] == b_fp
+        && r["detail"] == created.invite_id));
     // One revocation, recorded as `team revoke-invite` records it.
     let revoked = audit_events(&a, "team_invite_revoke");
     assert_eq!(revoked.len(), 1);

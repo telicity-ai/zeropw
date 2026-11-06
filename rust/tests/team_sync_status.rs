@@ -15,7 +15,7 @@ use zeropw::team::identity::DeviceKey;
 use zeropw::team::membership;
 use zeropw::team::sync::{self, TeamSync};
 use zeropw::team::sync_status;
-use zeropw::team::transport::{MembershipCheck, TcpTransport};
+use zeropw::team::transport::{InProcessTransport, MembershipCheck, TcpTransport, Transport};
 
 const SECRET: &[u8] = b"synthetic-sync-status-secret-0123456789";
 const PEER_KEYS: [&str; 9] = [
@@ -337,6 +337,66 @@ fn mtime(path: &std::path::Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
+/// A session this serve dialed at a `zpl:` address is reported as carried
+/// by the link, whatever byte channel carries it locally.
+#[test]
+fn a_session_dialed_at_a_link_address_reports_the_link() {
+    let root = TempDir::new().unwrap();
+    let a = context(&root, "a", 0.05);
+    a.projects.create("demo", &["dev"]).unwrap();
+    let shared =
+        membership::share_environment(&a, None, "demo", "dev", "owner", "admin-passphrase")
+            .unwrap();
+    let env = shared["env_id"].as_str().unwrap().to_owned();
+    let in_process = |ctx: &Arc<Context>| {
+        let device = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+        let transport = Arc::new(InProcessTransport::new(device.clone(), none()));
+        (
+            TeamSync::new(ctx.clone(), transport.clone(), device),
+            transport,
+        )
+    };
+    let a_address = "sync-status-link-a.test:47001";
+    let (node, _) = in_process(&a);
+    node.start(Some(a_address)).unwrap();
+    let invite =
+        membership::create_invite(&a, &env, "user", "laptop", 3600, &[a_address.to_owned()])
+            .unwrap();
+    let b = context(&root, "b", 0.05);
+    let (b_team, b_transport) = in_process(&b);
+    b_team.start(None).unwrap();
+    membership::join(
+        &b,
+        &invite,
+        b_transport.as_ref() as &dyn Transport,
+        &b_team,
+        Some("paired"),
+        Some("dev"),
+        10.0,
+    )
+    .unwrap();
+    let b_fp = fingerprint(&b);
+    b_team.stop();
+    node.stop();
+    // B now listens only at a link address; A's restarted serve listens
+    // nowhere and dials B there.
+    let link_address = format!("zpl:{}", "b".repeat(26));
+    let (b_team, _) = in_process(&b);
+    b_team.start(Some(&link_address)).unwrap();
+    let (node, _) = in_process(&a);
+    node.enable_sync_state();
+    node.start(None).unwrap();
+    node.set_peer_address(&env, &b_fp, &link_address).unwrap();
+    let status = wait_for("a session over the link address", || {
+        let status = sync_status::status(&a, &env).unwrap();
+        (peer_of(&status, &b_fp)["session"] == true).then_some(status)
+    });
+    assert_eq!(peer_of(&status, &b_fp)["transport"], "link");
+    assert_eq!(state_file(&a, &env)["peers"][&b_fp]["transport"], "link");
+    b_team.stop();
+    node.stop();
+}
+
 /// At most every 2 s, and only when something changed.
 #[test]
 fn writes_are_throttled_and_skipped_when_nothing_changed() {
@@ -348,22 +408,30 @@ fn writes_are_throttled_and_skipped_when_nothing_changed() {
     wait_for("session", || {
         (state_file(&a, &env)["peers"][&b_fp]["session"] == true).then_some(())
     });
-    let mut seen: Vec<SystemTime> = Vec::new();
+    // Each write changes the content (only a change is written) and replaces
+    // the file atomically; note when each new content is first seen on the
+    // monotonic clock. File mtimes are no measure here: a VM's coarse file
+    // clock put two writes 2.01 s apart only 1.80 s apart.
+    let mut seen: Vec<(Instant, String)> = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(9);
     while Instant::now() < deadline {
-        if let Some(time) = mtime(&path)
-            && seen.last() != Some(&time)
+        if let Ok(text) = std::fs::read_to_string(&path)
+            && seen.last().is_none_or(|(_, last)| *last != text)
         {
-            seen.push(time);
+            seen.push((Instant::now(), text));
         }
-        std::thread::sleep(Duration::from_millis(20));
+        std::thread::sleep(Duration::from_millis(10));
     }
+    // At least two writes seen as they happened, so at least one gap.
     assert!(
         seen.len() >= 3,
-        "a busy peer keeps changing the file: {seen:?}"
+        "a busy peer keeps changing the file: {} versions",
+        seen.len()
     );
-    for pair in seen.windows(2) {
-        let gap = pair[1].duration_since(pair[0]).unwrap();
+    // A version is seen at most one poll (plus a read) after it is written;
+    // the first one was written before the loop began, at an unknown time.
+    for pair in seen[1..].windows(2) {
+        let gap = pair[1].0.duration_since(pair[0].0);
         assert!(gap >= Duration::from_millis(1900), "written {gap:?} apart");
     }
     b_team.stop();
@@ -488,11 +556,12 @@ fn cli_sync_status_merges_the_file_with_the_store() {
     assert_eq!(peer["state"], "offline");
     assert!(peer["transport"].is_null());
 
-    // Conflicts: this environment's unacknowledged override alerts.
+    // Conflicts: this environment's unacknowledged override alerts, read as
+    // serve reads the file (a set of its strings).
     ctx.state
         .write_json(
             &format!("team/{env}/overridden_alerted.json"),
-            &json!(["aa:bb", "cc:dd"]),
+            &json!(["aa:bb", "cc:dd", "aa:bb", 5]),
         )
         .unwrap();
     let status = inviter.ok(&["team", "sync-status", "--env", "demo/dev"]);
