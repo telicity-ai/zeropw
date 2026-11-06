@@ -287,6 +287,9 @@ fn approval_flow_end_to_end() {
     assert_eq!(recorded.len(), 1, "{recorded:?}");
     assert_eq!(recorded[0]["fingerprint"], b_fp);
     assert_eq!(recorded[0]["detail"], created.invite_id);
+    assert_eq!(recorded[0]["result"], "ok");
+    assert_eq!(recorded[0]["reason"], "join_request_recorded");
+    assert_eq!(recorded[0]["count"], 1);
     let approvals = audit_events(&a, "team_join_approved");
     assert_eq!(approvals.len(), 1);
     assert_eq!(approvals[0]["caller"], "admin");

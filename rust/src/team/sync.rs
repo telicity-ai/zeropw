@@ -5336,10 +5336,12 @@ impl TeamSync {
             }
             audits.insert(key, now);
         }
+        // `ok`: the request was stored. Its reason says it waits; a new
+        // result value would be one more code every record reader must know.
         let _ = self.ctx.audit.record(
             "team_join_request",
             RecordArgs {
-                result: Some("pending"),
+                result: Some("ok"),
                 reason: Some(if new_request {
                     "join_request_recorded"
                 } else {
