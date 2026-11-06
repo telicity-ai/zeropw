@@ -14,7 +14,11 @@ use sha2::{Digest, Sha256};
 use super::commit::{self, Commit, CommitStore, Hlc};
 use super::fold::{self, Facts, FoldResult};
 use super::identity::{DeviceKey, DeviceRecord};
-use super::transport::{InviteCheck, MembershipCheck, OnSession, Session, Transport};
+use super::sync_status::PeerState;
+use super::transport::{
+    InviteCheck, InviteDecision, JOIN_PENDING_REASON, JOIN_PENDING_TYPE, MembershipCheck,
+    OnSession, Session, SessionClosed, Transport,
+};
 use crate::audit::RecordArgs;
 use crate::context::Context;
 use crate::errors::{Error, Result};
@@ -4627,6 +4631,24 @@ struct EnvState {
     /// The last refold failed, wherever it ran: the poll retries it until
     /// one succeeds (section 6.4, issue #51).
     refold_failure: Option<RefoldFailure>,
+    /// Sync status for the UI (docs/remote-sync.md §3.3), wall-clock times.
+    sync: SyncTrack,
+}
+/// What `sync_state.json` reports beyond the sessions and peer vectors.
+#[derive(Default)]
+struct SyncTrack {
+    since: HashMap<String, f64>,
+    transport: HashMap<String, &'static str>,
+    vector_received_at: HashMap<String, f64>,
+    last_contact: HashMap<String, f64>,
+    dial_failures: HashMap<String, u64>,
+    next_attempt_at: HashMap<String, f64>,
+    last_error: HashMap<String, String>,
+    /// Inviters that answered this node's join with JOIN_PENDING.
+    join_pending: HashSet<String>,
+    /// The `peers` value last written, and when it was last compared.
+    written: Option<Value>,
+    checked: Option<Instant>,
 }
 /// A failed refold the poll retries: its error, and when after the first
 /// retry ([`crate::context::Config::team_refold_retry_backoff`]).
@@ -4676,6 +4698,7 @@ impl EnvState {
             pending_removal_repairs: HashSet::new(),
             next_removal_repair: Instant::now(),
             refold_failure: None,
+            sync: SyncTrack::default(),
         }
     }
     /// `fp`'s member entry while the device is a member to talk to: active
@@ -4706,6 +4729,10 @@ pub struct TeamSync {
     /// The reason each failing environment's poll or load last failed with,
     /// so a failure the poll thread retries every tick is audited once.
     poll_failures: Mutex<HashMap<String, String>>,
+    /// Whether this instance writes `sync_state.json` (`serve` only).
+    sync_state: AtomicBool,
+    /// When each invitation's join request was last audited.
+    join_request_audits: Mutex<HashMap<String, Instant>>,
     /// Test observability: how many relaxed-document folds actually ran.
     #[cfg(test)]
     relaxed_folds: std::sync::atomic::AtomicUsize,
@@ -4734,6 +4761,8 @@ impl TeamSync {
             receivers: Mutex::new(Vec::new()),
             deferred_sends: Mutex::new(std::collections::VecDeque::new()),
             poll_failures: Mutex::new(HashMap::new()),
+            sync_state: AtomicBool::new(false),
+            join_request_audits: Mutex::new(HashMap::new()),
             #[cfg(test)]
             relaxed_folds: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
@@ -4747,8 +4776,9 @@ impl TeamSync {
         this.transport.set_membership(membership);
         let weak = Arc::downgrade(&this);
         let invite: InviteCheck = Arc::new(move |env, record, hash, proof| {
-            weak.upgrade()
-                .is_some_and(|s| s.invite_check(env, record, hash, proof))
+            weak.upgrade().map_or(InviteDecision::Reject, |s| {
+                s.invite_check(env, record, hash, proof)
+            })
         });
         this.transport.set_invite_check(Some(invite));
         let weak = Arc::downgrade(&this);
@@ -4809,6 +4839,8 @@ impl TeamSync {
             let mut all = Vec::new();
             for env in envs.values_mut() {
                 all.extend(env.sessions.drain().map(|(_, session)| session));
+                env.sync.since.clear();
+                env.sync.transport.clear();
                 env.fact_replay_cursor.clear();
                 env.catching_up.clear();
                 env.held.clear();
@@ -4828,6 +4860,10 @@ impl TeamSync {
             std::mem::take(&mut *self.receivers.lock().unwrap_or_else(|e| e.into_inner()));
         for t in receivers {
             t.join_bounded(THREAD_JOIN_TIMEOUT);
+        }
+        // The last word of a stopping serve: no session is open any more.
+        for id in self.known_envs() {
+            self.write_sync_state(&id, true);
         }
     }
     pub fn known_envs(&self) -> Vec<String> {
@@ -5007,6 +5043,8 @@ impl TeamSync {
                 })
                 .collect();
         }
+        // A restarted serve still tells `offline` from `never_connected`.
+        env.sync.last_contact = super::sync_status::previous_contacts(&self.ctx, env_id);
         self.envs
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -5216,6 +5254,11 @@ impl TeamSync {
         member_device_record(&env.document, fp)
     }
     fn audit_handshake_failed(&self, reason: &str, fp: Option<&str>) {
+        // A pending join is no failure: its request is audited where it is
+        // recorded (`invite_check`).
+        if reason == JOIN_PENDING_REASON {
+            return;
+        }
         let _ = self.ctx.audit.record(
             "team_handshake_failed",
             RecordArgs {
@@ -5226,23 +5269,86 @@ impl TeamSync {
             },
         );
     }
-    fn invite_check(&self, env_id: &str, record: &DeviceRecord, hash: &[u8], proof: &[u8]) -> bool {
+    fn invite_check(
+        &self,
+        env_id: &str,
+        record: &DeviceRecord,
+        hash: &[u8],
+        proof: &[u8],
+    ) -> InviteDecision {
+        use super::membership::InviteOutcome;
         let joiner = record.fingerprint();
-        let Ok(info) =
-            super::membership::consume_invite_by(&self.ctx, env_id, hash, proof, Some(&joiner))
-        else {
-            return false;
-        };
-        let Some((role, name)) = info else {
-            return false;
-        };
-        if let Ok(mut envs) = self.envs.lock() {
-            if let Some(env) = envs.get_mut(env_id) {
-                env.pending_invites.insert(joiner, (role, name));
-                return true;
+        let outcome = super::membership::check_invite(&self.ctx, env_id, hash, proof, &joiner);
+        match outcome {
+            Ok(InviteOutcome::Consumed { role, name }) => {
+                if let Ok(mut envs) = self.envs.lock() {
+                    if let Some(env) = envs.get_mut(env_id) {
+                        env.pending_invites.insert(joiner, (role, name));
+                        return InviteDecision::Accept;
+                    }
+                }
+                InviteDecision::Reject
             }
+            Ok(InviteOutcome::Pending {
+                invite_id,
+                new_request,
+                attempts,
+            }) => {
+                if !self
+                    .envs
+                    .lock()
+                    .is_ok_and(|envs| envs.contains_key(env_id))
+                {
+                    return InviteDecision::Reject;
+                }
+                self.audit_join_request(env_id, &invite_id, &joiner, new_request, attempts);
+                InviteDecision::Pending
+            }
+            Ok(InviteOutcome::NoMatch) | Err(_) => InviteDecision::Reject,
         }
-        false
+    }
+    /// `team_join_request`, at most once a minute per invitation (a holder
+    /// of the invitation can retry, or change keys, as often as it likes).
+    fn audit_join_request(
+        &self,
+        env_id: &str,
+        invite_id: &str,
+        fp: &str,
+        new_request: bool,
+        attempts: u64,
+    ) {
+        const INTERVAL: Duration = Duration::from_secs(60);
+        let key = format!("{env_id}/{invite_id}");
+        {
+            let mut audits = self
+                .join_request_audits
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let now = Instant::now();
+            audits.retain(|_, at| now.duration_since(*at) < INTERVAL);
+            if audits.contains_key(&key) {
+                return;
+            }
+            audits.insert(key, now);
+        }
+        let _ = self.ctx.audit.record(
+            "team_join_request",
+            RecordArgs {
+                result: Some("pending"),
+                reason: Some(if new_request {
+                    "join_request_recorded"
+                } else {
+                    "join_request_repeated"
+                }),
+                extra: vec![
+                    ("env_id", json!(env_id)),
+                    ("fingerprint", json!(fp)),
+                    ("detail", json!(invite_id)),
+                    ("count", json!(attempts)),
+                ],
+                ..Default::default()
+            },
+        );
     }
     pub fn document(&self, env_id: &str) -> Result<Value> {
         self.envs
@@ -5567,6 +5673,9 @@ impl TeamSync {
             env.backoff.remove(fp);
             env.next_attempt.remove(fp);
             env.dial_pending.remove(fp);
+            env.sync.dial_failures.remove(fp);
+            env.sync.next_attempt_at.remove(fp);
+            env.sync.last_error.remove(fp);
             if env.sessions.contains_key(fp) {
                 env.draining.entry(fp.into()).or_insert_with(|| {
                     Instant::now()
@@ -5629,6 +5738,13 @@ impl TeamSync {
         if inbound && env.pending_invites.contains_key(&fp) {
             env.catching_up.insert(fp.clone());
         }
+        let now = (self.ctx.clock)();
+        env.sync.since.insert(fp.clone(), now);
+        env.sync.last_contact.insert(fp.clone(), now);
+        match session.transport_kind() {
+            Some(kind) => env.sync.transport.insert(fp.clone(), kind),
+            None => env.sync.transport.remove(&fp),
+        };
         env.sessions.insert(fp, session);
         true
     }
@@ -5741,6 +5857,13 @@ impl TeamSync {
                 }
                 match session.recv(Duration::from_secs(1)) {
                     Ok(Some(message)) => {
+                        // An approval inviter's only frame to an unapproved
+                        // joiner (docs/remote-sync.md §3.2): `join` reports it.
+                        if !heard && message["type"] == JOIN_PENDING_TYPE {
+                            this.note_join_pending(&env_id, &session.peer().fingerprint());
+                            break;
+                        }
+                        this.note_contact(&env_id, &session.peer().fingerprint());
                         if this.handle_message(&env_id, &session, &message).is_err() {
                             break;
                         }
@@ -5785,6 +5908,8 @@ impl TeamSync {
             env.held.remove(fp);
             env.early_commits.remove(fp);
             env.vector_due.remove(fp);
+            env.sync.since.remove(fp);
+            env.sync.transport.remove(fp);
             env.sessions.remove(fp)
         };
         if let Some(session) = removed {
@@ -5958,6 +6083,9 @@ impl TeamSync {
             let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(env) = envs.get_mut(env_id) {
                 env.peer_vectors.insert(fp.clone(), clean);
+                env.sync
+                    .vector_received_at
+                    .insert(fp.clone(), (self.ctx.clock)());
             }
         }
         self.persist_peer_vectors(env_id)?;
@@ -6916,6 +7044,7 @@ impl TeamSync {
             if let Err(error) = polled {
                 failed.get_or_insert(error);
             }
+            self.write_sync_state(&id, false);
         }
         self.flush_deferred_sends();
         failed.map_or(Ok(()), Err)
@@ -7278,13 +7407,16 @@ impl TeamSync {
         let Some(address) = address else {
             return;
         };
-        let Ok(session) = self.transport.dial(&address, env_id, None) else {
-            self.record_dial_failure(env_id, fp);
-            return;
+        let session = match self.transport.dial(&address, env_id, None) {
+            Ok(session) => session,
+            Err(SessionClosed(reason)) => {
+                self.record_dial_failure(env_id, fp, reason);
+                return;
+            }
         };
         if session.peer().fingerprint() != fp {
             session.close();
-            self.record_dial_failure(env_id, fp);
+            self.record_dial_failure(env_id, fp, "team_dial_wrong_peer");
             return;
         }
         // The backoff resets only once the peer's first frame has been
@@ -7328,10 +7460,11 @@ impl TeamSync {
             }
         }
     }
-    fn record_dial_failure(&self, env_id: &str, fp: &str) {
+    fn record_dial_failure(&self, env_id: &str, fp: &str, reason: &str) {
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(env) = envs.get_mut(env_id) {
             self.note_dial_failure(env, fp);
+            env.sync.last_error.insert(fp.into(), reason.into());
         }
     }
     fn note_dial_failure(&self, env: &mut EnvState, fp: &str) {
@@ -7343,6 +7476,14 @@ impl TeamSync {
         let dur = Duration::from_secs_f64(next);
         env.backoff.insert(fp.into(), dur);
         env.next_attempt.insert(fp.into(), Instant::now() + dur);
+        let failures = env.sync.dial_failures.entry(fp.into()).or_insert(0);
+        *failures = failures.saturating_add(1);
+        env.sync
+            .next_attempt_at
+            .insert(fp.into(), (self.ctx.clock)() + next);
+        env.sync
+            .last_error
+            .insert(fp.into(), "team_dial_failed".into());
     }
     /// The peer's first frame on this session was handled: the peer
     /// accepts us, so the next dial need not wait. This holds for a session
@@ -7355,6 +7496,9 @@ impl TeamSync {
             take_dial_mark(env, &fp, session);
             env.backoff.remove(&fp);
             env.next_attempt.remove(&fp);
+            env.sync.dial_failures.remove(&fp);
+            env.sync.next_attempt_at.remove(&fp);
+            env.sync.last_error.remove(&fp);
         }
     }
     /// A dialed session ended before its peer sent a frame we handled -- a
@@ -7366,6 +7510,9 @@ impl TeamSync {
             && take_dial_mark(env, &fp, session)
         {
             self.note_dial_failure(env, &fp);
+            env.sync
+                .last_error
+                .insert(fp.clone(), "team_dial_refused".into());
         }
     }
     /// `_wire_dialed_session`. Python persists the dialed address first and an
@@ -7400,6 +7547,17 @@ impl TeamSync {
         if !self.accept_session(env_id, session.clone(), false) {
             return Ok(false);
         }
+        if session.transport_kind().is_none() && address.starts_with("zpl:") {
+            let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(env) = envs.get_mut(env_id)
+                && env
+                    .sessions
+                    .get(fp)
+                    .is_some_and(|current| Arc::ptr_eq(current, &session))
+            {
+                env.sync.transport.insert(fp.into(), "link");
+            }
+        }
         self.audit_event("team_session_open", env_id, Some(fp), None, None);
         self.start_receiver(env_id.into(), session.clone());
         self.send_vector(env_id, &session);
@@ -7423,6 +7581,119 @@ impl TeamSync {
         let fp = session.peer().fingerprint();
         self.wire_dialed_session(env_id, &fp, address, session)
             .map(|_| ())
+    }
+    /// Write `team/ENV_ID/sync_state.json` from now on (`serve`; docs/remote-sync.md §3.3).
+    pub fn enable_sync_state(&self) {
+        self.sync_state.store(true, Ordering::SeqCst);
+    }
+    fn note_contact(&self, env_id: &str, fp: &str) {
+        let now = (self.ctx.clock)();
+        if let Some(env) = self
+            .envs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_mut(env_id)
+        {
+            env.sync.last_contact.insert(fp.into(), now);
+        }
+    }
+    fn note_join_pending(&self, env_id: &str, fp: &str) {
+        if let Some(env) = self
+            .envs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_mut(env_id)
+        {
+            env.sync.join_pending.insert(fp.into());
+        }
+    }
+    /// Whether inviter `fp` answered this node's join of `env_id` with
+    /// JOIN_PENDING since the last call (the mark is taken).
+    pub fn take_join_pending(&self, env_id: &str, fp: &str) -> bool {
+        self.envs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get_mut(env_id)
+            .is_some_and(|env| env.sync.join_pending.remove(fp))
+    }
+    /// What `sync_state.json` would say about `env_id`'s peers now: the
+    /// document's active members other than this device, and any device
+    /// with an open session.
+    fn sync_peers(&self, env: &EnvState, mine: &str) -> BTreeMap<String, PeerState> {
+        let mut fps: BTreeSet<String> = env
+            .document
+            .get("members")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+            .map(|(fp, _)| fp)
+            .filter(|fp| *fp != mine && env.active_member(fp).is_some())
+            .cloned()
+            .collect();
+        fps.extend(env.sessions.keys().cloned());
+        fps.into_iter()
+            .map(|fp| {
+                let session = env.sessions.get(&fp).is_some_and(|s| !s.is_closed());
+                let state = PeerState {
+                    session,
+                    since: env.sync.since.get(&fp).copied(),
+                    peer_vector: env.peer_vectors.get(&fp).cloned(),
+                    vector_received_at: env.sync.vector_received_at.get(&fp).copied(),
+                    transport: env.sync.transport.get(&fp).copied(),
+                    dial_failures: env.sync.dial_failures.get(&fp).copied().unwrap_or(0),
+                    next_attempt_at: env.sync.next_attempt_at.get(&fp).copied(),
+                    last_error: env.sync.last_error.get(&fp).cloned(),
+                    last_contact_at: env.sync.last_contact.get(&fp).copied(),
+                };
+                (fp, state)
+            })
+            .collect()
+    }
+    /// Write `team/ENV_ID/sync_state.json` when this instance is enabled
+    /// and what it says changed, at most every
+    /// [`super::sync_status::WRITE_INTERVAL`] unless `force`d (on stop).
+    fn write_sync_state(&self, env_id: &str, force: bool) {
+        if !self.sync_state.load(Ordering::SeqCst) {
+            return;
+        }
+        let Ok(mine) = self.device.fingerprint() else {
+            return;
+        };
+        let now = Instant::now();
+        let peers = {
+            let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(env) = envs.get_mut(env_id) else {
+                return;
+            };
+            if !force
+                && env
+                    .sync
+                    .checked
+                    .is_some_and(|at| now.duration_since(at) < super::sync_status::WRITE_INTERVAL)
+            {
+                return;
+            }
+            env.sync.checked = Some(now);
+            let peers = super::sync_status::peers_value(&self.sync_peers(env, &mine));
+            if env.sync.written.as_ref() == Some(&peers) {
+                return;
+            }
+            peers
+        };
+        let document = super::sync_status::file_value((self.ctx.clock)(), &mine, &peers);
+        if self
+            .ctx
+            .state
+            .write_json(&super::sync_status::path(env_id), &document)
+            .is_ok()
+            && let Some(env) = self
+                .envs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_mut(env_id)
+        {
+            env.sync.written = Some(peers);
+        }
     }
     pub fn status(&self, env_id: &str) -> Result<Value> {
         let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());

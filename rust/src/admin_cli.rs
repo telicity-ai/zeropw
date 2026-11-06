@@ -613,7 +613,41 @@ fn build_parser() -> Parser {
     )
     .arg(Arg::opt("--link").flag().help(
         "also print a one-day zeropw://join# link, its invite id and expiry (the TTL is fixed at 24h)",
+    ))
+    .arg(Arg::opt("--approval").flag().help(
+        "the joining device also needs explicit approval of its fingerprint (team approve-join)",
     ));
+    add(
+        team,
+        "join-requests",
+        "list devices that proved an approval invite and wait for a decision",
+    )
+    .arg(env_arg());
+    add(
+        team,
+        "approve-join",
+        "approve a waiting device's fingerprint for its approval invites",
+    )
+    .arg(env_arg())
+    .arg(Arg::opt("--fingerprint").required().metavar("FINGERPRINT"))
+    .arg(
+        Arg::opt("--invite-id")
+            .metavar("INVITE_ID")
+            .help("approve only this invite (default: every one the device asked with)"),
+    );
+    add(
+        team,
+        "deny-join",
+        "revoke the approval invites a waiting device asked with",
+    )
+    .arg(env_arg())
+    .arg(Arg::opt("--fingerprint").required().metavar("FINGERPRINT"));
+    add(
+        team,
+        "sync-status",
+        "per-peer sync state from the running serve, merged with the local store",
+    )
+    .arg(env_arg());
     add(
         team,
         "invites",
@@ -3549,7 +3583,15 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
     }
     let mutating = !matches!(
         a.action.as_str(),
-        "members" | "status" | "log" | "show" | "diff" | "incidents" | "invites"
+        "members"
+            | "status"
+            | "log"
+            | "show"
+            | "diff"
+            | "incidents"
+            | "invites"
+            | "join-requests"
+            | "sync-status"
     ) && (a.action != "peers" || a.get("add").is_some_and(|v| !v.is_empty()));
     let ctx = open(a, mutating)?;
     if a.action == "init" {
@@ -3622,7 +3664,7 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
                 Some(text) => ttl_seconds_for_bounded_consumer(&ttl(text)?),
                 None => M::DEFAULT_INVITE_TTL_SECONDS,
             };
-            let created = M::create_invite_with(
+            let created = M::create_invite_opts(
                 &ctx,
                 &env_id,
                 a.req("role"),
@@ -3630,16 +3672,29 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
                 ttl,
                 &a.list("address"),
                 a.has("link"),
+                a.has("approval"),
             )?;
             let mut out = json!({"env_id":env_id,"invite":created.invite,"role":a.req("role"),"name":a.req("name"),"warning":"this string is a secret: never paste it into chat, issues, tickets, or logs"});
-            // Only `--link` adds keys; the plain output is unchanged.
+            // Only `--link` and `--approval` add keys; the plain output is unchanged.
             if let Some(link) = created.link {
                 out["link"] = json!(link);
                 out["invite_id"] = json!(created.invite_id);
                 out["expires_at"] = json!(created.expires_at);
             }
+            if created.approval {
+                out["approval"] = json!(crate::team::pairing::APPROVAL_REQUIRED);
+            }
             out
         }
+        "join-requests" => crate::team::pairing::list_requests(&ctx, &env_id)?,
+        "approve-join" => crate::team::pairing::approve_join(
+            &ctx,
+            &env_id,
+            a.req("fingerprint"),
+            a.get("invite-id").filter(|id| !id.is_empty()),
+        )?,
+        "deny-join" => crate::team::pairing::deny_join(&ctx, &env_id, a.req("fingerprint"))?,
+        "sync-status" => crate::team::sync_status::status(&ctx, &env_id)?,
         "invites" => M::list_invites(&ctx, &env_id)?,
         "revoke-invite" => M::revoke_invite(&ctx, &env_id, a.req("id"))?,
         "members" => {
@@ -3917,6 +3972,7 @@ pub fn run_serve(
         let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
         let transport = TcpTransport::new(device.clone(), Arc::new(|_, _| None), 64);
         let team = TeamSync::new(ctx.clone(), Arc::new(transport), device);
+        team.enable_sync_state();
         team.start(Some(address))?;
         Some(team)
     } else {

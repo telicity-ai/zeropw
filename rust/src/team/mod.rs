@@ -15,7 +15,9 @@ pub mod fold;
 pub mod humanview;
 pub mod identity;
 pub mod membership;
+pub mod pairing;
 pub mod sync;
+pub mod sync_status;
 pub mod transport;
 
 use std::collections::HashSet;
