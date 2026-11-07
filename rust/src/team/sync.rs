@@ -3916,6 +3916,249 @@ mod retry_tests {
         assert!(!state.sessions.contains_key(&fp));
         assert!(state.dial_pending.is_empty());
     }
+
+    /// Dials by address: a live address hands out the next queued session,
+    /// any other fails at once. Every dialed address is recorded.
+    struct RouteTransport {
+        live: Mutex<HashSet<String>>,
+        sessions: Mutex<std::collections::VecDeque<Arc<dyn Session>>>,
+        dialed: Mutex<Vec<String>>,
+    }
+    impl RouteTransport {
+        fn new() -> Arc<Self> {
+            Arc::new(RouteTransport {
+                live: Mutex::new(HashSet::new()),
+                sessions: Mutex::new(Default::default()),
+                dialed: Mutex::new(Vec::new()),
+            })
+        }
+        fn set_live(&self, addresses: &[&str]) {
+            *self.live.lock().unwrap() = addresses.iter().map(|a| a.to_string()).collect();
+        }
+        fn queue(&self, session: Arc<dyn Session>) {
+            self.sessions.lock().unwrap().push_back(session);
+        }
+        fn take_dialed(&self) -> Vec<String> {
+            std::mem::take(&mut *self.dialed.lock().unwrap())
+        }
+    }
+    impl Transport for RouteTransport {
+        fn set_membership(&self, _: MembershipCheck) {}
+        fn set_invite_check(&self, _: Option<InviteCheck>) {}
+        fn set_handshake_failed(&self, _: Option<HandshakeFailedHook>) {}
+        fn listen(&self, _: &str, _: OnSession) -> Result<()> {
+            Ok(())
+        }
+        fn dial(
+            &self,
+            address: &str,
+            _: &str,
+            _: Option<InviteProof>,
+        ) -> std::result::Result<Arc<dyn Session>, SessionClosed> {
+            self.dialed.lock().unwrap().push(address.to_owned());
+            if !self.live.lock().unwrap().contains(address) {
+                return Err(SessionClosed("synthetic_unreachable"));
+            }
+            self.sessions
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or(SessionClosed("synthetic_no_session"))
+        }
+        fn close(&self) {}
+    }
+
+    const LAN: &str = "192.0.2.10:47001";
+    const LINK: &str = "zpl:abcdefghijklmnopqrstuvwxyz";
+
+    /// A team on an empty `retry-env` that knows `peer` at `addresses`.
+    fn rotating_team(
+        root: &TempDir,
+        peer: &DeviceRecord,
+        addresses: &[&str],
+        transport: Arc<RouteTransport>,
+    ) -> Arc<TeamSync> {
+        let ctx = Arc::new(
+            Context::initialize(
+                root.path().join("state"),
+                "admin-passphrase",
+                "recovery-passphrase",
+                Config::default(),
+                crate::clock::system(),
+            )
+            .unwrap(),
+        );
+        let mine = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+        let team = TeamSync::new(ctx, transport, mine);
+        let mut state = EnvState::new(Facts::default(), HashSet::new(), HashMap::new());
+        state.candidate_addresses.insert(
+            peer.fingerprint(),
+            addresses.iter().map(|a| a.to_string()).collect(),
+        );
+        team.envs.lock().unwrap().insert("retry-env".into(), state);
+        team
+    }
+
+    /// Dial `fp` once more over a session the peer accepts (it sends one
+    /// frame, so the dial is confirmed), then hang the session up.
+    fn connect_and_hang_up(team: &Arc<TeamSync>, transport: &RouteTransport, peer: &DeviceRecord) {
+        let fp = peer.fingerprint();
+        let (session, tx) = scripted(peer.clone());
+        transport.queue(session);
+        team.dial_attempt("retry-env", &fp);
+        tx.send(json!({"type":"PEERS","peers":{}})).unwrap();
+        wait_for(|| {
+            let guard = team.envs.lock().unwrap();
+            let state = &guard["retry-env"];
+            state.sessions.contains_key(&fp) && !state.backoff.contains_key(&fp)
+        });
+        drop(tx);
+        wait_for(|| {
+            !team.envs.lock().unwrap()["retry-env"]
+                .sessions
+                .contains_key(&fp)
+        });
+    }
+
+    fn backoff_of(team: &TeamSync, fp: &str) -> Option<Duration> {
+        team.envs.lock().unwrap()["retry-env"]
+            .backoff
+            .get(fp)
+            .copied()
+    }
+
+    /// docs/remote-sync.md §3.1: a failed dial moves the peer to its next
+    /// address, a successful one keeps it there; the backoff is unchanged
+    /// (issue #14): each failure counts, a confirmed dial resets it.
+    #[test]
+    fn a_failed_dial_moves_the_peer_to_its_next_address_and_success_keeps_it() {
+        let root = TempDir::new().unwrap();
+        let peer = DeviceKey::generate().record().unwrap();
+        let fp = peer.fingerprint();
+        let transport = RouteTransport::new();
+        let team = rotating_team(&root, &peer, &[LAN, LINK], transport.clone());
+        let (min, _) = Config::default().team_dial_backoff;
+
+        // The LAN address (sorted first) is down, the link is up.
+        transport.set_live(&[LINK]);
+        team.dial_attempt("retry-env", &fp);
+        assert_eq!(transport.take_dialed(), [LAN]);
+        assert_eq!(backoff_of(&team, &fp), Some(Duration::from_secs_f64(min)));
+        connect_and_hang_up(&team, &transport, &peer);
+        assert_eq!(transport.take_dialed(), [LINK]);
+        assert_eq!(backoff_of(&team, &fp), None);
+
+        // Success kept the link address although LAN sorts first.
+        connect_and_hang_up(&team, &transport, &peer);
+        assert_eq!(transport.take_dialed(), [LINK]);
+
+        // The link goes down and the LAN comes back: from the last address
+        // the rotation wraps to the first.
+        transport.set_live(&[LAN]);
+        team.dial_attempt("retry-env", &fp);
+        assert_eq!(transport.take_dialed(), [LINK]);
+        assert_eq!(backoff_of(&team, &fp), Some(Duration::from_secs_f64(min)));
+        connect_and_hang_up(&team, &transport, &peer);
+        assert_eq!(transport.take_dialed(), [LAN]);
+        connect_and_hang_up(&team, &transport, &peer);
+        assert_eq!(transport.take_dialed(), [LAN]);
+
+        // And back again: the LAN fails, the link answers.
+        transport.set_live(&[LINK]);
+        team.dial_attempt("retry-env", &fp);
+        connect_and_hang_up(&team, &transport, &peer);
+        assert_eq!(transport.take_dialed(), [LAN, LINK]);
+    }
+
+    /// Every address down: each attempt tries the next one in turn and the
+    /// backoff doubles per failure exactly as with one address.
+    #[test]
+    fn unreachable_addresses_are_tried_in_turn_with_the_usual_backoff() {
+        let root = TempDir::new().unwrap();
+        let peer = DeviceKey::generate().record().unwrap();
+        let fp = peer.fingerprint();
+        let transport = RouteTransport::new();
+        let addresses = ["a.test:1", "b.test:1", LINK];
+        let team = rotating_team(&root, &peer, &addresses, transport.clone());
+        let (min, max) = Config::default().team_dial_backoff;
+        let mut expected = min;
+        for _ in 0..4 {
+            team.dial_attempt("retry-env", &fp);
+            assert_eq!(
+                backoff_of(&team, &fp),
+                Some(Duration::from_secs_f64(expected))
+            );
+            expected = (expected * 2.0).min(max);
+        }
+        assert_eq!(
+            transport.take_dialed(),
+            ["a.test:1", "b.test:1", LINK, "a.test:1"]
+        );
+    }
+
+    /// A dial the peer refuses after the handshake (it hangs up before any
+    /// frame) is a failed dial too: the next attempt uses the next address.
+    #[test]
+    fn a_refused_dial_also_moves_to_the_next_address() {
+        let root = TempDir::new().unwrap();
+        let peer = DeviceKey::generate().record().unwrap();
+        let fp = peer.fingerprint();
+        let transport = RouteTransport::new();
+        let team = rotating_team(&root, &peer, &[LAN, LINK], transport.clone());
+        transport.set_live(&[LAN, LINK]);
+        let (session, tx) = scripted(peer.clone());
+        drop(tx);
+        transport.queue(session);
+        team.dial_attempt("retry-env", &fp);
+        wait_for(|| backoff_of(&team, &fp).is_some());
+        wait_for(|| {
+            !team.envs.lock().unwrap()["retry-env"]
+                .sessions
+                .contains_key(&fp)
+        });
+        connect_and_hang_up(&team, &transport, &peer);
+        assert_eq!(transport.take_dialed(), [LAN, LINK]);
+    }
+
+    /// PEERS gossip stays free-form within its 128-byte bound: a `zpl:`
+    /// address of an active member becomes a dial candidate like any other.
+    #[test]
+    fn peers_gossip_carries_link_addresses_within_the_bound() {
+        let f = owner_with_admin_peer();
+        let peer = f.peer_key.fingerprint().unwrap();
+        f.team.poll().unwrap();
+        assert!(f.team.is_active_member(&f.env_id, &peer));
+        let long = format!("zpl:{}", "a".repeat(125));
+        assert_eq!(long.len(), 129);
+        f.team.handle_peers(
+            &f.env_id,
+            &json!({"type":"PEERS","peers":{(peer.clone()): [LINK, LAN, long, ""]}}),
+        );
+        let guard = f.team.envs.lock().unwrap();
+        assert_eq!(
+            guard[&f.env_id].candidate_addresses[&peer],
+            BTreeSet::from([LAN.to_owned(), LINK.to_owned()])
+        );
+    }
+
+    /// A removed member's cursor goes with its addresses and backoff.
+    #[test]
+    fn member_removal_forgets_the_dial_cursor() {
+        let root = TempDir::new().unwrap();
+        let peer = DeviceKey::generate().record().unwrap();
+        let fp = peer.fingerprint();
+        let transport = RouteTransport::new();
+        let team = rotating_team(&root, &peer, &[LAN, LINK], transport.clone());
+        team.dial_attempt("retry-env", &fp);
+        assert!(
+            team.envs.lock().unwrap()["retry-env"]
+                .dial_cursor
+                .contains_key(&fp)
+        );
+        team.drain_removed("retry-env", &fp);
+        let guard = team.envs.lock().unwrap();
+        assert!(!guard["retry-env"].dial_cursor.contains_key(&fp));
+    }
 }
 fn valid_id(s: &str, limit: usize) -> bool {
     !s.is_empty()
@@ -4581,6 +4824,12 @@ struct EnvState {
     peer_vectors: HashMap<String, BTreeMap<String, PyInt>>,
     backoff: HashMap<String, Duration>,
     next_attempt: HashMap<String, Instant>,
+    /// The candidate address each peer is dialed at next: the one a dial
+    /// last reached it at, or the one after the address a dial failed on
+    /// (sorted order, wrapping), so a peer with several addresses -- LAN
+    /// `HOST:PORT` and `zpl:` -- is tried at each in turn
+    /// (docs/remote-sync.md §3.1).
+    dial_cursor: HashMap<String, String>,
     /// A dialed session whose peer has not yet sent a frame we handled.
     /// The initiator's handshake completes before the responder accepts it
     /// (a remover refuses a removed device only at message 3), so the dial
@@ -4653,6 +4902,7 @@ impl EnvState {
             peer_vectors: HashMap::new(),
             backoff: HashMap::new(),
             next_attempt: HashMap::new(),
+            dial_cursor: HashMap::new(),
             dial_pending: HashMap::new(),
             hlc: Hlc::new(0, 0),
             last_known_vector: BTreeMap::new(),
@@ -4685,6 +4935,48 @@ impl EnvState {
     fn active_member(&self, fp: &str) -> Option<&Value> {
         let member = &self.document["members"][fp];
         (member["status"] == "active" && !self.facts.removed_members.contains(fp)).then_some(member)
+    }
+    /// The address to dial `fp` at now: its cursor if still a candidate,
+    /// else the next candidate after it, else the first; remembered as the
+    /// cursor.
+    fn next_dial_address(&mut self, fp: &str) -> Option<String> {
+        use std::ops::Bound;
+        let addresses = self.candidate_addresses.get(fp)?;
+        let chosen = self
+            .dial_cursor
+            .get(fp)
+            .and_then(|cursor| {
+                addresses
+                    .range::<str, _>((Bound::Included(cursor.as_str()), Bound::Unbounded))
+                    .next()
+            })
+            .or_else(|| addresses.iter().next())?
+            .clone();
+        self.dial_cursor.insert(fp.to_owned(), chosen.clone());
+        Some(chosen)
+    }
+    /// A dial of `fp` failed: move its cursor to the candidate after the one
+    /// it was dialed at, wrapping to the first.
+    fn advance_dial_cursor(&mut self, fp: &str) {
+        use std::ops::Bound;
+        let (Some(addresses), Some(cursor)) =
+            (self.candidate_addresses.get(fp), self.dial_cursor.get(fp))
+        else {
+            return;
+        };
+        let next = addresses
+            .range::<str, _>((Bound::Excluded(cursor.as_str()), Bound::Unbounded))
+            .next()
+            .or_else(|| addresses.iter().next())
+            .cloned();
+        match next {
+            Some(next) => {
+                self.dial_cursor.insert(fp.to_owned(), next);
+            }
+            None => {
+                self.dial_cursor.remove(fp);
+            }
+        }
     }
 }
 
@@ -5265,7 +5557,12 @@ impl TeamSync {
         })
     }
     pub fn set_peer_address(&self, env_id: &str, fp: &str, address: &str) -> Result<()> {
-        if !valid_fp(fp) || address.is_empty() {
+        // A `zpl:` address must be a well-formed link address
+        // (docs/remote-sync.md §3.1); other addresses stay free-form.
+        if !valid_fp(fp)
+            || address.is_empty()
+            || (super::link::routes_to_link(address) && !super::link::valid_link_address(address))
+        {
             return Err(Error::invalid_input("team_invalid_peer_address"));
         }
         {
@@ -5566,6 +5863,7 @@ impl TeamSync {
             env.candidate_addresses.remove(fp);
             env.backoff.remove(fp);
             env.next_attempt.remove(fp);
+            env.dial_cursor.remove(fp);
             env.dial_pending.remove(fp);
             if env.sessions.contains_key(fp) {
                 env.draining.entry(fp.into()).or_insert_with(|| {
@@ -5660,6 +5958,11 @@ impl TeamSync {
                 self.drop_session(&env_id, &fp, Some(&session));
                 return;
             }
+        }
+        // docs/remote-sync.md §3.1: the link peer this authenticated member
+        // reached us from is where we can dial it back.
+        if let Some(address) = session.link_address() {
+            let _ = self.set_peer_address(&env_id, &fp, &address);
         }
         self.audit_event("team_session_open", &env_id, Some(&fp), None, None);
         self.start_receiver(env_id.clone(), session.clone());
@@ -7270,10 +7573,8 @@ impl TeamSync {
     }
     fn dial_attempt(&self, env_id: &str, fp: &str) {
         let address = {
-            let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
-            envs.get(env_id)
-                .and_then(|e| e.candidate_addresses.get(fp))
-                .and_then(|a| a.iter().next().cloned())
+            let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+            envs.get_mut(env_id).and_then(|e| e.next_dial_address(fp))
         };
         let Some(address) = address else {
             return;
@@ -7335,6 +7636,7 @@ impl TeamSync {
         }
     }
     fn note_dial_failure(&self, env: &mut EnvState, fp: &str) {
+        env.advance_dial_cursor(fp);
         let (min, max) = self.ctx.config.team_dial_backoff;
         let next = env
             .backoff

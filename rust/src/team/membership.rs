@@ -582,7 +582,7 @@ pub fn invite_string_of(text: &str) -> Result<&str> {
 }
 
 /// What `invalid_address` tells the inviter (no input is repeated).
-const INVITE_ADDRESS_DETAIL: &str = "use HOST:PORT: a host name, an IPv4 address or a bracketed IPv6 address such as [2001:db8::5]:47001";
+const INVITE_ADDRESS_DETAIL: &str = "use HOST:PORT: a host name, an IPv4 address or a bracketed IPv6 address such as [2001:db8::5]:47001, or zpl: and a 26-character zeropw-link device id";
 
 fn is_host_name_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_')
@@ -599,7 +599,13 @@ fn is_host_name_byte(byte: u8) -> bool {
 /// [`parse_invite_or_link`] accepts only these, so an invite this crate makes
 /// is never refused by its own `team join`; an unbracketed IPv6 address and
 /// surrounding whitespace are refused on both sides.
+///
+/// A zeropw-link address `zpl:<device-id>` (26 characters `[a-z2-7]`,
+/// docs/remote-sync.md §3.1) is accepted too; any other `zpl:` text is not.
 pub fn valid_invite_address(address: &str) -> bool {
+    if super::link::valid_link_address(address) {
+        return true;
+    }
     if address.is_empty() || address.len() > MAX_ADDRESS_BYTES {
         return false;
     }
@@ -637,7 +643,7 @@ fn valid_fingerprint(text: &str) -> bool {
 
 /// `parse_invite` for untrusted input (a preview or a join): accepts an
 /// invite string or a `zeropw://join#` link, and additionally requires at most
-/// [`MAX_ADDRESSES`] valid `HOST:PORT` addresses, a device-fingerprint
+/// [`MAX_ADDRESSES`] valid `HOST:PORT` or `zpl:` addresses, a device-fingerprint
 /// `inviter` and a UTC expiry. [`parse_invite`] keeps the prototype's lenient
 /// grammar for the library's own callers.
 pub fn parse_invite_or_link(text: &str) -> Result<Invite> {
@@ -649,7 +655,7 @@ pub fn parse_invite_or_link(text: &str) -> Result<Invite> {
         || !invite.addresses.iter().all(|a| valid_invite_address(a))
     {
         return Err(malformed(
-            "addresses must be at most 16 HOST:PORT entries of at most 128 bytes",
+            "addresses must be at most 16 HOST:PORT or zpl:<device-id> entries of at most 128 bytes",
         ));
     }
     if parse_expiry(&json!(invite.expires_at)).is_none() {
@@ -1617,6 +1623,39 @@ mod invite_compat_tests {
                 expected,
                 "{input:?}"
             );
+        }
+    }
+
+    /// docs/remote-sync.md §3.1: `zpl:` + a 26-character `[a-z2-7]` device
+    /// id is an invite address; any other `zpl:` text is not, and the
+    /// `HOST:PORT` rule is untouched.
+    #[test]
+    fn invite_addresses_accept_well_formed_link_addresses_only() {
+        for address in [
+            "zpl:abcdefghijklmnopqrstuvwxyz",
+            "zpl:aaaaaaaaaaaaaaaaaaaaaaaaa7",
+            "192.0.2.10:47001",
+            "[fe80::1%en0]:47001",
+            "node-a.example.test:1",
+            // Still the `HOST:PORT` of a host named `zpl`.
+            "zpl:47001",
+        ] {
+            assert!(valid_invite_address(address), "{address:?}");
+        }
+        for address in [
+            "zpl:",
+            "zpl:abcdefghijklmnopqrstuvwxy",
+            "zpl:abcdefghijklmnopqrstuvwxyza",
+            "zpl:ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            "zpl:abcdefghijklmnopqrstuvwxy1",
+            "zpl:abcdefghijklmnopqrstuvwxyz:47001",
+            "zpl:abcdefghijklmnopqrstuvwxyz ",
+            " zpl:abcdefghijklmnopqrstuvwxyz",
+            "ZPL:abcdefghijklmnopqrstuvwxyz",
+            "node-a",
+            "2001:db8::5:47001",
+        ] {
+            assert!(!valid_invite_address(address), "{address:?}");
         }
     }
 

@@ -609,7 +609,7 @@ fn build_parser() -> Parser {
         Arg::opt("--address")
             .append()
             .metavar("HOST:PORT")
-            .help("this node's reachable address (repeatable)"),
+            .help("this node's reachable address, HOST:PORT or zpl:<link device id> (repeatable)"),
     )
     .arg(Arg::opt("--link").flag().help(
         "also print a one-day zeropw://join# link, its invite id and expiry (the TTL is fixed at 24h)",
@@ -645,6 +645,11 @@ fn build_parser() -> Parser {
             Arg::opt("--stdin")
                 .flag()
                 .help("read the invite string or link from standard input (or the input envelope)"),
+        )
+        .arg(
+            Arg::opt("--link-socket")
+                .metavar("PATH")
+                .help("zeropw-link daemon socket (absolute path) for the invite's zpl: addresses"),
         );
     add(team, "members", "list team members").arg(env_arg());
     add(
@@ -702,7 +707,11 @@ fn build_parser() -> Parser {
         "list, or (with --device) add, a peer's known address",
     )
     .arg(env_arg())
-    .arg(Arg::opt("--add").metavar("HOST:PORT"))
+    .arg(
+        Arg::opt("--add")
+            .metavar("HOST:PORT")
+            .help("HOST:PORT, or zpl:<link device id> for a peer reached through zeropw-link"),
+    )
     .arg(
         Arg::opt("--device")
             .metavar("FINGERPRINT")
@@ -737,6 +746,11 @@ fn build_parser() -> Parser {
             .metavar("HOST:PORT")
             .help("start team sync on a separate LAN/VPN-facing socket (default: team sync off)"),
     )
+    // docs/remote-sync.md §3.1: team sync through the local zeropw-link
+    // daemon socket (absolute path), with `--team-listen` or alone (link-only
+    // inbound). Left out of the help listing (`help=SUPPRESS`) because the
+    // recorded command-line contract pins `serve --help`.
+    .arg(Arg::opt("--link-socket").metavar("PATH").suppress_help())
     .arg(
         Arg::opt("--quiet")
             .flag()
@@ -3583,7 +3597,8 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
         ));
     }
     if a.action == "join" {
-        use crate::team::transport::TcpTransport;
+        use crate::team::link::{LINK_SOCKET_REQUIRED, LinkTransport, valid_link_address};
+        let link_socket = link_socket_arg(a.get("link-socket"))?;
         // Strict parsing of the untrusted invite (or link) and a local expiry
         // check before anything is dialed.
         let text = invite_text(a, a.positional.first().map(String::as_str))?;
@@ -3592,20 +3607,34 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
             return Err(Error::invalid_input("invite_expired")
                 .with_detail("the invite is past its expiry; ask for a new one"));
         }
+        // docs/remote-sync.md §3.1: an inviter reachable only through
+        // zeropw-link needs the daemon socket; refuse before anything is
+        // stored rather than dial nothing.
+        if link_socket.is_none()
+            && !invite.addresses.is_empty()
+            && invite.addresses.iter().all(|a| valid_link_address(a))
+        {
+            return Err(Error::invalid_input(LINK_SOCKET_REQUIRED).with_detail(
+                "this invite is reachable through zeropw-link only; pass --link-socket PATH",
+            ));
+        }
         drop(invite);
         let invite_string = M::invite_string_of(&text)?;
         let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
-        let transport = TcpTransport::new(
+        // `HOST:PORT` addresses dial over TCP exactly as before; `zpl:` ones
+        // go through the daemon, or fail as `link_socket_required`.
+        let transport: Arc<dyn crate::team::transport::Transport> = Arc::new(LinkTransport::new(
             device.clone(),
             Arc::new(|_, _| None),
             crate::team::transport::DEFAULT_MAX_CONNECTIONS,
-        );
-        let team = sync::TeamSync::new(Arc::new(ctx), Arc::new(transport.clone()), device);
+            link_socket,
+        )?);
+        let team = sync::TeamSync::new(Arc::new(ctx), transport.clone(), device);
         team.start(None)?;
         let result = M::join(
             &team.ctx,
             invite_string,
-            &transport,
+            transport.as_ref(),
             &team,
             a.get("project"),
             a.get("environment"),
@@ -3894,12 +3923,39 @@ pub fn run_serve(
     team_listen: Option<&str>,
     stop: Arc<AtomicBool>,
 ) -> Result<Value, Error> {
+    run_serve_with(state_dir, listen, quiet, team_listen, None, stop)
+}
+
+/// The zeropw-link daemon socket of `--link-socket`: an absolute path
+/// (`invalid_link_socket` otherwise), never connected here.
+fn link_socket_arg(path: Option<&str>) -> Result<Option<std::path::PathBuf>, Error> {
+    path.map(|path| {
+        crate::team::link::LinkClient::new(path).map(|client| client.socket().to_path_buf())
+    })
+    .transpose()
+}
+
+/// [`run_serve`] with `serve --link-socket` (docs/remote-sync.md §3.1): team
+/// sync also dials `zpl:` addresses and accepts inbound streams through the
+/// link daemon at `link_socket`, alone (link-only inbound) or beside
+/// `team_listen`. A daemon that is absent or restarts is retried with
+/// backoff; it never stops the server. The startup payload then also names
+/// the socket as `link_socket`.
+pub fn run_serve_with(
+    state_dir: &str,
+    listen: &str,
+    quiet: bool,
+    team_listen: Option<&str>,
+    link_socket: Option<&str>,
+    stop: Arc<AtomicBool>,
+) -> Result<Value, Error> {
     use std::io::Write;
     let (host, port) = parse_listen(listen)?;
     let host = require_loopback(&host)?;
     if let Some(address) = team_listen {
         parse_listen(address)?;
     }
+    let link_path = link_socket_arg(link_socket)?;
     let config = Config {
         listen_host: host.clone(),
         listen_port: i64::from(port),
@@ -3912,7 +3968,15 @@ pub fn run_serve(
     )?);
     ctx.audit.require_writable()?;
     let _detector = crate::intrusion::install(ctx.clone(), None)?;
-    let team = if let Some(address) = team_listen {
+    let team = if let Some(path) = link_path {
+        use crate::team::{identity::DeviceKey, link::LinkTransport, sync::TeamSync};
+        let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
+        let transport = LinkTransport::new(device.clone(), Arc::new(|_, _| None), 64, Some(path))?;
+        let team = TeamSync::new(ctx.clone(), Arc::new(transport), device);
+        // An empty listen address is link-only inbound.
+        team.start(Some(team_listen.unwrap_or("")))?;
+        Some(team)
+    } else if let Some(address) = team_listen {
         use crate::team::{identity::DeviceKey, sync::TeamSync, transport::TcpTransport};
         let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
         let transport = TcpTransport::new(device.clone(), Arc::new(|_, _| None), 64);
@@ -3926,6 +3990,9 @@ pub fn run_serve(
         crate::server::ZeroPWServer::new_with_quiet(ctx.clone(), Some(&host), Some(port), quiet)?;
     server.serve_in_thread()?;
     let mut payload = json!({"url":server.url(),"pid":std::process::id(),"ssh_signer":"available","state_dir":ctx.state.path.to_string_lossy(),"team_listen":team_listen});
+    if let Some(path) = link_socket {
+        payload["link_socket"] = json!(path);
+    }
     if let Some(obj) = control(&ctx)?.as_object() {
         for (k, v) in obj {
             payload[k] = v.clone();
@@ -4053,11 +4120,12 @@ pub fn main(argv: &[String]) -> i32 {
             output(&error.to_dict(), true);
             return 1;
         }
-        return match run_serve(
+        return match run_serve_with(
             &args.state_dir,
             args.get("listen").unwrap_or("127.0.0.1:0"),
             args.has("quiet"),
             args.get("team-listen"),
+            args.get("link-socket"),
             stop,
         ) {
             Ok(_) => 0,
