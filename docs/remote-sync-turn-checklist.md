@@ -36,6 +36,17 @@ Go/race·desktop pairing·실제 두 Mac·link Opus REVISE 조건은 별도로 �
 Signer 검증 후 Mac 예약을 M1에 넘겼고, M1은 exact bd commit을 자기 branch에
 cherry-pick할 수 있으나 결합된 소스의 전체 native 검증은 여전히 필요하다.
 
+후속 link `e115879`는 연결 수·최초 인증 시간·인증 lease·사전 TLS 발급률을
+제한하고, 요청 네트워크별 challenge quota·별도로 고정한 배포 파일 digest·
+descriptor 기반 상태/CA 상위 경로와 Darwin ACL 검사를 통합했다.
+[162개 소스 파일 대조 기록](evidence/2026-11-07-link-e115879.json)에서 Linux
+vet/Go 전체/server·daemon race/Darwin 교차 빌드는 exit 0이다. 배포 archive
+시험 `5a9f581`의 118개 검사에는 artifact 경계 24개가 포함된다. 새 Darwin
+ACL·기본 root alias·다른 UID의 retained-directory-FD 실제 검증은 NOTRUN이며,
+기존 ca01275 Opus REVISE와 원래 finding severity는 그대로 보존한다.
+`4af5ac8`의 Darwin 라이선스 동봉은 별도 빌드 검증 대상이다. 최종 sidecar
+pin, 실제 설치·롤백 결과, 새로운 Opus 판정과 OCI 제품 배포는 별도 조건이다.
+
 
 이번 문서 갱신 전 비교한 ZeroPW 소스는 `1f60bc2a3f2b91fa691dfa9f79c81bfb131aabe1`이다. Linux 검증
 대상 `41d217f26a030042c9f0b1caac9417715470c0e1`과 Rust tree

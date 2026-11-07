@@ -4,6 +4,20 @@ Status: **incomplete; no release acceptance and no aggregate Opus PASS**. This i
 a dated evidence record, not a change to the acceptance requirements. The
 [TURN checklist](remote-sync-turn-checklist.md) keeps its completion gates open.
 
+Latest service-fix evidence: link `e115879f6a73d8f95e359a116da38ebb334d5ced`
+passed isolated Linux vet, the full Go suite, server/daemon race checks and
+CGO-free Darwin arm64 CLI/test cross-builds, with all 162 Git blobs, modes and
+file sets matching before/after ([record](evidence/2026-11-07-link-e115879.json)).
+This includes bounded connection admission, requesting-network session challenge
+quotas, mandatory independently pinned deployment archives and descriptor-based
+state/CA ancestor checks with native Darwin ACL APIs. The artifact unit suite
+at `5a9f581` passed 118 checks, including 24 artifact boundaries. Native execution
+of the new ACL, standard-root-alias and retained-directory-FD boundaries remains
+NOTRUN; prior f544 native tests do not validate these changes. Link `4af5ac8`
+subsequently adds Darwin redistribution notices to build outputs. No new Opus
+verdict, OCI product deployment or final sidecar-pin integration is claimed.
+This factual addendum was recorded by actual `gpt-6.1-sol`.
+
 ## Source and execution identity
 
 | Item | Exact source or scope |
@@ -480,6 +494,16 @@ Linux failed the unchanged `original_public_url_and_expired_grant_contract` at
 not an established cause. Do not label the test flaky, replace this failure with
 the earlier `945e6a6` PASS, or infer harmlessness from the macOS pass. Astra accepts
 the bounded design implementation; **full two-platform acceptance remains open**.
+
+A subsequent [fixed ten-attempt diagnostic](evidence/2026-11-07-grant-expiry-diagnostic.json)
+added only isolated test logging of the wall clock, monotonic clock and grant
+expiry, preserving the original TTL, sleep and assertions. All ten attempts
+passed; the original failure was not reproduced and its cause remains
+unconfirmed. A historical guest clock correction overlapped the approximate
+test-binary run, but no per-test timestamp proves causation. The diagnostic
+results do not replace the failed full Linux run. The original executable and
+failure log were preserved; the diagnostic build cache is explicitly distinct
+from that frozen executable.
 
 The macOS reservation was released to M1 after signer verification completed.
 The M1 worker may cherry-pick this exact commit on its own branch, but its combined

@@ -1,0 +1,22 @@
+{
+  "source": "bd065fc4c66a79133a2b7f24f462200858080b60",
+  "experiment_status": "completed",
+  "attempts_predetermined": 10,
+  "attempts_executed": 10,
+  "pass": 10,
+  "fail": 0,
+  "build_exit": 0,
+  "build_seconds": 9.956,
+  "started_at": "2026-11-07T05:36:07.796872+00:00",
+  "finished_at": "2026-11-07T05:36:47.674795+00:00",
+  "record_type": "bounded_instrumented_expiry_diagnostic",
+  "actual_model": "gpt-6.1-sol",
+  "analysis_sha256": "54bfce93ecf6ff956ffa95de10cf5dcaa6d702517dfe3755d4a014129d209798",
+  "original_test_assertions_ttl_sleep_unchanged": true,
+  "diagnostic_only_clock_logging": true,
+  "original_full_linux_failure_still_open": true,
+  "original_failure_reproduced": false,
+  "causal_attribution": "unconfirmed",
+  "scope": "Isolated Lima test-only instrumentation. Ten predetermined attempts, not replacement full verification or a product fix.",
+  "evidence_directory": "/Users/ys/Code/zeropw-mlp-evidence/signer-path-fix-20261107/clock-experiment-20261107T053256Z-v2"
+}
