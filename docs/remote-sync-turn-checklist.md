@@ -22,6 +22,21 @@
 
 ### 0.1. 2026-11-07 작업 상태와 항목별 근거
 
+최신 수집 소스는 signer 수정 `bd065fc4c66a79133a2b7f24f462200858080b60`이며
+exact fast-forward cherry-pick으로 통합했다(Rust tree `2882ba592e2204eb62723d95e240525e75196f64`).
+[소스별 증거](evidence/2026-11-07-signer-bd065fc.json): macOS Rust 전체는
+100단계/1,634통과/0실패/4 ordinary ignored로 PASS, Linux는 100단계 완료 중
+99단계 통과·tools_server 1단계 실패, 1,630통과/1실패/4 ignored로 FAILED다.
+두 플랫폼 모두 signer 새 8개·원래 변경 없는 회귀 3개·별도 probe 4개를 통과했다.
+[Astra 한정 평가](reviews/2026-11-07-signer-bd065fc-astra.md)는 설계 구현만 인정하며
+전체 두 플랫폼 인수는 아니다. Linux grant_expired assertion의 원인은 미확정이며
+clock journal/backwards-event 가설을 확정 원인이나 flaky 시험으로 쓰지 않는다.
+원래 d942 실패 로그는 보존한다. 이전 signer 회귀는 이번 증거로 해결했지만,
+Go/race·desktop pairing·실제 두 Mac·link Opus REVISE 조건은 별도로 남는다.
+Signer 검증 후 Mac 예약을 M1에 넘겼고, M1은 exact bd commit을 자기 branch에
+cherry-pick할 수 있으나 결합된 소스의 전체 native 검증은 여전히 필요하다.
+
+
 이번 문서 갱신 전 비교한 ZeroPW 소스는 `1f60bc2a3f2b91fa691dfa9f79c81bfb131aabe1`이다. Linux 검증
 대상 `41d217f26a030042c9f0b1caac9417715470c0e1`과 Rust tree
 `f2c67647fcba83ae78dd6fd10418b6f42a58a6f8`이 같다. 작업 중인 sidecar pin은 ACL 수정 커밋 `f544478a48cea66be816efbed50967bafcacc8ac`이며,
@@ -93,7 +108,7 @@ Native link integration은 strict capture 방향 검사에서 11통과/1실패�
 | C08 | 부분: loopback 관리 포트/로그 제한 구성. OCI 외부 노출 검사 미실행; DOS-1 HIGH/OPEN; 운영 정적 리뷰 REVISE, 생략 범위와 실제 배포 인수는 남음 |
 | C09 | 부분: metrics 운영 정책 문서. 실제 배포의 label 수·메모리 장시간 계측 없음 |
 | D01 | 미완료: 암호화 팀 세션/분리 daemon 구현. 프로세스 분리만으로 OS 격리 입증 불가; macOS ACL f544478 수정·Linux 시험/API probe 통과, ca01275 Opus 판정 INSUFFICIENT_EVIDENCE와 새 08 경로 race로 ZPL-SEC-03 열림 |
-| D02 | 부분: `zpl:` ZeroPW 어댑터 통합 및 PORTING 반영. Linux 945e6a6 전체 100단계/1,623통과. native baseline 2실패/Linux d77 capture 1실패 보존. d942 native 전체 4실패, 원인 진단/수정 인수 미완료 |
+| D02 | 부분: `zpl:` 통합/PORTING 반영. bd065fc macOS Rust 전체 100단계/1,634통과, Linux 전체 99단계 통과/expiry 1실패. 원래 signer 회귀 3개는 변경 없이 양쪽 통과; 결합 M1·Go/desktop/두 Mac 인수 별도 |
 | D03 | **제품 공백**: 초기 snapshot 미구현. 현재 signed-history bootstrap은 compacted history 신규 기기 온보딩 불가 |
 | D04 | 부분: 기존 서명 commit·vector·durable 저장 재사용. Linux 프로세스/coturn 재시작 E2E 통과. crash/ACK 유실/원자성 전체 인수와 snapshot 경로 없음 |
 | D05 | 부분: link 프레임/큐 및 기존 팀 권한 검사. 최종 통합 head의 저장·자원 실패 경계 검증 미완료 |
@@ -107,7 +122,7 @@ Native link integration은 strict capture 방향 검사에서 11통과/1실패�
 | E07 | NOTRUN: 전체 시나리오 데이터 불일치·95%/60초 재접속 목표 측정 없음 |
 | E08 | 부분: 재배포·복구·health/로그 운영 산출물 및 이전 nspawn 시험. OCI 적용/장애·경보 시험 없음 |
 | E09 | 부분: 등록 DB와 revocation journal 복구 절차/이전 시험. 실제 OCI 백업·복원과 용량 인수 미완료 |
-| E10 | **미완료**: Linux 945e6a6 전체 통과; native baseline 2실패/Linux d77 1실패 보존. d942 targeted native 8+2 통과/전체 4실패, native Go/race·desktop core 실패, 두 Mac NOTRUN. ca01275 Opus REVISE; OPUS03·SEC03·DOS1 HIGH와 새04–11 열림, scope 생략 유지, aggregate PASS 없음 |
+| E10 | **미완료**: bd065fc macOS Rust 전체 PASS, Linux expiry 실패 미해결; full 두 플랫폼 PASS 아님. 역사적 실패 보존, f544 Go/race·desktop core 실패/두 Mac NOTRUN. link ca01275 Opus REVISE와 원래 severity·scope 생략 유지 |
 
 초기 유효 리뷰와 검증은 실제 `claude-opus-5-5` 실행이다. 초기 구현 작업자도
 실제 `claude-opus-5-5`였으며 Sol로 바꿔 기록하지 않는다. 현재 coordinator는
@@ -161,7 +176,8 @@ Tart guest의 `/bin/chmod` Apple-anchor 서명 확인은 통과했지만 SIP는 
 실행 모두 통과했고, 이전 858ddc의 합성 seed를 다른 UID가 읽는 원래 노출도
 재현했다(값은 수집하지 않음). d942 desktop fmt는 `Failed to find targets`로
 실패, Clippy/bins는 통과, core는 137통과/2실패(`handshake_channel_closed`)다.
-전체 native PASS는 없으며, 이 결과는 Opus 보고서에 없던 후속 수집 증거다.
+이 d942/f544 실행의 전체 native PASS는 없으며, Opus 보고서에 없던 후속 수집
+증거다. 이후 bd065fc Rust 전체 macOS PASS는 위에서 별도로 기록했다.
 원래 severity와 반박 검증은
 [partial archive](reviews/2026-11-07-link-initial.partial.json)에 그대로 보존했다.
 ca01275 리뷰에서 원래 OPUS01/02·SEC01/02/04는 해당 시나리오 RESOLVED,

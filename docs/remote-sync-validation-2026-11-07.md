@@ -12,7 +12,8 @@ a dated evidence record, not a change to the acceptance requirements. The
 | ZeroPW product source tested | `41d217f26a030042c9f0b1caac9417715470c0e1`; its Rust tree `f2c67647fcba83ae78dd6fd10418b6f42a58a6f8` is byte-identical to the compared revision's Rust tree |
 | Rust reader-fix source (later verification below) | `d77ce9ed7170f9e2689bc1ecf5244aa9602cc587`; Rust tree `181f99ddbffedb3b7f5c158d7484afca37be8a8a`, different from the earlier passing Linux tree |
 | Later test-only correction | `7f0421af335911b4ff21aebf7eb8447dbe20de5c` changes only `rust/tests/team_link_transport.rs`; product source remains the `d77ce9e` implementation. Full Linux verification passed at this revision; later native-fixture correction `d942263` has separate focused evidence |
-| Latest diagnostic-record fix | `945e6a6fa9865f015c51cb0dcabd43b0b1e2c6af` serializes complete wire-capture records across threads/processes. Its regression was added at `55c833b`. Focused and complete Linux checks passed at this revision, Rust tree `f147723da8e8b5b6e42ae678819f20d57ffc36bb`; native verification remains separate |
+| Earlier diagnostic-record fix | `945e6a6fa9865f015c51cb0dcabd43b0b1e2c6af` serializes complete wire-capture records across threads/processes. Its regression was added at `55c833b`. Focused and complete Linux checks passed at this revision, Rust tree `f147723da8e8b5b6e42ae678819f20d57ffc36bb`; native verification remains separate |
+| Integrated signer correction | `bd065fc4c66a79133a2b7f24f462200858080b60`, collected by exact fast-forward cherry-pick; Rust tree `2882ba592e2204eb62723d95e240525e75196f64`. macOS full Rust PASS; Linux full Rust FAILED on an unresolved grant-expiry assertion. Bounded Astra design assessment is not two-platform or Opus acceptance |
 | Current link fixes and sidecar pin | ACL fix `f544478a48cea66be816efbed50967bafcacc8ac`; working `desktop/zeropw-link.json` now pins it. Three native ACL regressions subsequently passed, but full native Go failed; post-fix Opus returned REVISE at `ca01275` before that evidence was collected. The new `d77ce9e`/`f544478` E2E and pin-packaging checks passed; native acceptance remains separate |
 | Link README follow-up | `ca01275c60037b2e008714e646c79a57aa6c1462` changes only the root README after `f544478` |
 | E2E fixture/evidence | Earlier fixture/evidence commit `28abd9a450d8328424db5334443f1dd4bbd5cc24`; final `858ddc` run evidence is committed under `docs/evidence/remote-sync-e2e-2026-11-07-858ddc/` at the compared revision. Both runs use CLI source `41d217f26a030042c9f0b1caac9417715470c0e1` |
@@ -61,10 +62,12 @@ it does not establish working native macOS delivery or a deployed service.
 | Test-only correction verification | `7f0421a`, `integ/link-wire-capture-proof-linux.log` and `integ/rust-verify-7f0421a-linux.log`; [full result manifest](evidence/2026-11-07-linux-rust-7f0421a.json) | PASS, exit 0: strict Clippy/12-test target, then all 100 unchanged full-matrix steps; 1,622 passed, 0 failed, 4 ordinary-library ignored with all four signer probes explicitly run |
 | Native-fixture correction | `d94226364eae32a67a739312a8cd393cc64f3909`, `integ/link-fixture-concurrent-writer-linux.log` | Linux strict library Clippy and all eight link unit tests PASS, exit 0. Native v2 driver reports 8/8 link and 2/2 Unix-frame tests passed; complete native Rust subsequently FAILED as recorded below |
 | New native verification handoff | Replacement driver 8090, frozen `d942263` Rust/core and `f544478` Go; `/Volumes/ZeroPWBuild/verification-20261107-v2/` | Full Rust FINISHED FAILED, exit 1: 100 steps, four failed steps, 1,621 passed/4 failed/4 ordinary ignored. Driver finished 03:57:48 UTC, all-required-pass false; subsequent Go/core results are below. Original driver 7245 remains archived/interrupted, never PASS. VM execution is not two physical Macs |
-| Frozen native full failure evidence | [Exact phase/source/log manifest](evidence/2026-11-07-macos-rust-d942263.json), `macos/v2-collection-20261107035319Z/rust-d942-full.log` | Failed steps: `lib-and-bins`, `test:signer_e2e`, `test:team_link_transport`, `test:vault_context`. Includes known capture-format failure and three unresolved signer directory/cleanup assertions. No full native PASS |
+| Frozen native full failure evidence | [Exact phase/source/log manifest](evidence/2026-11-07-macos-rust-d942263.json), `macos/v2-collection-20261107035319Z/rust-d942-full.log` | Failed steps: `lib-and-bins`, `test:signer_e2e`, `test:team_link_transport`, `test:vault_context`. Includes the historical capture-format failure and three signer directory/cleanup assertions subsequently covered by unchanged passing regressions at `bd065fc`. This frozen run remains FAILED |
 | Native capture-proof failure | `d942263`, `macos/rust-d942-targeted-link-integration.log` | FAILED, exit 101: 11 passed, 1 failed on an invalid capture direction token. This is separate from the earlier writer deadlock. Original strict format and all secret scans remain; malformed records were not skipped |
 | Diagnostic capture concurrency regression | `55c833b` then `945e6a6`, isolated Linux; `integ/wire-capture-concurrency-before-fix.log` and `integ/wire-capture-concurrency-after-fix.log` | Before-fix regression FAILED, exit 101; a retained synthetic capture confirms interleaved records. Fix PASS, exit 0: strict all-target Clippy, the 512-record/two-process/eight-thread test and all 12 link integration tests. Native verification remains separate |
-| Latest complete Linux Rust verification | `945e6a6`, `integ/rust-verify-945e6a6-linux.log`; [result manifest](evidence/2026-11-07-linux-rust-945e6a6.json) | PASS, exit 0: all 100 unchanged script steps, 1,623 passed, 0 failed, 4 ordinary-library ignored and all four signer probes explicitly run. This covers the latest committed Rust tree, not future M1/M2 or frontend changes |
+| Earlier complete Linux Rust verification | `945e6a6`, `integ/rust-verify-945e6a6-linux.log`; [result manifest](evidence/2026-11-07-linux-rust-945e6a6.json) | PASS, exit 0: all 100 unchanged script steps, 1,623 passed, 0 failed, 4 ordinary-library ignored and all four signer probes explicitly run. This covers only the `945e6a6` Rust tree, not later signer/M1/M2 or frontend changes |
+| Integrated signer macOS verification | `bd065fc`; [source-specific evidence](evidence/2026-11-07-signer-bd065fc.json), `signer-path-fix-20261107/macos-vm-evidence/` | PASS, exit 0: all 100 unchanged full-matrix steps, 1,634 passed, 0 failed, 4 ordinary ignored; four signer probes explicitly passed. SIP-disabled VM, not physical two-Mac/desktop packaging evidence |
+| Integrated signer Linux verification | Same `bd065fc`; `signer-path-fix-20261107/linux-vm-evidence/` | FAILED, exit 1: 100 steps completed, 99 successful and `test:tools_server` failed; 1,630 passed, 1 failed, 4 ordinary ignored; four signer probes explicitly passed. Unresolved expired-grant assertion, not a two-platform PASS |
 | Two physical Macs | Two-device test environment unavailable | NOTRUN |
 | 200-device/24-hour capacity, reconnect target and combined 1 GB VM budget | No completed current-source measurements | NOTRUN; no 100-user capacity claim |
 
@@ -373,8 +376,9 @@ Raw-log SHA-256:
 The [native failure manifest](evidence/2026-11-07-macos-rust-d942263.json)
 retains each completed phase and identical before/after source manifests.
 In addition to the capture assertion below, two signer teardown tests and the
-configured signer socket-directory assertion failed. Their cause and remediation
-remain open; no test or TMPDIR change is used as a substitute for diagnosis.
+configured signer socket-directory assertion failed. Their retained failures were later addressed by the bounded signer correction
+and unchanged regression passes at `bd065fc`, recorded below; the original
+failed result is not rewritten and the test TMPDIR was not shortened.
 As of 03:53:15 UTC Go vet was running; native Go/ACL/core phases had not started.
 This local driver is not an always-on cloud service or two-Mac evidence.
 
@@ -445,8 +449,44 @@ passing listener-cap test. The three native ACL passes supply missing runtime
 evidence for SEC-03, but do not close its post-normalization readback/detection
 concerns, OPUS-08 state-path race or post-fix review requirement. The original
 exposure reproduction is synthetic evidence, not inspection of a production key.
-Desktop pairing failures remain unresolved; signer-path diagnosis does not by
-itself explain or fix them. No full native PASS or two-Mac acceptance exists.
+Desktop pairing failures remain unresolved; the signer correction does not
+by itself explain or fix them. This v2 run has no full native PASS; later
+`bd065fc` Rust verification is separate and supplies no two-Mac acceptance.
+
+## Integrated signer correction: bounded acceptance, Linux failure retained
+
+Exact worker commit `bd065fc4c66a79133a2b7f24f462200858080b60` was collected by
+fast-forward cherry-pick. Its [evidence manifest](evidence/2026-11-07-signer-bd065fc.json)
+and [Astra assessment](reviews/2026-11-07-signer-bd065fc-astra.md) bind the changed
+source and results. Actual worker model was `gpt-6.1-sol`; actual bounded assessor
+was `gpt-6-astra`. Only `rust/src/signer.rs` and `rust/DEVIATIONS.md` changed.
+Selection uses the real 18-character basename within the existing 100-character
+budget; the separate 103-character bind guard remains. Fresh fallback directories
+have an explicit owner, reusable shutdown retains them, and final teardown removes
+only an empty owned leaf. Caller/Context ownership and nonrecursive cleanup remain.
+
+Eight new behavior tests, the three byte-unchanged original signer/context
+regressions and all four signer probes passed on both platforms. The full macOS
+Rust matrix passed all 100 steps (1,634 passed/0 failed/4 ordinary ignored).
+The full Linux matrix completed 100 steps with 99 successful and one failed step
+(1,630 passed/1 failed/4 ordinary ignored). Both used private 57-character TMPDIR
+paths; the native length matches the earlier failing v2 environment. Context,
+verification script and frozen fixtures are unchanged. This closes the bounded
+signer regressions with evidence, not the earlier failed log or every native gate.
+
+Linux failed the unchanged `original_public_url_and_expired_grant_contract` at
+`rust/tests/tools_server.rs:1242`: execution returned a running result instead of
+`grant_expired`. The clock-journal/backwards-event explanation is only a hypothesis,
+not an established cause. Do not label the test flaky, replace this failure with
+the earlier `945e6a6` PASS, or infer harmlessness from the macOS pass. Astra accepts
+the bounded design implementation; **full two-platform acceptance remains open**.
+
+The macOS reservation was released to M1 after signer verification completed.
+The M1 worker may cherry-pick this exact commit on its own branch, but its combined
+source still requires full native verification; these results do not validate M1
+or a future merged tree. No link Opus REVISE finding or scope omission changes.
+SIP remains disabled in the test VM, physical two-Mac/desktop acceptance remains
+separate, and orderly empty-leaf cleanup makes no broad temporary-residue claim.
 
 ## Remaining acceptance work
 
@@ -454,8 +494,9 @@ Earlier Linux Rust verification, `858ddc` real-network E2E, cross-build and
 packaging tooling checks retain their source-specific evidence above. Preserve
 the completed failed native baseline and Linux `d77ce9e` matrix. Linux `7f0421a`
 full verification is now passed; reconcile every replacement native handoff phase.
-Latest `945e6a6` complete Linux verification has passed; finish the native
-capture correction. Neither Linux PASS validates subsequent code changes.
+Earlier `945e6a6` complete Linux verification passed. Integrated `bd065fc` full
+macOS Rust verification passed, but its full Linux expired-grant failure requires
+diagnosis and verification; no prior PASS validates subsequent code changes.
 The new
 Rust/link E2E and `f544478` packaging-tooling checks passed;
 resolve the returned `ca01275` REVISE findings and obtain exact-head Opus
@@ -464,9 +505,9 @@ operations omissions; implement/verify initial snapshots and whole-secret deleti
 obtain isolated macOS and two-Mac evidence, including ACL protection; then validate
 the deployed HTTPS/TURN service and its operating limits. Finish product
 firewall/listener/TLS acceptance and complete native
-packaging/runtime checks on the final ZeroPW head. Native full Rust, Go/race and desktop-core runs finished with the failures
-recorded above; preserve them and verify their corrections. No overall native
-PASS is recorded. The bounded proposed
+packaging/runtime checks on the final ZeroPW head. Preserve the historical d942 native failures and f544 Go/race/desktop failures.
+The later bd065fc full native Rust PASS does not close those separate Go/desktop
+gates, the current Linux failure or combined M1 verification. The bounded proposed
 [next milestones](remote-sync-next-milestones.md) address authenticated snapshot
 onboarding and whole-secret tombstones; they are not implemented work.
 
@@ -480,4 +521,4 @@ Link `83eb55d` additionally refuses an IPv6 SSH lockout before applying the IPv4
 
 The [finished native v2 manifest](evidence/2026-11-07-macos-v2-final.json) preserves frozen d942/f544 phase results, including three native ACL regressions passing but full Go/race failures on the unassigned127.0.0.2 address, full Rust failures and desktop fmt/core failures. It is not the f366 focused result and establishes no full native PASS.
 
-Follow-up link documentation at `5444fed` binds these fixes to evidence and corrects TURN fairness, monthly-cost and lost-VM recovery claims. The ZeroPW sidecar remains pinned to f544 until a final reviewed integration. DOS-1, remaining state/CA protection and artifact-gate findings, full post-fix review and deployment remain open. The known Rust signer path issue has an Astra-approved bounded decision, still awaiting implementation.
+Follow-up link documentation at `5444fed` binds these fixes to evidence and corrects TURN fairness, monthly-cost and lost-VM recovery claims. The ZeroPW sidecar remains pinned to f544 until a final reviewed integration. DOS-1, remaining state/CA protection and artifact-gate findings, full post-fix review and deployment remain open. The bounded Rust signer correction is now integrated as `bd065fc`, with Astra design assessment, full macOS Rust PASS and the unresolved full Linux expiry failure recorded above. It does not close the link review findings.

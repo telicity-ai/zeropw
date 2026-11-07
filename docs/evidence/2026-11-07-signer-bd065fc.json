@@ -1,0 +1,1022 @@
+{
+  "source_sha": "bd065fc4c66a79133a2b7f24f462200858080b60",
+  "source_tree_sha": "eec4348e1a55b4da07951393f3cbef030c5469e6",
+  "rust_tree_sha": "2882ba592e2204eb62723d95e240525e75196f64",
+  "base_sha": "410ce9b603ec956b5afeba84bbf4d30e87810f02",
+  "base_rust_tree_sha": "f147723da8e8b5b6e42ae678819f20d57ffc36bb",
+  "actual_implementation_model": "gpt-6.1-sol",
+  "implementation_reasoning_effort": "ultra",
+  "evidence_audit_model": "gpt-6.1-sol",
+  "role": "Bounded independent data/Git evidence audit; no product execution by this audit",
+  "artifact_archive": "zeropw-mlp-evidence/signer-path-fix-20261107",
+  "validation_json_sha256": "4dfba2915de684bae5a915c4201ad738f4abef086d1ba235237a421214f7caaf",
+  "SHA256SUMS_sha256": "cb7157132e5cfadc207c3e98d896ff6db786d58296049a39a7df79a3bf8ed750",
+  "source_bindings_sha256": "67f334c2b4e2328c707698fded60ff21d0872f3003e9553a32e608eadaafeb02",
+  "source_archive_sha256": "41bc55678b401829427f3b6b22a0b9808f2ca34c608d9d064e24a782926365bb",
+  "source_expected_manifest_sha256": "e767b26632597d0ae6958ca771f809923a7297b9f54be1180ca663aaa8e7a613",
+  "artifact_hash_audit": {
+    "listed_files": 42,
+    "all_match": true,
+    "unlisted_files_except_SHA256SUMS": [],
+    "source_files": 634,
+    "archive_matches_exact_git_blobs_modes_and_set": true,
+    "both_platform_before_after_manifests_match": true
+  },
+  "original_test_functions": [
+    {
+      "path": "rust/src/signer.rs",
+      "test": "teardown_leaves_no_socket_file_listener_or_signer_created_directory",
+      "unchanged": true,
+      "sha256": "5bf6050c39640d6c741d74c3b4e704cb52be5e58f22df68e1da96a4d0d8a1627"
+    },
+    {
+      "path": "rust/tests/signer_e2e.rs",
+      "test": "teardown_leaves_no_socket_file_or_signer_created_directory",
+      "unchanged": true,
+      "sha256": "2ce7718014f6030bf44647a06dd48833c18c84e349fd7d281e7384104337d00b"
+    },
+    {
+      "path": "rust/tests/vault_context.rs",
+      "test": "signer_socket_dir_matches_configured_directory_under_this_machines_default_tmpdir",
+      "unchanged": true,
+      "sha256": "00834ba3871850fe4cfc46912e44768ebcca7404993afa5c60908cced21196ed"
+    }
+  ],
+  "unchanged_verify_script_git_blob": "cd343186ca5bc736c4a28dfa31dd1abd1cb33e53",
+  "unchanged_fixture_tree_git_object": "d1b7d929a6dfaa8dcbc3d5481e161ac8e45adc21",
+  "compilation_profile_flags": {
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_BUILD_JOBS": "1",
+    "CARGO_NET_OFFLINE": "true"
+  },
+  "verification_command": "bash rust/verify.sh (unchanged, no arguments); focused tests precede full verification",
+  "exit_evidence": "validation.json records driver exits; combined driver logs independently record SOURCE_HEAD, full-verify exit, UTC end and RUN_FAILED; per-step full logs independently establish step/test totals",
+  "platforms": {
+    "linux": {
+      "driver_exit_code": 1,
+      "full_pass": false,
+      "verify_step_count": 100,
+      "successful_steps": 99,
+      "failed_steps": [
+        {
+          "name": "test:tools_server",
+          "exit_code": 101
+        }
+      ],
+      "passed_tests": 1630,
+      "failed_tests": 1,
+      "ordinary_ignored_tests": 4,
+      "signer_probes_explicitly_passed": 4,
+      "signer_probe_test_names": [
+        "signer::tests::idle_cpu_with_one_and_nine_live_bindings",
+        "signer::tests::per_binding_fd_cost_matches_python_ratio_of_one",
+        "signer::tests::per_client_fd_cost_matches_python_ratio_of_one",
+        "signer::tests::rlimit_probe_served_clients_and_accept_loop_survival"
+      ],
+      "focused": {
+        "focused-signer": {
+          "passed": 47,
+          "failed": 0,
+          "ignored": 4,
+          "log_sha256": "b3aa8e3671da4ab3c6fb3c07b6901f1c2cd069fdebb65b4ff0f9e77e5d4124ec"
+        },
+        "focused-signer-e2e": {
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0,
+          "log_sha256": "6123c28718940831fd2ca682709973c00e5549191c94ab76ff4053d39b3ee665"
+        },
+        "focused-context": {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "log_sha256": "8fae9e1bd861e2f5ea0a1490f3dd885552738d113ee56e0ff2e7580b618b85e7"
+        }
+      },
+      "source_file_count": 634,
+      "source_before_after_match_expected": true,
+      "source_manifest_sha256": "e767b26632597d0ae6958ca771f809923a7297b9f54be1180ca663aaa8e7a613",
+      "full_log_archive": "linux-vm-evidence/full-verify.log",
+      "full_log_sha256": "95f4ba8b6c92ebee4676cfe315dae2e1da8df706e603e00876de375d8844a09c",
+      "combined_driver_log_archive": "linux-run.log",
+      "combined_driver_log_sha256": "30cb500fc9ac60ea5915af47c0d5e35d9f5aa4ca8f3609c427ac6590c175e7ed",
+      "utc_begin": "2026-11-07T04:42:26Z",
+      "utc_end": "2026-11-07T05:11:29Z",
+      "original_three_regressions_passed": true,
+      "eight_added_signer_tests_passed": true,
+      "steps": [
+        {
+          "name": "fmt",
+          "exit_code": 0
+        },
+        {
+          "name": "clippy",
+          "exit_code": 0
+        },
+        {
+          "name": "lib-and-bins",
+          "exit_code": 0
+        },
+        {
+          "name": "test:admin_expanduser_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:admin_input_envelope",
+          "exit_code": 0
+        },
+        {
+          "name": "test:admin_secret_import",
+          "exit_code": 0
+        },
+        {
+          "name": "test:admin_sigint_cleanup_boundaries",
+          "exit_code": 0
+        },
+        {
+          "name": "test:admin_sigint_exit",
+          "exit_code": 0
+        },
+        {
+          "name": "test:agent_help",
+          "exit_code": 0
+        },
+        {
+          "name": "test:agent_proxy_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_cleanup_publication_order",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_cli_runtime_round2",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_cli_runtime_round3",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_cli_runtime_round4",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_projects_final",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_pty_portability",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_response_acceptance",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_response_final",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_response_final_recheck",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_response_review",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_response_round2",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_response_round3",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_response_round4",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_run_context_lease",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_runtime_final",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_runtime_review",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_sigint_cleanup",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_sigint_cleanup_final",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_team_fact_catchup",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_team_fact_duplicate_diagnostic",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_team_reconnect_diagnostic",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_team_review",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_team_round2",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_team_round3",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_team_round4",
+          "exit_code": 0
+        },
+        {
+          "name": "test:base_cli_error_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:canonical_helpers",
+          "exit_code": 0
+        },
+        {
+          "name": "test:cli_commands",
+          "exit_code": 0
+        },
+        {
+          "name": "test:cli_grant_limits_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:cli_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:democli_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:escaped_builtin_http_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:fake_upstream",
+          "exit_code": 0
+        },
+        {
+          "name": "test:gateway",
+          "exit_code": 0
+        },
+        {
+          "name": "test:gateway_oracle",
+          "exit_code": 0
+        },
+        {
+          "name": "test:gateway_replay_status_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:gateway_tls_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:gateway_x1_credential_e2e",
+          "exit_code": 0
+        },
+        {
+          "name": "test:ledger_float_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:native_admin_cli",
+          "exit_code": 0
+        },
+        {
+          "name": "test:native_admin_cli_more",
+          "exit_code": 0
+        },
+        {
+          "name": "test:native_agent_cli",
+          "exit_code": 0
+        },
+        {
+          "name": "test:native_atomic_cli",
+          "exit_code": 0
+        },
+        {
+          "name": "test:native_cli_e2e",
+          "exit_code": 0
+        },
+        {
+          "name": "test:native_response_cli",
+          "exit_code": 0
+        },
+        {
+          "name": "test:native_team_cli",
+          "exit_code": 0
+        },
+        {
+          "name": "test:native_team_e2e",
+          "exit_code": 0
+        },
+        {
+          "name": "test:policy_oracle",
+          "exit_code": 0
+        },
+        {
+          "name": "test:policy_parity_close",
+          "exit_code": 0
+        },
+        {
+          "name": "test:python_numeric_comparison_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:relay_escape_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:response",
+          "exit_code": 0
+        },
+        {
+          "name": "test:response_contract",
+          "exit_code": 0
+        },
+        {
+          "name": "test:response_integer_boundaries",
+          "exit_code": 0
+        },
+        {
+          "name": "test:response_parity_gaps",
+          "exit_code": 0
+        },
+        {
+          "name": "test:runs",
+          "exit_code": 0
+        },
+        {
+          "name": "test:runtime_fix_boundaries",
+          "exit_code": 0
+        },
+        {
+          "name": "test:runtime_parity_gaps",
+          "exit_code": 0
+        },
+        {
+          "name": "test:serve_request_log",
+          "exit_code": 0
+        },
+        {
+          "name": "test:server_accept_resilience",
+          "exit_code": 0
+        },
+        {
+          "name": "test:signer_e2e",
+          "exit_code": 0
+        },
+        {
+          "name": "test:signer_oracle",
+          "exit_code": 0
+        },
+        {
+          "name": "test:sshwire",
+          "exit_code": 0
+        },
+        {
+          "name": "test:state_dir_cross_language",
+          "exit_code": 0
+        },
+        {
+          "name": "test:store_cross_process_lock",
+          "exit_code": 0
+        },
+        {
+          "name": "test:store_oracle",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_derive_lazy_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_envelope_parity_edges",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_fold",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_fold_lazy_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_invite_link",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_link_transport",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_membership_sync",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_oracle",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_pairing_approval",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_parity_gaps",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_remaining_contract",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_secret_import",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_share_policy_version_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_snapshot_total_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_snapshot_version_order_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_sync_status",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_transport",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_uncaught_scope_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:tools_server",
+          "exit_code": 101
+        },
+        {
+          "name": "test:vault_context",
+          "exit_code": 0
+        },
+        {
+          "name": "test:vault_context_oracle",
+          "exit_code": 0
+        },
+        {
+          "name": "test:vault_public_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "signer-probes",
+          "exit_code": 0
+        },
+        {
+          "name": "doc-tests",
+          "exit_code": 0
+        }
+      ],
+      "tmpdir_ascii_character_length": 57,
+      "tmpdir_mode": "0700",
+      "zpws_fallback_residue_entries": [],
+      "other_tmpdir_residue_count": 13,
+      "environment": {
+        "isolation": "Lima zeropw-parity VM; unprivileged parity user; synthetic credentials and controlled endpoints",
+        "os": "Ubuntu 24.04.4 LTS arm64",
+        "kernel": "6.8.0-147-generic",
+        "rust": "1.98.1",
+        "cargo": "1.98.1",
+        "python": "3.12.14",
+        "openssl_cli": "3.0.13",
+        "soft_nofile": 1024,
+        "hard_nofile": 1048576,
+        "tmpdir": "/tmp/signer-path-fix-20261107-v2-xxxxxxxxxxxx/private-tmp",
+        "cargo_target_dir": "/home/parity/jobs/signer-path-fix/target"
+      },
+      "open_failure": {
+        "status": "OPEN",
+        "test": "original_public_url_and_expired_grant_contract",
+        "file": "rust/tests/tools_server.rs",
+        "line": 1242,
+        "observed": "Expiry assertion expected grant_expired but unwrap_err() received Ok with state running, reason null and run_id r-a7f4349da68a7029",
+        "step": "test:tools_server",
+        "step_exit_code": 101,
+        "root_cause": "Not diagnosed; no replacement rerun or out-of-scope fix is evidence of resolution",
+        "test_and_tools_policy_run_implementation_unchanged_by_signer_commit": true
+      }
+    },
+    "macos": {
+      "driver_exit_code": 0,
+      "full_pass": true,
+      "verify_step_count": 100,
+      "successful_steps": 100,
+      "failed_steps": [],
+      "passed_tests": 1634,
+      "failed_tests": 0,
+      "ordinary_ignored_tests": 4,
+      "signer_probes_explicitly_passed": 4,
+      "signer_probe_test_names": [
+        "signer::tests::idle_cpu_with_one_and_nine_live_bindings",
+        "signer::tests::per_binding_fd_cost_matches_python_ratio_of_one",
+        "signer::tests::per_client_fd_cost_matches_python_ratio_of_one",
+        "signer::tests::rlimit_probe_served_clients_and_accept_loop_survival"
+      ],
+      "focused": {
+        "focused-signer": {
+          "passed": 45,
+          "failed": 0,
+          "ignored": 4,
+          "log_sha256": "ecc5e5e49b513bfd439ef817f8809721df883e12b8b68cd54c01c06dc6d1d41e"
+        },
+        "focused-signer-e2e": {
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0,
+          "log_sha256": "3616e3f33ce29c3d37a009eee9e46b73054da2bdb438e3ec361c5a9d56033ba2"
+        },
+        "focused-context": {
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "log_sha256": "5b5a8948c531df5cd3be1db576d5f3158b34231e4796cb6ad30853fb624ea08c"
+        }
+      },
+      "source_file_count": 634,
+      "source_before_after_match_expected": true,
+      "source_manifest_sha256": "e767b26632597d0ae6958ca771f809923a7297b9f54be1180ca663aaa8e7a613",
+      "full_log_archive": "macos-vm-evidence/full-verify.log",
+      "full_log_sha256": "b9ddce041aa6978cee8855fdc68c01f8b12d67add87ba2167d03742ae7e36163",
+      "combined_driver_log_archive": "macos-run.log",
+      "combined_driver_log_sha256": "505f0baacdf8cc91607edc0ebca69e407cc58f927dff75ef90ad22ae79e6c20d",
+      "utc_begin": "2026-11-07T04:42:11Z",
+      "utc_end": "2026-11-07T05:23:34Z",
+      "original_three_regressions_passed": true,
+      "eight_added_signer_tests_passed": true,
+      "steps": [
+        {
+          "name": "fmt",
+          "exit_code": 0
+        },
+        {
+          "name": "clippy",
+          "exit_code": 0
+        },
+        {
+          "name": "lib-and-bins",
+          "exit_code": 0
+        },
+        {
+          "name": "test:admin_expanduser_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:admin_input_envelope",
+          "exit_code": 0
+        },
+        {
+          "name": "test:admin_secret_import",
+          "exit_code": 0
+        },
+        {
+          "name": "test:admin_sigint_cleanup_boundaries",
+          "exit_code": 0
+        },
+        {
+          "name": "test:admin_sigint_exit",
+          "exit_code": 0
+        },
+        {
+          "name": "test:agent_help",
+          "exit_code": 0
+        },
+        {
+          "name": "test:agent_proxy_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_cleanup_publication_order",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_cli_runtime_round2",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_cli_runtime_round3",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_cli_runtime_round4",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_projects_final",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_pty_portability",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_response_acceptance",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_response_final",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_response_final_recheck",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_response_review",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_response_round2",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_response_round3",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_response_round4",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_run_context_lease",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_runtime_final",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_runtime_review",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_sigint_cleanup",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_sigint_cleanup_final",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_team_fact_catchup",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_team_fact_duplicate_diagnostic",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_team_reconnect_diagnostic",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_team_review",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_team_round2",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_team_round3",
+          "exit_code": 0
+        },
+        {
+          "name": "test:astra_team_round4",
+          "exit_code": 0
+        },
+        {
+          "name": "test:base_cli_error_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:canonical_helpers",
+          "exit_code": 0
+        },
+        {
+          "name": "test:cli_commands",
+          "exit_code": 0
+        },
+        {
+          "name": "test:cli_grant_limits_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:cli_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:democli_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:escaped_builtin_http_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:fake_upstream",
+          "exit_code": 0
+        },
+        {
+          "name": "test:gateway",
+          "exit_code": 0
+        },
+        {
+          "name": "test:gateway_oracle",
+          "exit_code": 0
+        },
+        {
+          "name": "test:gateway_replay_status_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:gateway_tls_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:gateway_x1_credential_e2e",
+          "exit_code": 0
+        },
+        {
+          "name": "test:ledger_float_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:native_admin_cli",
+          "exit_code": 0
+        },
+        {
+          "name": "test:native_admin_cli_more",
+          "exit_code": 0
+        },
+        {
+          "name": "test:native_agent_cli",
+          "exit_code": 0
+        },
+        {
+          "name": "test:native_atomic_cli",
+          "exit_code": 0
+        },
+        {
+          "name": "test:native_cli_e2e",
+          "exit_code": 0
+        },
+        {
+          "name": "test:native_response_cli",
+          "exit_code": 0
+        },
+        {
+          "name": "test:native_team_cli",
+          "exit_code": 0
+        },
+        {
+          "name": "test:native_team_e2e",
+          "exit_code": 0
+        },
+        {
+          "name": "test:policy_oracle",
+          "exit_code": 0
+        },
+        {
+          "name": "test:policy_parity_close",
+          "exit_code": 0
+        },
+        {
+          "name": "test:python_numeric_comparison_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:relay_escape_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:response",
+          "exit_code": 0
+        },
+        {
+          "name": "test:response_contract",
+          "exit_code": 0
+        },
+        {
+          "name": "test:response_integer_boundaries",
+          "exit_code": 0
+        },
+        {
+          "name": "test:response_parity_gaps",
+          "exit_code": 0
+        },
+        {
+          "name": "test:runs",
+          "exit_code": 0
+        },
+        {
+          "name": "test:runtime_fix_boundaries",
+          "exit_code": 0
+        },
+        {
+          "name": "test:runtime_parity_gaps",
+          "exit_code": 0
+        },
+        {
+          "name": "test:serve_request_log",
+          "exit_code": 0
+        },
+        {
+          "name": "test:server_accept_resilience",
+          "exit_code": 0
+        },
+        {
+          "name": "test:signer_e2e",
+          "exit_code": 0
+        },
+        {
+          "name": "test:signer_oracle",
+          "exit_code": 0
+        },
+        {
+          "name": "test:sshwire",
+          "exit_code": 0
+        },
+        {
+          "name": "test:state_dir_cross_language",
+          "exit_code": 0
+        },
+        {
+          "name": "test:store_cross_process_lock",
+          "exit_code": 0
+        },
+        {
+          "name": "test:store_oracle",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_derive_lazy_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_envelope_parity_edges",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_fold",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_fold_lazy_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_invite_link",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_link_transport",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_membership_sync",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_oracle",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_pairing_approval",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_parity_gaps",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_remaining_contract",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_secret_import",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_share_policy_version_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_snapshot_total_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_snapshot_version_order_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_sync_status",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_transport",
+          "exit_code": 0
+        },
+        {
+          "name": "test:team_uncaught_scope_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "test:tools_server",
+          "exit_code": 0
+        },
+        {
+          "name": "test:vault_context",
+          "exit_code": 0
+        },
+        {
+          "name": "test:vault_context_oracle",
+          "exit_code": 0
+        },
+        {
+          "name": "test:vault_public_parity",
+          "exit_code": 0
+        },
+        {
+          "name": "signer-probes",
+          "exit_code": 0
+        },
+        {
+          "name": "doc-tests",
+          "exit_code": 0
+        }
+      ],
+      "tmpdir_ascii_character_length": 57,
+      "tmpdir_mode": "0700",
+      "zpws_fallback_residue_entries": [],
+      "other_tmpdir_residue_count": 13,
+      "environment": {
+        "isolation": "Reserved Tart native macOS VM; synthetic credentials and controlled endpoints",
+        "os": "macOS 26.6.2 build 25G83 arm64",
+        "kernel": "Darwin 25.6.0",
+        "sip": "disabled in existing guest; unchanged",
+        "rust": "1.98.1",
+        "cargo": "1.98.1",
+        "python": "3.12.15",
+        "openssl_build_directory": "/opt/homebrew/opt/openssl@3",
+        "openssl_build_directory_and_pkg_config_version": "3.5.9",
+        "openssl_cli_first_on_path_version": "4.0.3",
+        "soft_nofile": 65536,
+        "hard_nofile": 524288,
+        "tmpdir": "/Volumes/ZeroPWBuild/signer-pathx-20261107-v2/private-tmp",
+        "cargo_target_dir": "/Volumes/ZeroPWBuild/signer-path-target",
+        "physical_macs_tested": 0
+      }
+    }
+  },
+  "two_platform_full_pass": false,
+  "limitations": [
+    "Linux full verification remains FAILED on the unresolved tools-server expiry assertion; macOS PASS does not replace that failure",
+    "Evidence applies to exact bd065fc source and recorded compilation/environment flags; no later-source acceptance",
+    "SIP-disabled native macOS VM, not two physical Macs or frontend/packaging validation",
+    "No Opus review, release acceptance, deployment, capacity or M1/M2 completion established",
+    "Empty-leaf fallback cleanup requires orderly last-manager teardown; abrupt exit, unexpected contents and filesystem removal errors are outside that destructor guarantee",
+    "Thirteen other temporary entries per platform were retained; no broad no-residue claim",
+    "Preliminary linux-focused-attempt1.log predates final source and is not final-source acceptance evidence"
+  ]
+}
