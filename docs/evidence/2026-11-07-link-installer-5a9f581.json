@@ -1,0 +1,196 @@
+{
+  "repository": "telicity-ai/zeropw-link",
+  "source_sha": "5a9f5810a0c2423bf501ef670287b4a7d0a58697",
+  "source_tree_sha": "aa9bc9de999daffb69c49fc7f8f6c6898a04fad4",
+  "actual_model": "gpt-6.1-sol",
+  "role": "Isolated installer and rollback E2E runner; no external review",
+  "environment": {
+    "host_for_product_execution": "isolated Lima zeropw-parity VM",
+    "os": "Ubuntu 24.04.4 LTS arm64",
+    "kernel": "6.8.0-147-generic",
+    "go": "go1.27.3 linux/arm64",
+    "systemd": "255.4-1ubuntu8.18",
+    "container": "disposable systemd-nspawn zpl-aie2e",
+    "host_code_execution": false,
+    "native_macos_used": false,
+    "production_credentials_used": false
+  },
+  "execution": {
+    "utc_begin": "2026-11-07T06:06:33Z",
+    "utc_end": "2026-11-07T06:09:45Z",
+    "driver_exit_code": 0,
+    "timeout": "15m, TERM then KILL after30s",
+    "command": "env -i HOME=/root PATH=/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin LANG=C.UTF-8 GOTOOLCHAIN=local GOPROXY=off GOCACHE=/root/jobs/artifact-install-e2e/gocache TMPDIR=/root/jobs/artifact-install-e2e/private-tmp bash [coordinator wrapper] -> timeout --signal=TERM --kill-after=30s 15m bash /root/jobs/artifact-install-e2e/installer-invocation.sh --coturn-bundle /root/jobs/artifact-install-e2e/coturn.tar.gz",
+    "tmpdir_mode": "0700",
+    "source_date_epoch_for_release_builds": "1762400000",
+    "go_release_profile": "CGO_ENABLED=0 GOOS=linux GOARCH=arm64; -trimpath; -s -w -buildid=; explicit synthetic versions",
+    "go_module_mode": "fixture sets GOFLAGS=-mod=mod; GOPROXY=off; cached modules; source manifests verified unchanged"
+  },
+  "source_binding": {
+    "files": 153,
+    "full_expected_manifest": "source-expected.json",
+    "full_expected_manifest_sha256": "f2470d3feac745705cb8ef211b3cb31445e6418f4202bd88d4a4956cfcef84ad",
+    "source_tar_sha256": "f7f95ccdf44bbd962976d9365316447dc794ac869b3a42ba7d4d2a55ee0a98c7",
+    "source_ls_tree_sha256": "0ea445f7e4a0c000fcb176f053f28d7774593909fea63d4f73bcc5b82ccc92c8",
+    "before": {
+      "exact_git_blobs_sha256_modes_and_set": true,
+      "files": 153,
+      "head": "5a9f5810a0c2423bf501ef670287b4a7d0a58697"
+    },
+    "after": {
+      "exact_git_blobs_sha256_modes_and_set": true,
+      "files": 153,
+      "head": "5a9f5810a0c2423bf501ef670287b4a7d0a58697"
+    },
+    "archive_git_blobs_sha256_modes_file_set_independently_verified": true,
+    "product_source_modified": false
+  },
+  "isolated_fixture_invocation": {
+    "original": "deploy/test/install-e2e.sh at exact source head",
+    "runner": "collected/installer-invocation.sh",
+    "runner_sha256": "3b8deeeb1f674d41b7c6a7f798c85095c3290b3aa8e6e515a33fafde6feacb38",
+    "diff": "collected/invocation-only.diff",
+    "diff_sha256": "dc1b4895bb253e95b8cfe7c15157e3752c0064213ff265c6cbc0b7ad4e55d5ed",
+    "changes": "Own absolute source pointers, unique container/veth/temp paths, public artifact/pin/log/installed-file retention; no assertion removal/relaxation or product-source edits",
+    "expected_digest_flags": "Already present at frozen head and supplied for all positive and tampered release/bundle invocations"
+  },
+  "fixture_inputs": {
+    "coturn_bundle": {
+      "original_local_cache": "/root/coturn-4.18.0-noble-aarch64.tar.gz",
+      "sha256": "ffcf96f95f621cfa93bd3644b8f97f501170257b9490f8e4732457ca600b90a0",
+      "version": "4.18.0",
+      "source_commit": "23c6c1d32a3d2b21a56cee65d3203bcc4ea82d2b",
+      "source_tarball_sha256": "28d55294ac596fbd129b293a85e7bb1c5dc4bd15b7fb55c500f355149e5f4e28",
+      "installed_binary_sha256": "d3e7cf6fd8446d11757f6969e75e1eb7d8ba1183ec33c27da67556f837052380",
+      "build_record": "collected/input-coturn.BUILDINFO",
+      "recompiled_by_this_run": false,
+      "admission_pin_independently_checked_before_invocation": true
+    },
+    "rootfs_cache": {
+      "path": "/var/cache/zpl-e2e/noble-arm64.tar",
+      "sha256": "96dc17fc1d197ec058f2662ada96eaa0ae835c90efc2574913036af7508a72ae",
+      "cached_packages_used_without_rootfs_rebuild_or_download": true
+    },
+    "caches_unchanged_after": true
+  },
+  "scenario_assertions_passed": 119,
+  "scenario_assertions_failed": 0,
+  "result": "PASS in this controlled installer fixture",
+  "run_log": "run-1.log",
+  "run_log_sha256": "dadac1389406f0e1f4c223b60d0b646ce3b2d9c293a3c7a8142a2442a313faea",
+  "release_artifacts": [
+    {
+      "version": "0.1.0-e2e",
+      "archive": "collected/artifacts/zeropw-link-0.1.0-e2e-linux-arm64.tar.gz",
+      "sha256": "997cba84ac1e0a3a8651c5aa18da9492ad438da6977fff1cbcad79fdf933413e",
+      "pin_label": "rel1",
+      "installed_files": [
+        {
+          "file": "VERSION",
+          "sha256": "b3bf581a2ddfb640ff86146b473c2a27f291ed169d996541fd3d1c08cbfb4678",
+          "installed_path": "/opt/zeropw-link/releases/0.1.0-e2e/VERSION",
+          "matches": true
+        },
+        {
+          "file": "zeropw-linkd",
+          "sha256": "b6f3028230b65b715ec41c6a8d9d14b288caf4a1c4c2f9065ff0744af4338f1b",
+          "installed_path": "/opt/zeropw-link/releases/0.1.0-e2e/zeropw-linkd",
+          "matches": true
+        },
+        {
+          "file": "zeropw-turnprobe",
+          "sha256": "82b42b928606bd279adacfdd0324d2a9aa557469bf1a34570d1662571a23604d",
+          "installed_path": "/opt/zeropw-link/releases/0.1.0-e2e/zeropw-turnprobe",
+          "matches": true
+        },
+        {
+          "file": "zeropw-turnsweep",
+          "sha256": "46760234fc474aa92ddfadcac172cf411383dc3531129075aeca36355fc9ff49",
+          "installed_path": "/opt/zeropw-link/releases/0.1.0-e2e/zeropw-turnsweep",
+          "matches": true
+        }
+      ]
+    },
+    {
+      "version": "0.2.0-e2e",
+      "archive": "collected/artifacts/zeropw-link-0.2.0-e2e-linux-arm64.tar.gz",
+      "sha256": "0bfc7c46d34414e1c43da5ba6da25c421cd8386cc22f613254d69a9679e88664",
+      "pin_label": "rel2",
+      "installed_files": [
+        {
+          "file": "VERSION",
+          "sha256": "086c08a16efe5631d9ecae84f656cef5e93f4bd9f6da762be978b090602ae61f",
+          "installed_path": "/opt/zeropw-link/releases/0.2.0-e2e/VERSION",
+          "matches": true
+        },
+        {
+          "file": "zeropw-linkd",
+          "sha256": "dfbdf0d8e9dbfaa61e8638d6b88e5861625d6cf4edc76dac47820a6ce8dc6c2d",
+          "installed_path": "/opt/zeropw-link/releases/0.2.0-e2e/zeropw-linkd",
+          "matches": true
+        },
+        {
+          "file": "zeropw-turnprobe",
+          "sha256": "82b42b928606bd279adacfdd0324d2a9aa557469bf1a34570d1662571a23604d",
+          "installed_path": "/opt/zeropw-link/releases/0.2.0-e2e/zeropw-turnprobe",
+          "matches": true
+        },
+        {
+          "file": "zeropw-turnsweep",
+          "sha256": "46760234fc474aa92ddfadcac172cf411383dc3531129075aeca36355fc9ff49",
+          "installed_path": "/opt/zeropw-link/releases/0.2.0-e2e/zeropw-turnsweep",
+          "matches": true
+        }
+      ]
+    },
+    {
+      "version": "0.3.0-e2e",
+      "archive": "collected/artifacts/zeropw-link-0.3.0-e2e-linux-arm64.tar.gz",
+      "sha256": "644d1fc4e727a8300612983a7f442f4331bfade1a3264434dd842907b55700f0",
+      "pin_label": "broken",
+      "installed_files": [
+        {
+          "file": "VERSION",
+          "sha256": "1c663bf2c9659fc2e0ec499663f05bb61fb110e9f62798e1e283e470e589d720",
+          "installed_path": "/opt/zeropw-link/releases/0.3.0-e2e/VERSION",
+          "matches": true
+        },
+        {
+          "file": "zeropw-linkd",
+          "sha256": "8351e34923dc306f10424b91cfcd16392528ec0ebcbb81e5315d3d82c1aca70e",
+          "installed_path": "/opt/zeropw-link/releases/0.3.0-e2e/zeropw-linkd",
+          "matches": true
+        },
+        {
+          "file": "zeropw-turnsweep",
+          "sha256": "46760234fc474aa92ddfadcac172cf411383dc3531129075aeca36355fc9ff49",
+          "installed_path": "/opt/zeropw-link/releases/0.3.0-e2e/zeropw-turnsweep",
+          "matches": true
+        },
+        {
+          "file": "zeropw-turnprobe",
+          "sha256": "82b42b928606bd279adacfdd0324d2a9aa557469bf1a34570d1662571a23604d",
+          "installed_path": "/opt/zeropw-link/releases/0.3.0-e2e/zeropw-turnprobe",
+          "matches": true
+        }
+      ]
+    }
+  ],
+  "installed_release_files_verified_against_pinned_archive_members": 12,
+  "cleanup": {
+    "own_unit": "inactive",
+    "own_container_root": "removed",
+    "own_veth": "removed",
+    "log": "cleanup-and-cache-after.log"
+  },
+  "limitations": [
+    "Synthetic isolated Linux arm64 fixture, not Oracle deployment or actual target shape performance",
+    "No native macOS or two physical Macs used",
+    "New synthetic artifact digests exercise admission; they do not confer external review or release acceptance",
+    "Cached coturn runtime bundle was reused with exact digest and source BUILDINFO pin; current hardened coturn compilation path was not retested",
+    "Test CA/provided TLS mode exercises certificate identity/renewal hooks, not live ACME issuance or DNS ownership",
+    "Three 1-second measurement samples describe this VM fixture only, not combined1GB capacity/100-user guarantees",
+    "No production credentials or generated fixture key/seed/token files were collected",
+    "Does not establish complete network-flood, installation threat-model or repository-wide review acceptance"
+  ]
+}

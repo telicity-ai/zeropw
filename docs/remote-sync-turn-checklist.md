@@ -41,10 +41,14 @@ cherry-pick할 수 있으나 결합된 소스의 전체 native 검증은 여전�
 descriptor 기반 상태/CA 상위 경로와 Darwin ACL 검사를 통합했다.
 [162개 소스 파일 대조 기록](evidence/2026-11-07-link-e115879.json)에서 Linux
 vet/Go 전체/server·daemon race/Darwin 교차 빌드는 exit 0이다. 배포 archive
-시험 `5a9f581`의 118개 검사에는 artifact 경계 24개가 포함된다. 새 Darwin
+시험 `5a9f581`의 118개 검사에는 artifact 경계 24개가 포함된다. 별도
+[설치·롤백 E2E](evidence/2026-11-07-link-installer-5a9f581.json)는 119개 통과,
+exit 0이며 실제 OCI 배포가 아닌 격리 nspawn 시험이다. 새 Darwin
 ACL·기본 root alias·다른 UID의 retained-directory-FD 실제 검증은 NOTRUN이며,
 기존 ca01275 Opus REVISE와 원래 finding severity는 그대로 보존한다.
-`4af5ac8`의 Darwin 라이선스 동봉은 별도 빌드 검증 대상이다. 최종 sidecar
+[`4af5ac8` 빌드 기록](evidence/2026-11-07-link-build-4af5ac8.json)은 5개 대상과
+artifact 검사 33개 통과, 162개 소스 변경 없음이다. 실제 native 실행이나
+두 번째 빌드와의 재현성 비교는 아니다. 최종 sidecar
 pin, 실제 설치·롤백 결과, 새로운 Opus 판정과 OCI 제품 배포는 별도 조건이다.
 
 

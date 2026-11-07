@@ -11,10 +11,18 @@ file sets matching before/after ([record](evidence/2026-11-07-link-e115879.json)
 This includes bounded connection admission, requesting-network session challenge
 quotas, mandatory independently pinned deployment archives and descriptor-based
 state/CA ancestor checks with native Darwin ACL APIs. The artifact unit suite
-at `5a9f581` passed 118 checks, including 24 artifact boundaries. Native execution
+at `5a9f581` passed 118 checks, including 24 artifact boundaries. Its separate
+[installer/rollback E2E record](evidence/2026-11-07-link-installer-5a9f581.json)
+reports 119 checks passed, exit0, with 153 source files unchanged and all 12
+installed release files matching the independently pinned synthetic archives.
+This is a disposable systemd-nspawn fixture, not an OCI deployment. Native execution
 of the new ACL, standard-root-alias and retained-directory-FD boundaries remains
 NOTRUN; prior f544 native tests do not validate these changes. Link `4af5ac8`
-subsequently adds Darwin redistribution notices to build outputs. No new Opus
+subsequently adds Darwin redistribution notices to build outputs. Its separate
+[one-build artifact verification](evidence/2026-11-07-link-build-4af5ac8.json)
+passed all five cross-build targets and 33 artifact checks, with all 162 source
+files unchanged. This is neither native execution nor a second-build
+reproducibility comparison. No new Opus
 verdict, OCI product deployment or final sidecar-pin integration is claimed.
 This factual addendum was recorded by actual `gpt-6.1-sol`.
 
