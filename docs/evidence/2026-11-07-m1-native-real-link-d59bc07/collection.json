@@ -1,0 +1,46 @@
+{
+  "controller_model": "gpt-6.1-sol",
+  "reasoning_effort": "ultra",
+  "tested_context": "d59bc07ff25abdc69cf10ffd9d6f8cfc45bd4b5a",
+  "rust_tree": "5d3acbd546c5dc3490e95635342572cb064007eb",
+  "desktop_tree": "2413844c89265a3e239be2372d34b1e6e1b2d4bb",
+  "native_rust_passed": 1740,
+  "native_frontend_passed": 343,
+  "native_core_passed": 198,
+  "native_original_driver_exit": 1,
+  "native_all13_phase_exits": 0,
+  "independent_native_audits_exit": 0,
+  "evidence_hashes_verified": 280,
+  "source_original_files_modes_verified": 1136,
+  "linux_final_pass_observations": 188,
+  "private_assertions": 6,
+  "not_unique_test_count": true,
+  "linux_cumulative_ops_including_failed_attempts": 308,
+  "Go_E2E_source": "3eb972745ced7d8d60806254e8703c04b475099f",
+  "newer_admission_export_or_final_sidecar_not_validated": true,
+  "notrun": [
+    "fresh shared no-version signed deletion target",
+    "explicit duplicate encrypted FACT receipt"
+  ],
+  "fixture_authority_gap": [
+    "rootcleanup readsPIDfiles under parity-ownedW without identityvalidation",
+    "root script path is parity-controlled and reexecuted",
+    "root shell redirects traverse parity-writable output paths; substitution is not fenced"
+  ],
+  "capture_UID": "configured -Z parity; no liveUIDsnapshot",
+  "SSH_after_delete": "no signature observed; agentfailure vs socketIOfailure notdistinguished",
+  "old_privileged_fixture_rerun": "PROHIBITED until structural boundary fix",
+  "exploitation_or_unrelated_kill": "not inferred from staticgap",
+  "selected_sha256": {
+    "REPORT.md": "bed8ce70e0779e53735996195227adc989097b6259a00f4c6e6cd1f353a4a87d",
+    "NATIVE.md": "a80584d8023291d4cc2079650e87180f9ca9b289ac4b09a89e76b17f7a80441a",
+    "LINUX.md": "22b049cabd345dc1f2ae8902f7b1dd3fc706bf0b7303df0cd84296dd6a0d4b58",
+    "linux-summary.json": "ffde9ed5d7f2bc356871fdb3e4643218a091703a812746d23eaa5511365c35e8",
+    "native-ownership.json": "b3f49f0ebdee27293f6d0093087b18668d6035cddfe44295985ba82f3140b810",
+    "EXTERNAL-SHA256SUMS": "9ac99541917642e0a9c46df9b3e640e4616559240427daa0d6136fe72d525869",
+    "original-network.sh.txt": "aad1931f85faabafb243c04b6613df76f6f57084d7489fbbe10860773091a13a",
+    "STATIC-COLLECTION.md": "44ebf6c59b41b073459faf358b02f30b9e1e7a8cb76cb14d38dc74682d590c75"
+  },
+  "external_evidence_directory": "/Users/ys/Code/zeropw-mlp-evidence/m1-native-real-link-20261107/t3-1876922e",
+  "review": "Staticcollection only; canonicaldispositions unchanged; all M2/runtime/physical/release gates open"
+}

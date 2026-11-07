@@ -209,7 +209,11 @@ retained-authority/non-removal-fact candidate and passed isolated Linux Rust
 separate that result from the later M1/UI composition. Exact9e76a1d subsequently
 passed the [combined Linux product checks](evidence/2026-11-07-m1-m2b1-union-linux-9e76a1d/README.md):
 Rust107 steps/1,737 tests and Desktop343 frontend+198 core; original driver exit1
-and the corrected independent source audit0 are preserved. Native remains NOTRUN. Removal-fact semantics, final overlay/generations, runtime
+and the corrected independent source audit0 are preserved. Exactd59bc07 later
+passed [native product phases and Linux real-link observations](evidence/2026-11-07-m1-native-real-link-d59bc07/README.md):
+Rust1,740 and Desktop343+198. The native driver audit exit1 is preserved; the
+Linux fixture has a concrete privileged-control gap and two NOTRUN checks, so
+those observations do not close external acceptance or the general M2 gates. Removal-fact semantics, final overlay/generations, runtime
 onboarding and all M2-G01–G10 gates remain open; this candidate cannot install data.
 
 ### Decision and exact trust boundary

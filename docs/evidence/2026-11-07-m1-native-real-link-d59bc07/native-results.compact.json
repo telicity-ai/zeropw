@@ -1,0 +1,541 @@
+{
+  "source_head": "d59bc07ff25abdc69cf10ffd9d6f8cfc45bd4b5a",
+  "trees": [
+    "bdbf0c0372146ba1c890dfe1924adc2567806bf1",
+    "5d3acbd546c5dc3490e95635342572cb064007eb",
+    "2413844c89265a3e239be2372d34b1e6e1b2d4bb"
+  ],
+  "phase_counts_and_exits": [
+    {
+      "name": "01-profile",
+      "start": "2026-11-07T12:46:23.174728+00:00",
+      "end": "2026-11-07T12:46:24.331326+00:00",
+      "exit": 0,
+      "sum_passed": 0,
+      "sum_failed": 0,
+      "sum_ignored": 0,
+      "frontend_test_totals": [],
+      "frontend_file_totals": [],
+      "rust_objcopy_LLVM_warning_occurrences": 0
+    },
+    {
+      "name": "01b-public-registry",
+      "start": "2026-11-07T12:46:24.331810+00:00",
+      "end": "2026-11-07T12:46:29.191073+00:00",
+      "exit": 0,
+      "sum_passed": 0,
+      "sum_failed": 0,
+      "sum_ignored": 0,
+      "frontend_test_totals": [],
+      "frontend_file_totals": [],
+      "rust_objcopy_LLVM_warning_occurrences": 0
+    },
+    {
+      "name": "02-features",
+      "start": "2026-11-07T12:46:29.191265+00:00",
+      "end": "2026-11-07T12:46:31.823491+00:00",
+      "exit": 0,
+      "sum_passed": 0,
+      "sum_failed": 0,
+      "sum_ignored": 0,
+      "frontend_test_totals": [],
+      "frontend_file_totals": [],
+      "rust_objcopy_LLVM_warning_occurrences": 0
+    },
+    {
+      "name": "03-focused",
+      "start": "2026-11-07T12:46:31.824282+00:00",
+      "end": "2026-11-07T12:48:05.612441+00:00",
+      "exit": 0,
+      "sum_passed": 57,
+      "sum_failed": 0,
+      "sum_ignored": 0,
+      "frontend_test_totals": [],
+      "frontend_file_totals": [],
+      "rust_objcopy_LLVM_warning_occurrences": 13
+    },
+    {
+      "name": "03b-m1-session",
+      "start": "2026-11-07T12:48:05.615078+00:00",
+      "end": "2026-11-07T12:49:34.500440+00:00",
+      "exit": 0,
+      "sum_passed": 14,
+      "sum_failed": 0,
+      "sum_ignored": 0,
+      "frontend_test_totals": [],
+      "frontend_file_totals": [],
+      "rust_objcopy_LLVM_warning_occurrences": 2
+    },
+    {
+      "name": "04-checkpoint-debug",
+      "start": "2026-11-07T12:49:34.503910+00:00",
+      "end": "2026-11-07T12:49:39.957464+00:00",
+      "exit": 0,
+      "sum_passed": 13,
+      "sum_failed": 0,
+      "sum_ignored": 0,
+      "frontend_test_totals": [],
+      "frontend_file_totals": [],
+      "rust_objcopy_LLVM_warning_occurrences": 2
+    },
+    {
+      "name": "05-payload-stack-debug",
+      "start": "2026-11-07T12:49:39.961445+00:00",
+      "end": "2026-11-07T12:49:40.269399+00:00",
+      "exit": 0,
+      "sum_passed": 1,
+      "sum_failed": 0,
+      "sum_ignored": 0,
+      "frontend_test_totals": [],
+      "frontend_file_totals": [],
+      "rust_objcopy_LLVM_warning_occurrences": 7
+    },
+    {
+      "name": "06-semantic-stack-debug",
+      "start": "2026-11-07T12:49:40.271881+00:00",
+      "end": "2026-11-07T12:49:40.646289+00:00",
+      "exit": 0,
+      "sum_passed": 1,
+      "sum_failed": 0,
+      "sum_ignored": 0,
+      "frontend_test_totals": [],
+      "frontend_file_totals": [],
+      "rust_objcopy_LLVM_warning_occurrences": 7
+    },
+    {
+      "name": "05-payload-stack-release",
+      "start": "2026-11-07T12:49:40.646959+00:00",
+      "end": "2026-11-07T12:53:20.220064+00:00",
+      "exit": 0,
+      "sum_passed": 1,
+      "sum_failed": 0,
+      "sum_ignored": 0,
+      "frontend_test_totals": [],
+      "frontend_file_totals": [],
+      "rust_objcopy_LLVM_warning_occurrences": 7
+    },
+    {
+      "name": "06-semantic-stack-release",
+      "start": "2026-11-07T12:53:20.228552+00:00",
+      "end": "2026-11-07T12:53:30.007822+00:00",
+      "exit": 0,
+      "sum_passed": 1,
+      "sum_failed": 0,
+      "sum_ignored": 0,
+      "frontend_test_totals": [],
+      "frontend_file_totals": [],
+      "rust_objcopy_LLVM_warning_occurrences": 7
+    },
+    {
+      "name": "07-checkpoint-release",
+      "start": "2026-11-07T12:53:30.009598+00:00",
+      "end": "2026-11-07T12:55:29.322913+00:00",
+      "exit": 0,
+      "sum_passed": 13,
+      "sum_failed": 0,
+      "sum_ignored": 0,
+      "frontend_test_totals": [],
+      "frontend_file_totals": [],
+      "rust_objcopy_LLVM_warning_occurrences": 2
+    },
+    {
+      "name": "08-full-rust",
+      "start": "2026-11-07T12:55:29.330216+00:00",
+      "end": "2026-11-07T13:27:53.343922+00:00",
+      "exit": 0,
+      "sum_passed": 1740,
+      "sum_failed": 0,
+      "sum_ignored": 4,
+      "frontend_test_totals": [],
+      "frontend_file_totals": [],
+      "rust_objcopy_LLVM_warning_occurrences": 725
+    },
+    {
+      "name": "09-full-desktop",
+      "start": "2026-11-07T13:27:53.348700+00:00",
+      "end": "2026-11-07T13:36:53.903624+00:00",
+      "exit": 0,
+      "sum_passed": 198,
+      "sum_failed": 0,
+      "sum_ignored": 0,
+      "frontend_test_totals": [
+        "343"
+      ],
+      "frontend_file_totals": [
+        "26"
+      ],
+      "rust_objcopy_LLVM_warning_occurrences": 20
+    }
+  ],
+  "original_driver": {
+    "all_phases_completed": true,
+    "disk_after": {
+      "free": 57706598400,
+      "total": 85689589760,
+      "used": 27982991360
+    },
+    "end": "2026-11-07T13:36:56.393801+00:00",
+    "exit": 1,
+    "head": "d59bc07ff25abdc69cf10ffd9d6f8cfc45bd4b5a",
+    "phases": [
+      {
+        "command": [
+          "bash",
+          "-c",
+          "id; sw_vers; csrutil status; uname -a; rustc --version --verbose; cargo --version --verbose; node --version; npm --version; python3.12 --version; /opt/homebrew/opt/openssl@3/bin/openssl version; ulimit -a; df -Pk .; printf \"umask=\"; umask"
+        ],
+        "cwd": "/Volumes/ZeroPWBuild/m1-m2b1-native-d59bc07/src",
+        "elapsed_seconds": 1.1565257499969448,
+        "end": "2026-11-07T12:46:24.331326+00:00",
+        "exit": 0,
+        "name": "01-profile",
+        "start": "2026-11-07T12:46:23.174728+00:00"
+      },
+      {
+        "command": [
+          "python3.12",
+          "guest-driver.py:public_registry"
+        ],
+        "cwd": "/Volumes/ZeroPWBuild/m1-m2b1-native-d59bc07/src",
+        "end": "2026-11-07T12:46:29.191073+00:00",
+        "exit": 0,
+        "name": "01b-public-registry",
+        "start": "2026-11-07T12:46:24.331810+00:00"
+      },
+      {
+        "command": [
+          "cargo",
+          "tree",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--target",
+          "all",
+          "-e",
+          "features",
+          "-i",
+          "serde_json"
+        ],
+        "cwd": "/Volumes/ZeroPWBuild/m1-m2b1-native-d59bc07/src",
+        "elapsed_seconds": 2.6322627089975867,
+        "end": "2026-11-07T12:46:31.823491+00:00",
+        "exit": 0,
+        "name": "02-features",
+        "start": "2026-11-07T12:46:29.191265+00:00"
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_checkpoint_admission",
+          "--test",
+          "team_checkpoint_authority_oracle",
+          "--test",
+          "team_checkpoint_legacy_parser_regression",
+          "--test",
+          "team_checkpoint_manifest",
+          "--test",
+          "team_checkpoint_payload",
+          "--test",
+          "team_checkpoint_provenance",
+          "--test",
+          "whole_secret_tombstone"
+        ],
+        "cwd": "/Volumes/ZeroPWBuild/m1-m2b1-native-d59bc07/src",
+        "elapsed_seconds": 93.79174887499539,
+        "end": "2026-11-07T12:48:05.612441+00:00",
+        "exit": 0,
+        "name": "03-focused",
+        "start": "2026-11-07T12:46:31.824282+00:00"
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--lib",
+          "m1_",
+          "--",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "cwd": "/Volumes/ZeroPWBuild/m1-m2b1-native-d59bc07/src",
+        "elapsed_seconds": 88.88870429199596,
+        "end": "2026-11-07T12:49:34.500440+00:00",
+        "exit": 0,
+        "name": "03b-m1-session",
+        "start": "2026-11-07T12:48:05.615078+00:00"
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--lib",
+          "team::checkpoint",
+          "--",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "cwd": "/Volumes/ZeroPWBuild/m1-m2b1-native-d59bc07/src",
+        "elapsed_seconds": 5.45303637500183,
+        "end": "2026-11-07T12:49:39.957464+00:00",
+        "exit": 0,
+        "name": "04-checkpoint-debug",
+        "start": "2026-11-07T12:49:34.503910+00:00"
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_checkpoint_payload",
+          "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+          "--",
+          "--exact",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "cwd": "/Volumes/ZeroPWBuild/m1-m2b1-native-d59bc07/src",
+        "elapsed_seconds": 0.3073095409999951,
+        "end": "2026-11-07T12:49:40.269399+00:00",
+        "exit": 0,
+        "name": "05-payload-stack-debug",
+        "selected_test_expected": "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+        "selection_seen": true,
+        "start": "2026-11-07T12:49:39.961445+00:00"
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_checkpoint_admission",
+          "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+          "--",
+          "--exact",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "cwd": "/Volumes/ZeroPWBuild/m1-m2b1-native-d59bc07/src",
+        "elapsed_seconds": 0.37422237499413313,
+        "end": "2026-11-07T12:49:40.646289+00:00",
+        "exit": 0,
+        "name": "06-semantic-stack-debug",
+        "selected_test_expected": "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+        "selection_seen": true,
+        "start": "2026-11-07T12:49:40.271881+00:00"
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--test",
+          "team_checkpoint_payload",
+          "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+          "--",
+          "--exact",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "cwd": "/Volumes/ZeroPWBuild/m1-m2b1-native-d59bc07/src",
+        "elapsed_seconds": 219.5813820830008,
+        "end": "2026-11-07T12:53:20.220064+00:00",
+        "exit": 0,
+        "name": "05-payload-stack-release",
+        "selected_test_expected": "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+        "selection_seen": true,
+        "start": "2026-11-07T12:49:40.646959+00:00"
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--test",
+          "team_checkpoint_admission",
+          "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+          "--",
+          "--exact",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "cwd": "/Volumes/ZeroPWBuild/m1-m2b1-native-d59bc07/src",
+        "elapsed_seconds": 9.778673082997557,
+        "end": "2026-11-07T12:53:30.007822+00:00",
+        "exit": 0,
+        "name": "06-semantic-stack-release",
+        "selected_test_expected": "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+        "selection_seen": true,
+        "start": "2026-11-07T12:53:20.228552+00:00"
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--locked",
+          "--offline",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--lib",
+          "team::checkpoint",
+          "--",
+          "--nocapture",
+          "--test-threads=1"
+        ],
+        "cwd": "/Volumes/ZeroPWBuild/m1-m2b1-native-d59bc07/src",
+        "elapsed_seconds": 119.31759879099991,
+        "end": "2026-11-07T12:55:29.322913+00:00",
+        "exit": 0,
+        "name": "07-checkpoint-release",
+        "start": "2026-11-07T12:53:30.009598+00:00"
+      },
+      {
+        "command": [
+          "bash",
+          "rust/verify.sh"
+        ],
+        "cwd": "/Volumes/ZeroPWBuild/m1-m2b1-native-d59bc07/src",
+        "elapsed_seconds": 1944.087334208998,
+        "end": "2026-11-07T13:27:53.343922+00:00",
+        "exit": 0,
+        "name": "08-full-rust",
+        "start": "2026-11-07T12:55:29.330216+00:00"
+      },
+      {
+        "command": [
+          "bash",
+          "desktop/verify.sh"
+        ],
+        "cwd": "/Volumes/ZeroPWBuild/m1-m2b1-native-d59bc07/src",
+        "elapsed_seconds": 540.5350808750009,
+        "end": "2026-11-07T13:36:53.903624+00:00",
+        "exit": 0,
+        "name": "09-full-desktop",
+        "start": "2026-11-07T13:27:53.348700+00:00"
+      }
+    ],
+    "start": "2026-11-07T12:46:23.081949+00:00"
+  },
+  "socket_probe": {
+    "utc": "2026-11-07T13:13:15.023939+00:00",
+    "uid": 501,
+    "exit": 0,
+    "timing": "pre-Desktop, after full Rust verifier had already begun; no claim this probe preceded all Rust tests",
+    "tmpdir_length": 57,
+    "paths": [
+      {
+        "name": "rust-signer-fallback",
+        "path": "/Volumes/ZeroPWBuild/m1n-d59-tttttttttttttttttttttttttttt/zpws-m1n00000/a000000000000.sock",
+        "ascii_bytes": 90,
+        "source_pattern": "rust/src/signer.rs make_temp_dir zpws- +8; a +12hex +.sock",
+        "bind_exit": 0,
+        "Go103limit_is_separate": true
+      },
+      {
+        "name": "rust-exec-ack",
+        "path": "/Volumes/ZeroPWBuild/m1n-d59-tttttttttttttttttttttttttttt/zp-ack-m1n000/ack",
+        "ascii_bytes": 75,
+        "source_pattern": "rust/src/runs.rs zp-ack- +6 +/ack",
+        "bind_exit": 0,
+        "Go103limit_is_separate": true
+      },
+      {
+        "name": "desktop-fake-link",
+        "path": "/Volumes/ZeroPWBuild/m1n-d59-tttttttttttttttttttttttttttt/xpm1n00000/a/link/link.sock",
+        "ascii_bytes": 85,
+        "source_pattern": "desktop/core tests tempfile ten-character leaf +/a/link/link.sock",
+        "bind_exit": 0,
+        "Go103limit_is_separate": true
+      }
+    ]
+  },
+  "binaries": [
+    {
+      "path": "target/debug/zeropw-admin",
+      "sha256": "7f79e0a141de4b23a3178d9be2ee1c7125ce1f450178d1108d944f240f5f2b17",
+      "size": 28130144
+    },
+    {
+      "path": "target/debug/zeropw-agent",
+      "sha256": "884ef0138dfa89415039081b80a7fa1bc811e85d14cfc7abd7132fb6cda98021",
+      "size": 13289312
+    },
+    {
+      "path": "target/debug/zeropw-demo",
+      "sha256": "8655040d6612e3864bd15573342c4e47420570de6d583f3c0cc059b097a88a49",
+      "size": 22442880
+    },
+    {
+      "path": "target/debug/zeropw-democli",
+      "sha256": "279b77da34a7ade157837907d8de73b3a1484dce82723452684bca1f04ce9ec2",
+      "size": 6437472
+    },
+    {
+      "path": "target/debug/zeropw_session",
+      "sha256": "4e7ff4ce264462c1168954ca0310c2d5b0d0e3fc75f87246f4c72f857be3a561",
+      "size": 666080
+    },
+    {
+      "path": "target/release/zeropw-admin",
+      "sha256": "2d49e7803ec2516d399df9772a9c880429e7f3a7e3dc8eda75b97664c7ce4b77",
+      "size": 9954048
+    },
+    {
+      "path": "target/release/zeropw-agent",
+      "sha256": "3c54bfdb36c52a37be6b96dfaa1b255fbfa07579d95583bec75e7325ba034823",
+      "size": 4743136
+    },
+    {
+      "path": "target/release/zeropw-demo",
+      "sha256": "93a34a3d515968573660190b139aeeb30763b033051c22c98140f3787e386d38",
+      "size": 8080448
+    },
+    {
+      "path": "target/release/zeropw-democli",
+      "sha256": "f54d5481f102edac66f6b07ce83dabe49c90571d04edc1df10112004653cef2c",
+      "size": 2477360
+    },
+    {
+      "path": "target/release/zeropw_session",
+      "sha256": "fc1296f1b97f5484abcdf0d4389d29f435a0b0cde9ed86d6a0b871fdfffd0360",
+      "size": 493920
+    }
+  ],
+  "original_summary_sha256": "efd6a4ea51bceef319a4f05a36500deb1f24a45145feea8e1145e96d7478400f",
+  "original_files_unchanged": 1136,
+  "generated_outputs": 187,
+  "original_driver_exit": 1,
+  "all13_product_phase_exits": 0,
+  "independent_archive_audits_exit": 0
+}

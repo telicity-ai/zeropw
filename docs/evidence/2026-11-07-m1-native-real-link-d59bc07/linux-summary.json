@@ -1,0 +1,601 @@
+{
+  "runtime_result": {
+    "exit": 0,
+    "utc": "2026-11-07T13:03:07.411642+00:00",
+    "ops": 298,
+    "application_bytes": 52704,
+    "duration_seconds": 146.06882254895754,
+    "phase": "relay-tls",
+    "scope": "Linux two simulated devices; immutable3eb Go source, reused9e Rust artifact; no newer admission candidate/runtime snapshot/physicalMac/capacity acceptance"
+  },
+  "assertion_counts": {
+    "PASS": 188,
+    "OBSERVED": 24,
+    "NOTRUN": 2
+  },
+  "local": {
+    "exit": 0,
+    "ops": 10,
+    "campaign_total_ops": 308,
+    "assertions": [
+      {
+        "name": "private-wrong-reauth-denied",
+        "passed": true,
+        "detail": null
+      },
+      {
+        "name": "exact-local-delete-metadata",
+        "passed": true,
+        "detail": {
+          "permanent_id": true,
+          "provider_revocation_required": true,
+          "secret_id": "local-gone",
+          "status": "deleted",
+          "sync_status": "local"
+        }
+      },
+      {
+        "name": "private-idempotent-retry",
+        "passed": true,
+        "detail": null
+      },
+      {
+        "name": "private-version-1-denied-after-reopen",
+        "passed": true,
+        "detail": null
+      },
+      {
+        "name": "private-version-2-denied-after-reopen",
+        "passed": true,
+        "detail": null
+      },
+      {
+        "name": "private-id-reuse-denied",
+        "passed": true,
+        "detail": null
+      }
+    ]
+  },
+  "notrun": [
+    {
+      "name": "signed-deletion-of-no-version-target",
+      "result": "NOTRUN",
+      "reason": "Public secret delete requires an existing secret or previous tombstone and accepts only --id, with no --env target scope. Unknown ID returns secret_not_found. No public authorized fact-signing API for a fresh no-version shared target; no signed facts fabricated.",
+      "phase": "direct",
+      "utc": "2026-11-07T13:01:31.484768+00:00"
+    },
+    {
+      "name": "explicit-duplicate-FACT-replay-frame-observation",
+      "result": "NOTRUN",
+      "reason": "Real reconnects exercise source-defined bounded fact replay and durable sets remain unchanged, but encrypted FACT frames are not exposed by a supported public observation surface. No explicit duplicate-frame receipt claim or ACK-loss claim is inferred from timing.",
+      "phase": "relay-tls",
+      "utc": "2026-11-07T13:03:03.687163+00:00"
+    }
+  ],
+  "transport_and_deletion_proofs": [
+    {
+      "name": "actual-direct-transport",
+      "result": "PASS",
+      "utc": "2026-11-07T13:00:57.803540+00:00",
+      "phase": "direct",
+      "detail": [
+        {
+          "ok": true,
+          "enrolled": true,
+          "revoked": false,
+          "service": "https://link.zpl.test:8443",
+          "device_id": "7whd6mwv5rts2y3oae47s5hlsq",
+          "account_id": "z33qlgtq6tyd7jcuge3zzh2uua",
+          "online": true,
+          "peers": [
+            {
+              "device_id": "uveqdydwylxj3zftqzvwtf6ncy",
+              "name": "DeviceB",
+              "online": true,
+              "revoked": false,
+              "path": "direct",
+              "rtt_ms": 0,
+              "last_error": null
+            }
+          ],
+          "_exit": 0
+        },
+        {
+          "ok": true,
+          "enrolled": true,
+          "revoked": false,
+          "service": "https://link.zpl.test:8443",
+          "device_id": "uveqdydwylxj3zftqzvwtf6ncy",
+          "account_id": "z33qlgtq6tyd7jcuge3zzh2uua",
+          "online": true,
+          "peers": [
+            {
+              "device_id": "7whd6mwv5rts2y3oae47s5hlsq",
+              "name": "DeviceA",
+              "online": true,
+              "revoked": false,
+              "path": "direct",
+              "rtt_ms": 0,
+              "last_error": null
+            }
+          ],
+          "_exit": 0
+        }
+      ]
+    },
+    {
+      "name": "two-legitimate-admins",
+      "result": "PASS",
+      "utc": "2026-11-07T13:01:15.971368+00:00",
+      "phase": "direct",
+      "detail": null
+    },
+    {
+      "name": "cached-http-next-new-auth-denied-after-delete",
+      "result": "PASS",
+      "utc": "2026-11-07T13:01:29.613109+00:00",
+      "phase": "direct",
+      "detail": {
+        "business": false,
+        "reason": "secret_deleted",
+        "status": 403
+      }
+    },
+    {
+      "name": "cached-bound-signer-next-sign-denied-after-delete",
+      "result": "PASS",
+      "utc": "2026-11-07T13:01:29.615691+00:00",
+      "phase": "direct",
+      "detail": {
+        "agent_type": 5,
+        "signature_valid": false
+      }
+    },
+    {
+      "name": "offline-edit-delete-complete-signed-union",
+      "result": "PASS",
+      "utc": "2026-11-07T13:01:34.872132+00:00",
+      "phase": "direct",
+      "detail": {
+        "digest": "c3893caea489ac2d2d732bca6a536424520b84c44402cdd111a55da26af89e1b",
+        "facts": 5,
+        "vector": {
+          "2itgfkg2fdoardwk2ailcjtlyu": 2,
+          "miiwusn5e5y2bbckcad2b67ybe": 20
+        },
+        "status": [
+          {
+            "conflicts": 0,
+            "env_id": "miiwusn5e5y2bbckcad2b67ybe-056479ab0ee486fa10b4a4d3eec1fad9",
+            "peers": [
+              {
+                "fingerprint": "2itgfkg2fdoardwk2ailcjtlyu",
+                "last_contact_at": "2026-11-07T13:01:34Z",
+                "last_error": null,
+                "name": "DeviceB",
+                "next_attempt_at": null,
+                "session": true,
+                "state": "up_to_date",
+                "transport": "link"
+              }
+            ],
+            "self": "miiwusn5e5y2bbckcad2b67ybe",
+            "serve_updated_at": "2026-11-07T13:01:34Z",
+            "_exit": 0
+          },
+          {
+            "conflicts": 0,
+            "env_id": "miiwusn5e5y2bbckcad2b67ybe-056479ab0ee486fa10b4a4d3eec1fad9",
+            "peers": [
+              {
+                "fingerprint": "miiwusn5e5y2bbckcad2b67ybe",
+                "last_contact_at": "2026-11-07T13:01:34Z",
+                "last_error": null,
+                "name": "DeviceA",
+                "next_attempt_at": null,
+                "session": true,
+                "state": "up_to_date",
+                "transport": "link"
+              }
+            ],
+            "self": "2itgfkg2fdoardwk2ailcjtlyu",
+            "serve_updated_at": "2026-11-07T13:01:34Z",
+            "_exit": 0
+          }
+        ],
+        "durable_session_state": [
+          {
+            "peers": {
+              "2itgfkg2fdoardwk2ailcjtlyu": {
+                "dial_failures": 0,
+                "last_contact_at": "2026-11-07T13:01:34Z",
+                "last_error": null,
+                "next_attempt_at": null,
+                "peer_vector": {
+                  "2itgfkg2fdoardwk2ailcjtlyu": 2,
+                  "miiwusn5e5y2bbckcad2b67ybe": 20
+                },
+                "session": true,
+                "since": "2026-11-07T13:01:32Z",
+                "tombstone_agreement": {
+                  "digest": "c3893caea489ac2d2d732bca6a536424520b84c44402cdd111a55da26af89e1b",
+                  "ready": true
+                },
+                "transport": "link",
+                "vector_received_at": "2026-11-07T13:01:34Z"
+              }
+            },
+            "self": "miiwusn5e5y2bbckcad2b67ybe",
+            "updated_at": "2026-11-07T13:01:34Z"
+          },
+          {
+            "peers": {
+              "miiwusn5e5y2bbckcad2b67ybe": {
+                "dial_failures": 0,
+                "last_contact_at": "2026-11-07T13:01:34Z",
+                "last_error": null,
+                "next_attempt_at": null,
+                "peer_vector": {
+                  "2itgfkg2fdoardwk2ailcjtlyu": 2,
+                  "miiwusn5e5y2bbckcad2b67ybe": 20
+                },
+                "session": true,
+                "since": "2026-11-07T13:01:32Z",
+                "tombstone_agreement": {
+                  "digest": "c3893caea489ac2d2d732bca6a536424520b84c44402cdd111a55da26af89e1b",
+                  "ready": true
+                },
+                "transport": "link",
+                "vector_received_at": "2026-11-07T13:01:34Z"
+              }
+            },
+            "self": "2itgfkg2fdoardwk2ailcjtlyu",
+            "updated_at": "2026-11-07T13:01:34Z"
+          }
+        ]
+      }
+    },
+    {
+      "name": "all-distinct-signed-deletions-retained",
+      "result": "PASS",
+      "utc": "2026-11-07T13:01:51.412771+00:00",
+      "phase": "direct",
+      "detail": {
+        "hashes": [
+          "6736f2dff1d4e93d30fa35180bef61a2e2dd0cc892a53b7c6755de3285f6c5cf",
+          "7fee13ace3b3958cd51cec645a4eb7d58f4582274a0c16a266a0177c9f9bfaad",
+          "afc88196329894b3e5e6f5a2933cb95586f51e026863a4bb6a03844ae96031cb",
+          "e8d27a8065b5f8fb578072de6a3cb88db247af5d229b2f77aa68a531d4074a2e",
+          "efe8e484d7982fb562e833148e6b2044f999c9b3cc24372b418539b41650bc6b"
+        ],
+        "digest": "c3893caea489ac2d2d732bca6a536424520b84c44402cdd111a55da26af89e1b"
+      }
+    },
+    {
+      "name": "relay-udp-actual-selected-transport",
+      "result": "PASS",
+      "utc": "2026-11-07T13:02:01.252212+00:00",
+      "phase": "relay-udp",
+      "detail": [
+        {
+          "ok": true,
+          "enrolled": true,
+          "revoked": false,
+          "service": "https://link.zpl.test:8443",
+          "device_id": "7whd6mwv5rts2y3oae47s5hlsq",
+          "account_id": "z33qlgtq6tyd7jcuge3zzh2uua",
+          "online": true,
+          "peers": [
+            {
+              "device_id": "uveqdydwylxj3zftqzvwtf6ncy",
+              "name": "DeviceB",
+              "online": true,
+              "revoked": false,
+              "path": "relay-udp",
+              "rtt_ms": 0,
+              "last_error": null
+            }
+          ],
+          "_exit": 0
+        },
+        {
+          "ok": true,
+          "enrolled": true,
+          "revoked": false,
+          "service": "https://link.zpl.test:8443",
+          "device_id": "uveqdydwylxj3zftqzvwtf6ncy",
+          "account_id": "z33qlgtq6tyd7jcuge3zzh2uua",
+          "online": true,
+          "peers": [
+            {
+              "device_id": "7whd6mwv5rts2y3oae47s5hlsq",
+              "name": "DeviceA",
+              "online": true,
+              "revoked": false,
+              "path": "relay-udp",
+              "rtt_ms": 0,
+              "last_error": null
+            }
+          ],
+          "_exit": 0
+        }
+      ]
+    },
+    {
+      "name": "relay-tls-actual-selected-transport",
+      "result": "PASS",
+      "utc": "2026-11-07T13:02:23.176287+00:00",
+      "phase": "relay-tls",
+      "detail": [
+        {
+          "ok": true,
+          "enrolled": true,
+          "revoked": false,
+          "service": "https://link.zpl.test:8443",
+          "device_id": "7whd6mwv5rts2y3oae47s5hlsq",
+          "account_id": "z33qlgtq6tyd7jcuge3zzh2uua",
+          "online": true,
+          "peers": [
+            {
+              "device_id": "uveqdydwylxj3zftqzvwtf6ncy",
+              "name": "DeviceB",
+              "online": true,
+              "revoked": false,
+              "path": "relay-tls",
+              "rtt_ms": 0,
+              "last_error": null
+            }
+          ],
+          "_exit": 0
+        },
+        {
+          "ok": true,
+          "enrolled": true,
+          "revoked": false,
+          "service": "https://link.zpl.test:8443",
+          "device_id": "uveqdydwylxj3zftqzvwtf6ncy",
+          "account_id": "z33qlgtq6tyd7jcuge3zzh2uua",
+          "online": true,
+          "peers": [
+            {
+              "device_id": "7whd6mwv5rts2y3oae47s5hlsq",
+              "name": "DeviceA",
+              "online": true,
+              "revoked": false,
+              "path": "relay-tls",
+              "rtt_ms": 0,
+              "last_error": null
+            }
+          ],
+          "_exit": 0
+        }
+      ]
+    },
+    {
+      "name": "relay-tls-after-rust-go-coturn-restart-actual-selected-transport",
+      "result": "PASS",
+      "utc": "2026-11-07T13:02:47.064151+00:00",
+      "phase": "relay-tls",
+      "detail": [
+        {
+          "ok": true,
+          "enrolled": true,
+          "revoked": false,
+          "service": "https://link.zpl.test:8443",
+          "device_id": "7whd6mwv5rts2y3oae47s5hlsq",
+          "account_id": "z33qlgtq6tyd7jcuge3zzh2uua",
+          "online": true,
+          "peers": [
+            {
+              "device_id": "uveqdydwylxj3zftqzvwtf6ncy",
+              "name": "DeviceB",
+              "online": true,
+              "revoked": false,
+              "path": "relay-tls",
+              "rtt_ms": 0,
+              "last_error": null
+            }
+          ],
+          "_exit": 0
+        },
+        {
+          "ok": true,
+          "enrolled": true,
+          "revoked": false,
+          "service": "https://link.zpl.test:8443",
+          "device_id": "uveqdydwylxj3zftqzvwtf6ncy",
+          "account_id": "z33qlgtq6tyd7jcuge3zzh2uua",
+          "online": true,
+          "peers": [
+            {
+              "device_id": "7whd6mwv5rts2y3oae47s5hlsq",
+              "name": "DeviceA",
+              "online": true,
+              "revoked": false,
+              "path": "relay-tls",
+              "rtt_ms": 0,
+              "last_error": null
+            }
+          ],
+          "_exit": 0
+        }
+      ]
+    },
+    {
+      "name": "bounded-log-wire-sentinel-scan",
+      "result": "PASS",
+      "utc": "2026-11-07T13:03:03.694882+00:00",
+      "phase": "relay-tls",
+      "detail": {
+        "files": 17,
+        "bytes": 723850,
+        "sentinels": 22,
+        "encodings": [
+          "plaintext",
+          "base64",
+          "hex"
+        ],
+        "capture_present": true,
+        "claim": "named observations only"
+      }
+    },
+    {
+      "name": "bounded-log-wire-sentinel-scan",
+      "result": "PASS",
+      "utc": "2026-11-07T13:03:07.407906+00:00",
+      "phase": "relay-tls",
+      "detail": {
+        "files": 17,
+        "bytes": 742445,
+        "sentinels": 22,
+        "encodings": [
+          "plaintext",
+          "base64",
+          "hex"
+        ],
+        "capture_present": true,
+        "claim": "named observations only"
+      }
+    }
+  ],
+  "privacy": [
+    {
+      "checkpoint": "privacy-direct-predelete",
+      "metadata": {
+        "pid": 3242571,
+        "returncode": null,
+        "uid_line": "Uid:\t2000\t2000\t2000\t2000",
+        "exe": "/home/parity/jobs/m1-real-link-e2e-d59bc07/bin/zeropw-link"
+      },
+      "sentinel_hits": 0,
+      "memory_bytes": 8388608,
+      "memory_errors": [],
+      "scope": "known owned daemon; argv/environ; at most8MiB writable mappings point-in-time"
+    },
+    {
+      "checkpoint": "privacy-direct-predelete",
+      "metadata": {
+        "pid": 3242695,
+        "returncode": null,
+        "uid_line": "Uid:\t2000\t2000\t2000\t2000",
+        "exe": "/home/parity/jobs/m1-real-link-e2e-d59bc07/bin/zeropw-link"
+      },
+      "sentinel_hits": 0,
+      "memory_bytes": 8388608,
+      "memory_errors": [],
+      "scope": "known owned daemon; argv/environ; at most8MiB writable mappings point-in-time"
+    },
+    {
+      "checkpoint": "privacy-direct-union",
+      "metadata": {
+        "pid": 3242571,
+        "returncode": null,
+        "uid_line": "Uid:\t2000\t2000\t2000\t2000",
+        "exe": "/home/parity/jobs/m1-real-link-e2e-d59bc07/bin/zeropw-link"
+      },
+      "sentinel_hits": 0,
+      "memory_bytes": 8388608,
+      "memory_errors": [],
+      "scope": "known owned daemon; argv/environ; at most8MiB writable mappings point-in-time"
+    },
+    {
+      "checkpoint": "privacy-direct-union",
+      "metadata": {
+        "pid": 3244683,
+        "returncode": null,
+        "uid_line": "Uid:\t2000\t2000\t2000\t2000",
+        "exe": "/home/parity/jobs/m1-real-link-e2e-d59bc07/bin/zeropw-link"
+      },
+      "sentinel_hits": 0,
+      "memory_bytes": 8388608,
+      "memory_errors": [],
+      "scope": "known owned daemon; argv/environ; at most8MiB writable mappings point-in-time"
+    },
+    {
+      "checkpoint": "privacy-relay-tls-after-rust-go-coturn-restart",
+      "metadata": {
+        "pid": 3247781,
+        "returncode": null,
+        "uid_line": "Uid:\t2000\t2000\t2000\t2000",
+        "exe": "/home/parity/jobs/m1-real-link-e2e-d59bc07/bin/zeropw-link"
+      },
+      "sentinel_hits": 0,
+      "memory_bytes": 8388608,
+      "memory_errors": [],
+      "scope": "known owned daemon; argv/environ; at most8MiB writable mappings point-in-time"
+    },
+    {
+      "checkpoint": "privacy-relay-tls-after-rust-go-coturn-restart",
+      "metadata": {
+        "pid": 3247835,
+        "returncode": null,
+        "uid_line": "Uid:\t2000\t2000\t2000\t2000",
+        "exe": "/home/parity/jobs/m1-real-link-e2e-d59bc07/bin/zeropw-link"
+      },
+      "sentinel_hits": 0,
+      "memory_bytes": 8388608,
+      "memory_errors": [],
+      "scope": "known owned daemon; argv/environ; at most8MiB writable mappings point-in-time"
+    },
+    {
+      "checkpoint": "privacy-relay-tls",
+      "metadata": {
+        "pid": 3246752,
+        "returncode": null,
+        "uid_line": "Uid:\t2000\t2000\t2000\t2000",
+        "exe": "/home/parity/jobs/m1-real-link-e2e-d59bc07/bin/zeropw-link"
+      },
+      "sentinel_hits": 0,
+      "memory_bytes": 8388608,
+      "memory_errors": [],
+      "scope": "known owned daemon; argv/environ; at most8MiB writable mappings point-in-time"
+    },
+    {
+      "checkpoint": "privacy-relay-tls",
+      "metadata": {
+        "pid": 3246807,
+        "returncode": null,
+        "uid_line": "Uid:\t2000\t2000\t2000\t2000",
+        "exe": "/home/parity/jobs/m1-real-link-e2e-d59bc07/bin/zeropw-link"
+      },
+      "sentinel_hits": 0,
+      "memory_bytes": 8388608,
+      "memory_errors": [],
+      "scope": "known owned daemon; argv/environ; at most8MiB writable mappings point-in-time"
+    },
+    {
+      "checkpoint": "privacy-relay-udp",
+      "metadata": {
+        "pid": 3245761,
+        "returncode": null,
+        "uid_line": "Uid:\t2000\t2000\t2000\t2000",
+        "exe": "/home/parity/jobs/m1-real-link-e2e-d59bc07/bin/zeropw-link"
+      },
+      "sentinel_hits": 0,
+      "memory_bytes": 8388608,
+      "memory_errors": [],
+      "scope": "known owned daemon; argv/environ; at most8MiB writable mappings point-in-time"
+    },
+    {
+      "checkpoint": "privacy-relay-udp",
+      "metadata": {
+        "pid": 3245818,
+        "returncode": null,
+        "uid_line": "Uid:\t2000\t2000\t2000\t2000",
+        "exe": "/home/parity/jobs/m1-real-link-e2e-d59bc07/bin/zeropw-link"
+      },
+      "sentinel_hits": 0,
+      "memory_bytes": 8388608,
+      "memory_errors": [],
+      "scope": "known owned daemon; argv/environ; at most8MiB writable mappings point-in-time"
+    }
+  ],
+  "cleanup": "18 assigned namespace instances across three attempts absent after cleanup",
+  "source_after": {
+    "count": 1305,
+    "Rust_source_head": "d59bc07ff25abdc69cf10ffd9d6f8cfc45bd4b5a",
+    "Go_head": "3eb972745ced7d8d60806254e8703c04b475099f",
+    "all_bytes_modes_blobs_match": true
+  },
+  "collection_scope": "Safe static artifacts only; no generated vault/key/token files copied; raw CLI responses retained guest. Host JSON export redacts public host-key args/metadata; original hashes retained."
+}

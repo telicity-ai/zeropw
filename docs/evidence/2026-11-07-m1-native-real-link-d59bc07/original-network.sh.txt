@@ -1,0 +1,54 @@
+#!/bin/bash
+# Narrow task-owned topology and uid2000 launch only. Never source product fixtures.
+set -euo pipefail
+P=m1e7d59c
+J=/home/parity/jobs/m1-real-link-e2e-d59bc07
+W=/home/parity/m1e7-d59-7a33
+ns(){ ip netns exec "$P-$1" "${@:2}"; }
+case "${1:-}" in
+campaign)
+ cleanup_campaign(){ bash "$0" down; }
+ trap cleanup_campaign EXIT
+ bash "$0" up
+ # Fixed task-owned marker only; all response parsing remains uid2000.
+ (
+  for ((i=0;i<1100;i++)); do
+   if test -f "$J/evidence/phase-ready-for-udp-block.json"; then bash "$0" block; bash "$0" metadata > "$W/network-blocked.log"; touch "$W/udp-blocked"; exit 0; fi
+   sleep 1
+  done
+  exit 93
+ ) & blocker=$!
+ echo "$blocker" > "$W/root-blocker.pid"
+ ip netns exec "$P-pa" true
+ setpriv --reuid=2000 --regid=2000 --clear-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs -- env -i HOME=/home/parity PATH=/usr/bin:/bin /opt/zeropw-tools/python31214/bin/python3.12 "$J/input/scenario.py"
+ ;;
+
+up)
+ for n in wan srv ra rb pa pb; do test ! -e "/var/run/netns/$P-$n"; done
+ for n in wan srv ra rb pa pb; do ip netns add "$P-$n"; ns "$n" ip link set lo up; done
+ ns wan ip link add br0 type bridge
+ ns wan ip link set br0 up
+ for pair in 'srv eth0 vsrv' 'ra wan vra' 'rb wan vrb'; do read -r n dev wanif <<< "$pair"; ns "$n" ip link add "$dev" type veth peer name "$wanif" netns "$P-wan"; ns "$n" ip link set "$dev" up; ns wan ip link set "$wanif" up; ns wan ip link set "$wanif" master br0; done
+ ns srv ip addr add 198.51.100.10/24 dev eth0
+ ns ra ip addr add 198.51.100.21/24 dev wan
+ ns rb ip addr add 198.51.100.22/24 dev wan
+ for pair in 'a 1' 'b 2'; do read -r n i <<< "$pair"; ns "r$n" ip link add lan type veth peer name eth0 netns "$P-p$n"; ns "r$n" ip link set lan up; ns "p$n" ip link set eth0 up; ns "r$n" ip addr add "10.$i.0.1/24" dev lan; ns "p$n" ip addr add "10.$i.0.2/24" dev eth0; ns "p$n" ip route add 198.51.100.0/24 via "10.$i.0.1"; ns "r$n" sysctl -qw net.ipv4.ip_forward=1; ns "r$n" iptables -t nat -A POSTROUTING -o wan -j MASQUERADE; ns "r$n" iptables -A INPUT -i wan -m conntrack --ctstate NEW,INVALID -j DROP; ns "r$n" iptables -A FORWARD -i wan -m conntrack --ctstate NEW,INVALID -j DROP; done
+ for n in pa pb srv; do mkdir "/etc/netns/$P-$n"; printf '127.0.0.1 localhost\n198.51.100.10 link.zpl.test\n' > "/etc/netns/$P-$n/hosts"; done
+ for pair in 'pa a' 'pb b' 'srv srv'; do read -r n label <<< "$pair"; ip netns exec "$P-$n" setpriv --reuid=2000 --regid=2000 --clear-groups --bounding-set=-all --inh-caps=-all --ambient-caps=-all --no-new-privs -- env -i HOME=/home/parity PATH=/usr/bin:/bin /opt/zeropw-tools/python31214/bin/python3.12 "$J/input/broker.py" "$W" "$label" > "$W/logs/broker-$label.log" 2>&1 & echo "$!" > "$W/root-broker-$label.pid"; done
+ ip netns exec "$P-pa" tcpdump -Z parity -i eth0 -s 0 -U -c 12000 -w "$W/wire.pcap" > "$W/logs/capture.log" 2>&1 & echo "$!" > "$W/root-capture.pid"
+ ;;
+block)
+ for n in pa pb; do ns "$n" iptables -A OUTPUT -o lo -j ACCEPT; ns "$n" iptables -A OUTPUT -p udp -j DROP; ns "$n" iptables -A INPUT -p udp -j DROP; ns "$n" iptables -A OUTPUT -p tcp -d 198.51.100.10 -j ACCEPT; ns "$n" iptables -A OUTPUT -p tcp -j DROP; done
+ ;;
+unblock)
+ for n in pa pb; do ns "$n" iptables -D OUTPUT -o lo -j ACCEPT; ns "$n" iptables -D OUTPUT -p udp -j DROP; ns "$n" iptables -D INPUT -p udp -j DROP; ns "$n" iptables -D OUTPUT -p tcp -d 198.51.100.10 -j ACCEPT; ns "$n" iptables -D OUTPUT -p tcp -j DROP; done
+ ;;
+metadata)
+ for n in wan srv ra rb pa pb; do echo "NAMESPACE=$P-$n"; ns "$n" ip -j route show; ns "$n" iptables -S; done
+ ;;
+down)
+ for p in "$W"/root-*.pid; do test -f "$p" || continue; read -r pid < "$p"; case "$pid" in ''|*[!0-9]*) exit 92;; esac; kill "$pid" 2>/dev/null || true; done
+ for n in pa pb srv ra rb wan; do ip netns del "$P-$n" 2>/dev/null || true; if test -d "/etc/netns/$P-$n"; then rm -f "/etc/netns/$P-$n/hosts"; rmdir "/etc/netns/$P-$n"; fi; done
+ ;;
+*) exit 2;;
+esac
