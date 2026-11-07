@@ -222,8 +222,14 @@ The [complete supplied cut candidate](evidence/2026-11-07-m2b2a-complete-cut-651
 is collected at controller source `6ba0a0f56ef40d66f1129d3c39631eeedf23d602`,
 with the exact tested Rust tree `4536b42fb5206b446d4c6760c37c80281bcd3cbe`.
 Linux full verification passed 109 steps / 104 integration targets / 1,766 tests;
-focused debug/release and actual 256 KiB stack checks passed. Native macOS is
-NOTRUN for this changed tree. This pure sibling checks only complete supplied
+focused debug/release and actual 256 KiB stack checks passed. The dated
+[native follow-up](evidence/2026-11-08-m2b2a-native-2936202/README.md) ran exact
+source2936202 with this same Rust tree once: unchanged109-step/104-target matrix,
+1,769 passed/0 failed; all20 requested phases exited0 and each exact256KiB
+selector ran one test. All1,259 source bytes/modes matched before/after; Mac501
+was explicitly released. These are virtual-macOS Rust results, with no physical
+Mac/GUI/runtime/review acceptance or changed historical failure claim.
+This pure sibling checks only complete supplied
 cuts and a finite isolated-removal class; it cannot install or acknowledge data,
 prove required-key usability or support runtime onboarding. General gaps/removal
 interactions, generation usability, runtime budgets and all M2 gates remain open.
