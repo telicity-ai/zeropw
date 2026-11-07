@@ -106,6 +106,7 @@ fn original_signatures_schema_environment_and_canonical_identity() {
         "bad-op",
         "bad-target",
         "wrong-environment",
+        "wrong-fact-environment",
         "unknown-fact-kind",
         "wrong-hash",
         "unknown-author",
@@ -145,6 +146,13 @@ fn original_signatures_schema_environment_and_canonical_identity() {
                 resign(c, &h.keys[0]);
                 p.repair_commits();
             }
+            "wrong-fact-environment" => {
+                let f = &mut p.payload["components"][3]["data"]["records"][0]["record"];
+                f["env_id"] = json!(format!("{}-{}", h.fps[0], "03".repeat(16)));
+                let author = h.fps.iter().position(|fp| f["author"] == *fp).unwrap();
+                resign(f, &h.keys[author]);
+                p.repair_facts();
+            }
             "unknown-fact-kind" => {
                 let f = &mut p.payload["components"][3]["data"]["records"][0]["record"];
                 f["kind"] = json!("unknown");
@@ -166,6 +174,7 @@ fn original_signatures_schema_environment_and_canonical_identity() {
         let raw = canon(&p.payload);
         if [
             "wrong-environment",
+            "wrong-fact-environment",
             "unknown-fact-kind",
             "wrong-hash",
             "unknown-author",
@@ -288,6 +297,12 @@ fn full_device_copies_include_agreement_key_self_signature_and_dictionary() {
 
 #[test]
 fn genesis_authority_set_named_admission_and_projection() {
+    let mut forged = history("P1");
+    forged.table.push(4);
+    let mut op = forged.history[0].ops[0].clone();
+    op["owner_device"] = forged.records[4].to_dict();
+    forged.history[0] = forged.c(4, 1, 1000, &[], vec![op]);
+    refusal(&forged, forged.package(), SemanticError::AuthorityUnproven);
     for mutation in [
         "genesis-reference",
         "missing-init",
@@ -873,6 +888,35 @@ fn every_removal_fact_scope_is_explicitly_unsupported_after_original_checks() {
         ));
         refusal(&h, h.package(), SemanticError::ScopeUnsupported);
     }
+    // Complete reciprocal evidence stays in the bundle: neither inconvenient
+    // original may be removed to recover a qualifying historical interval.
+    let mut reciprocal = history("P4");
+    reciprocal.facts.push(reciprocal.f(
+        1,
+        "member_removed",
+        json!({"fingerprint":reciprocal.fps[3]}),
+        5500,
+    ));
+    reciprocal.facts.push(reciprocal.f(
+        3,
+        "member_removed",
+        json!({"fingerprint":reciprocal.fps[1]}),
+        5600,
+    ));
+    refusal(
+        &reciprocal,
+        reciprocal.package(),
+        SemanticError::ScopeUnsupported,
+    );
+    let mut rotation = history("P1");
+    let op = json!({"op":"dek.rotate","generation_id":"dddddddddddddddd","wraps":{&rotation.fps[0]:wrap_for_generation(&rotation.env,"dddddddddddddddd",&rotation.records[0],20,23)},"removal_fact_hash":"ab".repeat(32)});
+    let c = rotation.c(0, 5, 9000, &[(0, 4), (1, 2)], vec![op]);
+    with_commit(&mut rotation, c);
+    refusal(
+        &rotation,
+        rotation.package(),
+        SemanticError::ScopeUnsupported,
+    );
     let mut h = history("P4");
     h.facts
         .push(h.f(3, "member_removed", json!({"fingerprint":h.fps[1]}), 7000));
