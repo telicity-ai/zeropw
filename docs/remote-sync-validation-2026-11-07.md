@@ -4,6 +4,19 @@ Status: **incomplete; no release acceptance and no aggregate Opus PASS**. This i
 a dated evidence record, not a change to the acceptance requirements. The
 [TURN checklist](remote-sync-turn-checklist.md) keeps its completion gates open.
 
+Latest connection-module execution is at exact link
+`6e7939d779522631907d2d3cbd938930628d4089`: Linux full Go/race passed
+305 tests/subtests each; native macOS full Go/race passed 314 each, with
+formatting, vet, ACL/root-alias and retained-directory-FD checks passing.
+All 162 source files matched before/after. Original native `4781997` failures
+and Linux `8462d93` publication-order failure remain preserved; the narrow
+fixes keep privacy policies, assertions and deadlines intact.
+[Exact source, checksums and limits](evidence/2026-11-07-link-native-final.json).
+The macOS guest has SIP disabled; physical-Mac/SIP-enabled acceptance and
+actual Opus finding disposition remain open. Link publication `3eb9727` adds
+only documentation after tested source6e; no fresh full-head PASS is inferred.
+The older NOTRUN entries below describe their earlier recorded sources.
+
 Personal Vault UI/i18n source `9561eff50843f18cb42b15d7fcc4881bef368fb8`
 is merged and pushed as `859066a9bf7608e873f4d2620b2b2fc89c572cff` on
 `feature/remote-sync-mlp`; draft PR #72 was updated for that merge. Its desktop

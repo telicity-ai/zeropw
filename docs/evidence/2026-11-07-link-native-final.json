@@ -1,0 +1,50 @@
+{
+  "implementation_tested": "6e7939d779522631907d2d3cbd938930628d4089",
+  "published_documentation_head": "3eb972745ced7d8d60806254e8703c04b475099f",
+  "published_pr": "https://github.com/telicity-ai/zeropw-link/pull/1",
+  "source_files_tested": 162,
+  "documentation_only_after_tested_source": true,
+  "runtime_tests_for_documentation_head": "NOTRUN; no new full-head PASS claimed",
+  "linux": {
+    "formatting_vet": "PASS",
+    "original_offline_regression": 1,
+    "full_tests": 305,
+    "full_failures": 0,
+    "race_tests": 305,
+    "race_failures": 0,
+    "raw_log_sha256": "f71d2b70dbc8e8be10136bb2d650c0bf6ba32b93a1c0f7de4ad62cbbeb550aaa",
+    "source_before_after": "162 files and executable bits matched"
+  },
+  "macos": {
+    "formatting_vet": "PASS",
+    "focus_tests": 39,
+    "full_tests": 314,
+    "full_failures": 0,
+    "race_tests": 314,
+    "race_failures": 0,
+    "retained_directory_fd_probe": "PASS; earlier open file still readable, new private file denied through retained directory FD",
+    "report_sha256": "fde78ac7cba6463f242cc70226d39aed7b51d6b7ccaab76aee697083fb4e77cd",
+    "source_before_after": "162 files, exact modes and file set matched",
+    "environment": "Tart macOS26.6.2 arm64 Go1.27.3, SIP disabled, synthetic credentials only"
+  },
+  "preserved_failures": [
+    "native478 focused/full/race ACL fixture and oversized-write failures",
+    "Linux846 unchanged TestOfflinePeerTimesOut, full304PASS1FAIL; its race305PASS does not erase failure",
+    "Linux846 initial oversized orchestration argument setup failure before tests"
+  ],
+  "fixes": [
+    "8462d93 four test fixtures only, original security assertions retained",
+    "6e7939d publishes failure under same lock before waking Dial callers"
+  ],
+  "checksum_collection_entries_verified": 96,
+  "report": "https://github.com/telicity-ai/zeropw-link/blob/3eb972745ced7d8d60806254e8703c04b475099f/docs/evidence/2026-11-07-native-final-6e7939d/NATIVE-6E.md",
+  "actual_model": "gpt-6.1-sol, ultra; no Opus acceptance",
+  "last_completed_opus": "ca01275 REVISE; severities unchanged, new attempt blocked before reading source by quota",
+  "still_open": [
+    "final Opus review and finding disposition",
+    "SIP-enabled and physical two-Mac/sleep-wake acceptance",
+    "final sidecar pin and packaging",
+    "OCI product deployment and combined resource/capacity measurement"
+  ],
+  "deployment": "Infrastructure+ACME only; no product HTTPS/TURN service"
+}
