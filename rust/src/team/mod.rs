@@ -20,6 +20,7 @@ pub mod membership;
 pub mod pairing;
 pub mod sync;
 pub mod sync_status;
+pub mod tombstone_gate;
 pub mod transport;
 
 use std::collections::HashSet;

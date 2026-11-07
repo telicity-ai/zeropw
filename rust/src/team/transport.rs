@@ -299,6 +299,16 @@ impl Session for EncryptedSession {
                 self.close();
                 SessionClosed("frame_malformed")
             })?;
+        if super::tombstone_gate::is_control(message["type"].as_str().unwrap_or(""))
+            && (plaintext.len() > super::tombstone_gate::MAX_CONTROL_BYTES
+                || std::str::from_utf8(&plaintext)
+                    .ok()
+                    .is_none_or(|text| crate::pyjson::loads_unique_object(text).is_err())
+                || super::tombstone_gate::validate(&message).is_err())
+        {
+            self.close();
+            return Err(SessionClosed("team_sync_control_malformed"));
+        }
         if !message.is_object() {
             self.close();
             return Err(SessionClosed("frame_malformed"));

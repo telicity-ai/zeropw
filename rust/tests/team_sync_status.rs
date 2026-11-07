@@ -18,7 +18,7 @@ use zeropw::team::sync_status;
 use zeropw::team::transport::{InProcessTransport, MembershipCheck, TcpTransport, Transport};
 
 const SECRET: &[u8] = b"synthetic-sync-status-secret-0123456789";
-const PEER_KEYS: [&str; 9] = [
+const PEER_KEYS: [&str; 10] = [
     "dial_failures",
     "last_contact_at",
     "last_error",
@@ -26,6 +26,7 @@ const PEER_KEYS: [&str; 9] = [
     "peer_vector",
     "session",
     "since",
+    "tombstone_agreement",
     "transport",
     "vector_received_at",
 ];
@@ -191,6 +192,10 @@ fn serve_writes_metadata_only_and_states_follow_the_sessions() {
     assert_eq!(file["self"], a_fp);
     let entry = &file["peers"][&b_fp];
     assert_eq!(sorted_keys(entry), PEER_KEYS);
+    assert_eq!(
+        entry["tombstone_agreement"],
+        json!({"digest":"4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945","ready":true})
+    );
     assert_eq!(entry["session"], true);
     assert!(entry["since"].is_string() && entry["vector_received_at"].is_string());
     let local = CommitStore::new(a.state, &env).vector().unwrap();
@@ -397,9 +402,9 @@ fn a_session_dialed_at_a_link_address_reports_the_link() {
     node.stop();
 }
 
-/// At most every 2 s, and only when something changed.
+/// At most every 2 s; capable agreement renews its short readiness lease.
 #[test]
-fn writes_are_throttled_and_skipped_when_nothing_changed() {
+fn writes_are_throttled_and_capable_agreement_is_refreshed() {
     let root = TempDir::new().unwrap();
     // Busy: a VECTOR every 50 ms keeps `last_contact_at` moving.
     let (a, node, env, address) = serving(&root, 0.05);
@@ -437,8 +442,9 @@ fn writes_are_throttled_and_skipped_when_nothing_changed() {
     b_team.stop();
     node.stop();
 
-    // Quiet: one VECTOR a minute, so once the session is up nothing changes
-    // for a while and the file is left alone.
+    // Quiet capable peer: one VECTOR a minute. Only the readiness lease is
+    // refreshed; all payload fields remain identical. Legacy peers retain
+    // the no-rewrite behavior (m1_legacy_quiet_status_keeps_its_original_bytes_and_inode).
     let root = TempDir::new().unwrap();
     let (a, node, env, address) = serving(&root, 60.0);
     let (_b, b_team, b_fp, _) = joined(&root, &a, &env, &address, 60.0);
@@ -451,7 +457,24 @@ fn writes_are_throttled_and_skipped_when_nothing_changed() {
     let before = (mtime(&path), std::fs::read_to_string(&path).unwrap());
     std::thread::sleep(Duration::from_millis(5000));
     let after = (mtime(&path), std::fs::read_to_string(&path).unwrap());
-    assert_eq!(before, after, "an unchanged state is not rewritten");
+    assert_ne!(before, after, "a capable agreement's lease is refreshed");
+    let mut before_doc: Value = serde_json::from_str(&before.1).unwrap();
+    let mut after_doc: Value = serde_json::from_str(&after.1).unwrap();
+    let before_time = before_doc
+        .as_object_mut()
+        .unwrap()
+        .remove("updated_at")
+        .unwrap();
+    let after_time = after_doc
+        .as_object_mut()
+        .unwrap()
+        .remove("updated_at")
+        .unwrap();
+    assert_ne!(before_time, after_time);
+    assert_eq!(
+        before_doc, after_doc,
+        "heartbeat changes only the lease timestamp"
+    );
     b_team.stop();
     node.stop();
 }

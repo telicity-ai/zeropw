@@ -61,6 +61,7 @@ pub const EVENTS: &[&str] = &[
     "secret_import",
     "secret_retire",
     "secret_revoke",
+    "secret_delete",
     "secret_reveal",
     "secret_reveal_denied",
     "connection_create",

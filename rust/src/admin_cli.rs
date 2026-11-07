@@ -226,6 +226,12 @@ fn build_parser() -> Parser {
     )
     .arg(Arg::opt("--id").required())
     .arg(Arg::opt("--version").ty(EXACT_INT).required());
+    add(
+        secret,
+        "delete",
+        "permanently delete every version of this ID (admin re-auth)",
+    )
+    .arg(Arg::opt("--id").required());
     // docs/env-import.md §6. Hidden from `secret`'s listing and choices, like
     // `status`: the recorded command-line contract pins that help text.
     let p = secret.add_hidden_parser(
@@ -1473,6 +1479,20 @@ fn secret_view(m: SecretMeta) -> Value {
         }).collect::<Vec<_>>()})
 }
 
+fn secret_metadata(ctx: &Context, meta: SecretMeta) -> Result<Value, Error> {
+    let doc = ctx.state.read_json(crate::vault::VAULT_DOC, json!({}))?;
+    let deleted = crate::tombstone::is_deleted(
+        ctx.state,
+        &meta.id,
+        doc["secrets"][&meta.id]["shared_env"].as_str(),
+    )?;
+    let mut view = secret_view(meta);
+    if deleted {
+        view["deleted"] = json!(true);
+    }
+    Ok(view)
+}
+
 fn csv(v: Option<&str>) -> Vec<String> {
     v.unwrap_or("")
         .split(',')
@@ -2119,9 +2139,9 @@ fn local_command(a: &Args) -> Result<Value, Error> {
         }
         ("secret", "import") => secret_import(&ctx, a),
         ("secret", "list") => Ok(
-            json!({"secrets":ctx.vault.list_secrets(a.get("project"),a.get("environment"))?.into_iter().map(secret_view).collect::<Vec<_>>()}),
+            json!({"secrets":ctx.vault.list_secrets(a.get("project"),a.get("environment"))?.into_iter().map(|m| secret_metadata(&ctx,m)).collect::<Result<Vec<_>,_>>()?}),
         ),
-        ("secret", "versions") => Ok(secret_view(ctx.vault.get_meta(a.req("id"))?)),
+        ("secret", "versions") => secret_metadata(&ctx, ctx.vault.get_meta(a.req("id"))?),
         ("secret", "reveal") => {
             let pass = passphrase("ZEROPW_ADMIN_PASSPHRASE")?;
             let auth = match ctx.admin.verify(&pass, None) {
@@ -2148,6 +2168,40 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             } else {
                 out["value_base64"] = json!(pybase64::b64encode(value.expose()));
                 out["encoding"] = json!("base64");
+            }
+            Ok(out)
+        }
+        ("secret", "delete") => {
+            let pass = passphrase("ZEROPW_ADMIN_PASSPHRASE")?;
+            let auth = ctx.admin.verify(&pass, None)?;
+            let _lock = ctx.state.lock()?;
+            let id = a.req("id");
+            let mut out = json!({"secret_id":id,"status":"deleted","permanent_id":true,"provider_revocation_required":true,"sync_status":"local"});
+            if let Some(env_id) = secret_shared_env(&ctx, id)? {
+                let doc = shared_document(&ctx, &env_id)?;
+                let device = crate::team::identity::DeviceKey::load(ctx.state, ctx.kms)?;
+                if !crate::team::sync::is_admin(&doc, &device.fingerprint()?) {
+                    return Err(Error::policy_denied("team_fact_not_authorized"));
+                }
+                let (facts, _, _) = crate::team::sync::load_facts(&ctx, &env_id)?;
+                if !facts.deleted_secrets.contains(id) {
+                    let result =
+                        team_fact(&ctx, &env_id, "secret_deleted", json!({"secret_id":id}))?;
+                    out["fact"] = result["fact"].clone();
+                } else {
+                    crate::team::membership::refold_and_derive(&ctx, &env_id)?;
+                }
+                ctx.audit.record(
+                    "secret_delete",
+                    RecordArgs {
+                        result: Some("ok"),
+                        extra: vec![("secret_id", json!(id)), ("env_id", json!(env_id))],
+                        ..Default::default()
+                    },
+                )?;
+                out["sync_status"] = json!("pending");
+            } else {
+                ctx.vault.delete_secret(id, &auth)?;
             }
             Ok(out)
         }
@@ -2890,6 +2944,9 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             let reapplied = {
                 let _lock = ctx.state.lock()?;
                 let reapplied = Vault::reapply_revocations(ctx.state)?;
+                for env_id in crate::team::sync::discover_envs(ctx.state)? {
+                    crate::team::membership::refold_and_derive(&ctx, &env_id)?;
+                }
                 ctx.policy.set_restore_pending(false)?;
                 reapplied
             };
@@ -3068,9 +3125,39 @@ fn project_shared_env(
 }
 fn secret_shared_env(ctx: &Context, secret_id: &str) -> Result<Option<String>, Error> {
     let doc = ctx.state.read_json(crate::vault::VAULT_DOC, json!({}))?;
-    Ok(doc["secrets"][secret_id]["shared_env"]
-        .as_str()
-        .map(str::to_owned))
+    if let Some(entry) = doc["secrets"].get(secret_id) {
+        if let Some(env) = entry["shared_env"].as_str() {
+            return Ok(Some(env.into()));
+        }
+        return crate::tombstone::restored_scope(
+            ctx.state,
+            secret_id,
+            &entry["project"],
+            &entry["environment"],
+        );
+    }
+    let ledger = crate::tombstone::load(ctx.state)?;
+    if ledger["local"].get(secret_id).is_some() {
+        return Ok(None);
+    }
+    let mut scopes = Vec::new();
+    for env in ledger["shared"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(env, _)| env)
+    {
+        if crate::tombstone::shared_facts(ctx.state, env)?
+            .iter()
+            .any(|fact| fact["target"]["secret_id"] == secret_id)
+        {
+            scopes.push(env.clone());
+        }
+    }
+    if scopes.len() > 1 {
+        return Err(Error::policy_denied("secret_identity_ambiguous"));
+    }
+    Ok(scopes.pop())
 }
 fn connection_shared_env(ctx: &Context, connection_id: &str) -> Result<Option<String>, Error> {
     let doc = ctx.state.read_json(crate::policy::CONNECTIONS, json!({}))?;
@@ -3121,6 +3208,7 @@ fn shared_put(
     // The folded document is read and both commits written under one lock.
     let _lock = ctx.state.lock()?;
     let doc = shared_document(ctx, env_id)?;
+    crate::tombstone::require_live(ctx.state, id, Some(env_id))?;
     let (generation, dek) = current_dek(ctx, env_id, &doc)?;
     let version_id = random_version_id();
     let ciphertext =

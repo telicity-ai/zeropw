@@ -93,6 +93,8 @@ pub const DEFAULT_SYNC_INTERVAL_SECONDS: i64 = 10;
 pub struct Facts {
     pub disabled_connections: HashSet<String>,
     pub revoked_versions: HashSet<(String, String)>,
+    pub deleted_secrets: HashSet<String>,
+    pub tombstone_facts: BTreeMap<String, Value>,
     pub removed_members: HashSet<String>,
     pub incidents: Vec<Value>,
     /// The signed `member_removed` facts behind `removed_members`, by fact
@@ -827,7 +829,7 @@ fn op_connection_disable(
 fn op_secret_put_version(
     doc: &mut Value,
     commit: &Commit,
-    _facts: &mut Facts,
+    facts: &mut Facts,
     vo: &mut VersionOrderState,
     op: &Map<String, Value>,
 ) -> Result<Option<String>> {
@@ -880,6 +882,9 @@ fn op_secret_put_version(
     )?;
     let version_key = py_key(version_id)?.ok_or_else(doc_corrupt)?;
     vo.append(secret_key.to_string(), version_key.to_string())?;
+    if facts.deleted_secrets.contains(secret_key) {
+        return Ok(Some("secret_deleted".into()));
+    }
     Ok(None)
 }
 
@@ -890,6 +895,12 @@ fn set_secret_status(
     version_id: &Value,
     status: &Value,
 ) -> Result<Option<String>> {
+    if secret_id
+        .as_str()
+        .is_some_and(|id| facts.deleted_secrets.contains(id))
+    {
+        return Ok(Some("secret_deleted".into()));
+    }
     // `entry = doc["secrets"].get(secret_id)`; `version =
     // entry["versions"].get(version_id) if entry else None`.
     let entry = py_dict_get(py_getitem(doc, "secrets")?, secret_id)?;
@@ -1310,6 +1321,19 @@ fn reapply_facts(doc: &mut Value, facts: &Facts) -> Result<()> {
         py_setitem(version, &json!("status"), json!("revoked"))?;
         if is_str(py_getitem(entry, "active_version")?, version_id) {
             py_setitem(entry, &json!("active_version"), Value::Null)?;
+        }
+    }
+    for id in &facts.deleted_secrets {
+        if let Some(entry) = doc["secrets"].get_mut(id) {
+            entry["deleted"] = json!(true);
+            entry["active_version"] = Value::Null;
+            for version in entry["versions"]
+                .as_object_mut()
+                .ok_or_else(doc_corrupt)?
+                .values_mut()
+            {
+                version["status"] = json!("revoked");
+            }
         }
     }
     for fp in &facts.removed_members {
@@ -2321,6 +2345,9 @@ fn fact_keys(facts: Option<&Facts>) -> Vec<Value> {
             .iter()
             .map(|(secret, version)| json!(["revoked", secret, version])),
     );
+    // Deletions are an unconditional final overlay and cannot change roles or
+    // removal scheduling. Their durable ledger survives independently; adding
+    // them must not invalidate an already compacted local prefix cache.
     keys.sort_by_key(|key| key.to_string());
     keys.dedup();
     keys
@@ -2754,6 +2781,15 @@ fn derive_vault(
                 }
                 continue;
             }
+        }
+        if entry["deleted"] == true {
+            crate::tombstone::retain_derived_binding(
+                state,
+                env_id,
+                secret_id,
+                project,
+                environment,
+            )?;
         }
         let vindex = version_index.get(secret_id).cloned().unwrap_or_default();
         let mut local_versions: Map<String, Value> = Map::new();

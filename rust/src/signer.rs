@@ -991,9 +991,18 @@ impl BindingServer {
         };
         let our_key = match self.public_key() {
             Ok(k) => k,
-            Err(_) => {
-                let _ =
-                    self.safe_audit("ssh_sign", "denied", Some("key_unavailable"), None, vec![]);
+            Err(error) => {
+                let _ = self.safe_audit(
+                    "ssh_sign",
+                    "denied",
+                    Some(if error.reason == "secret_deleted" {
+                        "secret_deleted"
+                    } else {
+                        "key_unavailable"
+                    }),
+                    None,
+                    vec![],
+                );
                 return Ok(sshwire::build_failure().to_vec());
             }
         };
@@ -2950,6 +2959,26 @@ mod tests {
         f.ctx.policy.revoke_grant(&f.grant.id).unwrap();
         assert!(!f.binding.socket_path.exists());
         assert!(UnixStream::connect(&f.binding.socket_path).is_err());
+    }
+
+    #[test]
+    fn m1_deleted_identity_refuses_next_signature_on_already_bound_socket() {
+        let f = fixture();
+        let mut conn = f.connect();
+        conn.request(&f.bind_message()).unwrap();
+        let data = f.userauth();
+        assert_eq!(
+            f.sign_req(&mut conn, &data, 0, None)[0],
+            sshwire::SSH_AGENT_SIGN_RESPONSE
+        );
+        let auth = f.ctx.admin.verify(ADMIN, None).unwrap();
+        f.ctx.vault.delete_secret("box-key", &auth).unwrap();
+        assert_eq!(
+            f.sign_req(&mut conn, &data, 0, None),
+            sshwire::build_failure()
+        );
+        assert!(f.has_reason("secret_deleted"));
+        assert!(f.manager.bind("agent-1", "box", &f.grant.id).is_err());
     }
 
     // Port of test_usage_cap_enforced_per_signature

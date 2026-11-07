@@ -158,6 +158,7 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 | `project_list` / `project_create` | `{name, environments[]}` | 프로젝트. `project_list`는 팀 환경이 있으면 `team_environments`(`{project, environment, env_id}`)도 준다. 팀 환경 연결표(`team/envs.json`)를 읽지 못하면 프로젝트는 그대로 주고 `team_environments` 대신 `team_environments_error`(`state_corrupt`)를 준다 | `project …` | |
 | `secret_list` / `secret_versions` | `{project?, environment?}` / `{id}` | 값 없는 목록 | `secret list/versions` | |
 | `secret_put` | `{id, kind, project, environment, source}` | 버전 정보 | `secret put --stdin` | |
+| `secret_delete` | `{id, admin_passphrase}` | 삭제 상태·영구 ID·동기화 대기 메타데이터 | `secret delete --id` | 재인증, 공유 환경의 활성 관리자 권한, ID 재사용 금지 |
 | `secret_reveal` | `{id, version?, admin_passphrase}` | `{ref, id, version}` | `secret reveal` | 매번 |
 | `secret_retire` / `secret_revoke` | `{id, version}` | CLI 출력 | `secret retire/revoke` | |
 | `connection_list` / `connection_create_http` / `connection_create_ssh` / `connection_disable` | 연결 필드 | CLI 출력 | `connection …` | 만들기 재인증 |

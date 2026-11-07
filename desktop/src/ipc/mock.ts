@@ -838,6 +838,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     },
     // rust/src/admin_cli.rs secret retire/revoke: output keyed `secret_id`, the version as a number,
     // and the reminder that the provider still accepts the credential
+    secret_delete: () => { throw { error: 'Unsupported', reason: 'mock_unsupported' }; },
     secret_retire: ({ id, version }) => {
       needInit();
       const want = versionArg(version);

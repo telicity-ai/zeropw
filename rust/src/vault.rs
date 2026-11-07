@@ -1255,6 +1255,7 @@ impl<'a> Vault<'a> {
         activate: bool,
         public: Value,
     ) -> Result<PyInt, Error> {
+        crate::tombstone::require_live_in_scope(self.state, secret_id, project, environment)?;
         let secret_id = secret_id.to_owned();
         // Python: `doc["secrets"].get(secret_id)` -- a non-dict document cannot be subscripted
         // (`TypeError`), a missing `secrets` is `KeyError`, and a non-dict `secrets` has no
@@ -1381,6 +1382,65 @@ impl<'a> Vault<'a> {
         Ok(())
     }
 
+    /// Permanent identity deletion; retry repairs metadata after an interrupted write.
+    pub fn delete_secret(&self, secret_id: &str, admin: &AdminAuth) -> Result<bool, Error> {
+        if !admin.fresh(None) {
+            return Err(Error::auth_failed("admin_reauth_stale"));
+        }
+        let _lock = self.state.lock()?;
+        let mut doc = self.doc()?;
+        if doc["secrets"].get(secret_id).is_none()
+            && crate::tombstone::is_deleted(self.state, secret_id, None)?
+        {
+            return Ok(false);
+        }
+        let entry = doc["secrets"]
+            .get_mut(secret_id)
+            .ok_or_else(|| Error::not_found("secret_not_found"))?;
+        if entry.get("shared_env").is_some_and(|v| !v.is_null())
+            || crate::tombstone::restored_scope(
+                self.state,
+                secret_id,
+                &entry["project"],
+                &entry["environment"],
+            )?
+            .is_some()
+        {
+            return Err(Error::policy_denied("team_admin_required"));
+        }
+        self.audit.record(
+            "secret_delete",
+            RecordArgs {
+                result: Some("attempt"),
+                extra: vec![("secret_id", json!(secret_id))],
+                ..Default::default()
+            },
+        )?;
+        let changed = crate::tombstone::delete_local(
+            self.state,
+            secret_id,
+            json!({"project":entry["project"],"environment":entry["environment"]}),
+        )?;
+        entry["active_version"] = Value::Null;
+        for version in entry["versions"]
+            .as_object_mut()
+            .ok_or_else(|| escaped(TYPE_ERROR))?
+            .values_mut()
+        {
+            version["status"] = json!("revoked");
+        }
+        self.state.write_json(VAULT_DOC, &doc)?;
+        self.audit.record(
+            "secret_delete",
+            RecordArgs {
+                result: Some("ok"),
+                extra: vec![("secret_id", json!(secret_id))],
+                ..Default::default()
+            },
+        )?;
+        Ok(changed)
+    }
+
     pub fn set_version_status(
         &self,
         secret_id: &str,
@@ -1394,6 +1454,11 @@ impl<'a> Vault<'a> {
         {
             let _lock = self.state.lock()?;
             let mut doc_val = self.doc()?;
+            crate::tombstone::require_live(
+                self.state,
+                secret_id,
+                doc_val["secrets"][secret_id]["shared_env"].as_str(),
+            )?;
             let secrets_obj = dict_methods_mut(index_mut(&mut doc_val, "secrets")?)?;
             // Python: `entry = doc["secrets"].get(secret_id); if entry is None or str(version) not
             // in entry["versions"]: raise NotFound(...)`. `dict.get` returns `None` both when the
@@ -1567,12 +1632,23 @@ impl<'a> Vault<'a> {
                 });
             }
             let entry_obj = entry.as_object().ok_or_else(|| escaped(TYPE_ERROR))?;
+            let deleted =
+                crate::tombstone::is_deleted(self.state, &secret_id, entry["shared_env"].as_str())?;
+            if deleted {
+                for version in &mut versions {
+                    version.status = json!("revoked");
+                }
+            }
             result.push(SecretMeta {
                 id: secret_id.clone(),
                 project: index(entry, "project")?.clone(),
                 environment: index(entry, "environment")?.clone(),
                 kind: index(entry, "kind")?.clone(),
-                active_version: require_active_version(entry_obj)?,
+                active_version: if deleted {
+                    None
+                } else {
+                    require_active_version(entry_obj)?
+                },
                 versions,
             });
         }
@@ -1591,6 +1667,13 @@ impl<'a> Vault<'a> {
         secret_id: &str,
         version: Option<PyInt>,
     ) -> Result<ResolvedVersion, Error> {
+        let _lock = self.state.lock()?;
+        let doc = self.doc()?;
+        crate::tombstone::require_live(
+            self.state,
+            secret_id,
+            doc["secrets"][secret_id]["shared_env"].as_str(),
+        )?;
         let meta = self.get_meta(secret_id)?;
         match version {
             None => meta
@@ -1612,6 +1695,7 @@ impl<'a> Vault<'a> {
         secret_id: &str,
         version: Option<PyInt>,
     ) -> Result<SecretBytes, Error> {
+        let _lock = self.state.lock()?;
         let doc = self.doc()?;
         let secrets_obj = Vault::secrets_obj(&doc)?;
         // Python: `entry = self._doc()["secrets"].get(secret_id); if entry is None: raise
@@ -1761,6 +1845,12 @@ impl<'a> Vault<'a> {
                 documents.insert(
                     (*name).to_string(),
                     self.state.read_json(name, Value::Null)?,
+                );
+            }
+            if self.state.exists(crate::tombstone::PATH) {
+                documents.insert(
+                    crate::tombstone::PATH.into(),
+                    crate::tombstone::load(self.state)?,
                 );
             }
         }
@@ -2013,6 +2103,10 @@ impl<'a> Vault<'a> {
             first_write.insert("restore_pending".into(), json!(true));
             state.write_json(control_doc, &Value::Object(first_write))?;
 
+            let current_vault = state.read_json(VAULT_DOC, Value::Null)?;
+            if let Some(archived) = documents_obj.get(crate::tombstone::PATH) {
+                crate::tombstone::merge_restore(state, archived)?;
+            }
             for name in Vault::BACKUP_DOCS {
                 if *name == control_doc {
                     continue;
@@ -2022,6 +2116,34 @@ impl<'a> Vault<'a> {
                 {
                     state.write_json(name, v)?;
                 }
+            }
+            // Preserve known local ownership when a pre-sharing backup lacks
+            // the marker. Unmarked collisions in the current vault stay local.
+            let mut restored_vault = state.read_json(VAULT_DOC, Value::Null)?;
+            let mut retagged = false;
+            for (id, entry) in current_vault["secrets"].as_object().into_iter().flatten() {
+                if let Some(env) = entry["shared_env"].as_str()
+                    && let Some(restored) = restored_vault["secrets"].get_mut(id)
+                    && restored["shared_env"].is_null()
+                {
+                    let mapped = match (
+                        restored["project"].as_str(),
+                        restored["environment"].as_str(),
+                    ) {
+                        (Some(p), Some(e)) => crate::team::sync::resolve_env_id(state, p, e)?,
+                        _ => None,
+                    };
+                    if (restored["project"] == entry["project"]
+                        && restored["environment"] == entry["environment"])
+                        || mapped.as_deref() == Some(env)
+                    {
+                        restored["shared_env"] = json!(env);
+                        retagged = true;
+                    }
+                }
+            }
+            if retagged {
+                state.write_json(VAULT_DOC, &restored_vault)?;
             }
             let archived_control = documents_obj.get(control_doc);
             let mut control = match archived_control {

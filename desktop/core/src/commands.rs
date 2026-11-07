@@ -270,6 +270,13 @@ pub struct SecretRevealIn {
     pub admin_passphrase: SecretString,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SecretDeleteIn {
+    pub id: String,
+    pub admin_passphrase: SecretString,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct RevealOut {
     #[serde(rename = "ref")]
@@ -1154,6 +1161,14 @@ impl Core {
             id: out.id,
             version: scalar_text(&out.version),
         })
+    }
+
+    pub fn secret_delete(&self, input: SecretDeleteIn) -> Result<Value, AppError> {
+        require_passphrase(&input.admin_passphrase)?;
+        self.run(
+            AdminArgs::command(&["secret", "delete"]).opt("id", &input.id)?,
+            Envelope::new().admin_passphrase(&input.admin_passphrase),
+        )
     }
 
     pub fn secret_retire(&self, input: SecretVersionIn) -> Result<Value, AppError> {

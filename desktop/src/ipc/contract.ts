@@ -170,6 +170,7 @@ export interface Commands {
   secret_versions: [{ id: string }, SecretView];
   secret_put: [{ id: string; kind: SecretKind; project: string; environment: string; source: SecretSource }, Record<string, unknown>];
   secret_reveal: [{ id: string; version?: VersionId; admin_passphrase: string }, { ref: string; id: string; version: VersionId }];
+  secret_delete: [{ id: string; admin_passphrase: string }, { secret_id: string; status: 'deleted'; permanent_id: true; provider_revocation_required: true; sync_status: 'local' | 'pending'; fact?: unknown }];
   secret_retire: [{ id: string; version: VersionId }, Record<string, unknown>];
   secret_revoke: [{ id: string; version: VersionId }, Record<string, unknown>];
 
