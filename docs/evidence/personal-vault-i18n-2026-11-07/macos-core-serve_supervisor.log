@@ -1,0 +1,18 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.48s
+     Running tests/serve_supervisor.rs (target/debug/deps/serve_supervisor-6d3b4bd818b00ffc)
+
+running 11 tests
+test a_serve_that_exits_reports_the_cli_error_from_its_log ... ok
+test a_serve_printing_a_non_loopback_url_is_refused ... ok
+test a_serve_that_cannot_listen_says_which_address_failed ... ok
+test reports_of_a_start_a_stop_and_an_attach_come_before_any_other_look ... ok
+test start_records_a_private_pid_file_and_a_second_supervisor_attaches ... ok
+test a_serve_that_never_gets_healthy_times_out_and_is_stopped ... ok
+test a_stop_during_a_start_cancels_it_promptly ... ok
+test stop_escalates_to_sigkill_after_the_grace_period ... ok
+test the_watch_runs_ps_on_an_adopted_sidecar_only_every_few_looks ... ok
+test the_core_reports_an_adopted_sidecar_that_died ... ok
+test the_core_reports_a_sidecar_it_started_that_died ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.84s
+

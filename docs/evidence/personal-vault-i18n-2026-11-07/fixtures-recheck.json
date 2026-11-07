@@ -1,0 +1,35 @@
+[
+  {
+    "id": "ko-dark-1180x780-vault",
+    "surface": "vault",
+    "locale": "ko",
+    "theme": "dark",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=vault",
+    "errors": [],
+    "logs": [
+      "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    ],
+    "failedRequests": [],
+    "badResponses": [
+      {
+        "url": "http://localhost:1420/favicon.ico",
+        "status": 404
+      }
+    ],
+    "lang": "ko",
+    "title": "모든 항목 3",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "ZeroPW\n금고\n모든 항목\n3\n비밀번호\n1\nAPI 키\n1\n환경변수\n1\nSSH 키\n위치\ndemo · dev\n1\ndemo · staging\n1\ndemo · prod\n1\n내 Mac\n서비스 연결\n개발자\n활동\n로컬 서비스 켜짐\n모두 차단\n설정\n모든 항목 3\ndb-password\n비밀번호\ndemo · prod\nexample-api\nAPI 키\ndemo · dev\n연결 1개\nsentry-dsn\n환경변수\ndemo · staging\ndb-password\n\n비밀"
+  }
+]

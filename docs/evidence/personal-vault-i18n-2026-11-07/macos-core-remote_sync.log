@@ -1,0 +1,25 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.28s
+     Running tests/remote_sync.rs (target/debug/deps/remote_sync-f8c01ded5742b29a)
+
+running 18 tests
+test approve_and_deny_are_re_authenticated_and_stop_at_a_wrong_passphrase ... ok
+test enrolment_sends_the_invite_code_only_in_the_socket_request ... ok
+test join_requests_keep_well_formed_requests_and_name_unreadable_environments ... ok
+test link_status_reports_a_mac_removed_at_the_service ... ok
+test link_status_says_why_remote_sync_is_unavailable ... ok
+test a_pasted_code_is_previewed_offline_and_each_invitation_is_checked ... ok
+test pairing_create_never_hands_out_an_invitation_without_approval ... ok
+test a_local_environment_of_the_same_name_is_not_joined_and_a_dial_failure_says_why ... ok
+test pairing_create_makes_approval_invitations_for_this_mac_and_stores_the_code_once ... ok
+test pairing_join_from_another_account_or_service_is_refused_before_any_join ... ok
+test removing_a_mac_leaves_its_teams_first_and_revokes_the_link_device_only_then ... ok
+test pairing_join_enrols_with_the_token_and_retries_pending_joins_until_approved ... ok
+test the_devices_overview_brings_members_sync_state_and_link_peers_together ... ok
+test the_saved_link_service_is_the_enrolment_default ... ok
+test the_socket_client_reads_one_line_and_maps_daemon_errors_without_their_text ... ok
+test pairing_joins_one_at_a_time ... ok
+test a_vault_made_in_this_app_run_brings_the_link_daemon_up_with_the_relay ... ok
+test serve_gets_the_link_socket_once_the_daemon_answers ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.56s
+

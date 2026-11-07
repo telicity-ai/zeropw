@@ -1,0 +1,74 @@
+
+> zeropw-desktop@0.2.0 test
+> vitest run
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv5.0.4 [39m[90m/home/parity/jobs/personal-vault-i18n-20261107-final-6427d6f/desktop[39m
+
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+ [32m✓[39m test/settings.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 1377[2mms[22m[39m
+   [32m✓[39m connection server [2m(2)[22m
+     [33m[2m✓[22m[39m saves the planned address without changing the other settings and never says the server operates[33m 544[2mms[22m[39m
+ [32m✓[39m test/devices.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 1189[2mms[22m[39m
+ [32m✓[39m test/app.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 1191[2mms[22m[39m
+   [32m✓[39m language preference [2m(2)[22m
+     [33m[2m✓[22m[39m follows the system on first run and changes language without losing the current step or input[33m 340[2mms[22m[39m
+   [32m✓[39m the local service in the sidebar [2m(1)[22m
+     [33m[2m✓[22m[39m shows a stop for every use, and resume asks for the passphrase[33m 345[2mms[22m[39m
+ [32m✓[39m test/reasons.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m test/services.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 2453[2mms[22m[39m
+   [32m✓[39m services page [2m(7)[22m
+     [33m[2m✓[22m[39m lists both connections and offers an ssh path for the SSH one without it[33m 456[2mms[22m[39m
+     [33m[2m✓[22m[39m creates an HTTP connection: the key once, then the connection with the passphrase and methods[33m 689[2mms[22m[39m
+     [33m[2m✓[22m[39m shows only the SSH essentials and opens "더 보기" for an error inside it[33m 412[2mms[22m[39m
+ [32m✓[39m test/dash.test.ts [2m([22m[2m46 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m test/vault.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 2106[2mms[22m[39m
+   [32m✓[39m vault page [2m(8)[22m
+     [33m[2m✓[22m[39m adds an API key with a typed value through secret_put[33m 473[2mms[22m[39m
+     [33m[2m✓[22m[39m generates an SSH key in Rust and shows only its public half[33m 322[2mms[22m[39m
+     [33m[2m✓[22m[39m reveals a value only after the passphrase, then hides it[33m 391[2mms[22m[39m
+ [32m✓[39m test/mock-dashboard.test.ts [2m([22m[2m53 tests[22m[2m)[22m[32m 91[2mms[22m[39m
+ [32m✓[39m test/terminal-input.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 157[2mms[22m[39m
+ [32m✓[39m test/validators.test.ts [2m([22m[2m75 tests[22m[2m)[22m[32m 34[2mms[22m[39m
+ [32m✓[39m test/copy.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 129[2mms[22m[39m
+ [32m✓[39m test/remote-sync-lib.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 28[2mms[22m[39m
+ [32m✓[39m test/mock-ipc.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 37[2mms[22m[39m
+ [32m✓[39m test/activity.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 523[2mms[22m[39m
+ [32m✓[39m test/fonts.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 28[2mms[22m[39m
+ [32m✓[39m test/format.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 50[2mms[22m[39m
+ [32m✓[39m test/envimport.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 56[2mms[22m[39m
+ [32m✓[39m test/ipc-events.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 55[2mms[22m[39m
+ [32m✓[39m test/invite.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m test/terminal-size.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m test/invite-preview.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m test/pending-invite.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m test/developer.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 4902[2mms[22m[39m
+   [32m✓[39m agents [2m(5)[22m
+     [33m[2m✓[22m[39m creates an agent and copies its token only once[33m 867[2mms[22m[39m
+     [33m[2m✓[22m[39m opens the terminal with the new token and never discards it[33m 487[2mms[22m[39m
+     [33m[2m✓[22m[39m discards a token nobody used when the dialog closes[33m 373[2mms[22m[39m
+     [33m[2m✓[22m[39m gives a permission only with the administrator passphrase[33m 643[2mms[22m[39m
+   [32m✓[39m approvals [2m(1)[22m
+     [33m[2m✓[22m[39m approves one pending request with the passphrase[33m 426[2mms[22m[39m
+   [32m✓[39m sharing [2m(4)[22m
+     [33m[2m✓[22m[39m shares the place, then makes an invite whose link stays masked and is copied once[33m 836[2mms[22m[39m
+     [33m[2m✓[22m[39m joins with a pasted link after the preview, keeping the link out of the page[33m 408[2mms[22m[39m
+     [33m[2m✓[22m[39m discards an adopted link when the dialog closes without joining[33m 326[2mms[22m[39m
+ [32m✓[39m test/design.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m test/records.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m test/onboarding.test.ts [2m([22m[2m11 tests[22m[2m)[22m[33m 5687[2mms[22m[39m
+   [32m✓[39m first run [2m(5)[22m
+     [33m[2m✓[22m[39m creates the vault with the generated code, the personal place and the service, then offers the first item[33m 1556[2mms[22m[39m
+     [33m[2m✓[22m[39m on the connect path leads to joining with the other Mac first[33m 936[2mms[22m[39m
+     [33m[2m✓[22m[39m takes a chosen recovery code and refuses one that contains the passphrase[33m 1129[2mms[22m[39m
+     [33m[2m✓[22m[39m lets the person finish when the local service does not start[33m 1061[2mms[22m[39m
+     [33m[2m✓[22m[39m mentions an invite link received during the first run without taking it[33m 983[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m26 passed[39m[22m[90m (26)[39m
+[2m      Tests [22m [1m[32m334 passed[39m[22m[90m (334)[39m
+[2m   Start at [22m 16:19:47
+[2m   Duration [22m 13.09s[2m (environment 33%, transform 31%, tests 25%, import 10%)[22m
+
+[2m    Isolate [22m [33m26 workers spawned[39m[2m · ~1.23s startup each (spawn + environment, per file)[22m
+[2m            [22m [2mat least ~3.33s faster with [22m[33misolate: false[39m[2m — reuses workers across files instead of one per file[22m
+

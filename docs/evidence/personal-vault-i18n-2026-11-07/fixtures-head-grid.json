@@ -1,0 +1,811 @@
+[
+  {
+    "id": "en-light-760x560-add-item",
+    "theme": "light",
+    "errors": [],
+    "consoleErrors": [
+      "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    ],
+    "requestFailures": [],
+    "badResponses": [
+      {
+        "url": "http://localhost:1420/favicon.ico",
+        "status": 404
+      }
+    ],
+    "lang": "en",
+    "dialog": {
+      "left": 160,
+      "right": 600,
+      "top": 80.328125,
+      "bottom": 479.65625,
+      "width": 440,
+      "height": 399.328125
+    },
+    "dialogWidth": 438,
+    "dialogScroll": 438,
+    "segment": {
+      "left": 183,
+      "right": 577,
+      "top": 145.328125,
+      "bottom": 207.328125,
+      "width": 394,
+      "height": 62
+    },
+    "segmentWidth": 394,
+    "segmentScroll": 394,
+    "segmentDisplay": "grid",
+    "segmentColumns": "194px 194px",
+    "typeLabels": [
+      "Password",
+      "API Key",
+      "Environment Variable",
+      "SSH Key"
+    ],
+    "selectedType": "API Key",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "buttons": [
+      {
+        "text": "",
+        "ariaLabel": "Close",
+        "left": 553,
+        "right": 579,
+        "top": 101.328125,
+        "bottom": 127.328125,
+        "width": 26,
+        "height": 26,
+        "scrollWidth": 24,
+        "clientWidth": 24,
+        "selfClipped": false,
+        "ancestorViolations": [],
+        "ancestors": [
+          {
+            "className": "dialog dialog-sm",
+            "left": 160,
+            "right": 600,
+            "top": 80.328125,
+            "bottom": 479.65625,
+            "width": 440,
+            "height": 399.328125,
+            "overflowX": "visible",
+            "outside": false
+          }
+        ]
+      },
+      {
+        "text": "Password",
+        "ariaLabel": null,
+        "left": 185,
+        "right": 379,
+        "top": 147.328125,
+        "bottom": 175.328125,
+        "width": 194,
+        "height": 28,
+        "scrollWidth": 194,
+        "clientWidth": 194,
+        "selfClipped": false,
+        "ancestorViolations": [],
+        "ancestors": [
+          {
+            "className": "seg seg-md",
+            "left": 183,
+            "right": 577,
+            "top": 145.328125,
+            "bottom": 207.328125,
+            "width": 394,
+            "height": 62,
+            "overflowX": "visible",
+            "outside": false
+          },
+          {
+            "className": "vault-kind-seg",
+            "left": 183,
+            "right": 577,
+            "top": 145.328125,
+            "bottom": 207.328125,
+            "width": 394,
+            "height": 62,
+            "overflowX": "visible",
+            "outside": false
+          },
+          {
+            "className": "dialog-body",
+            "left": 161,
+            "right": 599,
+            "top": 131.328125,
+            "bottom": 415.65625,
+            "width": 438,
+            "height": 284.328125,
+            "overflowX": "auto",
+            "outside": false
+          },
+          {
+            "className": "dialog dialog-sm",
+            "left": 160,
+            "right": 600,
+            "top": 80.328125,
+            "bottom": 479.65625,
+            "width": 440,
+            "height": 399.328125,
+            "overflowX": "visible",
+            "outside": false
+          }
+        ]
+      },
+      {
+        "text": "API Key",
+        "ariaLabel": null,
+        "left": 381,
+        "right": 575,
+        "top": 147.328125,
+        "bottom": 175.328125,
+        "width": 194,
+        "height": 28,
+        "scrollWidth": 194,
+        "clientWidth": 194,
+        "selfClipped": false,
+        "ancestorViolations": [],
+        "ancestors": [
+          {
+            "className": "seg seg-md",
+            "left": 183,
+            "right": 577,
+            "top": 145.328125,
+            "bottom": 207.328125,
+            "width": 394,
+            "height": 62,
+            "overflowX": "visible",
+            "outside": false
+          },
+          {
+            "className": "vault-kind-seg",
+            "left": 183,
+            "right": 577,
+            "top": 145.328125,
+            "bottom": 207.328125,
+            "width": 394,
+            "height": 62,
+            "overflowX": "visible",
+            "outside": false
+          },
+          {
+            "className": "dialog-body",
+            "left": 161,
+            "right": 599,
+            "top": 131.328125,
+            "bottom": 415.65625,
+            "width": 438,
+            "height": 284.328125,
+            "overflowX": "auto",
+            "outside": false
+          },
+          {
+            "className": "dialog dialog-sm",
+            "left": 160,
+            "right": 600,
+            "top": 80.328125,
+            "bottom": 479.65625,
+            "width": 440,
+            "height": 399.328125,
+            "overflowX": "visible",
+            "outside": false
+          }
+        ]
+      },
+      {
+        "text": "Environment Variable",
+        "ariaLabel": null,
+        "left": 185,
+        "right": 379,
+        "top": 177.328125,
+        "bottom": 205.328125,
+        "width": 194,
+        "height": 28,
+        "scrollWidth": 194,
+        "clientWidth": 194,
+        "selfClipped": false,
+        "ancestorViolations": [],
+        "ancestors": [
+          {
+            "className": "seg seg-md",
+            "left": 183,
+            "right": 577,
+            "top": 145.328125,
+            "bottom": 207.328125,
+            "width": 394,
+            "height": 62,
+            "overflowX": "visible",
+            "outside": false
+          },
+          {
+            "className": "vault-kind-seg",
+            "left": 183,
+            "right": 577,
+            "top": 145.328125,
+            "bottom": 207.328125,
+            "width": 394,
+            "height": 62,
+            "overflowX": "visible",
+            "outside": false
+          },
+          {
+            "className": "dialog-body",
+            "left": 161,
+            "right": 599,
+            "top": 131.328125,
+            "bottom": 415.65625,
+            "width": 438,
+            "height": 284.328125,
+            "overflowX": "auto",
+            "outside": false
+          },
+          {
+            "className": "dialog dialog-sm",
+            "left": 160,
+            "right": 600,
+            "top": 80.328125,
+            "bottom": 479.65625,
+            "width": 440,
+            "height": 399.328125,
+            "overflowX": "visible",
+            "outside": false
+          }
+        ]
+      },
+      {
+        "text": "SSH Key",
+        "ariaLabel": null,
+        "left": 381,
+        "right": 575,
+        "top": 177.328125,
+        "bottom": 205.328125,
+        "width": 194,
+        "height": 28,
+        "scrollWidth": 194,
+        "clientWidth": 194,
+        "selfClipped": false,
+        "ancestorViolations": [],
+        "ancestors": [
+          {
+            "className": "seg seg-md",
+            "left": 183,
+            "right": 577,
+            "top": 145.328125,
+            "bottom": 207.328125,
+            "width": 394,
+            "height": 62,
+            "overflowX": "visible",
+            "outside": false
+          },
+          {
+            "className": "vault-kind-seg",
+            "left": 183,
+            "right": 577,
+            "top": 145.328125,
+            "bottom": 207.328125,
+            "width": 394,
+            "height": 62,
+            "overflowX": "visible",
+            "outside": false
+          },
+          {
+            "className": "dialog-body",
+            "left": 161,
+            "right": 599,
+            "top": 131.328125,
+            "bottom": 415.65625,
+            "width": 438,
+            "height": 284.328125,
+            "overflowX": "auto",
+            "outside": false
+          },
+          {
+            "className": "dialog dialog-sm",
+            "left": 160,
+            "right": 600,
+            "top": 80.328125,
+            "bottom": 479.65625,
+            "width": 440,
+            "height": 399.328125,
+            "overflowX": "visible",
+            "outside": false
+          }
+        ]
+      },
+      {
+        "text": "",
+        "ariaLabel": "Show Password",
+        "left": 540,
+        "right": 568,
+        "top": 325.546875,
+        "bottom": 353.546875,
+        "width": 28,
+        "height": 28,
+        "scrollWidth": 28,
+        "clientWidth": 28,
+        "selfClipped": false,
+        "ancestorViolations": [],
+        "ancestors": [
+          {
+            "className": "dialog-body",
+            "left": 161,
+            "right": 599,
+            "top": 131.328125,
+            "bottom": 415.65625,
+            "width": 438,
+            "height": 284.328125,
+            "overflowX": "auto",
+            "outside": false
+          },
+          {
+            "className": "dialog dialog-sm",
+            "left": 160,
+            "right": 600,
+            "top": 80.328125,
+            "bottom": 479.65625,
+            "width": 440,
+            "height": 399.328125,
+            "overflowX": "visible",
+            "outside": false
+          }
+        ]
+      },
+      {
+        "text": "Cancel",
+        "ariaLabel": null,
+        "left": 443.109375,
+        "right": 513.578125,
+        "top": 430.65625,
+        "bottom": 460.65625,
+        "width": 70.46875,
+        "height": 30,
+        "scrollWidth": 68,
+        "clientWidth": 68,
+        "selfClipped": false,
+        "ancestorViolations": [],
+        "ancestors": [
+          {
+            "className": "dialog dialog-sm",
+            "left": 160,
+            "right": 600,
+            "top": 80.328125,
+            "bottom": 479.65625,
+            "width": 440,
+            "height": 399.328125,
+            "overflowX": "visible",
+            "outside": false
+          }
+        ]
+      },
+      {
+        "text": "Save",
+        "ariaLabel": null,
+        "left": 521.578125,
+        "right": 579,
+        "top": 430.65625,
+        "bottom": 460.65625,
+        "width": 57.421875,
+        "height": 30,
+        "scrollWidth": 55,
+        "clientWidth": 55,
+        "selfClipped": false,
+        "ancestorViolations": [],
+        "ancestors": [
+          {
+            "className": "dialog dialog-sm",
+            "left": 160,
+            "right": 600,
+            "top": 80.328125,
+            "bottom": 479.65625,
+            "width": 440,
+            "height": 399.328125,
+            "overflowX": "visible",
+            "outside": false
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "en-dark-760x560-add-item",
+    "theme": "dark",
+    "errors": [],
+    "consoleErrors": [],
+    "requestFailures": [],
+    "badResponses": [],
+    "lang": "en",
+    "dialog": {
+      "left": 160,
+      "right": 600,
+      "top": 80.328125,
+      "bottom": 479.65625,
+      "width": 440,
+      "height": 399.328125
+    },
+    "dialogWidth": 438,
+    "dialogScroll": 438,
+    "segment": {
+      "left": 183,
+      "right": 577,
+      "top": 145.328125,
+      "bottom": 207.328125,
+      "width": 394,
+      "height": 62
+    },
+    "segmentWidth": 394,
+    "segmentScroll": 394,
+    "segmentDisplay": "grid",
+    "segmentColumns": "194px 194px",
+    "typeLabels": [
+      "Password",
+      "API Key",
+      "Environment Variable",
+      "SSH Key"
+    ],
+    "selectedType": "API Key",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "buttons": [
+      {
+        "text": "",
+        "ariaLabel": "Close",
+        "left": 553,
+        "right": 579,
+        "top": 101.328125,
+        "bottom": 127.328125,
+        "width": 26,
+        "height": 26,
+        "scrollWidth": 24,
+        "clientWidth": 24,
+        "selfClipped": false,
+        "ancestorViolations": [],
+        "ancestors": [
+          {
+            "className": "dialog dialog-sm",
+            "left": 160,
+            "right": 600,
+            "top": 80.328125,
+            "bottom": 479.65625,
+            "width": 440,
+            "height": 399.328125,
+            "overflowX": "visible",
+            "outside": false
+          }
+        ]
+      },
+      {
+        "text": "Password",
+        "ariaLabel": null,
+        "left": 185,
+        "right": 379,
+        "top": 147.328125,
+        "bottom": 175.328125,
+        "width": 194,
+        "height": 28,
+        "scrollWidth": 194,
+        "clientWidth": 194,
+        "selfClipped": false,
+        "ancestorViolations": [],
+        "ancestors": [
+          {
+            "className": "seg seg-md",
+            "left": 183,
+            "right": 577,
+            "top": 145.328125,
+            "bottom": 207.328125,
+            "width": 394,
+            "height": 62,
+            "overflowX": "visible",
+            "outside": false
+          },
+          {
+            "className": "vault-kind-seg",
+            "left": 183,
+            "right": 577,
+            "top": 145.328125,
+            "bottom": 207.328125,
+            "width": 394,
+            "height": 62,
+            "overflowX": "visible",
+            "outside": false
+          },
+          {
+            "className": "dialog-body",
+            "left": 161,
+            "right": 599,
+            "top": 131.328125,
+            "bottom": 415.65625,
+            "width": 438,
+            "height": 284.328125,
+            "overflowX": "auto",
+            "outside": false
+          },
+          {
+            "className": "dialog dialog-sm",
+            "left": 160,
+            "right": 600,
+            "top": 80.328125,
+            "bottom": 479.65625,
+            "width": 440,
+            "height": 399.328125,
+            "overflowX": "visible",
+            "outside": false
+          }
+        ]
+      },
+      {
+        "text": "API Key",
+        "ariaLabel": null,
+        "left": 381,
+        "right": 575,
+        "top": 147.328125,
+        "bottom": 175.328125,
+        "width": 194,
+        "height": 28,
+        "scrollWidth": 194,
+        "clientWidth": 194,
+        "selfClipped": false,
+        "ancestorViolations": [],
+        "ancestors": [
+          {
+            "className": "seg seg-md",
+            "left": 183,
+            "right": 577,
+            "top": 145.328125,
+            "bottom": 207.328125,
+            "width": 394,
+            "height": 62,
+            "overflowX": "visible",
+            "outside": false
+          },
+          {
+            "className": "vault-kind-seg",
+            "left": 183,
+            "right": 577,
+            "top": 145.328125,
+            "bottom": 207.328125,
+            "width": 394,
+            "height": 62,
+            "overflowX": "visible",
+            "outside": false
+          },
+          {
+            "className": "dialog-body",
+            "left": 161,
+            "right": 599,
+            "top": 131.328125,
+            "bottom": 415.65625,
+            "width": 438,
+            "height": 284.328125,
+            "overflowX": "auto",
+            "outside": false
+          },
+          {
+            "className": "dialog dialog-sm",
+            "left": 160,
+            "right": 600,
+            "top": 80.328125,
+            "bottom": 479.65625,
+            "width": 440,
+            "height": 399.328125,
+            "overflowX": "visible",
+            "outside": false
+          }
+        ]
+      },
+      {
+        "text": "Environment Variable",
+        "ariaLabel": null,
+        "left": 185,
+        "right": 379,
+        "top": 177.328125,
+        "bottom": 205.328125,
+        "width": 194,
+        "height": 28,
+        "scrollWidth": 194,
+        "clientWidth": 194,
+        "selfClipped": false,
+        "ancestorViolations": [],
+        "ancestors": [
+          {
+            "className": "seg seg-md",
+            "left": 183,
+            "right": 577,
+            "top": 145.328125,
+            "bottom": 207.328125,
+            "width": 394,
+            "height": 62,
+            "overflowX": "visible",
+            "outside": false
+          },
+          {
+            "className": "vault-kind-seg",
+            "left": 183,
+            "right": 577,
+            "top": 145.328125,
+            "bottom": 207.328125,
+            "width": 394,
+            "height": 62,
+            "overflowX": "visible",
+            "outside": false
+          },
+          {
+            "className": "dialog-body",
+            "left": 161,
+            "right": 599,
+            "top": 131.328125,
+            "bottom": 415.65625,
+            "width": 438,
+            "height": 284.328125,
+            "overflowX": "auto",
+            "outside": false
+          },
+          {
+            "className": "dialog dialog-sm",
+            "left": 160,
+            "right": 600,
+            "top": 80.328125,
+            "bottom": 479.65625,
+            "width": 440,
+            "height": 399.328125,
+            "overflowX": "visible",
+            "outside": false
+          }
+        ]
+      },
+      {
+        "text": "SSH Key",
+        "ariaLabel": null,
+        "left": 381,
+        "right": 575,
+        "top": 177.328125,
+        "bottom": 205.328125,
+        "width": 194,
+        "height": 28,
+        "scrollWidth": 194,
+        "clientWidth": 194,
+        "selfClipped": false,
+        "ancestorViolations": [],
+        "ancestors": [
+          {
+            "className": "seg seg-md",
+            "left": 183,
+            "right": 577,
+            "top": 145.328125,
+            "bottom": 207.328125,
+            "width": 394,
+            "height": 62,
+            "overflowX": "visible",
+            "outside": false
+          },
+          {
+            "className": "vault-kind-seg",
+            "left": 183,
+            "right": 577,
+            "top": 145.328125,
+            "bottom": 207.328125,
+            "width": 394,
+            "height": 62,
+            "overflowX": "visible",
+            "outside": false
+          },
+          {
+            "className": "dialog-body",
+            "left": 161,
+            "right": 599,
+            "top": 131.328125,
+            "bottom": 415.65625,
+            "width": 438,
+            "height": 284.328125,
+            "overflowX": "auto",
+            "outside": false
+          },
+          {
+            "className": "dialog dialog-sm",
+            "left": 160,
+            "right": 600,
+            "top": 80.328125,
+            "bottom": 479.65625,
+            "width": 440,
+            "height": 399.328125,
+            "overflowX": "visible",
+            "outside": false
+          }
+        ]
+      },
+      {
+        "text": "",
+        "ariaLabel": "Show Password",
+        "left": 540,
+        "right": 568,
+        "top": 325.546875,
+        "bottom": 353.546875,
+        "width": 28,
+        "height": 28,
+        "scrollWidth": 28,
+        "clientWidth": 28,
+        "selfClipped": false,
+        "ancestorViolations": [],
+        "ancestors": [
+          {
+            "className": "dialog-body",
+            "left": 161,
+            "right": 599,
+            "top": 131.328125,
+            "bottom": 415.65625,
+            "width": 438,
+            "height": 284.328125,
+            "overflowX": "auto",
+            "outside": false
+          },
+          {
+            "className": "dialog dialog-sm",
+            "left": 160,
+            "right": 600,
+            "top": 80.328125,
+            "bottom": 479.65625,
+            "width": 440,
+            "height": 399.328125,
+            "overflowX": "visible",
+            "outside": false
+          }
+        ]
+      },
+      {
+        "text": "Cancel",
+        "ariaLabel": null,
+        "left": 443.109375,
+        "right": 513.578125,
+        "top": 430.65625,
+        "bottom": 460.65625,
+        "width": 70.46875,
+        "height": 30,
+        "scrollWidth": 68,
+        "clientWidth": 68,
+        "selfClipped": false,
+        "ancestorViolations": [],
+        "ancestors": [
+          {
+            "className": "dialog dialog-sm",
+            "left": 160,
+            "right": 600,
+            "top": 80.328125,
+            "bottom": 479.65625,
+            "width": 440,
+            "height": 399.328125,
+            "overflowX": "visible",
+            "outside": false
+          }
+        ]
+      },
+      {
+        "text": "Save",
+        "ariaLabel": null,
+        "left": 521.578125,
+        "right": 579,
+        "top": 430.65625,
+        "bottom": 460.65625,
+        "width": 57.421875,
+        "height": 30,
+        "scrollWidth": 55,
+        "clientWidth": 55,
+        "selfClipped": false,
+        "ancestorViolations": [],
+        "ancestors": [
+          {
+            "className": "dialog dialog-sm",
+            "left": 160,
+            "right": 600,
+            "top": 80.328125,
+            "bottom": 479.65625,
+            "width": 440,
+            "height": 399.328125,
+            "overflowX": "visible",
+            "outside": false
+          }
+        ]
+      }
+    ]
+  }
+]
