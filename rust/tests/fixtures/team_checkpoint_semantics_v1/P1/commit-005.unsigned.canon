@@ -1,0 +1,1 @@
+{"author":"gr2q7gf5lh6pzfdnurnkvputhm","author_seq":2,"env_id":"copdsqhgjnkjc4rardm2bv2bmi-0123456789abcdef0123456789abcdef","format":"zeropw-team-commit-v1","hlc":"6000-0000","ops":[{"op":"secret.activate","secret_id":"retained-secret","version_id":"cccccccccccccccc"}],"seen":{"copdsqhgjnkjc4rardm2bv2bmi":4,"gr2q7gf5lh6pzfdnurnkvputhm":1}}

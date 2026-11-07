@@ -5031,7 +5031,7 @@ pub fn verify_fact(fact: &Fact, author: &DeviceRecord) -> bool {
     fact.canonical_json(false)
         .is_ok_and(|bytes| super::verify_signature(&author.sign_pub, &bytes, &sig))
 }
-fn apply_fact(facts: &mut Facts, fact: &Fact) {
+pub(super) fn apply_fact(facts: &mut Facts, fact: &Fact) {
     match fact.kind.as_str() {
         "connection_disabled" => {
             if let Some(id) = fact.target["connection_id"].as_str() {
