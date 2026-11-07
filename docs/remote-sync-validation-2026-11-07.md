@@ -24,7 +24,14 @@ passed all five cross-build targets and 33 artifact checks, with all 162 source
 files unchanged. This is neither native execution nor a second-build
 reproducibility comparison. No new Opus
 verdict, OCI product deployment or final sidecar-pin integration is claimed.
-This factual addendum was recorded by actual `gpt-6.1-sol`.
+Fresh [real-network E2E](evidence/remote-sync-e2e-2026-11-07-bd-4af/README.md)
+at ZeroPW `52e87b0` (bd065fc Rust tree) plus link `4af5ac8` passed the original
+66 assertions and separate seven-service-secret scan, exit0. All 640/162 source
+files and four product executable hashes matched before/after. Original fixtures
+and assertion order were unchanged; the new unsafe 0775 ancestor refusal is
+preserved. This Linux simulation covers actual direct/TURN UDP/TLS and restarts,
+not native Mac, M1 tombstones, M2 snapshots, the unresolved full-Linux expiry
+failure, IPv6 policy or OCI capacity. This factual addendum was recorded by actual `gpt-6.1-sol`.
 
 The [new Opus attempt at 4af5ac8](evidence/2026-11-07-link-4af5ac8-review-unavailable.json)
 failed before source review because Claude's five-hour API quota was exhausted.

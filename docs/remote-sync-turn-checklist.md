@@ -48,8 +48,11 @@ ACL·기본 root alias·다른 UID의 retained-directory-FD 실제 검증은 NOT
 기존 ca01275 Opus REVISE와 원래 finding severity는 그대로 보존한다.
 [`4af5ac8` 빌드 기록](evidence/2026-11-07-link-build-4af5ac8.json)은 5개 대상과
 artifact 검사 33개 통과, 162개 소스 변경 없음이다. 실제 native 실행이나
-두 번째 빌드와의 재현성 비교는 아니다. 최종 sidecar
-pin, 실제 설치·롤백 결과, 새로운 Opus 판정과 OCI 제품 배포는 별도 조건이다.
+두 번째 빌드와의 재현성 비교는 아니다. 새 [네트워크 E2E](evidence/remote-sync-e2e-2026-11-07-bd-4af/README.md)는
+bd Rust tree+link4af에서 원래 66개 assertion과 별도 7개 합성 서비스 비밀
+검사를 exit 0으로 통과했다. 640/162개 소스와 제품 실행 파일 4개 해시를
+전후 대조했다. M1·M2·native Mac·IPv6·OCI 용량 인수는 아니다. 최종 sidecar
+pin, 새로운 Opus 판정과 OCI 제품 배포는 별도 조건이다.
 
 
 이번 문서 갱신 전 비교한 ZeroPW 소스는 `1f60bc2a3f2b91fa691dfa9f79c81bfb131aabe1`이다. Linux 검증
