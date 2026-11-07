@@ -144,7 +144,7 @@ export function enrollErrorKey(reason: string): CopyKey {
     case 'link_service_invalid': return 'devices.enroll.err.service';
     case 'link_invite_invalid': case 'link_device_revoked': return 'devices.enroll.err.refused';
     case 'link_device_limit': return 'pair.failed.full';
-    case 'link_rate_limited': case 'link_busy': return 'devices.enroll.err.busy';
+    case 'link_rate_limited': return 'devices.enroll.err.busy';
     case 'link_service_unavailable': case 'link_timeout': case 'link_connect_failed': case 'link_unavailable': return 'devices.enroll.err.offline';
     default: return 'error.generic';
   }

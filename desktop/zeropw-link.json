@@ -1,7 +1,7 @@
 {
   "module": "github.com/telicity-ai/zeropw-link",
-  "commit": "725270be9ecb5c242426417389653dbed2d3b71d",
+  "commit": "bcdaaecd569a71bf4df07c738869e1e0c7a577e1",
   "go": "go1.27.3",
   "macos_minimum": "13.0",
-  "note": "The zeropw-link daemon the app bundles (desktop/scripts/build-link-sidecar.py). The commit is the head of zeropw-link's wip/daemon branch on 2026-11-07, before that branch is merged; move it to the merged commit before a release. Go 1.27 builds for macOS 13 or later."
+  "note": "The zeropw-link daemon the app bundles (desktop/scripts/build-link-sidecar.py). The commit is the head of zeropw-link's main branch on 2026-11-07 (wip/daemon and wip/deploy merged). Go 1.27 builds for macOS 13 or later."
 }

@@ -34,6 +34,8 @@ const EVENT: Record<string, CopyKey> = {
   team_fact_apply: 'log.ev.team_fact_apply', team_fact_rejected: 'log.ev.team_fact_rejected',
   team_sync_vector: 'log.ev.team_sync', team_sync_poll: 'log.ev.team_sync', team_share: 'log.ev.team_share',
   team_invite_create: 'log.ev.team_invite_create', team_invite_revoke: 'log.ev.team_invite_revoke', team_join: 'log.ev.team_join',
+  team_join_request: 'log.ev.team_join_request', team_join_approved: 'log.ev.team_join_approved',
+  team_join_denied: 'log.ev.team_join_denied',
   team_member_add: 'log.ev.team_member_add', team_member_remove: 'log.ev.team_member_remove', team_dek_rotate: 'log.ev.team_dek_rotate',
   team_compact: 'log.ev.team_compact', team_incident_received: 'log.ev.team_incident_received', incident_open: 'log.ev.incident_open',
   incident_widen: 'log.ev.incident_widen', incident_close: 'log.ev.incident_close', incident_notify: 'log.ev.incident_notify',
@@ -115,13 +117,15 @@ const REASON: Record<string, CopyKey | null> = {
   backup_kms_mismatch: 'log.why.backup_kms_mismatch',
   // team and incidents (rust/src/team, rust/src/incident.rs: an incident's trigger, `widen`)
   team_rekey_pending: 'log.why.team_rekey_pending', not_admin: 'log.why.not_admin', member_removed: 'log.why.member_removed',
+  // a join request an approval invitation recorded (rust/src/team/sync.rs `audit_join_request`)
+  join_request_recorded: 'log.why.join_request_recorded', join_request_repeated: 'log.why.join_request_repeated',
   manual: 'log.why.manual', auto: 'log.why.auto', widen: null,
 };
 
 const SCOPE: Record<string, CopyKey> = { principal: 'inc.scope.principal', runtime: 'inc.scope.runtime', all: 'inc.scope.all' };
 
 /** The events the administrator's CLI records with the caller `admin` (rust/src/admin_cli.rs,
- *  rust/src/team/membership.rs), and the reveal, which only the administrator can do. The relay,
+ *  rust/src/team/membership.rs, rust/src/team/pairing.rs), and the reveal, which only the administrator can do. The relay,
  *  the SSH signer, an agent's commands and the server's token check write the agent's own id as
  *  the caller, and an agent may be named `admin` (rust/src/projects.rs `validate_name`), so on
  *  their events `admin` is a name. */
@@ -130,7 +134,7 @@ const ADMIN_EVENTS = new Set([
   'connection_create', 'connection_update', 'connection_disable', 'connection_switch_credential',
   'grant_create', 'grant_revoke', 'grant_regrant', 'stop_all', 'resume', 'approval_grant', 'rotation', 'restore_ack',
   'auth_failed', 'team_share', 'team_invite_create', 'team_invite_revoke', 'team_join', 'team_member_remove',
-  'team_dek_rotate', 'team_fact_apply',
+  'team_dek_rotate', 'team_fact_apply', 'team_join_approved', 'team_join_denied',
 ]);
 /** An `auth_failed` the administrator's password checks write; the server's token check writes
  *  one with a caller only for a disabled agent (`principal_disabled`, rust/src/server.rs). */

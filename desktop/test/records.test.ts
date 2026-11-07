@@ -93,12 +93,13 @@ const REASONS = unique([
 ]);
 
 // The events the administrator's CLI records with the caller `admin`: its record helpers and
-// refusals (rust/src/admin_cli.rs) and the team commands (rust/src/team/membership.rs `audit`).
-const adminCli = rs('admin_cli.rs'), membership = rs('team/membership.rs');
+// refusals (rust/src/admin_cli.rs) and the team commands (rust/src/team/membership.rs `audit`,
+// the join approvals of rust/src/team/pairing.rs).
+const adminCli = rs('admin_cli.rs'), membership = rs('team/membership.rs'), pairing = rs('team/pairing.rs');
 const ADMIN_WRITTEN = unique([
   ...all(adminCli, /admin_record(?:_for)?\(\s*&?ctx,\s*"([a-z_]+)"/g),
   ...all(adminCli, /refuse_cli_env\([^;]*?,\s*"([a-z_]+)"\)/g),
-  ...all(adminCli + membership, /\.record\(\s*"([a-z_]+)",\s*RecordArgs \{\s*caller: Some\("admin"\)/g),
+  ...all(adminCli + membership + pairing, /\.record\(\s*"([a-z_]+)",\s*RecordArgs \{\s*caller: Some\("admin"\)/g),
   ...all(membership, /\baudit\(\s*ctx,\s*"([a-z_]+)"/g),
 ]);
 
@@ -118,7 +119,7 @@ describe('records and alerts in plain words', () => {
       'grant_revoked', 'global_stop', 'path_not_allowed', 'upstream_timeout', 'replay_body_unavailable', 'cancelled_by_caller',
       'grant_mismatch', 'handle_expired', 'caller_token_invalid',
     ]));
-    for (const [name, text] of Object.entries({ audit, gateway, policy, handles, signer, tools, runs, server, adminCli, membership })) {
+    for (const [name, text] of Object.entries({ audit, gateway, policy, handles, signer, tools, runs, server, adminCli, membership, pairing })) {
       expect(text.length, name).toBeGreaterThan(1000);
     }
     // only test modules are left out, whole: no test is read, and no product item after a test
@@ -176,7 +177,7 @@ describe('records and alerts in plain words', () => {
   // pr69-frontend-records-a11y-1: an agent may be named `admin`, and its relay requests, signings
   // and denials carry that name as the caller; they were said to be the administrator's
   it('calls the caller admin the administrator only on records the administrator writes', () => {
-    expect(ADMIN_WRITTEN).toEqual(expect.arrayContaining(['principal_create', 'grant_revoke', 'connection_create', 'auth_failed', 'team_join']));
+    expect(ADMIN_WRITTEN).toEqual(expect.arrayContaining(['principal_create', 'grant_revoke', 'connection_create', 'auth_failed', 'team_join', 'team_join_approved', 'team_join_denied']));
     for (const event of ADMIN_WRITTEN) {
       const reason = event === 'auth_failed' ? 'admin_reauth_failed' : null;
       expect(recordView({ ts: 't', event, caller: 'admin', result: 'ok', reason }, 'audit').meta[0], event).toBe('관리자');
@@ -198,6 +199,21 @@ describe('records and alerts in plain words', () => {
     const denials = (reason: string) => recordView({ ts: 't', alert: 'repeated_denials', caller: 'admin', event: 'auth_failed', reason, detail: '5 denials within 60s' }, 'alert');
     expect(denials('principal_disabled').meta[0]).toBe('admin');
     expect(denials('admin_reauth_failed').meta[0]).toBe('관리자');
+  });
+
+  // docs/remote-sync.md §3.2: serve records a join request (no caller), the administrator's CLI
+  // the approval or denial
+  it('says a join request and its decision in words', () => {
+    const JOIN_REASONS = unique(all(fnBody(rs('team/sync.rs'), 'audit_join_request'), /"(join_request_[a-z_]+)"/g));
+    expect(JOIN_REASONS).toEqual(['join_request_recorded', 'join_request_repeated']);
+    for (const reason of JOIN_REASONS) {
+      const v = recordView({ ts: 't', event: 'team_join_request', result: 'ok', reason, env_id: 'env_1', fingerprint: 'fp', detail: 'inv_1', count: 2 }, 'audit');
+      expect(v.title).toBe('합류 요청');
+      expect(v.meta, reason).toEqual([expect.stringMatching(HANGUL)]);
+      expect(v.raw).toEqual(['env_id=env_1', 'fingerprint=fp', 'detail=inv_1', 'count=2']);
+    }
+    expect(recordView({ ts: 't', event: 'team_join_approved', caller: 'admin', result: 'ok' }, 'audit')).toMatchObject({ title: '합류 승인', meta: ['관리자'] });
+    expect(recordView({ ts: 't', event: 'team_join_denied', caller: 'admin', result: 'ok' }, 'audit')).toMatchObject({ title: '합류 거절', meta: ['관리자'] });
   });
 
   it('keeps the agent and connection names as they are and adds the event behind an alert', () => {

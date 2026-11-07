@@ -215,9 +215,11 @@ pub fn is_link_token(token: &str) -> bool {
         && token.bytes().all(|b| b.is_ascii_graphic())
 }
 
-/// The daemon's error codes (zeropw-link protocol §5 and the daemon's fixed set) as fixed
-/// `(class, reason)` pairs. A code outside the set is `link_failed`: the daemon's text is never
-/// passed on, so nothing it wrote can reach the UI or a log.
+/// The daemon's error codes as fixed `(class, reason)` pairs: exactly the closed set
+/// `zeropw-link daemon` answers with (zeropw-link `internal/daemon/proto.go` and
+/// docs/daemon.md §3 at the pinned commit, [`DAEMON_ERROR_CODES`]). A code outside the set is
+/// `link_failed`: the daemon's text is never passed on, so nothing it wrote can reach the UI or
+/// a log.
 fn link_error(code: &str) -> AppError {
     let (class, reason) = match code {
         "invalid_request" => ("InvalidInput", "link_invalid_request"),
@@ -237,13 +239,39 @@ fn link_error(code: &str) -> AppError {
         "connect_failed" => ("Unavailable", "link_connect_failed"),
         "timeout" => ("Timeout", "link_timeout"),
         "service_unavailable" => ("Unavailable", "link_service_unavailable"),
+        // service 429s and local overload (too many socket clients or accepts, an enrolment
+        // already running)
         "rate_limited" => ("Unavailable", "link_rate_limited"),
-        "busy" => ("Unavailable", "link_busy"),
+        // the daemon is stopping: as if it were not there
         "shutting_down" => ("Unavailable", "link_unavailable"),
+        // the daemon could not write its own state file
+        "internal" => ("InternalError", "link_internal"),
         _ => ("LinkError", "link_failed"),
     };
     AppError::new(class, reason)
 }
+
+/// Every error code `zeropw-link daemon` sends (zeropw-link `internal/daemon/proto.go`,
+/// `Code*`, at the commit desktop/zeropw-link.json pins). Each has its own reason in
+/// [`link_error`].
+pub const DAEMON_ERROR_CODES: [&str; 16] = [
+    "invalid_request",
+    "not_enrolled",
+    "already_enrolled",
+    "device_revoked",
+    "invite_invalid",
+    "link_token_invalid",
+    "device_limit",
+    "peer_unknown",
+    "peer_revoked",
+    "peer_offline",
+    "connect_failed",
+    "timeout",
+    "service_unavailable",
+    "rate_limited",
+    "shutting_down",
+    "internal",
+];
 
 /// A reason code from the daemon's status (a peer's last error), for the connection details
 /// only: lowercase letters, digits and `_`, at most 48 characters, else `link_failed`.
@@ -1088,9 +1116,9 @@ mod tests {
             ("device_revoked", "PolicyDenied", "link_device_revoked"),
             ("device_limit", "PolicyDenied", "link_device_limit"),
             ("peer_offline", "Unavailable", "link_peer_offline"),
-            ("busy", "Unavailable", "link_busy"),
             ("shutting_down", "Unavailable", "link_unavailable"),
-            ("internal", "LinkError", "link_failed"),
+            ("internal", "InternalError", "link_internal"),
+            ("already_enrolled", "StateError", "link_already_enrolled"),
         ] {
             let e = link_error(code);
             assert_eq!(
@@ -1099,8 +1127,16 @@ mod tests {
                 "{code}"
             );
         }
-        // codes outside the daemon's set are never passed on, whatever their shape
+        // every code the daemon sends has its own reason, never the catch-all
+        for code in DAEMON_ERROR_CODES {
+            let e = link_error(code);
+            assert_ne!(e.reason, "link_failed", "{code}");
+            assert!(e.reason.starts_with("link_"), "{code}");
+        }
+        // codes outside the daemon's set are never passed on, whatever their shape; `busy` was
+        // never one of them
         for code in [
+            "busy",
             "token for zpl secret",
             "",
             "zplt_synthetic_token",

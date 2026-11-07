@@ -816,6 +816,9 @@ export const COPY = {
   'log.ev.team_invite_create': '팀원 초대',
   'log.ev.team_invite_revoke': '초대 취소',
   'log.ev.team_join': '팀에 합류',
+  'log.ev.team_join_request': '합류 요청',
+  'log.ev.team_join_approved': '합류 승인',
+  'log.ev.team_join_denied': '합류 거절',
   'log.ev.team_member_add': '팀원 추가',
   'log.ev.team_member_remove': '팀원 내보내기',
   'log.ev.team_dek_rotate': '팀 키 바꾸기',
@@ -932,6 +935,8 @@ export const COPY = {
   'log.why.team_rekey_pending': '팀 키를 바꾸는 중',
   'log.why.not_admin': '팀 관리자가 아님',
   'log.why.member_removed': '내보낸 팀원',
+  'log.why.join_request_recorded': '새 요청',
+  'log.why.join_request_repeated': '다시 요청',
   'log.why.manual': '직접 선언',
   'log.why.auto': '자동 감지',
 
