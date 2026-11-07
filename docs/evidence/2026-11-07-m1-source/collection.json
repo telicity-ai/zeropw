@@ -1,0 +1,18 @@
+{
+  "scope": "Coordinator data-only evidence checksum collection; no product execution or acceptance",
+  "manifest_sha256": "103de3b59f58dbcc66dfd69c46554a82def51d2d9882a9b6b7d385f42a6fad79",
+  "verified_entries": 207,
+  "bytes_read": 363864823,
+  "mismatches": [],
+  "source_commit": "8258a8d2eac7541e229f414151271bb3faa215f8",
+  "status": "Original M1 source collected, not yet integrated with Personal Vault UI",
+  "actual_recorder": "gpt-6.1-sol, ultra",
+  "original_evidence_path": "/Users/ys/Code/zeropw-mlp-evidence/m1",
+  "collected_files": {
+    "REPORT.md": "a1c47913bfb45f84a80880925f756a154cb3f845321f3742d46662bcba8d214d",
+    "final-source-bindings.json": "628151aff7ec08c5cdf6f2b0e70a5611b02f789d1eaa59f14bd1fe8e2b69f304",
+    "unchanged-boundaries.json": "7cc49d7e40e40dce1717a606a7185fbc989d2d2878aeeab4d313881b192ad8db",
+    "raw-value-feature-boundary.json": "c8d5c70ed45f2413c460042a9885c7b690c8046adb1d1f83358a4670b153a3a1"
+  },
+  "integration_plan_sha256": "66ca0b7676f63f35b0ec6796b420a8589b92ad769ab77696e8b27411bd3bdf93"
+}

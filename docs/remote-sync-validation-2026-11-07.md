@@ -4,6 +4,26 @@ Status: **incomplete; no release acceptance and no aggregate Opus PASS**. This i
 a dated evidence record, not a change to the acceptance requirements. The
 [TURN checklist](remote-sync-turn-checklist.md) keeps its completion gates open.
 
+Personal Vault UI/i18n source `9561eff50843f18cb42b15d7fcc4881bef368fb8`
+is merged and pushed as `859066a9bf7608e873f4d2620b2b2fc89c572cff` on
+`feature/remote-sync-mlp`; draft PR #72 was updated for that merge. Its desktop
+tree equals the UI source; its Rust tree equals the first parent. Protected
+harness/instructions, M2 fixtures/design and remote-sync documents are preserved.
+[Git conservation record](evidence/2026-11-07-personal-vault-ui-merge/README.md).
+This is branch integration, not a new release or integrated-head test PASS.
+The [source UI report](personal-vault-i18n-2026-11-07.md) retains its native
+TLS/pairing/supervisor failures.
+
+M1 worker source `8258a8d2eac7541e229f414151271bb3faa215f8` is complete
+but **not yet integrated into this UI**. Its exact-head Linux Rust and desktop
+matrices passed; native Rust passed, while native desktop failed two unchanged
+remote-pairing assertions. The [collected report](evidence/2026-11-07-m1-source/REPORT.md)
+preserves those failures and incomplete native core coverage. A coordinator
+data-only check matched all 207 retained evidence checksums. These results do
+not validate a future combined M1/UI head. The follow-up ports deletion into
+ItemDetail/VaultPage with fresh reauthentication, metadata-only results and
+distinct local/pending status; removed dashboard files stay removed.
+
 The M2a fixture package was collected from Sol commit
 `c38523ad7321270521745a0112dc90743beb0371` as coordinator commit `ac7a00c`.
 Both Rust trees are `9982d235d7b464edf7a520c450f1db4c33ad86d0`: only a test-only
