@@ -785,8 +785,9 @@ fn wire_case(relay_file: &Path) {
 /// The bytes the transport wrote and read through the link channel
 /// (`ZEROPW_TEAM_WIRE_CAPTURE`) and every byte the daemons relayed carry no
 /// secret value, invite secret or administrator passphrase in any encoding;
-/// and the captured frames are the relayed ones, so the capture really is
-/// of link traffic.
+/// and every received frame occurs in the relayed bytes, so the capture
+/// really is of link traffic. Send capture includes attempted writes that
+/// teardown may interrupt before relay; these remain in every leak scan.
 #[test]
 fn link_wire_and_daemon_bytes_carry_no_plaintext() {
     if let Some(relay) = std::env::var_os("ZEROPW_LINK_WIRE_TEST_RELAY") {
@@ -811,28 +812,45 @@ fn link_wire_and_daemon_bytes_carry_no_plaintext() {
         "child link run failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let frames: Vec<Vec<u8>> = std::fs::read_to_string(&capture)
-        .unwrap()
+    let capture_text = std::fs::read_to_string(&capture).unwrap();
+    let frames: Vec<(bool, Vec<u8>)> = capture_text
         .lines()
-        .map(|line| hex::decode(line.split_once(' ').unwrap().1).unwrap())
+        .map(|line| {
+            let (direction, frame) = line.split_once(' ').unwrap();
+            assert!(matches!(direction, "send" | "recv"));
+            (direction == "recv", hex::decode(frame).unwrap())
+        })
+        .collect();
+    let received: Vec<&[u8]> = frames
+        .iter()
+        .filter_map(|(received, frame)| received.then_some(frame.as_slice()))
         .collect();
     let relayed = std::fs::read(&relay).unwrap();
     assert!(frames.len() > 6, "capture must contain real link frames");
+    assert!(
+        received.len() > 3,
+        "capture must contain received link frames"
+    );
     assert!(!relayed.is_empty(), "the daemons must have relayed bytes");
-    for frame in &frames {
+    for frame in &received {
         let mut framed = (frame.len() as u32).to_be_bytes().to_vec();
         framed.extend_from_slice(frame);
         assert!(
             relayed
                 .windows(framed.len())
                 .any(|w| w == framed.as_slice()),
-            "a captured frame did not cross the link"
+            "a received frame did not cross the link"
         );
     }
     let invite_secret = std::fs::read(relay.with_extension("invite")).unwrap();
     assert_eq!(invite_secret.len(), 32);
     let needles = vec![SECRET.to_vec(), invite_secret, ADMIN.as_bytes().to_vec()];
-    assert_eq!(native_e2e::find_secret(&frames.concat(), &needles), None);
+    let all_captured: Vec<u8> = frames
+        .iter()
+        .flat_map(|(_, frame)| frame)
+        .copied()
+        .collect();
+    assert_eq!(native_e2e::find_secret(&all_captured, &needles), None);
     assert_eq!(native_e2e::find_secret(&relayed, &needles), None);
     let hex_capture = std::fs::read(&capture).unwrap();
     assert_eq!(native_e2e::find_secret(&hex_capture, &needles), None);
