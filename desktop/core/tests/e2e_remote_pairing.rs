@@ -578,6 +578,41 @@ fn two_macs_pair_through_the_link_daemon_only_after_explicit_approval() {
             .any(|d| d.fingerprint == made.fingerprint
                 && d.link_device_id.as_deref() == Some("aaaaaaaaaaaaaaaaaaaaaaaaaa"))
     );
+    // Both relays run with the link socket and no team listen address. Each still writes its
+    // sync state, and the two Macs' relays reach each other through the daemons: each reports
+    // an open session carried by the link (docs/remote-sync.md §3.3).
+    let link_session = |core: &Core, fp: &str| {
+        let view = core.devices_overview().ok()?;
+        let sync = view
+            .envs
+            .iter()
+            .find(|e| e.env == "demo/dev")?
+            .sync
+            .clone()?;
+        let peer = sync["peers"]
+            .as_array()?
+            .iter()
+            .find(|p| p["fingerprint"] == fp)?
+            .clone();
+        (!sync["serve_updated_at"].is_null()
+            && peer["session"] == true
+            && peer["transport"] == "link")
+            .then_some(peer)
+    };
+    for (who, core, fp) in [
+        ("A", &a, b_fp.as_str()),
+        ("B", &b, made.fingerprint.as_str()),
+    ] {
+        let peer = wait_for(
+            &format!("{who}'s relay to report the link session"),
+            Duration::from_secs(90),
+            || link_session(core, fp),
+        );
+        assert!(
+            ["up_to_date", "syncing"].contains(&peer["state"].as_str().unwrap_or("")),
+            "{who}: {peer}"
+        );
+    }
 
     // removing B on A leaves the team and revokes B at the service
     let removed = a

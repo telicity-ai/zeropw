@@ -67,7 +67,7 @@ code bypasses them.
 | SSH signer | `signer.rs`, `sshwire.rs` |
 | Agent tools and execution | `tools.rs`, `runs.rs`, `server.rs`, `bin/zeropw_session.rs` |
 | Compromise response | `incident.rs`, `intrusion.rs`, `notify.rs`, `smtp.rs` |
-| Team sharing | `team/{identity,envelope,commit,fold,humanview,transport,sync,membership,pairing,sync_status}.rs` |
+| Team sharing | `team/{identity,envelope,commit,fold,humanview,transport,link,sync,membership,pairing,sync_status}.rs` |
 | Command-line interfaces | `admin_cli.rs` (`zeropw-admin`), `agent_cli.rs` (`zeropw-agent`), `mac_proxies.rs` (macOS system proxies for the agent), `demo.rs` (`zeropw-demo`), `bin/zeropw-democli.rs` |
 | Compatibility helpers | `pyjson.rs`, `pystr.rs`, `pyint.rs`, `pybase64.rs`, `pyidna.rs`, `argparse.rs` (§2) |
 
