@@ -72,7 +72,7 @@ ZeroPW can import the keys of a `.env` file into the vault (`secret import`, or 
 
 The [remote-sync MLP](docs/remote-sync.md) adds direct connections and a coturn fallback for personal devices. It is incomplete and is not part of the v0.2.0 release. The earlier Linux Rust matrix and real-network E2E passed for their recorded revisions. Native macOS testing found two failures; a Rust fix is committed, with full verification pending. Physical two-Mac acceptance has not run, security review remains incomplete, and initial snapshots are missing. See the [dated validation and remaining work](docs/remote-sync-validation-2026-11-07.md).
 
-Connection and service code lives in the separate, currently private [zeropw-link repository](https://github.com/telicity-ai/zeropw-link). Its [self-host documentation](https://github.com/telicity-ai/zeropw-link/blob/main/docs/self-host.md) describes the deployment setup; the Oracle VM, DNS, NSG attachment and certificate are provisioned, but no product HTTPS/TURN service is deployed. No remote-sync binary is presented here as release-ready.
+Connection and service code lives in the separate, currently private [zeropw-link repository](https://github.com/telicity-ai/zeropw-link). Its [pinned self-host documentation](https://github.com/telicity-ai/zeropw-link/blob/f544478a48cea66be816efbed50967bafcacc8ac/docs/self-host.md) describes the deployment setup; the Oracle VM, DNS, NSG attachment and certificate are provisioned, but no product HTTPS/TURN service is deployed. No remote-sync binary is presented here as release-ready.
 
 ## Desktop app (preview)
 

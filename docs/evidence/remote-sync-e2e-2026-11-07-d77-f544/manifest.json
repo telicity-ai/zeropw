@@ -1,0 +1,41 @@
+{
+  "actual_model": "gpt-6.1-sol",
+  "runner_role": "local Codex coordinator",
+  "environment": "isolated Lima zeropw-parity Linux arm64 VM",
+  "linux_kernel": "6.8.0-147-generic",
+  "zeropw_source_sha": "d77ce9ed7170f9e2689bc1ecf5244aa9602cc587",
+  "zeropw_rust_tree_sha": "181f99ddbffedb3b7f5c158d7484afca37be8a8a",
+  "zeropw_link_source_sha": "f544478a48cea66be816efbed50967bafcacc8ac",
+  "zeropw_documentation_pin_head": "7b146ec00924e788d286edff20a637417e914f37",
+  "zeropw_link_documentation_head": "ca01275c60037b2e008714e646c79a57aa6c1462",
+  "source_equivalence": {
+    "zeropw": "Rust tree at documentation/pin head equals tested source Rust tree",
+    "zeropw_link": "Only README.md differs between tested source and documentation head"
+  },
+  "coturn_version": "4.18.0",
+  "go_version": "go1.27.3 linux/arm64",
+  "run_date": "2026-11-07",
+  "fixture_logged_time_window": "11:18:32.515 to 11:21:08.804 (timezone not printed)",
+  "vm_runtime_directory": "/tmp/zpe.0Xb0AT",
+  "exit_code": 0,
+  "exit_code_evidence": "Coordinator confirmed write_stdin for execution session 5035 returned exit_code 0",
+  "scenario_assertions_passed": 66,
+  "scenario_assertions_failed": 0,
+  "separate_fixture_secret_check": "PASS: 7 synthetic service secrets in one separate log scan",
+  "physical_macs_tested": 0,
+  "oracle_deployed": false,
+  "opus_review_performed_by_this_evidence_task": false,
+  "previous_evidence_manifest": "../remote-sync-e2e-2026-11-07-858ddc/manifest.json",
+  "sha256": {
+    "zeropw-admin": "73779b093bfdb50c1c77d76deb3b24731ce707c94d1d82e6d081205b48692635",
+    "zeropw-link": "8c4a33ccaddfffdd20e151a69f8769f0ed82d19324fac4fdb26c67d77e5185be",
+    "zeropw-linkd": "536d7053e77c8d0c18ef820822cbc63a445577b45536001f915a96a44ae2051f",
+    "turnserver": "d3e7cf6fd8446d11757f6969e75e1eb7d8ba1183ec33c27da67556f837052380",
+    "zeropw-link/test/daemon-netns/run.sh": "8bbb6aef6a62e12dfaccac47d997bed306d2a6f6073c8c2f33a4f4185c70a080",
+    "scripts/e2e-remote-sync/run.sh": "51abd3effd5906ccc39cf01e9d5e90aad0e9ed58d8229f9b40ad337ca6e1d315",
+    "scripts/e2e-remote-sync/scenarios.py": "5675f0d59fa7744f841e61fce0e7c5a2360418c0d26f392dbbff05c42e6e2539",
+    "raw_log": "0c37d13e7396fbc15311ef41394620635a82460b37f04c4fa44d74d05f404390",
+    "assertions.json": "f53219ae6f6420f0b61aeea9c0faf844de4050543d2abf1e20dd0a979f72fb96"
+  },
+  "raw_log_archive": "zeropw-mlp-evidence/e2e/run-11-d77-f544.log"
+}

@@ -79,9 +79,10 @@ the new gate; adding only a handler is insufficient.
   Each new control frame is at most 1 KiB. Validate types, duplicate/unknown keys,
   version, at most 16 feature strings and 64 ASCII characters per feature. A
   well-formed unknown feature is not support for tombstones.
-- A session in an environment with **no admitted tombstones on either known side**
-  retains existing v1 behavior; old peers may ignore `SYNC_CAPS`. Once the local
-  environment contains a tombstone, or a supported peer announces a nonempty
+- A legacy session in an environment with **no known admitted or advertised
+  nonempty tombstone set** retains existing v1 behavior; old peers may ignore
+  `SYNC_CAPS` and retain the old vector-based status without an ACK. Once the local
+  environment contains a tombstone, or an authenticated peer announces a nonempty
   tombstone set, require current-session `secret_tombstone_v1` before ordinary
   replication. Gate initial/periodic `VECTOR`, fact replay, commit/incident
   broadcasts, held queues, inbound processing and status. Clear readiness
@@ -98,6 +99,8 @@ the new gate; adding only a handler is insufficient.
   compaction and restore. Existing signature/role admission remains mandatory.
 - For a capable session send
   `{"type":"TOMBSTONE_STATE","digest":"<64-hex>","request_id":"<32-hex>"}`.
+  Capable peers exchange this state and its durable ACK even for the empty set;
+  they use the ACK to establish fresh current-session agreement, not legacy mode.
   Generate the 128-bit random request ID anew per session and per changed local
   set; keep at most one current request per peer. Announce before resuming ordinary
   vectors, then use the existing bounded fact replay to converge the sets. The
@@ -114,7 +117,8 @@ the new gate; adding only a handler is insufficient.
   union converges; a smaller set cannot acknowledge away additional local facts.
   A storage/derive error yields no ACK and leaves readiness false. An ACK lost in
   transit may be retried idempotently on the same request.
-- `up_to_date` on upgraded software requires the existing fresh commit-vector
+- The readiness gate is conditional: **capable peers, or any known nonempty
+  admitted/advertised tombstone set**, require the existing fresh commit-vector
   condition **and** an ACK on the current authenticated session matching the
   sender's current request ID and exact current local tombstone digest, with no
   conflicting reverse-direction state pending. Revoke this proof on disconnect,
@@ -122,12 +126,21 @@ the new gate; adding only a handler is insufficient.
   capability, vector equality and an ACK from another session do not establish
   durable deletion delivery. Add metadata/reason handling for unsupported or
   waiting peers without leaking secret values.
+- The only ACK-free exception is a genuinely nondeleted legacy peer that ignores
+  capabilities, with no known nonempty admitted/advertised set. Once any tombstone
+  is admitted, its monotone fact set must never become empty or be omitted through
+  fold, compaction, restart or restore; missing compatibility metadata cannot
+  downgrade that environment to legacy readiness. An unresolved nonempty peer
+  announcement also blocks the exception: later silence or an omitted field is
+  not proof that deletion vanished. Do not rewrite old nondeleted fixtures or
+  persist empty default fields to implement this distinction.
 
 Delete remains locally durable while peers are offline or unsupported; report
 that they have not synchronized, rather than waiting forever or undoing deletion.
 An already-old binary's offline vault/UI cannot be forced to apply a new fact.
-The upgraded side must disconnect/report unsupported and never claim that peer
-is up-to-date. This is the same offline revocation limitation, not permission to
+When tombstones are required, the upgraded side must disconnect/report unsupported
+and never claim that peer is up-to-date. This is the same offline revocation
+limitation, not permission to
 allow resurrection after a supported peer receives the tombstone. Replacing a
 new binary with old software is not a supported downgrade for tombstoned state;
 state that limitation explicitly without changing old fixture bytes.
@@ -137,8 +150,10 @@ ignores capability frames; cap timeout and reconnect; false/malformed capability
 new deletion during an established legacy session; ACK before durable application,
 wrong digest/request/session ACK and replay; reverse-direction concurrent deletes;
 commit vectors equal while facts differ; duplicate facts, lost ACK, restart,
-disk-full/derive failure; unknown feature names; size/queue limits. A peer lacking
-support must never be reported as synchronized by the upgraded CLI/UI.
+disk-full/derive failure; unknown feature names; size/queue limits. Test empty-set
+capable peers waiting for their fresh ACK separately from genuinely nondeleted
+legacy peers retaining vector-only status. A peer lacking support must never be
+reported as synchronized by the upgraded CLI/UI when tombstones are required.
 
 Acceptance cases: delete a secret with several usable versions; delete while an
 offline peer adds or activates a version; deliver delete before/after the commits;

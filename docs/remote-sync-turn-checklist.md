@@ -30,14 +30,21 @@
 Vitest와 fake-daemon 페어링 2개 통과를 실제 네트워크나 물리 Mac 2대 시험으로
 표시하지 않는다. Linux 전체 Rust 첫 실행은 디스크 부족으로 실패했으나 전체 재실행은
 exit 0(100단계, 1,621통과)으로 끝났고 별도 signer probe도 통과했다. 실제 네트워크
-E2E는 이전 pin `858ddc`에서 66/66과 7개 합성 서비스 비밀 로그 검사를 통과했다.
-격리 Tart macOS 26.6.2 arm64 VM의 고정 `1f60bc2` 시험은 fmt/strict Clippy 통과 후
-lib 662통과/2실패/4ignored이며 전체 matrix는 계속 진행 중이다. Darwin closed-peer
+E2E는 새 Rust `d77ce9e`+link `f544478`에서도 exit 0, 66/66 assertion과
+**7개 합성 서비스 비밀을 대상으로 한 별도 로그 검사 1회**를 통과했다.
+`desktop/package-f544478.log`의 패키징 도구 시험 61개도 exit 0이다.
+격리 Tart macOS 26.6.2 arm64 VM의 고정 `1f60bc2` 전체 시험은 exit 1로 끝났다.
+100단계 중 99통과/lib 단계 실패, 총 1,622통과/2실패/4ignored이며 signer probe도 실행했다. Darwin closed-peer
 SO_RCVTIMEO errno 22에 대한 수정 `d77ce9ed7170f9e2689bc1ecf5244aa9602cc587`의
 Rust tree는 `181f99ddbffedb3b7f5c158d7484afca37be8a8a`로 달라졌다. Linux strict
-all-target Clippy와 244개 team 시험은 통과했다. assertion 하나를 강화한 뒤 새
-Linux 전체 matrix는 진행 중이며 전체 통과는 아니다. 새 macOS 전체 검증은 대기 중이다. 이전 Linux/E2E
-통과를 새 Rust tree 통과로 옮기지 않는다. 물리 Mac 2대 시험은 NOTRUN이다.
+all-target Clippy와 244개 team 시험은 통과했으나 Linux 전체 matrix는 100단계,
+1,621통과/1실패/4ignored로 끝났다. 실패는 team_link_transport의 송신 시도와
+실제 수신 프레임을 동일시한 assertion이며 평문 누출 검사 실패가 아니다. 모든 비밀 검사와
+수신 프레임의 relay 통과 증명을 유지하고 3개 초과 수신 guard를 추가한 test-only
+`7f0421a`에서 Clippy/12개 target 시험은 통과했다. 변경하지 않은 전체 검증은
+`integ/rust-verify-7f0421a-linux.log`에서 재실행 중이며 전체 PASS는 없다.
+Native guest driver는 frozen d77 Rust/core와 f544 Go를 실행하며 단계별 결과 대기 중이다.
+이전 Linux/E2E 통과를 새 전체 matrix 통과로 옮기지 않는다. 물리 Mac 2대 시험은 NOTRUN이다.
 
 아래 표는 §4의 각 요구에 붙인 진행 기록이다. `부분`은 구현 또는 일부 시험
 근거만 있다는 뜻이며 체크박스를 채우는 근거가 아니다. 상세 환경·로그·원래
@@ -53,7 +60,7 @@ Linux 전체 matrix는 진행 중이며 전체 통과는 아니다. 새 macOS �
 | A05 | 부분: 별도 link wire/stream 계약과 파서 시험 존재. 최종 고정 head와 전체 종료·취소 경계 검증 필요 |
 | B01 | 부분: 초대 HMAC 저장·트랜잭션 소비 구현. 동시 실패 예산 ZPLINK-OPUS-02 수정·Linux 시험 통과, Opus 재인수 대기 |
 | B02 | 부분: Ed25519 challenge/session 구현. 공용 challenge 고갈 ZPLINK-OPUS-01 수정·Linux 시험 통과, Opus 재인수 대기 |
-| B03 | 부분: 명시적 fingerprint 승인과 desktop 흐름, fake-daemon 시험 2개 통과. 실제 Linux 네트워크 이전 `858ddc` 통과; native 시험 진행 중/두 Mac 미검증 |
+| B03 | 부분: 명시적 fingerprint 승인과 desktop 흐름, fake-daemon 시험 2개 통과. 실제 Linux 네트워크 새 `d77ce9e`+`f544478` 통과; native 시험 진행 중/두 Mac 미검증 |
 | B04 | 부분: 세션·등록 제한 구현. challenge 고갈/유실 응답 복구 수정·시험 통과. OPUS-03 orphan 회수/재시작/키 회전도 `858ddc` 시험 통과; Opus 재인수 대기 |
 | B05 | 부분: link `docs/protocol.md`에 구현 API 계약 존재. 최종 수정 head의 통합 검증 필요 |
 | B06 | 부분: 서명된 rendezvous와 replay 제한 구현 및 이전 link 단위시험. 최종 head·macOS 경로 검증 필요 |
@@ -62,14 +69,14 @@ Linux 전체 matrix는 진행 중이며 전체 통과는 아니다. 새 macOS �
 | C01 | 부분: coturn 4.18.0 고정. 고유 build UID/non-root probe를 쓴 격리 VM 실제 빌드 통과; OCI 설치/인수 없음 |
 | C02 | 부분: 서비스/coturn 전용 secret 구성 및 합성 로그 시험 이력. 운영 배포는 아직 없음 |
 | C03 | 부분: 이전 Linux lab의 만료·Refresh·allocation 잔존 시험. 선택 배포 설정에서 재확인 필요 |
-| C04 | 부분: coturn CLI 회수 구현과 이전 daemon lab의 종료 계측. Linux E2E 이전 `858ddc`의 금고/서비스 기기 회수 통과; 실제 배포 인수 별도 |
+| C04 | 부분: coturn CLI 회수 구현과 이전 daemon lab의 종료 계측. Linux E2E 새 `d77ce9e`+`f544478`의 금고/서비스 기기 회수 통과; 실제 배포 인수 별도 |
 | C05 | 부분: quota/대역폭 설정과 이전 lab 시험. timestamp별 우회·최종 합산 용량 보장 미완료 |
 | C06 | 부분: 차단 목록 및 이전 coturn lab 존재. 실제 OCI 주소/방화벽 적용과 지원 주소 계열 인수 미완료 |
 | C07 | 부분: TURN 오용 제한 설계·설정. 공용 배포 악용/경보 시험 미완료 |
 | C08 | 부분: loopback 관리 포트/로그 제한 구성. OCI 외부 노출 검사 미실행; DOS-1과 운영 리뷰 미완료 |
 | C09 | 부분: metrics 운영 정책 문서. 실제 배포의 label 수·메모리 장시간 계측 없음 |
 | D01 | 미완료: 암호화 팀 세션/분리 daemon 구현. 프로세스 분리만으로 OS 격리 입증 불가; macOS ACL f544478 수정·Linux 시험/API probe 통과, native 제품 regression/Opus 대기로 ZPL-SEC-03 열림 |
-| D02 | 부분: `zpl:` ZeroPW 어댑터 통합 및 PORTING 반영. 이전 tree Linux 전체 통과. native 2실패로 수정 d77ce9e Clippy/team244 통과, 새 전체 Linux 진행 중/macOS 대기 |
+| D02 | 부분: `zpl:` ZeroPW 어댑터 통합 및 PORTING 반영. 이전 tree Linux 전체 통과. native baseline 2실패/Linux d77 capture 1실패 보존. test-only 7f0421a target12 통과/전체 재실행·native handoff 진행 |
 | D03 | **제품 공백**: 초기 snapshot 미구현. 현재 signed-history bootstrap은 compacted history 신규 기기 온보딩 불가 |
 | D04 | 부분: 기존 서명 commit·vector·durable 저장 재사용. Linux 프로세스/coturn 재시작 E2E 통과. crash/ACK 유실/원자성 전체 인수와 snapshot 경로 없음 |
 | D05 | 부분: link 프레임/큐 및 기존 팀 권한 검사. 최종 통합 head의 저장·자원 실패 경계 검증 미완료 |
@@ -83,7 +90,7 @@ Linux 전체 matrix는 진행 중이며 전체 통과는 아니다. 새 macOS �
 | E07 | NOTRUN: 전체 시나리오 데이터 불일치·95%/60초 재접속 목표 측정 없음 |
 | E08 | 부분: 재배포·복구·health/로그 운영 산출물 및 이전 nspawn 시험. OCI 적용/장애·경보 시험 없음 |
 | E09 | 부분: 등록 DB와 revocation journal 복구 절차/이전 시험. 실제 OCI 백업·복원과 용량 인수 미완료 |
-| E10 | **미완료**: 이전 tree Linux 전체 통과; native 2실패/새 Rust tree 전체 Linux 진행 중·macOS 대기, 두 Mac NOTRUN. 6개 finding과 partial HIGH DOS-1 수정·시험 후 Opus 대기; SEC03 열림, network/ops 리뷰 미완료, aggregate PASS 없음 |
+| E10 | **미완료**: 이전 tree Linux 전체 통과; native baseline 2실패/Linux d77 1실패. 7f0421a 전체 재실행/native handoff 결과 대기, 두 Mac NOTRUN. 6개 finding과 partial HIGH DOS-1 수정·시험 후 Opus 대기; SEC03 열림, network/ops 리뷰 미완료, aggregate PASS 없음 |
 
 초기 유효 리뷰와 검증은 실제 `claude-opus-5-5` 실행이다. 초기 구현 작업자도
 실제 `claude-opus-5-5`였으며 Sol로 바꿔 기록하지 않는다. 현재 coordinator는
@@ -97,7 +104,9 @@ Linux Go 전체/vet·server/daemon race·shell lint, 배포 단위시험 106개,
 Opus 재인수는 아니다. 이전 Go 실패와 수정한 시험의 종료 조건도 검증 기록에 보존했다.
 이전 pin `858ddc`에서 패키징 도구 61개, Darwin cross-build, 실제 네트워크
 66/66+7개 합성 비밀 검사가 통과했다. Tart VM은 synthetic-only/no host mounts,
-Rust 1.98.1/Go 1.27.3 환경에서 native 전체 Rust/Go 시험을 진행 중이며 위 실패를 보존한다.
+Rust 1.98.1/Go 1.27.3 환경에서 native driver 7245가 d77 Rust/core와 f544 Go를
+실행한다. `/Volumes/ZeroPWBuild/verification-20261107/`와 host
+`macos/DURABLE-HANDOFF-20261107.md`가 상태 근거이며, 대기 중인 단계는 통과가 아니다.
 Let’s Encrypt 인증서(만료 2027-02-05) 발급과 certbot.timer 활성화는 확인했지만
 제품·HTTPS·TURN listener는 아직 없으며, endpoint 동작을 확인한 것은 아니다.
 OS 80 허용은 netfilter-persistent 1.0.20으로 저장(exit 0)하고 활성화했다.
@@ -113,6 +122,13 @@ checked-fd `/bin/chmod -N` OS API probe는 통과했지만 native 제품 시험�
 SEC03은 native 제품 regression과 Opus 확인까지 열린다. `ca01275`는 그 뒤 README만
 추가한 커밋이다. Linux 용량 확보는 비활성 MLP cache 하나만 대상으로 했고 먼저 제품
 바이너리 5개와 SHA를 보존했다(`linux-cache-reclaim-20261107.log`, 이후 약 11GB 여유).
+추가로 비활성 `integ-dverify`/`integ-desktop`/`desktop-core`의 정상 제품 바이너리를
+inode 그대로 이동하고 SHA를 기록한 뒤 cache를 제거했다. 소스·로그·E2E 입력·실행 중인
+target은 보존했으며 `linux-cache-reclaim-m1-capacity-20261107.log`에 약 18GiB 여유를 기록했다.
+Tart guest의 `/bin/chmod` Apple-anchor 서명 확인은 통과했지만 SIP는 upstream
+이미지에서 **disabled**다(`macos/acl-helper-platform-integrity.log`). 이 작업에서
+보안 설정은 변경하지 않았다. 따라서 native 시험은 production OS 격리 증명이나
+물리 Mac 2대 시험이 아니며, 이 환경 한계를 유지한다.
 원래 severity와 반박 검증은
 [partial archive](reviews/2026-11-07-link-initial.partial.json)에 그대로 보존했다.
 

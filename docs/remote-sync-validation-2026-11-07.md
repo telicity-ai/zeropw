@@ -11,7 +11,8 @@ a dated evidence record, not a change to the acceptance requirements. The
 | Pre-fix ZeroPW source compared | `1f60bc2a3f2b91fa691dfa9f79c81bfb131aabe1` on `feature/remote-sync-mlp`; comparison revision before this documentation update |
 | ZeroPW product source tested | `41d217f26a030042c9f0b1caac9417715470c0e1`; its Rust tree `f2c67647fcba83ae78dd6fd10418b6f42a58a6f8` is byte-identical to the compared revision's Rust tree |
 | New Rust fix awaiting full verification | `d77ce9ed7170f9e2689bc1ecf5244aa9602cc587`; Rust tree `181f99ddbffedb3b7f5c158d7484afca37be8a8a`, different from the earlier passing Linux tree |
-| Current link fixes and sidecar pin | ACL fix `f544478a48cea66be816efbed50967bafcacc8ac`; working `desktop/zeropw-link.json` now pins it. Native product regression and post-fix Opus acceptance are pending. Earlier packaging/E2E checks use `858ddc`, not this pin |
+| Later test-only correction | `7f0421af335911b4ff21aebf7eb8447dbe20de5c` changes only `rust/tests/team_link_transport.rs`; product source remains the `d77ce9e` implementation. The unchanged full verification script is being rerun on this revision |
+| Current link fixes and sidecar pin | ACL fix `f544478a48cea66be816efbed50967bafcacc8ac`; working `desktop/zeropw-link.json` now pins it. Native product regression and post-fix Opus acceptance are pending. The new `d77ce9e`/`f544478` E2E and pin-packaging checks passed; native acceptance remains separate |
 | Link README follow-up | `ca01275c60037b2e008714e646c79a57aa6c1462` changes only the root README after `f544478` |
 | E2E fixture/evidence | Earlier fixture/evidence commit `28abd9a450d8328424db5334443f1dd4bbd5cc24`; final `858ddc` run evidence is committed under `docs/evidence/remote-sync-e2e-2026-11-07-858ddc/` at the compared revision. Both runs use CLI source `41d217f26a030042c9f0b1caac9417715470c0e1` |
 | Link publication | Private [telicity-ai/zeropw-link](https://github.com/telicity-ai/zeropw-link), [draft PR #1](https://github.com/telicity-ai/zeropw-link/pull/1); not merged or release accepted |
@@ -41,7 +42,8 @@ it does not establish working native macOS delivery or a deployed service.
 | Desktop static checks, unit tests and build | Isolated Linux job `/home/parity/jobs/integ-dverify`, source `41d217f26a030042c9f0b1caac9417715470c0e1`; `integ/desktop-verify-2.log` | PASS for the recorded scope: static checks, 336 Vitest tests in 21 files, build, formatting, strict Clippy, product binaries and desktop core tests; overall `EXIT=0` |
 | Desktop pairing integration tests | Same source/job; tail of `integ/desktop-verify-2.log`, `E2E_EXIT=0` | Two tests passed. They use a fake link daemon. The test name `two_macs_pair_through_the_link_daemon_only_after_explicit_approval` is not evidence of two physical Macs or actual ICE/TURN networking |
 | Earlier full Linux Rust verification | Isolated Linux job `/home/parity/jobs/integ-rverify`, source `41d217f26a030042c9f0b1caac9417715470c0e1`; first `integ/rust-verify-41d217f-resume.log`, retry `integ/rust-verify-41d217f-retry-space.log` | First run FAILED due to disk exhaustion. Complete retry PASS, process exit 0: 100 steps; 1,621 passed, 0 failed; 4 ignored in ordinary library run, all four signer probes subsequently run and passed |
-| Real service/daemon/coturn plus ZeroPW sync | Isolated Lima `zeropw-parity` Ubuntu 24.04 arm64 VM, kernel `6.8.0-147-generic`, Go 1.27.3, coturn 4.18.0; ZeroPW `41d217f` + link `858ddc`; [final committed evidence](evidence/remote-sync-e2e-2026-11-07-858ddc/README.md) | PASS, exit 0: 66/66 scenario assertions plus separate log scan for seven synthetic service secrets. Earlier `cc733dc` run retained separately |
+| Earlier real service/daemon/coturn plus ZeroPW sync | Isolated Lima `zeropw-parity` Ubuntu 24.04 arm64 VM, kernel `6.8.0-147-generic`, Go 1.27.3, coturn 4.18.0; ZeroPW `41d217f` + link `858ddc`; [final committed evidence](evidence/remote-sync-e2e-2026-11-07-858ddc/README.md) | PASS, exit 0: 66/66 scenario assertions plus separate log scan for seven synthetic service secrets. Earlier `cc733dc` run retained separately |
+| New Rust/link real-network E2E | ZeroPW `d77ce9ed7170f9e2689bc1ecf5244aa9602cc587` + link `f544478a48cea66be816efbed50967bafcacc8ac`, isolated Linux; [new evidence](evidence/remote-sync-e2e-2026-11-07-d77-f544/README.md) | PASS, exit 0 confirmed by coordinator execution session 5035: 66 scenario assertions plus one separate log scan covering seven synthetic service secrets |
 | Link component network lab | Predecessor link-core `49d6f8d`, isolated Ubuntu 24.04 aarch64 VM, kernel 6.8, Go 1.27.3; `link-core/netns-final-49d6f8d-plain.log` and `link-core/netns-final-49d6f8d-turn-nat.log`; scenario descriptions in `zeropw-link/docs/connection.md` §7 | Component evidence for direct, forced TURN UDP/TCP/TLS, UDP blocking, outage/restart and expiry scenarios. This does not establish integrated vault sync or macOS behavior |
 | Earlier deployment lab | Isolated Ubuntu 24.04 arm64 VM and systemd-nspawn test containers; `deploy/` logs; source-specific reports in `zeropw-link/docs/operations.md` | Historical installation/coturn evidence only; neither an OCI deployment nor validation of the committed review fixes |
 | Link review-fix tests | Isolated Linux job, fixes committed as `cc733dc`; `zl-review-fixes-10.log`, coordinator recorded process exit 0 | PASS: `go vet`, full Go suite, server/daemon race tests and shell lint (18 scripts). Historical full-run failures remain recorded below |
@@ -52,10 +54,11 @@ it does not establish working native macOS delivery or a deployed service.
 | Fixed coturn build | Isolated Linux VM; `zl-review-coturn-build.log`, process exit 0 | PASS: pinned coturn 4.18.0 source build under a unique build UID and non-root probes. Installed only at `/opt/zeropw-coturn-review-cc733dc`; not deployed to OCI |
 | Darwin cross-build | Linux; `zl-review-darwin-crossbuild.log`, process exit 0, link `cc733dc`; latest retry `zl-review-darwin-858ddc-crossbuild.log` | PASS for both `cc733dc` and final `858ddc`: arm64 and amd64 Mach-O binaries produced. No native macOS runtime test |
 | Desktop packaging tooling | Linux with fixtures, `desktop/package-cc733dc.log`; latest retry `desktop/package-858ddc.log` | PASS for both `cc733dc` and final `858ddc` pin: 61 Python tests per run. Not real macOS packaging or a signed/released app |
-| ACL-fix sidecar pin packaging | Isolated Linux, `desktop/package-f544478.log` | PASS: 61 tests for the `f544478` pin; still fixture-based tooling, not native app packaging |
-| Frozen-source native macOS Rust verification | Isolated Tart macOS 26.6.2 arm64 VM, synthetic-only, no host-directory mounts; Rust 1.98.1; frozen `1f60bc2`, `macos/rust-verify-1f60bc2.log` | IN PROGRESS WITH FAILURES: fmt and strict Clippy passed; library 662 passed, 2 failed, 4 ignored. Full matrix continues; no overall PASS |
-| New Rust fix verification | `d77ce9e`, tree `181f99ddbffedb3b7f5c158d7484afca37be8a8a` | Linux strict all-target Clippy and 244 focused team tests PASS. After strengthening one assertion, full Linux matrix `integ/rust-verify-d77ce9e-linux.log` is IN PROGRESS; no overall PASS. New complete macOS verification pending; earlier source results do not cover this tree |
-| Native Go verification | Same isolated Tart VM, Go 1.27.3, unchanged link `858ddc`; delegated to `real_sync_e2e` | IN PROGRESS; no final result recorded. VM execution is not two physical Macs |
+| ACL-fix sidecar pin packaging | Isolated Linux, `desktop/package-f544478.log` | PASS, exit 0: 61 tests for the `f544478` pin; still fixture-based tooling, not native app packaging |
+| Frozen-source native macOS Rust verification | Isolated Tart macOS 26.6.2 arm64 VM, synthetic-only, no host-directory mounts; Rust 1.98.1; frozen `1f60bc2`, `macos/rust-verify-1f60bc2.log` | FINISHED FAILED, exit 1: 100 steps, 99 passed and only `lib-and-bins` failed. Aggregate 1,622 tests passed, 2 failed, 4 ordinary-run ignored; signer probes ran separately. Both closed-peer library failures are retained |
+| New Rust fix verification | `d77ce9e`, tree `181f99ddbffedb3b7f5c158d7484afca37be8a8a` | Linux strict all-target Clippy and 244 focused team tests PASS. Full `integ/rust-verify-d77ce9e-linux.log` FINISHED FAILED: 100 steps; 1,621 tests passed, 1 failed, 4 ordinary-run ignored; only `test:team_link_transport` failed on capture/delivery accounting |
+| Test-only correction verification | `7f0421a`, `integ/link-wire-capture-proof-linux.log` | PASS, exit 0: strict Clippy and all 12 `team_link_transport` tests. Full unchanged matrix `integ/rust-verify-7f0421a-linux.log` IN PROGRESS; no overall PASS |
+| New native verification handoff | Durable guest driver 7245, frozen `d77ce9e` Rust/core and `f544478` Go, with optional `858ddc` ACL comparison | IN PROGRESS / pending phases: targeted and full Rust, Go and desktop core results must be read from the guest status files. No phase is marked passed in advance; VM execution is not two physical Macs |
 | Two physical Macs | Two-device test environment unavailable | NOTRUN |
 | 200-device/24-hour capacity, reconnect target and combined 1 GB VM budget | No completed current-source measurements | NOTRUN; no 100-user capacity claim |
 
@@ -111,10 +114,11 @@ and safe `rustix` `net`/`DONTWAIT` reads for replies and frames, preserving
 deadlines, size limits and cancellation. It adds raw buffered reply/frame, EOF
 and truncation assertions for a closed peer. It enables the `net` feature on
 existing `rustix`, without adding a new dependency. The fix is implemented;
-Linux strict all-target Clippy and 244 focused team tests passed. After one
-assertion was strengthened, the full Linux matrix started and remains in progress;
-new full macOS verification is pending. Neither the earlier Linux
-PASS nor the E2E run using the earlier Rust binary is acceptance of the new tree.
+Linux strict all-target Clippy and 244 focused team tests passed. The full Linux
+matrix subsequently finished with one capture-accounting assertion failure,
+detailed below; it did not pass overall. The new `d77ce9e`/`f544478` E2E passed
+for its scenario scope. New native verification is now in the durable guest
+handoff; pending phases have no recorded success.
 
 ## Product gaps and unverified boundaries
 
@@ -183,6 +187,15 @@ directories. Protection against ACLs on custom-CA files/ancestors remains
 Opus finding. ZPL-SEC-03 remains open until native product regression and Opus
 acceptance, regardless of the successful OS-only API probe.
 
+Native guest metadata in `macos/acl-helper-platform-integrity.log` confirms
+`/bin/chmod` passes Apple-anchor code-signature verification, with SHA-256
+`b0451fa7b5995805519855783cc208a2ade4925b30735258639bc0cca68da10d`.
+However, `csrutil` reports **System Integrity Protection disabled** in the
+upstream Tart image. No security setting was changed for this task. This is a
+material environment limit: the VM's checks are not proof of production macOS
+OS isolation, and a VM is not two physical Macs. The Apple signature check does
+not erase that limit or close ZPL-SEC-03.
+
 The first Linux ACL-fix attempt (`zl-acl-fix-linux.log`) failed CA ancestry checks
 because the wrapper's `TMPDIR` had mode 0775. The isolated test environment was
 corrected to 0700; the checks were not weakened. The subsequent
@@ -249,14 +262,57 @@ HTTPS/TURN reachability and complete cloud/host firewall acceptance remain
 incomplete. DNS, NSG attachment and a certificate are infrastructure evidence,
 not evidence that the named host is a working ZeroPW endpoint.
 
-## Latest verification still running
+## Latest verification results and work still running
 
 `integ/rust-verify-d77ce9e-linux.log` is the full Linux matrix for the changed
 Rust reader tree. `integ/admin-build-d77ce9e.log` records a successful locked
 build of its real admin binary. `e2e/run-11-d77-f544.log` is a new real-network
-run combining that binary with link `f544478`; it is still in progress and is
-not included in the earlier 66/66 PASS claims. Native verification is likewise
-in progress. Completion must be reconciled from final exit markers and logs.
+run combining that binary with link `f544478`; it completed with exit 0 and
+66/66 scenario assertions, plus **one separate log scan of seven synthetic
+service secrets**. The [manifest](evidence/remote-sync-e2e-2026-11-07-d77-f544/manifest.json)
+records exact source, fixture and binary identities. The raw log SHA-256 is
+`0c37d13e7396fbc15311ef41394620635a82460b37f04c4fa44d74d05f404390`,
+assertions SHA-256
+`f53219ae6f6420f0b61aeea9c0faf844de4050543d2abf1e20dd0a979f72fb96`,
+and tested admin binary SHA-256
+`73779b093bfdb50c1c77d76deb3b24731ce707c94d1d82e6d081205b48692635`.
+`desktop/package-f544478.log` separately passed all 61 tooling tests with exit 0.
+The snapshot, whole-secret deletion, native Mac, capacity and review gaps remain.
+
+The frozen native `1f60bc2` matrix has finished **FAILED**, exit 1: 100 steps,
+99 successful steps and `lib-and-bins` failed on the two closed-peer tests above.
+Cargo-result totals are 1,622 passed, 2 failed and 4 ordinary-library ignored;
+signer probes were explicitly run. `macos/baseline-result-1f60bc2.json` records
+the result. The raw log SHA-256 is
+`1a4dc46fd7f9c0da30dd76aa038380996e973d9d37bfeb04f4349a0d27506453`.
+
+The Linux `d77ce9e` matrix also finished **FAILED**: 100 steps, 1,621 tests passed,
+1 failed and 4 ordinary-library ignored. Only `test:team_link_transport` failed,
+at `rust/tests/team_link_transport.rs:825`: “a captured frame did not cross the
+link”. The raw log SHA-256 is
+`9dfb47eddbf478c2a754d0709b755ec61bc6d9c58daee460c9c7df07365628b4`.
+This was not a plaintext-leak assertion failure. The capture records every send
+attempt before writing; shutdown can interrupt an attempt before the frame is
+forwarded, so not every captured attempt is a delivered frame.
+
+Test-only correction `7f0421af335911b4ff21aebf7eb8447dbe20de5c` preserves all
+capture/relay/hex secret scans and proof that every received frame appears in the
+relay bytes. It adds a guard requiring more than three received frames, rather
+than assuming interrupted send attempts must have been delivered. It changes no
+product code, verification script, harness, CI or original review severity.
+Strict Clippy and the full 12-test target passed with exit 0 in
+`integ/link-wire-capture-proof-linux.log`. The unchanged full matrix is now running
+in `integ/rust-verify-7f0421a-linux.log`; no overall PASS is recorded. The failed
+full-run logs remain retained alongside the correction and targeted result.
+
+After the frozen native baseline, durable guest driver 7245 now runs frozen
+`d77ce9e` targeted/full Rust, `f544478` Go, and `d77ce9e` desktop core checks,
+with an optional `858ddc` ACL comparison. Driver SHA-256:
+`9ad6919575fc583d8852922ebc42baab06f9a9f089ba715b8f48c5a7fec0f34a`.
+Guest status/logs are under `/Volumes/ZeroPWBuild/verification-20261107/`; the
+host handoff is `macos/DURABLE-HANDOFF-20261107.md`. Pending phases are not passed.
+The driver uses `f544478`, not `858ddc`, for current Go verification. This local
+VM driver does not turn the coordinator into an always-on cloud service.
 
 To make room for new verification, inactive MLP jobs `integ-dverify`,
 `integ-desktop` and `desktop-core` had their normal product executables moved to
@@ -269,18 +325,18 @@ free. It is not a product test or resource-capacity result.
 ## Remaining acceptance work
 
 Earlier Linux Rust verification, `858ddc` real-network E2E, cross-build and
-packaging tooling checks retain their source-specific evidence above. Finish
-the failed frozen native matrix and complete new Linux/macOS verification for
-`d77ce9e`, plus affected real-network checks of the new Rust binary. Run affected
-packaging/E2E checks for the new link pin `f544478`, and obtain post-fix Opus
-acceptance at the committed link head
+packaging tooling checks retain their source-specific evidence above. Preserve
+the completed failed native baseline and Linux `d77ce9e` matrix; finish the
+Linux `7f0421a` full rerun and reconcile every native handoff phase. The new
+Rust/link E2E and `f544478` packaging-tooling checks passed;
+obtain post-fix Opus acceptance at the committed link head
 without changing the original severities; complete the network and operations
 review scopes; implement/verify initial snapshots and whole-secret deletion;
 obtain isolated macOS and two-Mac evidence, including ACL protection; then validate
 the deployed HTTPS/TURN service and its operating limits. Finish product
 firewall/listener/TLS acceptance and complete native
 packaging/runtime checks on the final ZeroPW head. Native full Rust and Go tests
-in the Tart VM are in progress with the frozen Rust failures preserved; no
+in the Tart VM are handed off with the completed frozen Rust failure preserved; no
 overall native PASS is recorded. The bounded proposed
 [next milestones](remote-sync-next-milestones.md) address authenticated snapshot
 onboarding and whole-secret tombstones; they are not implemented work.
