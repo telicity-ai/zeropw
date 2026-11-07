@@ -59,8 +59,9 @@ it does not establish working native macOS delivery or a deployed service.
 | Frozen-source native macOS Rust verification | Isolated Tart macOS 26.6.2 arm64 VM, synthetic-only, no host-directory mounts; Rust 1.98.1; frozen `1f60bc2`, `macos/rust-verify-1f60bc2.log` | FINISHED FAILED, exit 1: 100 steps, 99 passed and only `lib-and-bins` failed. Aggregate 1,622 tests passed, 2 failed, 4 ordinary-run ignored; signer probes ran separately. Both closed-peer library failures are retained |
 | New Rust fix verification | `d77ce9e`, tree `181f99ddbffedb3b7f5c158d7484afca37be8a8a` | Linux strict all-target Clippy and 244 focused team tests PASS. Full `integ/rust-verify-d77ce9e-linux.log` FINISHED FAILED: 100 steps; 1,621 tests passed, 1 failed, 4 ordinary-run ignored; only `test:team_link_transport` failed on capture/delivery accounting |
 | Test-only correction verification | `7f0421a`, `integ/link-wire-capture-proof-linux.log` and `integ/rust-verify-7f0421a-linux.log`; [full result manifest](evidence/2026-11-07-linux-rust-7f0421a.json) | PASS, exit 0: strict Clippy/12-test target, then all 100 unchanged full-matrix steps; 1,622 passed, 0 failed, 4 ordinary-library ignored with all four signer probes explicitly run |
-| Native-fixture correction | `d94226364eae32a67a739312a8cd393cc64f3909`, `integ/link-fixture-concurrent-writer-linux.log` | Linux strict library Clippy and all eight link unit tests PASS, exit 0. Native v2 driver reports 8/8 link and 2/2 Unix-frame tests passed; complete native Rust/Go/core phases remain pending |
-| New native verification handoff | Replacement driver 8090, frozen `d942263` Rust/core and `f544478` Go; `/Volumes/ZeroPWBuild/verification-20261107-v2/` | IN PROGRESS: source checks and targeted results do not establish full native acceptance. Original driver 7245 was archived and interrupted after a confirmed test-fixture deadlock; it did not PASS. VM execution is not two physical Macs |
+| Native-fixture correction | `d94226364eae32a67a739312a8cd393cc64f3909`, `integ/link-fixture-concurrent-writer-linux.log` | Linux strict library Clippy and all eight link unit tests PASS, exit 0. Native v2 driver reports 8/8 link and 2/2 Unix-frame tests passed; complete native Rust subsequently FAILED as recorded below |
+| New native verification handoff | Replacement driver 8090, frozen `d942263` Rust/core and `f544478` Go; `/Volumes/ZeroPWBuild/verification-20261107-v2/` | Full Rust FINISHED FAILED, exit 1: 100 steps, four failed steps, 1,621 passed/4 failed/4 ordinary ignored. Go vet was running and native Go/ACL/core phases had not started as of 03:53:15 UTC. Original driver 7245 remains archived/interrupted, never PASS. VM execution is not two physical Macs |
+| Frozen native full failure evidence | [Exact phase/source/log manifest](evidence/2026-11-07-macos-rust-d942263.json), `macos/v2-collection-20261107035319Z/rust-d942-full.log` | Failed steps: `lib-and-bins`, `test:signer_e2e`, `test:team_link_transport`, `test:vault_context`. Includes known capture-format failure and three unresolved signer directory/cleanup assertions. No full native PASS |
 | Native capture-proof failure | `d942263`, `macos/rust-d942-targeted-link-integration.log` | FAILED, exit 101: 11 passed, 1 failed on an invalid capture direction token. This is separate from the earlier writer deadlock. Original strict format and all secret scans remain; malformed records were not skipped |
 | Diagnostic capture concurrency regression | `55c833b` then `945e6a6`, isolated Linux; `integ/wire-capture-concurrency-before-fix.log` and `integ/wire-capture-concurrency-after-fix.log` | Before-fix regression FAILED, exit 101; a retained synthetic capture confirms interleaved records. Fix PASS, exit 0: strict all-target Clippy, the 512-record/two-process/eight-thread test and all 12 link integration tests. Native verification remains separate |
 | Latest complete Linux Rust verification | `945e6a6`, `integ/rust-verify-945e6a6-linux.log`; [result manifest](evidence/2026-11-07-linux-rust-945e6a6.json) | PASS, exit 0: all 100 unchanged script steps, 1,623 passed, 0 failed, 4 ordinary-library ignored and all four signer probes explicitly run. This covers the latest committed Rust tree, not future M1/M2 or frontend changes |
@@ -335,14 +336,25 @@ directory, `/Volumes/ZeroPWBuild/verification-20261107-v2/`. Its SHA-256 is
 The old directory contains a `CURRENT-RUN.json` pointer; replacement actions are
 in `macos/v2-owned-replacement.log`. Targeted phases have a 600-second bound and
 15-second status heartbeats. Eight native link tests and two native Unix-frame
-tests passed; full Rust/Go/core phases remain pending and are not passed in
-advance. This local driver is not an always-on cloud service or two-Mac evidence.
+tests passed. Full frozen Rust then finished with exit 1 and four failed steps:
+`lib-and-bins`, `test:signer_e2e`, `test:team_link_transport`, `test:vault_context`.
+Its Cargo-result totals are 1,621 passed, 4 failed and 4 ordinary ignored.
+Raw-log SHA-256:
+`aa1bf6b07a71539572f2e835d5eec4a5449b30a08417e2c72cec477f72a67e03`.
+The [native failure manifest](evidence/2026-11-07-macos-rust-d942263.json)
+retains each completed phase and identical before/after source manifests.
+In addition to the capture assertion below, two signer teardown tests and the
+configured signer socket-directory assertion failed. Their cause and remediation
+remain open; no test or TMPDIR change is used as a substitute for diagnosis.
+As of 03:53:15 UTC Go vet was running; native Go/ACL/core phases had not started.
+This local driver is not an always-on cloud service or two-Mac evidence.
 
 The v2 targeted link integration then failed on its strict direction-token check
 (11 passed, 1 failed, exit 101). The raw log SHA-256 is
 `c07a16d24d28dfc0ef6d1ddbdf6e1a69864fbc8e36d812887db5972cb8807795`;
-`macos/v2-capture-proof-failure.md` preserves the open result. The full frozen
-v2 matrix and independent Go/core checks continue without source mutation.
+`macos/v2-capture-proof-failure.md` preserves the open result. The complete frozen
+v2 Rust matrix failed separately as recorded above; independent Go/core checks
+continue without source mutation.
 
 The coordinator added a concurrent-record regression at `55c833b`. Two processes
 with four threads each write 64 uniquely tagged 64-byte records per thread. The

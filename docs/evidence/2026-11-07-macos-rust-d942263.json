@@ -1,0 +1,233 @@
+{
+  "collection": "read-only one-time VM evidence collection; no wait/build/runtime/source changes",
+  "collected_at": "2026-11-07T03:55:22.961881+00:00",
+  "status_updated_at": "2026-11-07T03:53:15Z",
+  "state": "running",
+  "driver_pid": 8090,
+  "rust_source": "d94226364eae32a67a739312a8cd393cc64f3909",
+  "go_source": "f544478a48cea66be816efbed50967bafcacc8ac",
+  "driver_sha256": "ca197b102230ff2434fe81c6a486a9c40f57a9f37b1d62c17147f12af79b320f",
+  "environment_limits": {
+    "sip": "disabled in upstream Tart guest",
+    "physical_macs_tested": 0,
+    "review": "no Opus review performed by this driver"
+  },
+  "phases": [
+    {
+      "name": "rust-d942-targeted-link",
+      "state": "passed",
+      "exit_code": 0,
+      "rust_test_totals": {
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0
+      },
+      "go_test_totals_including_subtests": {
+        "pass": 0,
+        "fail": 0,
+        "skip": 0
+      },
+      "source": "d94226364eae32a67a739312a8cd393cc64f3909",
+      "source_before": {
+        "sha": "d94226364eae32a67a739312a8cd393cc64f3909",
+        "files": 626,
+        "manifest_sha256": "2a3b8d4a30f2b95f4b05c84fc3abe3ebae6fe3d266d35e76381580f47b01a9f3"
+      },
+      "source_after": {
+        "sha": "d94226364eae32a67a739312a8cd393cc64f3909",
+        "files": 626,
+        "manifest_sha256": "2a3b8d4a30f2b95f4b05c84fc3abe3ebae6fe3d266d35e76381580f47b01a9f3"
+      },
+      "log_file": "rust-d942-targeted-link.log",
+      "log_sha256": "0e5cc5b86168531f0be75cba7f01582fb40876fcf55c6b6f384c86852e9c7a66",
+      "recorded_log_sha256_matches": true
+    },
+    {
+      "name": "rust-d942-targeted-unix-frames",
+      "state": "passed",
+      "exit_code": 0,
+      "rust_test_totals": {
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      "go_test_totals_including_subtests": {
+        "pass": 0,
+        "fail": 0,
+        "skip": 0
+      },
+      "source": "d94226364eae32a67a739312a8cd393cc64f3909",
+      "source_before": {
+        "sha": "d94226364eae32a67a739312a8cd393cc64f3909",
+        "files": 626,
+        "manifest_sha256": "2a3b8d4a30f2b95f4b05c84fc3abe3ebae6fe3d266d35e76381580f47b01a9f3"
+      },
+      "source_after": {
+        "sha": "d94226364eae32a67a739312a8cd393cc64f3909",
+        "files": 626,
+        "manifest_sha256": "2a3b8d4a30f2b95f4b05c84fc3abe3ebae6fe3d266d35e76381580f47b01a9f3"
+      },
+      "log_file": "rust-d942-targeted-unix-frames.log",
+      "log_sha256": "ea6b3249d341b63e04ecbd63ccda9c412e2b878e1e17ccb597eefb7ef8a1af2c",
+      "recorded_log_sha256_matches": true
+    },
+    {
+      "name": "rust-d942-targeted-link-integration",
+      "state": "failed",
+      "exit_code": 101,
+      "rust_test_totals": {
+        "passed": 11,
+        "failed": 1,
+        "ignored": 0
+      },
+      "go_test_totals_including_subtests": {
+        "pass": 0,
+        "fail": 0,
+        "skip": 0
+      },
+      "source": "d94226364eae32a67a739312a8cd393cc64f3909",
+      "source_before": {
+        "sha": "d94226364eae32a67a739312a8cd393cc64f3909",
+        "files": 626,
+        "manifest_sha256": "2a3b8d4a30f2b95f4b05c84fc3abe3ebae6fe3d266d35e76381580f47b01a9f3"
+      },
+      "source_after": {
+        "sha": "d94226364eae32a67a739312a8cd393cc64f3909",
+        "files": 626,
+        "manifest_sha256": "2a3b8d4a30f2b95f4b05c84fc3abe3ebae6fe3d266d35e76381580f47b01a9f3"
+      },
+      "log_file": "rust-d942-targeted-link-integration.log",
+      "log_sha256": "c07a16d24d28dfc0ef6d1ddbdf6e1a69864fbc8e36d812887db5972cb8807795",
+      "recorded_log_sha256_matches": true
+    },
+    {
+      "name": "rust-d942-full",
+      "state": "failed",
+      "exit_code": 1,
+      "rust_test_totals": {
+        "passed": 1621,
+        "failed": 4,
+        "ignored": 4
+      },
+      "go_test_totals_including_subtests": {
+        "pass": 0,
+        "fail": 0,
+        "skip": 0
+      },
+      "source": "d94226364eae32a67a739312a8cd393cc64f3909",
+      "source_before": {
+        "sha": "d94226364eae32a67a739312a8cd393cc64f3909",
+        "files": 626,
+        "manifest_sha256": "2a3b8d4a30f2b95f4b05c84fc3abe3ebae6fe3d266d35e76381580f47b01a9f3"
+      },
+      "source_after": {
+        "sha": "d94226364eae32a67a739312a8cd393cc64f3909",
+        "files": 626,
+        "manifest_sha256": "2a3b8d4a30f2b95f4b05c84fc3abe3ebae6fe3d266d35e76381580f47b01a9f3"
+      },
+      "log_file": "rust-d942-full.log",
+      "log_sha256": "aa1bf6b07a71539572f2e835d5eec4a5449b30a08417e2c72cec477f72a67e03",
+      "recorded_log_sha256_matches": true
+    },
+    {
+      "name": "go-f544-vet",
+      "state": "running",
+      "exit_code": null,
+      "rust_test_totals": null,
+      "go_test_totals_including_subtests": null,
+      "source": "f544478a48cea66be816efbed50967bafcacc8ac",
+      "source_before": {
+        "sha": "f544478a48cea66be816efbed50967bafcacc8ac",
+        "files": 145,
+        "manifest_sha256": "77227d5421dc8c6694a172d2b2e41e19c91221ad8f5089d9d5c2f620d9f8090b"
+      },
+      "source_after": null
+    },
+    {
+      "name": "go-f544-tests",
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "name": "go-f544-race",
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "name": "desktop-d942-fmt",
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "name": "desktop-d942-clippy",
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "name": "desktop-d942-bins",
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "name": "desktop-d942-core-tests",
+      "state": "not_started",
+      "exit_code": null
+    },
+    {
+      "name": "original-858ddc-acl-reproduction",
+      "state": "not_started",
+      "exit_code": null
+    }
+  ],
+  "full_rust": {
+    "step_count": 100,
+    "failed_steps": [
+      {
+        "name": "lib-and-bins",
+        "exit_code": 101
+      },
+      {
+        "name": "test:signer_e2e",
+        "exit_code": 101
+      },
+      {
+        "name": "test:team_link_transport",
+        "exit_code": 101
+      },
+      {
+        "name": "test:vault_context",
+        "exit_code": 101
+      }
+    ],
+    "failed_tests": [
+      "signer::tests::teardown_leaves_no_socket_file_listener_or_signer_created_directory",
+      "teardown_leaves_no_socket_file_or_signer_created_directory",
+      "link_wire_and_daemon_bytes_carry_no_plaintext",
+      "signer_socket_dir_matches_configured_directory_under_this_machines_default_tmpdir"
+    ],
+    "verify_failed": [
+      "lib-and-bins test:signer_e2e test:team_link_transport test:vault_context"
+    ],
+    "phase_end": [
+      "rust-d942-full exit=1"
+    ]
+  },
+  "f544_native_acl_tests": "not started as of captured status; vet running",
+  "desktop_core": "not started as of captured status",
+  "preservation": "new timestamped collection; previous capture and baseline failures untouched",
+  "artifact_sha256": {
+    "rust-d942-full.log": "aa1bf6b07a71539572f2e835d5eec4a5449b30a08417e2c72cec477f72a67e03",
+    "rust-d942-targeted-link-integration.log": "c07a16d24d28dfc0ef6d1ddbdf6e1a69864fbc8e36d812887db5972cb8807795",
+    "native-macos-driver-20261107-v2.py": "ca197b102230ff2434fe81c6a486a9c40f57a9f37b1d62c17147f12af79b320f",
+    "rust-d942-targeted-link.log": "0e5cc5b86168531f0be75cba7f01582fb40876fcf55c6b6f384c86852e9c7a66",
+    "source-d94226364eae32a67a739312a8cd393cc64f3909.ls-tree": "2a3b8d4a30f2b95f4b05c84fc3abe3ebae6fe3d266d35e76381580f47b01a9f3",
+    "status.json": "40b766adf9b2633b51cf647ece0b336d080843c24e8deea8336cf4ba016f690c",
+    "rust-d942-targeted-unix-frames.log": "ea6b3249d341b63e04ecbd63ccda9c412e2b878e1e17ccb597eefb7ef8a1af2c",
+    "source-f544478a48cea66be816efbed50967bafcacc8ac.ls-tree": "77227d5421dc8c6694a172d2b2e41e19c91221ad8f5089d9d5c2f620d9f8090b"
+  },
+  "record_type": "frozen_native_rust_failure_evidence",
+  "actual_recorder_model": "gpt-6.1-sol",
+  "role": "coordinator and read-only evidence collection; product execution in isolated macOS VM only",
+  "raw_log_archive": "zeropw-mlp-evidence/macos/v2-collection-20261107035319Z/rust-d942-full.log",
+  "scope_limit": "Full d942 Rust failed; independent Go/core phases pending at snapshot. No latest945, M1/M2, physical-Mac, OCI or Opus acceptance."
+}
