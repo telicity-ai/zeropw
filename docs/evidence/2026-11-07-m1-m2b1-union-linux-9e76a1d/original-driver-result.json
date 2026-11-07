@@ -1,0 +1,259 @@
+{
+  "all_phases_completed": true,
+  "disk_after": {
+    "free": 9844809728,
+    "total": 102888095744,
+    "used": 93026508800
+  },
+  "end": "2026-11-07T12:15:49.742083+00:00",
+  "exit": 1,
+  "head": "9e76a1dae165863ad97f5af976d5037c12e4d0e7",
+  "phases": [
+    {
+      "command": [
+        "bash",
+        "-c",
+        "id; uname -a; rustc --version --verbose; cargo --version --verbose; node --version; npm --version; python3.12 --version; openssl version; ulimit -a; df -Pk .; printf \"umask=\"; umask"
+      ],
+      "cwd": "/home/parity/jobs/m2b1-m1-union-9e76a1d/src",
+      "elapsed_seconds": 0.7223183610476553,
+      "end": "2026-11-07T11:44:39.435402+00:00",
+      "exit": 0,
+      "name": "01-profile",
+      "start": "2026-11-07T11:44:38.713034+00:00"
+    },
+    {
+      "command": [
+        "python3.12",
+        "guest-driver.py:public_registry"
+      ],
+      "cwd": "/home/parity/jobs/m2b1-m1-union-9e76a1d/src",
+      "end": "2026-11-07T11:44:43.141536+00:00",
+      "exit": 0,
+      "name": "01b-public-registry",
+      "start": "2026-11-07T11:44:39.435728+00:00"
+    },
+    {
+      "command": [
+        "cargo",
+        "tree",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--target",
+        "all",
+        "-e",
+        "features",
+        "-i",
+        "serde_json"
+      ],
+      "cwd": "/home/parity/jobs/m2b1-m1-union-9e76a1d/src",
+      "elapsed_seconds": 1.400857015978545,
+      "end": "2026-11-07T11:44:44.542595+00:00",
+      "exit": 0,
+      "name": "02-features",
+      "start": "2026-11-07T11:44:43.141719+00:00"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_admission",
+        "--test",
+        "team_checkpoint_authority_oracle",
+        "--test",
+        "team_checkpoint_legacy_parser_regression",
+        "--test",
+        "team_checkpoint_manifest",
+        "--test",
+        "team_checkpoint_payload",
+        "--test",
+        "team_checkpoint_provenance",
+        "--test",
+        "whole_secret_tombstone"
+      ],
+      "cwd": "/home/parity/jobs/m2b1-m1-union-9e76a1d/src",
+      "elapsed_seconds": 66.98910335288383,
+      "end": "2026-11-07T11:45:51.531970+00:00",
+      "exit": 0,
+      "name": "03-focused",
+      "start": "2026-11-07T11:44:44.542853+00:00"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "team::checkpoint",
+        "--",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "cwd": "/home/parity/jobs/m2b1-m1-union-9e76a1d/src",
+      "elapsed_seconds": 26.731934785842896,
+      "end": "2026-11-07T11:46:18.264623+00:00",
+      "exit": 0,
+      "name": "04-checkpoint-debug",
+      "start": "2026-11-07T11:45:51.532712+00:00"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_payload",
+        "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "cwd": "/home/parity/jobs/m2b1-m1-union-9e76a1d/src",
+      "elapsed_seconds": 0.20882223779335618,
+      "end": "2026-11-07T11:46:18.474858+00:00",
+      "exit": 0,
+      "name": "05-payload-stack-debug",
+      "selected_test_expected": "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+      "selection_seen": true,
+      "start": "2026-11-07T11:46:18.265977+00:00"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_admission",
+        "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "cwd": "/home/parity/jobs/m2b1-m1-union-9e76a1d/src",
+      "elapsed_seconds": 0.15912338020280004,
+      "end": "2026-11-07T11:46:18.634611+00:00",
+      "exit": 0,
+      "name": "06-semantic-stack-debug",
+      "selected_test_expected": "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+      "selection_seen": true,
+      "start": "2026-11-07T11:46:18.475426+00:00"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_payload",
+        "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "cwd": "/home/parity/jobs/m2b1-m1-union-9e76a1d/src",
+      "elapsed_seconds": 128.83729385305196,
+      "end": "2026-11-07T11:48:27.472185+00:00",
+      "exit": 0,
+      "name": "05-payload-stack-release",
+      "selected_test_expected": "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+      "selection_seen": true,
+      "start": "2026-11-07T11:46:18.634909+00:00"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_admission",
+        "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+        "--",
+        "--exact",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "cwd": "/home/parity/jobs/m2b1-m1-union-9e76a1d/src",
+      "elapsed_seconds": 5.216070350958034,
+      "end": "2026-11-07T11:48:32.690175+00:00",
+      "exit": 0,
+      "name": "06-semantic-stack-release",
+      "selected_test_expected": "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+      "selection_seen": true,
+      "start": "2026-11-07T11:48:27.473942+00:00"
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--lib",
+        "team::checkpoint",
+        "--",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "cwd": "/home/parity/jobs/m2b1-m1-union-9e76a1d/src",
+      "elapsed_seconds": 73.51812511309981,
+      "end": "2026-11-07T11:49:46.208710+00:00",
+      "exit": 0,
+      "name": "07-checkpoint-release",
+      "start": "2026-11-07T11:48:32.690651+00:00"
+    },
+    {
+      "command": [
+        "bash",
+        "rust/verify.sh"
+      ],
+      "cwd": "/home/parity/jobs/m2b1-m1-union-9e76a1d/src",
+      "elapsed_seconds": 1081.9654240328819,
+      "end": "2026-11-07T12:07:48.176180+00:00",
+      "exit": 0,
+      "name": "08-full-rust",
+      "start": "2026-11-07T11:49:46.210740+00:00"
+    },
+    {
+      "command": [
+        "bash",
+        "desktop/verify.sh"
+      ],
+      "cwd": "/home/parity/jobs/m2b1-m1-union-9e76a1d/src",
+      "elapsed_seconds": 480.7395473399665,
+      "end": "2026-11-07T12:15:48.513191+00:00",
+      "exit": 0,
+      "name": "09-full-desktop",
+      "start": "2026-11-07T12:07:48.179954+00:00"
+    }
+  ],
+  "start": "2026-11-07T11:44:38.639319+00:00"
+}

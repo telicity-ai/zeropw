@@ -1,0 +1,56 @@
+{
+  "scope": "Host standard-library data-only SHA256 and ASCII canonical crosscheck; no product code/signature execution",
+  "cases": [
+    {
+      "case": "P1",
+      "complete_commits": 6,
+      "original_facts": 0,
+      "original_tombstones": 0,
+      "digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "case": "P2",
+      "complete_commits": 7,
+      "original_facts": 3,
+      "original_tombstones": 3,
+      "digest": "2a68dc0d6d5c834941cf8ef36916477874e4cdb7d9cf4803ea48b51f09dbdc15"
+    },
+    {
+      "case": "P3",
+      "complete_commits": 8,
+      "original_facts": 2,
+      "original_tombstones": 1,
+      "digest": "0cf62cbf880781170c77e6dd2aea4a9adb80c740282a589dd859a1eec14d0a12"
+    },
+    {
+      "case": "P4",
+      "complete_commits": 6,
+      "original_facts": 1,
+      "original_tombstones": 1,
+      "digest": "dbe4b8501993f69044611e0731bc55fc3381e2bfade85f1f590ee6ca5bd888ec"
+    },
+    {
+      "case": "P5",
+      "complete_commits": 5,
+      "original_facts": 0,
+      "original_tombstones": 0,
+      "digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "case": "P6-empty",
+      "complete_commits": 6,
+      "original_facts": 0,
+      "original_tombstones": 0,
+      "digest": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+    },
+    {
+      "case": "P6-nonempty",
+      "complete_commits": 6,
+      "original_facts": 3,
+      "original_tombstones": 3,
+      "digest": "2a68dc0d6d5c834941cf8ef36916477874e4cdb7d9cf4803ea48b51f09dbdc15"
+    }
+  ],
+  "files_hashed": 149,
+  "fixture_SHA256SUMS_sha256": "74877c9b8a930aa21a0c3a8fc5cf3519e11c97c6cd13ba1e3a6107235e19a199"
+}

@@ -62,6 +62,10 @@ pub struct IntegrityCheckedPayload<'a> {
     pub(super) tombstones: Vec<String>,
     components: Vec<ComponentSpan<'a>>,
     commits: Vec<String>,
+    // The successful original-byte traversal's metadata and disjoint record
+    // spans, including their ancestor depths. Never reconstructed from JSON
+    // inspection output. Semantic siblings may materialize these same spans.
+    pub(super) index: strict_json::PayloadIndex<'a>,
 }
 impl IntegrityCheckedPayload<'_> {
     pub fn components(&self) -> &[ComponentSpan<'_>] {
@@ -381,13 +385,15 @@ pub fn verify_payload_bytes<'a>(
         commits: commits.into_keys().collect(),
         components: index
             .components
-            .into_iter()
+            .iter()
+            .cloned()
             .enumerate()
             .map(|(i, span)| ComponentSpan {
                 name: NAMES[i],
                 span,
             })
             .collect(),
+        index,
     })
 }
 

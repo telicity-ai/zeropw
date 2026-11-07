@@ -1,0 +1,26 @@
+{
+  "head": "795babd269e9c0ed0a6498a476c67c21894f875f",
+  "scope": "Dedicated single-test process; fixture generation/parser/allocator included in process peak, semantic elapsed measured separately; no capacity or per-transfer allocation claim",
+  "measurements": [
+    {
+      "payload_bytes": 2339533,
+      "retained_commits": 517,
+      "opaque_entries": 100000,
+      "semantic_elapsed_us": 1106321,
+      "phase": "semantic-debug-measure",
+      "process_before_peak_kib": 38680,
+      "process_peak_kib": 56888,
+      "process_after_rss_kib": 46876
+    },
+    {
+      "payload_bytes": 2339533,
+      "retained_commits": 517,
+      "opaque_entries": 100000,
+      "semantic_elapsed_us": 125236,
+      "phase": "semantic-release-measure",
+      "process_before_peak_kib": 36736,
+      "process_peak_kib": 54908,
+      "process_after_rss_kib": 44868
+    }
+  ]
+}

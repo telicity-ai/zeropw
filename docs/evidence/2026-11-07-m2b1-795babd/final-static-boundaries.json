@@ -1,0 +1,74 @@
+{
+  "changed_paths": 158,
+  "allowlist_only": true,
+  "base_paths_byte_mode_unchanged": 940,
+  "sync_body_unchanged_visibility_only": true,
+  "fold_original_code_no_deletions_or_replacements": true,
+  "production_callers_outside_checkpoint_and_pure_fold_seam": 0,
+  "protected": {
+    "rust/src/team/checkpoint/strict_json.rs": {
+      "mode": "100644",
+      "blob": "cb52bab6d84500f680385e7ae68c1e87ecbff595",
+      "sha256": "39a38110cc67c40135548c09b01e1297cb3960334539e57f36bffede40a7e2cf"
+    },
+    "rust/src/team/checkpoint/manifest.rs": {
+      "mode": "100644",
+      "blob": "ef49315db5a00babb66e37c707ffe49252189a42",
+      "sha256": "e391324cef4932f27607931664573534ab3023f9d06f6555dcd607fdcf45a082"
+    },
+    "rust/src/team/checkpoint/provenance.rs": {
+      "mode": "100644",
+      "blob": "8328e33664394530a36ce477f770771b19c5be4d",
+      "sha256": "afed96a7e74089393986a9178f68fadd84449fabfa6ecbc83aec2d8941dfc06e"
+    },
+    "rust/Cargo.toml": {
+      "mode": "100644",
+      "blob": "b62a0264891bd73d319ef54c04d66747afc1552c",
+      "sha256": "4ae4261cf2bdc9e9a7099eb9a0c898282997115d17da01a7953c75bba6c9a1a6"
+    },
+    "rust/Cargo.lock": {
+      "mode": "100644",
+      "blob": "0405bfab2c64b4dc62dd9242d09ce5922190f6d3",
+      "sha256": "fb0dbbf2a2b25c111a419f3b2102d51d2859a1745e28afca9b8d59339340d840"
+    },
+    "rust/verify.sh": {
+      "mode": "100755",
+      "blob": "cd343186ca5bc736c4a28dfa31dd1abd1cb33e53",
+      "sha256": "6a7c3ae7608553d2c2527f804daed752ced4117d1fc80eb5d58f98dee50c24ca"
+    },
+    "rust/tests/canonical_helpers.rs": {
+      "mode": "100644",
+      "blob": "9cce6f53e37e0cd024789a46ed057fe57358f6bc",
+      "sha256": "8fd9700dc1f0ac04786bceb0883ded8fe0350e8bfc745fd16971e8cc686041f8"
+    },
+    "rust/src/pyjson.rs": {
+      "mode": "100644",
+      "blob": "4bc9bb9812615ae722eb1f0a97bfe980686881fe",
+      "sha256": "edf803df92c51dd0ba55e1da8745dec87fb5fa0687b6293d2db999926bf30d32"
+    },
+    "rust/src/pyint.rs": {
+      "mode": "100644",
+      "blob": "1ab2206efe0d43304e0d0fba75b1680db3992ad1",
+      "sha256": "5562f68911c2df1ed4f8683ed9344ed8749a38b68d2399b07d973be0fde8c21a"
+    },
+    "rust/tests/common/team_checkpoint.rs": {
+      "mode": "100644",
+      "blob": "bb94cf445c72a4497d719074de1979ed47aa8232",
+      "sha256": "d284a641ab430ee5744c1e114fc760e15c8d62b83b29b08406f358536515615d"
+    },
+    "rust/tests/fixtures/team_checkpoint_v1/SHA256SUMS": {
+      "mode": "100644",
+      "blob": "135a28d8275047aee65d3fb17a39587337d6e0d3",
+      "sha256": "a5981856f26e687352a97836372816eaba0f98c285f8a8a41645678c8f8ebc88"
+    }
+  },
+  "fixture_semantics_SHA256SUMS": "74877c9b8a930aa21a0c3a8fc5cf3519e11c97c6cd13ba1e3a6107235e19a199",
+  "new_builder_sha256": "bb8ae70ae698ba9034d5f1ae9bbcd73c50773502215fe51707d4139690108390",
+  "head": {
+    "head": "795babd269e9c0ed0a6498a476c67c21894f875f",
+    "tree": "f5b76658321b3e089cf0ca849c4815115bfba992",
+    "rust_tree": "9c7d432b44ff7f7244dcd58f9a416c83b31e6c76",
+    "entries": 1098
+  },
+  "final_admission_tests_sha256": "7071270eacf8cfaab3201da6ae04bb53927fdfad2f8ee5dba9e75d58681d0758"
+}

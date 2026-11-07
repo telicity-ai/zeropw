@@ -1,0 +1,52 @@
+[
+  {
+    "path": "target/debug/zeropw-admin",
+    "sha256": "476bf03004967832458caf6aac8d13e17227d5e58ebb88db98f1cc28cf83ec50",
+    "size": 26607352
+  },
+  {
+    "path": "target/debug/zeropw-agent",
+    "sha256": "ee4737904800321b438ff8ff6738d2dfe6f4948f1cb4bbe2bc18ffc12d513730",
+    "size": 11719080
+  },
+  {
+    "path": "target/debug/zeropw-demo",
+    "sha256": "e6d133a3c45a8fd5ed0633cf17d50de9f735d144dee0140489f353c42f9a58b2",
+    "size": 20645056
+  },
+  {
+    "path": "target/debug/zeropw-democli",
+    "sha256": "215f50efbbf9ea7f1b91e5f27ff8903f33dcd7552c0f68674f50076d8a2e2e22",
+    "size": 6114200
+  },
+  {
+    "path": "target/debug/zeropw_session",
+    "sha256": "b5a6ee7c92dfacb014e760f8a6d16df48d49ec92e14463c135e3b4a45edb4da1",
+    "size": 717720
+  },
+  {
+    "path": "target/release/zeropw-admin",
+    "sha256": "bb6a8c432d7d87f0444be0f611e4d5a1d2619d92d9c06083c8d76ad4807586fb",
+    "size": 10848880
+  },
+  {
+    "path": "target/release/zeropw-agent",
+    "sha256": "42edd1221334282ed8d1819673b95882041172a8772665e783d9c4a861598e73",
+    "size": 5156976
+  },
+  {
+    "path": "target/release/zeropw-demo",
+    "sha256": "13281c95cabb0fbfebc538beec744b58b515e20f3ede3287fd22bc98873309c0",
+    "size": 8758520
+  },
+  {
+    "path": "target/release/zeropw-democli",
+    "sha256": "279e4c55b15e82b402a01e06ece8aadaa70350e3411e51acf3f517f0c9f01364",
+    "size": 2675912
+  },
+  {
+    "path": "target/release/zeropw_session",
+    "sha256": "2426f1f3f68a23a822e0d106e41543ded9c9e78cdd82070d88edd2e9302ef4b2",
+    "size": 543960
+  }
+]

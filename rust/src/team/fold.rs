@@ -1260,6 +1260,186 @@ fn apply_op(
     }
 }
 
+// Checkpoint-only observation seam. This is not a fold result or admission
+// capability. Callers must authenticate the originals first. In particular an
+// attested omitted data prefix cannot be replayed against an empty document.
+pub(super) fn checkpoint_authority_kind(name: &str) -> bool {
+    matches!(
+        name,
+        "env.init"
+            | "member.add"
+            | "member.set_role"
+            | "member.remove"
+            | "owner.transfer"
+            | "dek.rotate"
+    )
+}
+
+#[derive(Clone)]
+pub(super) struct CheckpointPosition {
+    pub total_order_index: usize,
+    pub record_index: usize,
+    pub hash: String,
+    pub op_index: usize,
+}
+pub(super) struct CheckpointOperation {
+    pub position: CheckpointPosition,
+    pub authority: bool,
+    // None for a successful authority handler / satisfied data role prerequisite.
+    // A data operation's target/effect is deliberately NOT executed here.
+    pub skipped: Option<String>,
+    pub applicable_wraps: BTreeSet<(String, String)>,
+    #[cfg(test)]
+    pub owner_after: Option<String>,
+}
+pub(super) struct CheckpointRoleInterval {
+    pub fingerprint: String,
+    pub admin: bool,
+    pub start: CheckpointPosition, // immediately after this original operation
+    pub end: Option<CheckpointPosition>, // immediately before this operation
+}
+pub(super) struct CheckpointAuthorityTrace {
+    pub projection: Value,
+    pub operations: Vec<CheckpointOperation>,
+    pub intervals: Vec<CheckpointRoleInterval>,
+    pub effective_wrap_sources: BTreeMap<(String, String), CheckpointPosition>,
+}
+
+fn checkpoint_roles(doc: &Value) -> Result<BTreeSet<(String, bool)>> {
+    let mut roles = BTreeSet::new();
+    for fp in py_getitem(doc, "members")?
+        .as_object()
+        .ok_or_else(doc_corrupt)?
+        .keys()
+    {
+        if is_active_member(doc, &json!(fp))? {
+            roles.insert((fp.clone(), false));
+            if is_admin(doc, &json!(fp))? {
+                roles.insert((fp.clone(), true));
+            }
+        }
+    }
+    Ok(roles)
+}
+
+/// Pure original-op trace, with no state, audit, key, session or I/O input.
+/// The private iterator streams independently checked whole records in total
+/// order, rather than retaining copies of their data operations. There is no
+/// switch/callback which can waive a handler or authorize an operation.
+pub(super) fn checkpoint_authority_trace(
+    env_id: &str,
+    records: impl Iterator<Item = Result<(usize, String, Commit)>>,
+) -> Result<CheckpointAuthorityTrace> {
+    let mut doc = Value::Object(new_document(env_id));
+    let mut facts = Facts::default();
+    let mut vo = VersionOrderState::Map(BTreeMap::new());
+    // M2b.1 admits no fact removals. Commit-only removals still use the real
+    // handler and its irreversible working Facts. No fabricated schedule.
+    let schedule = RemovalSchedule::new(&facts, &[]);
+    let mut operations = Vec::new();
+    let mut intervals: Vec<CheckpointRoleInterval> = Vec::new();
+    let mut open = BTreeMap::new();
+    let mut previous = None;
+    let mut effective_wrap_sources = BTreeMap::new();
+    for (total_order_index, item) in records.enumerate() {
+        let (record_index, hash, commit) = item?;
+        let key = commit::order_key(&commit)?;
+        if commit.env_id != env_id || previous.as_ref().is_some_and(|p| p >= &key) {
+            return Err(doc_corrupt());
+        }
+        previous = Some(key);
+        commit::validate_ops(&commit.ops)?;
+        for (op_index, op) in commit.ops.iter().enumerate() {
+            let obj = op.as_object().ok_or_else(doc_corrupt)?;
+            let name = obj
+                .get("op")
+                .and_then(Value::as_str)
+                .ok_or_else(doc_corrupt)?;
+            let authority = checkpoint_authority_kind(name);
+            let position = CheckpointPosition {
+                total_order_index,
+                record_index,
+                hash: hash.clone(),
+                op_index,
+            };
+            let before = checkpoint_roles(&doc)?;
+            let skipped = if schedule.past_bound(&commit) {
+                Some("member_removed".into())
+            } else if authority {
+                apply_op(&mut doc, &commit, &mut facts, &mut vo, obj)?
+            } else if commit::op_too_deep(obj) {
+                Some("op_too_deep".into())
+            } else if !is_admin(&doc, &author_value(&commit))? {
+                Some("not_admin".into())
+            } else if commit::creates_misnamed_connection(obj) {
+                Some("invalid_connection_id".into())
+            } else {
+                None
+            };
+            let after = checkpoint_roles(&doc)?;
+            for role in before.difference(&after) {
+                let index: usize = open.remove(role).ok_or_else(doc_corrupt)?;
+                intervals.get_mut(index).ok_or_else(doc_corrupt)?.end = Some(position.clone());
+            }
+            for (fp, admin) in after.difference(&before) {
+                open.insert((fp.clone(), *admin), intervals.len());
+                intervals.push(CheckpointRoleInterval {
+                    fingerprint: fp.clone(),
+                    admin: *admin,
+                    start: position.clone(),
+                    end: None,
+                });
+            }
+            let mut applicable_wraps = BTreeSet::new();
+            if skipped.is_none() {
+                if name == "member.add" {
+                    let recipient = DeviceRecord::from_dict(op_item(obj, "device")?)?.fingerprint();
+                    if let Some(wraps) = obj.get("wraps").and_then(Value::as_object) {
+                        for generation in wraps.keys() {
+                            if doc["dek"]["generations"].get(generation).is_some() {
+                                applicable_wraps.insert((generation.clone(), recipient.clone()));
+                            }
+                        }
+                    }
+                } else if matches!(name, "env.init" | "dek.rotate") {
+                    let generation = op_item(obj, "generation_id")?
+                        .as_str()
+                        .ok_or_else(doc_corrupt)?;
+                    for recipient in op_item(obj, "wraps")?
+                        .as_object()
+                        .ok_or_else(doc_corrupt)?
+                        .keys()
+                    {
+                        applicable_wraps.insert((generation.into(), recipient.clone()));
+                    }
+                }
+            }
+            for selector in &applicable_wraps {
+                effective_wrap_sources.insert(selector.clone(), position.clone());
+            }
+            operations.push(CheckpointOperation {
+                position,
+                authority,
+                skipped,
+                applicable_wraps,
+                #[cfg(test)]
+                owner_after: doc["owner"].as_str().map(str::to_owned),
+            });
+        }
+    }
+    let object = doc.as_object_mut().ok_or_else(doc_corrupt)?;
+    let mut projection = Map::new();
+    for field in ["owner", "members", "dek"] {
+        projection.insert(field.into(), object.remove(field).ok_or_else(doc_corrupt)?);
+    }
+    Ok(CheckpointAuthorityTrace {
+        projection: Value::Object(projection),
+        operations,
+        intervals,
+        effective_wrap_sources,
+    })
+}
+
 /// Ops eligible for section 7.2's "same target, later wins" override alert.
 /// Port of `_override_target`.
 #[derive(Clone, PartialEq, Eq, Hash)]

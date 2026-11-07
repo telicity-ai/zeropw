@@ -1,0 +1,15 @@
+{
+  "status": "RELEASED",
+  "start": "2026-11-07T12:45:40.491992+00:00",
+  "job": "/Volumes/ZeroPWBuild/m1-m2b1-native-d59bc07",
+  "prior_worker_release": "2026-11-07T12:18:01.241139Z",
+  "scope": "only this job and native drivers",
+  "released_at": "2026-11-07T13:38:04.583151+00:00",
+  "all_owned_native_drivers_ended": true,
+  "primary_native_driver_exit": 1,
+  "primary_phase_exits": "all13 phases0",
+  "socket_probe_exit": 0,
+  "collection_exit": 0,
+  "artifacts_left_intact": true,
+  "release_scope": "only this assignment; no other job ownership released"
+}
