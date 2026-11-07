@@ -12,7 +12,7 @@ a dated evidence record, not a change to the acceptance requirements. The
 | ZeroPW product source tested | `41d217f26a030042c9f0b1caac9417715470c0e1`; its Rust tree `f2c67647fcba83ae78dd6fd10418b6f42a58a6f8` is byte-identical to the compared revision's Rust tree |
 | Rust reader-fix source (later verification below) | `d77ce9ed7170f9e2689bc1ecf5244aa9602cc587`; Rust tree `181f99ddbffedb3b7f5c158d7484afca37be8a8a`, different from the earlier passing Linux tree |
 | Later test-only correction | `7f0421af335911b4ff21aebf7eb8447dbe20de5c` changes only `rust/tests/team_link_transport.rs`; product source remains the `d77ce9e` implementation. Full Linux verification passed at this revision; later native-fixture correction `d942263` has separate focused evidence |
-| Latest diagnostic-record fix | `945e6a6fa9865f015c51cb0dcabd43b0b1e2c6af` serializes complete wire-capture records across threads/processes. Its regression was added at `55c833b`. Focused Linux checks passed; complete latest-tree verification is running. The `7f0421a` full PASS is historical evidence, not this later tree's full PASS |
+| Latest diagnostic-record fix | `945e6a6fa9865f015c51cb0dcabd43b0b1e2c6af` serializes complete wire-capture records across threads/processes. Its regression was added at `55c833b`. Focused and complete Linux checks passed at this revision, Rust tree `f147723da8e8b5b6e42ae678819f20d57ffc36bb`; native verification remains separate |
 | Current link fixes and sidecar pin | ACL fix `f544478a48cea66be816efbed50967bafcacc8ac`; working `desktop/zeropw-link.json` now pins it. Native product regression and post-fix Opus acceptance are pending. The new `d77ce9e`/`f544478` E2E and pin-packaging checks passed; native acceptance remains separate |
 | Link README follow-up | `ca01275c60037b2e008714e646c79a57aa6c1462` changes only the root README after `f544478` |
 | E2E fixture/evidence | Earlier fixture/evidence commit `28abd9a450d8328424db5334443f1dd4bbd5cc24`; final `858ddc` run evidence is committed under `docs/evidence/remote-sync-e2e-2026-11-07-858ddc/` at the compared revision. Both runs use CLI source `41d217f26a030042c9f0b1caac9417715470c0e1` |
@@ -62,7 +62,8 @@ it does not establish working native macOS delivery or a deployed service.
 | Native-fixture correction | `d94226364eae32a67a739312a8cd393cc64f3909`, `integ/link-fixture-concurrent-writer-linux.log` | Linux strict library Clippy and all eight link unit tests PASS, exit 0. Native v2 driver reports 8/8 link and 2/2 Unix-frame tests passed; complete native Rust/Go/core phases remain pending |
 | New native verification handoff | Replacement driver 8090, frozen `d942263` Rust/core and `f544478` Go; `/Volumes/ZeroPWBuild/verification-20261107-v2/` | IN PROGRESS: source checks and targeted results do not establish full native acceptance. Original driver 7245 was archived and interrupted after a confirmed test-fixture deadlock; it did not PASS. VM execution is not two physical Macs |
 | Native capture-proof failure | `d942263`, `macos/rust-d942-targeted-link-integration.log` | FAILED, exit 101: 11 passed, 1 failed on an invalid capture direction token. This is separate from the earlier writer deadlock. Original strict format and all secret scans remain; malformed records were not skipped |
-| Diagnostic capture concurrency regression | `55c833b` then `945e6a6`, isolated Linux; `integ/wire-capture-concurrency-before-fix.log` and `integ/wire-capture-concurrency-after-fix.log` | Before-fix regression FAILED, exit 101; a retained synthetic capture confirms interleaved records. Fix PASS, exit 0: strict all-target Clippy, the 512-record/two-process/eight-thread test and all 12 link integration tests. Native and full latest-tree verification remain separate |
+| Diagnostic capture concurrency regression | `55c833b` then `945e6a6`, isolated Linux; `integ/wire-capture-concurrency-before-fix.log` and `integ/wire-capture-concurrency-after-fix.log` | Before-fix regression FAILED, exit 101; a retained synthetic capture confirms interleaved records. Fix PASS, exit 0: strict all-target Clippy, the 512-record/two-process/eight-thread test and all 12 link integration tests. Native verification remains separate |
+| Latest complete Linux Rust verification | `945e6a6`, `integ/rust-verify-945e6a6-linux.log`; [result manifest](evidence/2026-11-07-linux-rust-945e6a6.json) | PASS, exit 0: all 100 unchanged script steps, 1,623 passed, 0 failed, 4 ordinary-library ignored and all four signer probes explicitly run. This covers the latest committed Rust tree, not future M1/M2 or frontend changes |
 | Two physical Macs | Two-device test environment unavailable | NOTRUN |
 | 200-device/24-hour capacity, reconnect target and combined 1 GB VM budget | No completed current-source measurements | NOTRUN; no 100-user capacity claim |
 
@@ -359,10 +360,16 @@ the format, strict direction check, frame proofs and every confidentiality scan
 intact. Linux strict all-target Clippy, all 512 unique complete records and the
 12-test link target passed with exit 0. After-fix log SHA-256:
 `75dfd72b71324e5b8a8c960d00af16d14c421015ba330af179b6cabda3af7f18`.
-The new full run is `integ/rust-verify-945e6a6-linux.log`; no overall latest-tree
-PASS is recorded yet. The M1 worker was steered to include these bounded fixes
-before its own final verification. This is a diagnostic I/O fix, not an Opus
-review or a reason to erase any prior failure.
+The unchanged full script then passed with exit 0 at `945e6a6` in
+`integ/rust-verify-945e6a6-linux.log`: all 100 steps, 1,623 passed, 0 failed and
+4 ordinary-library ignored, with all four signer probes explicitly run.
+Raw-log SHA-256:
+`644ee90c14d10b0d01519bdd05a7b1041222080f6516c3bdd8c544daf2d9dea7`.
+The [result manifest](evidence/2026-11-07-linux-rust-945e6a6.json) binds this
+run to Rust tree `f147723da8e8b5b6e42ae678819f20d57ffc36bb`. Native validation
+of this fix is still required. The M1 worker was steered to include these bounded
+fixes before its own final verification. This is a diagnostic I/O fix, not an
+Opus review or a reason to erase any prior failure.
 
 To make room for new verification, inactive MLP jobs `integ-dverify`,
 `integ-desktop` and `desktop-core` had their normal product executables moved to
@@ -378,8 +385,8 @@ Earlier Linux Rust verification, `858ddc` real-network E2E, cross-build and
 packaging tooling checks retain their source-specific evidence above. Preserve
 the completed failed native baseline and Linux `d77ce9e` matrix. Linux `7f0421a`
 full verification is now passed; reconcile every replacement native handoff phase.
-Finish the latest `945e6a6` complete verification and native capture correction;
-the earlier full PASS does not validate subsequent code changes.
+Latest `945e6a6` complete Linux verification has passed; finish the native
+capture correction. Neither Linux PASS validates subsequent code changes.
 The new
 Rust/link E2E and `f544478` packaging-tooling checks passed;
 obtain post-fix Opus acceptance at the committed link head
