@@ -20,6 +20,7 @@
 use hmac::{Hmac, Mac};
 use serde_json::{Map, Value};
 use sha2::Sha256;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::crypto::chacha20poly1305 as aead;
 use crate::crypto::x25519;
@@ -68,7 +69,8 @@ pub fn hkdf_extract(salt: &[u8], ikm: &[u8]) -> Vec<u8> {
     // hashed down if too long), matching Python's `hmac.new(salt, ikm, sha256)`.
     let mut mac = Hmac::<Sha256>::new_from_slice(salt).expect("HMAC accepts any key length");
     mac.update(ikm);
-    mac.finalize().into_bytes().to_vec()
+    let bytes = Zeroizing::new(<[u8; HKDF_LEN]>::from(mac.finalize().into_bytes()));
+    bytes.to_vec()
 }
 
 /// RFC 5869 HKDF-Expand with SHA-256. Port of `hkdf_expand`.
@@ -76,25 +78,28 @@ pub fn hkdf_expand(prk: &[u8], info: &[u8], length: usize) -> Result<Vec<u8>> {
     if length > 255 * HKDF_LEN {
         return Err(Error::invalid_input("hkdf_length_too_large"));
     }
-    let mut output = Vec::with_capacity(length + HKDF_LEN);
-    let mut block: Vec<u8> = Vec::new();
+    let mut output = Zeroizing::new(Vec::with_capacity(length + HKDF_LEN));
+    let mut block = Zeroizing::new(Vec::<u8>::new());
     let mut counter: u8 = 1;
     while output.len() < length {
         let mut mac = Hmac::<Sha256>::new_from_slice(prk).expect("HMAC accepts any key length");
         mac.update(&block);
         mac.update(info);
         mac.update(&[counter]);
-        block = mac.finalize().into_bytes().to_vec();
+        let bytes = Zeroizing::new(<[u8; HKDF_LEN]>::from(mac.finalize().into_bytes()));
+        block.zeroize();
+        block.extend_from_slice(bytes.as_ref());
         output.extend_from_slice(&block);
         counter = counter.wrapping_add(1);
     }
+    output[length..].zeroize();
     output.truncate(length);
-    Ok(output)
+    Ok(std::mem::take(&mut *output))
 }
 
 /// Port of `hkdf`.
 pub fn hkdf(salt: &[u8], ikm: &[u8], info: &[u8], length: usize) -> Result<Vec<u8>> {
-    let prk = hkdf_extract(salt, ikm);
+    let prk = Zeroizing::new(hkdf_extract(salt, ikm));
     hkdf_expand(&prk, info, length)
 }
 
@@ -180,11 +185,13 @@ pub fn unwrap_dek(
     if eph_pub.len() != x25519::POINT_SIZE {
         return Err(bad());
     }
-    let shared = x25519::shared_secret(device.agree_private.expose(), &eph_pub)
-        .map_err(shared_secret_error)?;
+    let shared = Zeroizing::new(
+        x25519::shared_secret(device.agree_private.expose(), &eph_pub)
+            .map_err(shared_secret_error)?,
+    );
     let fingerprint = device.fingerprint()?;
     let info = dek_info(env_id, generation_id, &fingerprint);
-    let key = hkdf(b"", &shared, &info, aead::KEY_SIZE)?;
+    let key = Zeroizing::new(hkdf(b"", shared.as_ref(), &info, aead::KEY_SIZE)?);
     aead::decrypt(&key, &nonce, &ciphertext, &info)
         .map_err(|_| Error::invalid_input("dek_unwrap_failed"))
 }
