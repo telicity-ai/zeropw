@@ -43,6 +43,8 @@ impl Span<'_> {
 enum Role {
     Any,
     UInt,
+    Text,
+    Texts,
     Manifest,
     Counts,
     Vector,
@@ -101,6 +103,47 @@ impl Role {
             | (Payload, "v")
             | (Commit, "author_seq")
             | (WrapEntry, "source_op_index") => UInt,
+            (
+                Manifest,
+                "type"
+                | "domain"
+                | "trust_model"
+                | "env_id"
+                | "signer"
+                | "recipient"
+                | "recipient_role"
+                | "invite_id"
+                | "approval_id"
+                | "approval_sha256"
+                | "session_nonce"
+                | "onboarding_nonce"
+                | "transfer_id"
+                | "recipient_authorization_id"
+                | "recipient_admission_commit_hash"
+                | "admitted_fact_hashes_sha256"
+                | "tombstone_digest"
+                | "expected_final_document_sha256"
+                | "sig",
+            )
+            | (Head, "author" | "commit_hash")
+            | (Descriptor, "name" | "sha256")
+            | (PayloadDescriptor | Chunk, "sha256")
+            | (ChunkFrame, "type" | "transfer_id" | "manifest_hash" | "data_b64")
+            | (Payload, "format" | "env_id")
+            | (Component(_), "name")
+            | (Device, "fingerprint")
+            | (DeviceRecord, _)
+            | (Snapshot, "expected_final_document_sha256")
+            | (Document, "format" | "env_id")
+            | (Commits, "genesis_commit_hash" | "recipient_admission_commit_hash")
+            | (Commit, "format" | "env_id" | "author" | "hlc" | "sig")
+            | (Fact, "format" | "env_id" | "kind" | "author" | "hlc" | "sig")
+            | (WrapEntry, "generation_id" | "recipient" | "source_commit_hash") => Text,
+            (Manifest, "required_features")
+            | (Commits, "authority_commit_hashes")
+            | (Facts, "admitted_fact_hashes" | "tombstone_fact_hashes")
+            | (Removals, "witness_commit_hashes")
+            | (Wraps, "unavailable_generations") => Texts,
             (Manifest, "counts") => Counts,
             (Manifest | Snapshot, "vector") | (Commit, "seen") | (Removals, "bounds") => Vector,
             (Manifest, "heads") => Heads,
@@ -148,6 +191,8 @@ impl Role {
             PendingEntry if index < 2 => UInt,
             WrapEntries => WrapEntry,
             VersionIds => VersionId,
+            Texts | SelfPlaced => Text,
+            PendingEntry => Text,
             _ => Any,
         }
     }
@@ -532,7 +577,8 @@ impl<'de> DeserializeSeed<'de> for Seed<'_, '_> {
                 .role
                 .container()
                 .is_some_and(|kind| self.0.byte() != Some(kind))
-                || self.0.role == Role::VersionId && self.0.byte() != Some(b'"'))
+                || matches!(self.0.role, Role::VersionId | Role::Text)
+                    && self.0.byte() != Some(b'"'))
         {
             return Err(self.0.fail(Error::Schema));
         }
@@ -1228,16 +1274,20 @@ mod gate_tests {
     #[test]
     fn measured_wide_input_and_long_numeric_work() {
         let start = std::time::Instant::now();
-        let text = format!(
+        let mut text = format!(
             "{{{}}}",
-            (0..200_000)
+            (0..1_370_000)
                 .map(|i| format!("\"k{i}\":0"))
                 .collect::<Vec<_>>()
                 .join(",")
         );
+        // Nearly 16 MiB of actual distinct opaque keys, then permitted outer
+        // whitespace to exercise the exact byte cap without a new key limit.
+        text.reserve_exact(16_777_216 - text.len());
+        text.extend(std::iter::repeat_n(' ', 16_777_216 - text.len()));
         let state = run(root(text.as_bytes()), Role::Any, false).unwrap();
-        assert_eq!(state.entries, 200_001);
-        assert_eq!(state.scalars, 200_000);
+        assert_eq!(state.entries, 1_370_001);
+        assert_eq!(state.scalars, 1_370_000);
         println!(
             "wide bytes={} entries={} max_frames={} state_bytes={} frame_bytes={} elapsed_ms={}",
             text.len(),
@@ -1469,9 +1519,9 @@ impl Role {
     fn container(self) -> Option<u8> {
         use Role::*;
         match self {
-            Any | UInt | VersionId => None,
+            Any | UInt | VersionId | Text => None,
             Heads | Descriptors | Chunks | Components | Devices | CommitEntries | FactEntries
-            | Pending | PendingEntry | SelfPlaced | WrapEntries | VersionIds => Some(b'['),
+            | Pending | PendingEntry | SelfPlaced | WrapEntries | VersionIds | Texts => Some(b'['),
             _ => Some(b'{'),
         }
     }
@@ -1543,4 +1593,32 @@ pub(super) fn materialize(span: &Span<'_>) -> Result<Value> {
         .output
         .take()
         .ok_or(Error::Json)
+}
+
+#[cfg(test)]
+mod metadata_shape_tests {
+    use super::*;
+
+    #[test]
+    fn metadata_strings_refuse_containers_before_child_decoding() {
+        for (role, bytes) in [
+            (Role::Payload, br#"{"format":{"x":0}}"#.as_slice()),
+            (Role::Payload, br#"{"env_id":[0]}"#),
+            (Role::Document, br#"{"format":{"x":0}}"#),
+            (Role::Document, br#"{"env_id":[0]}"#),
+            (Role::Component(0), br#"{"name":{"x":0}}"#),
+            (Role::DeviceRecord, br#"{"sig":[0]}"#),
+            (Role::Texts, br#"[{"x":0}]"#),
+        ] {
+            preflight(bytes, 16_777_216, 0).unwrap();
+            let span = root(bytes);
+            let mut state = new_state(span.clone(), role, false);
+            state.enforce = true;
+            state.before_value =
+                Some(|entries| assert!(entries < 2, "metadata child decoder entered"));
+            assert_eq!(traverse(&mut state, &span), Err(Error::Schema));
+            assert_eq!(state.entries, 2);
+            assert_eq!(state.scalars, 0);
+        }
+    }
 }
