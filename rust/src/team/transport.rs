@@ -1220,6 +1220,76 @@ impl Transport for Arc<TcpTransport> {
 }
 
 #[cfg(test)]
+mod capture_tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::process::{Command, Stdio};
+
+    #[test]
+    fn concurrent_capture_records_are_whole() {
+        const CHILD: &str = "ZEROPW_TEST_CAPTURE_WRITER";
+        if let Ok(process) = std::env::var(CHILD) {
+            let process: u8 = process.parse().unwrap();
+            let workers: Vec<_> = (0..4u8)
+                .map(|writer| {
+                    thread::spawn(move || {
+                        for record in 0..64u8 {
+                            let mut payload = [0x5a; 64];
+                            payload[..3].copy_from_slice(&[process, writer, record]);
+                            capture_wire(if writer % 2 == 0 { "send" } else { "recv" }, &payload);
+                        }
+                    })
+                })
+                .collect();
+            for worker in workers {
+                worker.join().unwrap();
+            }
+            return;
+        }
+        // Keep synthetic diagnostic records on failure, clean them on success.
+        let dir = tempfile::tempdir().unwrap().keep();
+        let capture = dir.join("wire.hex");
+        let mut children: Vec<_> = (0..2u8)
+            .map(|process| {
+                Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "team::transport::capture_tests::concurrent_capture_records_are_whole",
+                        "--test-threads=1",
+                    ])
+                    .env(CHILD, process.to_string())
+                    .env(WIRE_CAPTURE_ENV, &capture)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .unwrap()
+            })
+            .collect();
+        for child in &mut children {
+            assert!(child.wait().unwrap().success());
+        }
+        let text = std::fs::read_to_string(&capture).unwrap();
+        let mut observed = HashSet::new();
+        for line in text.lines() {
+            let (direction, encoded) = line.split_once(' ').unwrap();
+            assert!(
+                matches!(direction, "send" | "recv"),
+                "interleaved capture direction; synthetic fixture retained at {}",
+                dir.display()
+            );
+            let bytes = hex::decode(encoded).expect("capture record must contain complete hex");
+            assert_eq!(bytes.len(), 64);
+            assert!(bytes[0] < 2 && bytes[1] < 4 && bytes[2] < 64);
+            assert!(bytes[3..].iter().all(|byte| *byte == 0x5a));
+            assert_eq!(direction, if bytes[1] % 2 == 0 { "send" } else { "recv" });
+            assert!(observed.insert((bytes[0], bytes[1], bytes[2])));
+        }
+        assert_eq!(observed.len(), 2 * 4 * 64);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
 mod deadline_tests {
     use super::*;
 
