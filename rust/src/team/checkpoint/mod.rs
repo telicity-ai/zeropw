@@ -1,7 +1,8 @@
 //! Pure bounded checkpoint attestation and integrity checks.
 //!
-//! These results establish neither retained-history admission nor final-overlay
-//! correctness. Snapshot onboarding remains unsupported; there is no runtime
+//! Attestation/integrity and retained-authority results have limited assurance.
+//! The complete-supplied-cut sibling additionally checks its finite semantic
+//! class and final overlay, with administrator-attested historical completeness. Snapshot onboarding remains unsupported; there is no runtime
 //! caller, installer, receipt, or credential authority in this module.
 //!
 //! Proof fields are private and JSON inspection cannot manufacture authority.
@@ -51,6 +52,11 @@
 //! ```
 
 mod admission;
+mod document;
+mod originals;
+mod removal;
+mod semantics;
+pub use semantics::{CompleteCutSemanticCandidate, verify_complete_cut_semantics};
 mod manifest;
 mod payload;
 mod provenance;

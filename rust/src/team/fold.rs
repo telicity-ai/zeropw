@@ -1291,6 +1291,8 @@ pub(super) struct CheckpointOperation {
     pub applicable_wraps: BTreeSet<(String, String)>,
     #[cfg(test)]
     pub owner_after: Option<String>,
+    #[cfg(test)]
+    pub roles_after: BTreeSet<(String, bool)>,
 }
 pub(super) struct CheckpointRoleInterval {
     pub fingerprint: String,
@@ -1424,6 +1426,8 @@ pub(super) fn checkpoint_authority_trace(
                 applicable_wraps,
                 #[cfg(test)]
                 owner_after: doc["owner"].as_str().map(str::to_owned),
+                #[cfg(test)]
+                roles_after: after,
             });
         }
     }
@@ -1628,6 +1632,181 @@ pub fn snapshot_of_prefix(
     })
 }
 
+/// Fixed, private observations of the ordinary complete fold. No callback can
+/// change a handler outcome or select a different authority policy.
+#[derive(Default)]
+pub(super) struct CheckpointCompleteTrace {
+    pub operations: Vec<CheckpointOperation>,
+    pub role_bases: BTreeMap<(String, bool), CheckpointCompleteRole>,
+    pub pending_standing: BTreeMap<String, CheckpointStanding>,
+    pub self_standing: BTreeMap<(String, usize), CheckpointStanding>,
+    pub effective_wrap_sources: BTreeMap<(String, String), CheckpointPosition>,
+    pub bounds: BTreeMap<String, PyInt>,
+    pub pending: Vec<((PyInt, PyInt), String)>,
+    pub self_placed: BTreeSet<String>,
+    current_roles: BTreeSet<(String, bool)>,
+}
+#[derive(Clone)]
+pub(super) struct CheckpointCompleteRole {
+    pub _start: CheckpointPosition,
+    pub end: Option<CheckpointCompleteBoundary>,
+}
+#[derive(Clone)]
+pub(super) enum CheckpointCompleteBoundary {
+    BeforeOperation { _position: CheckpointPosition },
+    BeforeCut { _hlc: (PyInt, PyInt) },
+}
+pub(super) struct CheckpointStanding {
+    pub active: BTreeSet<String>,
+    pub admins: BTreeSet<String>,
+    pub owner: Option<String>,
+}
+fn checkpoint_standing(doc: &Value) -> Result<CheckpointStanding> {
+    let roles = checkpoint_roles(doc)?;
+    Ok(CheckpointStanding {
+        active: roles
+            .iter()
+            .filter(|(_, admin)| !admin)
+            .map(|(fp, _)| fp.clone())
+            .collect(),
+        admins: roles
+            .iter()
+            .filter(|(_, admin)| *admin)
+            .map(|(fp, _)| fp.clone())
+            .collect(),
+        owner: doc["owner"].as_str().map(str::to_owned),
+    })
+}
+impl CheckpointCompleteTrace {
+    fn close_roles(&mut self, after: &BTreeSet<(String, bool)>, end: CheckpointCompleteBoundary) {
+        for role in self.current_roles.difference(after) {
+            if let Some(basis) = self.role_bases.get_mut(role)
+                && basis.end.is_none()
+            {
+                basis.end = Some(end.clone());
+            }
+        }
+    }
+
+    fn after_cut(&mut self, doc: &Value, cut: (PyInt, PyInt)) -> Result<()> {
+        let after = checkpoint_roles(doc)?;
+        self.close_roles(&after, CheckpointCompleteBoundary::BeforeCut { _hlc: cut });
+        self.current_roles = after;
+        Ok(())
+    }
+
+    fn operation(
+        &mut self,
+        doc: &Value,
+        commit: &Commit,
+        total_order_index: usize,
+        op_index: usize,
+        skipped: Option<String>,
+    ) -> Result<()> {
+        let position = CheckpointPosition {
+            total_order_index,
+            record_index: total_order_index,
+            hash: commit.hash()?,
+            op_index,
+        };
+        let after = checkpoint_roles(doc)?;
+        self.close_roles(
+            &after,
+            CheckpointCompleteBoundary::BeforeOperation {
+                _position: position.clone(),
+            },
+        );
+        for role in &after {
+            self.role_bases
+                .entry(role.clone())
+                .or_insert_with(|| CheckpointCompleteRole {
+                    _start: position.clone(),
+                    end: None,
+                });
+        }
+        self.current_roles = after;
+        let op = commit
+            .ops
+            .get(op_index)
+            .and_then(Value::as_object)
+            .ok_or_else(doc_corrupt)?;
+        let name = op
+            .get("op")
+            .and_then(Value::as_str)
+            .ok_or_else(doc_corrupt)?;
+        let mut applicable_wraps = BTreeSet::new();
+        if skipped.is_none() {
+            if name == "member.add" {
+                let recipient = DeviceRecord::from_dict(op_item(op, "device")?)?.fingerprint();
+                if let Some(wraps) = op.get("wraps").and_then(Value::as_object) {
+                    for generation in wraps.keys() {
+                        if doc["dek"]["generations"].get(generation).is_some() {
+                            applicable_wraps.insert((generation.clone(), recipient.clone()));
+                        }
+                    }
+                }
+            } else if matches!(name, "env.init" | "dek.rotate") {
+                let generation = op_item(op, "generation_id")?
+                    .as_str()
+                    .ok_or_else(doc_corrupt)?;
+                for recipient in op_item(op, "wraps")?
+                    .as_object()
+                    .ok_or_else(doc_corrupt)?
+                    .keys()
+                {
+                    applicable_wraps.insert((generation.into(), recipient.clone()));
+                }
+            }
+        }
+        for selector in &applicable_wraps {
+            self.effective_wrap_sources
+                .insert(selector.clone(), position.clone());
+        }
+        self.operations.push(CheckpointOperation {
+            position,
+            authority: checkpoint_authority_kind(name),
+            skipped,
+            applicable_wraps,
+            #[cfg(test)]
+            owner_after: doc["owner"].as_str().map(str::to_owned),
+            #[cfg(test)]
+            roles_after: checkpoint_roles(doc)?,
+        });
+        Ok(())
+    }
+}
+pub(super) struct CheckpointCompleteFold {
+    pub result: FoldResult,
+    pub unflushed: Value,
+    pub trace: CheckpointCompleteTrace,
+}
+/// Pure from-genesis entry; runs the same op engine, scheduler and overlay as
+/// ordinary folds. Its inputs/results are private data, never proof factories.
+pub(super) fn checkpoint_complete_fold(
+    env_id: &str,
+    commits: Vec<Commit>,
+    facts: &Facts,
+) -> Result<CheckpointCompleteFold> {
+    let mut trace = CheckpointCompleteTrace::default();
+    let (result, unflushed) = fold_scheduled_observed(
+        env_id,
+        commits,
+        Some(facts),
+        None,
+        None,
+        None,
+        None,
+        true,
+        None,
+        Some(&mut trace),
+    )?;
+    Ok(CheckpointCompleteFold {
+        result,
+        unflushed: unflushed.ok_or_else(doc_corrupt)?,
+        trace,
+    })
+}
+
 /// [`fold`], placing removals from `history` (every stored commit, when
 /// `commits` is only what a snapshot does not cover) instead of `commits`.
 /// With `keep_unflushed`, also the document as it stood after the last
@@ -1645,6 +1824,33 @@ fn fold_scheduled(
     history: Option<&[Commit]>,
     keep_unflushed: bool,
     audited_up_to: Option<&Value>,
+) -> Result<(FoldResult, Option<Value>)> {
+    fold_scheduled_observed(
+        env_id,
+        commits,
+        facts,
+        base_document,
+        base_version_order,
+        audit,
+        history,
+        keep_unflushed,
+        audited_up_to,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fold_scheduled_observed(
+    env_id: &str,
+    commits: Vec<Commit>,
+    facts: Option<&Facts>,
+    base_document: Option<Value>,
+    base_version_order: Option<BTreeMap<String, Vec<Value>>>,
+    audit: Option<&Audit>,
+    history: Option<&[Commit]>,
+    keep_unflushed: bool,
+    audited_up_to: Option<&Value>,
+    mut observations: Option<&mut CheckpointCompleteTrace>,
 ) -> Result<(FoldResult, Option<Value>)> {
     // `copy.deepcopy(base_document) if base_document is not None else
     // new_document(env_id)`, then `doc.setdefault` (a dict-only method).
@@ -1670,6 +1876,11 @@ fn fold_scheduled(
     // total order (`RemovalSchedule`).
     let removed_by_fact = working_facts.removed_members.clone();
     let schedule = RemovalSchedule::new(&working_facts, history.unwrap_or(&ordered));
+    if let Some(trace) = observations.as_deref_mut() {
+        trace.bounds = schedule.bounds.clone();
+        trace.pending = schedule.pending.clone();
+        trace.self_placed = schedule.self_placed.clone();
+    }
     for fp in schedule.placed() {
         working_facts.removed_members.remove(fp);
     }
@@ -1678,10 +1889,27 @@ fn fold_scheduled(
     let mut last_target_author: Vec<(OverrideTarget, (String, PyInt, String))> = Vec::new();
     let mut overridden: Vec<Value> = Vec::new();
     let mut fresh_connections: BTreeSet<String> = BTreeSet::new();
-    for commit in &ordered {
+    for (total_order_index, commit) in ordered.iter().enumerate() {
         let position = Hlc::parse(&commit.hlc)?;
-        while let Some((_, fp)) = pending_removals.next_if(|(cutoff, _)| *cutoff <= position) {
-            remove_member_now(&mut doc, &mut working_facts, fp)?;
+        while let Some((cutoff, _)) = pending_removals
+            .peek()
+            .filter(|(cutoff, _)| *cutoff <= position)
+        {
+            let cutoff = cutoff.clone();
+            // All same-HLC bases see the view before that entire batch.
+            if let Some(trace) = observations.as_deref_mut() {
+                for (_, fp) in schedule.pending.iter().filter(|(cut, _)| *cut == cutoff) {
+                    trace
+                        .pending_standing
+                        .insert(fp.clone(), checkpoint_standing(&doc)?);
+                }
+            }
+            while let Some((_, fp)) = pending_removals.next_if(|(cut, _)| *cut == cutoff) {
+                remove_member_now(&mut doc, &mut working_facts, fp)?;
+            }
+            if let Some(trace) = observations.as_deref_mut() {
+                trace.after_cut(&doc, cutoff)?;
+            }
         }
         let past_bound = schedule.past_bound(commit);
         for (index, op) in commit.ops.iter().enumerate() {
@@ -1696,6 +1924,14 @@ fn fold_scheduled(
                     .get("fingerprint")
                     .and_then(Value::as_str)
                     .is_some_and(|fp| removed_by_fact.contains(fp));
+            if let Some(trace) = observations.as_deref_mut()
+                && op_obj.get("op").and_then(Value::as_str) == Some("member.remove")
+                && op_obj.get("fingerprint").and_then(Value::as_str) == Some(commit.author.as_str())
+            {
+                trace
+                    .self_standing
+                    .insert((commit.hash()?, index), checkpoint_standing(&doc)?);
+            }
             let reason = if past_bound || to_removed {
                 Some("member_removed".to_string())
             } else {
@@ -1707,6 +1943,9 @@ fn fold_scheduled(
                     op_obj,
                 )?
             };
+            if let Some(trace) = observations.as_deref_mut() {
+                trace.operation(&doc, commit, total_order_index, index, reason.clone())?;
+            }
             if let Some(reason) = reason {
                 let hash = commit.hash()?;
                 skipped.push((hash, index, reason.clone()));
@@ -1788,8 +2027,21 @@ fn fold_scheduled(
         }
     }
     let unflushed = keep_unflushed.then(|| doc.clone());
-    for (_, fp) in pending_removals {
-        remove_member_now(&mut doc, &mut working_facts, fp)?;
+    while let Some((cutoff, _)) = pending_removals.peek() {
+        let cutoff = cutoff.clone();
+        if let Some(trace) = observations.as_deref_mut() {
+            for (_, fp) in schedule.pending.iter().filter(|(cut, _)| *cut == cutoff) {
+                trace
+                    .pending_standing
+                    .insert(fp.clone(), checkpoint_standing(&doc)?);
+            }
+        }
+        while let Some((_, fp)) = pending_removals.next_if(|(cut, _)| *cut == cutoff) {
+            remove_member_now(&mut doc, &mut working_facts, fp)?;
+        }
+        if let Some(trace) = observations.as_deref_mut() {
+            trace.after_cut(&doc, cutoff)?;
+        }
     }
     working_facts.removed_members.extend(removed_by_fact);
     reapply_facts(&mut doc, &working_facts)?;
@@ -3363,7 +3615,9 @@ fn rebind_following(
     Ok(rebound)
 }
 
-fn version_index_from_order(raw: &Value) -> Result<BTreeMap<String, BTreeMap<String, i64>>> {
+pub(super) fn version_index_from_order(
+    raw: &Value,
+) -> Result<BTreeMap<String, BTreeMap<String, i64>>> {
     let mut version_index = BTreeMap::new();
     let version_order = raw
         .as_object()
