@@ -24,6 +24,7 @@
     "allow-secret-versions",
     "allow-secret-put",
     "allow-secret-reveal",
+    "allow-secret-delete",
     "allow-secret-retire",
     "allow-secret-revoke",
     "allow-connection-list",

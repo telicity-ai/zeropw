@@ -1,0 +1,64 @@
+{
+  "head": "63d2e4d8d1f0d6f2b834401767026da8fddb1b9c",
+  "files": 931,
+  "tree": "489d517b1cf0f75a3610b6c789a38257bae09f88",
+  "rust_tree": "4b628201f8dc089c0579ebbe75ee768ae9861f6c",
+  "desktop_tree": "2413844c89265a3e239be2372d34b1e6e1b2d4bb",
+  "committed_bytes_equal": true,
+  "platforms": {
+    "linux": {
+      "before": {
+        "head": "63d2e4d8d1f0d6f2b834401767026da8fddb1b9c",
+        "files": 931,
+        "matches": true,
+        "different": []
+      },
+      "after": {
+        "head": "63d2e4d8d1f0d6f2b834401767026da8fddb1b9c",
+        "files": 931,
+        "matches": true,
+        "different": []
+      }
+    },
+    "macos": {
+      "before": {
+        "head": "63d2e4d8d1f0d6f2b834401767026da8fddb1b9c",
+        "files": 931,
+        "matches": true,
+        "different": []
+      },
+      "after": {
+        "head": "63d2e4d8d1f0d6f2b834401767026da8fddb1b9c",
+        "files": 931,
+        "matches": true,
+        "different": []
+      }
+    }
+  },
+  "primary_hashes": {
+    "combined-source-expected.json": "ba3ccb57008453859e078e1430b977f2dfdeb72678c9eead9767d2559b30a7db",
+    "combined-source.tar": "77666c3e021797c29a7f89dfc5160fa193cb87e6245e4a6cfa007556921e45e7",
+    "combined-source.diff": "4a0ed434a687b9929d19da89ca0478fdf28befa064adcb5bdfb19e88d2ee21c4",
+    "combined-commit-binding.json": "03df9b688cf8aa3a4b4bfc5197d11ffeea62d375c867d200e1522721aae0a2b7",
+    "combined-protected-boundaries.json": "31d1eaf9c10e15fdbe2de9264a7618bb504d17421c38f0055eee2632ca614a70",
+    "verification-summary.json": "bb289d13d71ae6275455f52f6b038e709158e6c20b3be27ccdf20a3d910f4835",
+    "combined-linux/environment.log": "4ecef3c7c5b796dea68b05b257e3ec0b9ce67e47915d6e48aa199248f836c846",
+    "combined-linux/rust-verify.log": "d7b27707f7cfe2b5b3606d6bb5871025942bb4744ded428e9046a4a4a1f55228",
+    "combined-linux/desktop-verify.log": "715beb6807090a9ae9f3ccddcf7086295dcb5b42e1037fa3f7cdd9c84d6970c0",
+    "combined-linux/release-parser.log": "6c81d8917c419d475d92697a6320e946552f9a26181df666e031be883eb16cee",
+    "combined-linux/release-payload-stack.log": "5d7f95799e609608e536ad91077d619487aeff2644d5754130cd469753aa0680",
+    "combined-linux/source-before.json": "fab002d4cd2a4bcc3517de02b525dd24358894eb3d36a582cc196541a9016ae6",
+    "combined-linux/source-after.json": "fab002d4cd2a4bcc3517de02b525dd24358894eb3d36a582cc196541a9016ae6",
+    "combined-linux/results.json": "f22c60834706f783d4756708fa9fabc37f9b1c06eaa449376fc43f4f9f4a2b8c",
+    "combined-linux/binary-sha256.json": "c7eb2bac2f079246853f79c90ee7956f131e7ac71acce8e7602e7ba8ca41d538",
+    "combined-native/environment.log": "3acc4e76862edbda6b062b8974181940e36d2b4f47c05259a2fa7ce87237b595",
+    "combined-native/rust-verify.log": "a19878007a4bf3ba279ee4729474be3e977949047946ca0780b69befb2b6c137",
+    "combined-native/desktop-verify.log": "834dc060013495a80d89be98fdc42268fe696dcdc91910e4c8c3fb7301d3b287",
+    "combined-native/release-parser.log": "b4c8330aeecb00422f1c660d1e11773d87775ae63d59ff2bc414f3d63b9a87b7",
+    "combined-native/release-payload-stack.log": "8ff76c69de3d6bde53a4429a5034d4d090717e108310cf03e45fb893b967ead7",
+    "combined-native/source-before.json": "fab002d4cd2a4bcc3517de02b525dd24358894eb3d36a582cc196541a9016ae6",
+    "combined-native/source-after.json": "fab002d4cd2a4bcc3517de02b525dd24358894eb3d36a582cc196541a9016ae6",
+    "combined-native/results.json": "f22c60834706f783d4756708fa9fabc37f9b1c06eaa449376fc43f4f9f4a2b8c",
+    "combined-native/binary-sha256.json": "6329ff2b14033046403aefb11f29ecdf65ba2866bbb2737424294c45fe14e093"
+  }
+}

@@ -264,3 +264,14 @@ describe('records and alerts in plain words', () => {
     expect(v.raw).toEqual(['event=constructor', 'reason=toString']);
   });
 });
+
+// M1's Vault::delete_secret and shared CLI records omit caller (RecordArgs::default).
+// Preserve that absence instead of attributing an inferred administrator.
+describe('permanent deletion records', () => {
+  it('translates deletion metadata without inventing a caller', () => {
+    expect(recordView({ ts: 't', event: 'secret_delete', caller: null, result: 'ok', secret_id: 'api' }, 'audit'))
+      .toMatchObject({ title: '항목 영구 삭제', meta: [], raw: ['secret_id=api'] });
+    expect(recordView({ ts: 't', event: 'ssh_sign', caller: 'agent-1', result: 'denied', reason: 'secret_deleted' }, 'audit').meta)
+      .toContain('영구 삭제한 ID여서 모든 버전을 사용할 수 없어요');
+  });
+});

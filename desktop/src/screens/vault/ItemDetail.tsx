@@ -1,6 +1,6 @@
 // One item, laid out like a macOS detail: its name and one line of kind and place, the value row
 // (masked; seeing or copying it re-authenticates), a few facts, the versions, the services that
-// authenticate with it and what deleting means today. Sections sit on the white surface; grouped
+// authenticate with it and the permanent deletion action. Sections sit on the white surface; grouped
 // lists use the light group fill, never a card inside a card.
 
 import { t } from '../../copy';
@@ -19,6 +19,7 @@ export interface DetailActions {
   reveal(version?: VersionId): void;
   copy(): void;
   replace(): void;
+  delete(): void;
   retire(version: VersionId): void;
   revoke(version: VersionId): void;
   openConnection(id: string): void;
@@ -125,7 +126,8 @@ export function ItemDetail({ item, shared, conns, connsFailed, onBack, act }: {
           </Section>
 
           <Section title={t('vault.delete')}>
-            <p className="vault-note">{t('vault.delete.text')}</p>
+            <p className="vault-note">{t(state === 'deleted' ? 'vault.deleted.text' : 'vault.delete.text')}</p>
+            {state !== 'deleted' && <Button tone="danger" size="sm" onClick={act.delete}>{t('vault.delete.action')}</Button>}
           </Section>
         </div>
       </div>

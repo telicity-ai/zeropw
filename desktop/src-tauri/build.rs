@@ -29,6 +29,7 @@ const COMMANDS: &[&str] = &[
     "secret_versions",
     "secret_put",
     "secret_reveal",
+    "secret_delete",
     "secret_retire",
     "secret_revoke",
     "connection_list",

@@ -10,11 +10,52 @@ use std::os::unix::fs::PermissionsExt;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use common::{FakeLink, Fixture, install_fake_link_daemon, link_spawns, wait_until};
+use common::{
+    FakeLink, Fixture, install_fake_link_daemon as install_shared_fake_link_daemon, link_spawns,
+    wait_until,
+};
 use nix::sys::signal::kill;
 use nix::unistd::Pid;
 use serde_json::json;
 use zeropw_desktop_core::link::{Backoff, LinkSupervisor};
+
+// The status socket is an independent fixture. Observe the owned child's
+// stable-start marker before killing it or asserting its recorded spawn count.
+// This marker follows its one-time exit_after decision, so that setting up the
+// next restart cannot make the first child exit before the intended SIGKILL.
+fn install_fake_link_daemon(fx: &Fixture) {
+    install_shared_fake_link_daemon(fx);
+    let path = fx.paths.link_bin();
+    let script = fs::read_to_string(&path).unwrap();
+    let idle = "while :; do sleep 1; done";
+    assert_eq!(script.matches(idle).count(), 1);
+    fs::write(
+        path,
+        script.replace(idle, ": > \"$calls/$n.ready\"\nwhile :; do sleep 1; done"),
+    )
+    .unwrap();
+}
+
+fn wait_for_recorded_daemon(fx: &Fixture, number: usize) {
+    assert!(
+        wait_until(Duration::from_secs(3), || fx
+            .paths
+            .bin_dir
+            .join(format!("link-calls/{number}.ready"))
+            .is_file()),
+        "owned fake daemon must finish startup before the test proceeds"
+    );
+    let calls = link_spawns(fx);
+    assert_eq!(calls.len(), number);
+    assert_eq!(
+        calls[number - 1],
+        [
+            "daemon",
+            "--state",
+            &fx.paths.link_state_dir().to_string_lossy()
+        ]
+    );
+}
 
 fn supervisor(fx: &Fixture, backoff: Backoff) -> LinkSupervisor {
     LinkSupervisor::new(&fx.paths)
@@ -60,6 +101,7 @@ fn start_runs_the_daemon_privately_and_waits_for_its_socket() {
     let _socket = late.join().unwrap();
     assert!(process.running && process.available);
     let pid = process.pid.unwrap();
+    wait_for_recorded_daemon(&fx, 1);
 
     let spawns = link_spawns(&fx);
     assert_eq!(spawns.len(), 1);
@@ -130,6 +172,7 @@ fn a_daemon_that_exits_is_restarted_after_a_growing_backoff() {
     };
     let sup = supervisor(&fx, backoff);
     sup.start().unwrap();
+    wait_for_recorded_daemon(&fx, 1);
     fs::write(fx.paths.bin_dir.join("responses/link.exit_after"), "0").unwrap();
     let first = sup.process().pid.unwrap();
     kill(
@@ -179,6 +222,7 @@ fn a_second_supervisor_adopts_a_running_daemon_and_ignores_a_foreign_pid() {
     let _socket = status_socket(&fx);
     let first = supervisor(&fx, Backoff::default());
     let pid = first.start().unwrap().pid.unwrap();
+    wait_for_recorded_daemon(&fx, 1);
     let second = supervisor(&fx, Backoff::default());
     let adopted = second.start().unwrap();
     assert_eq!(adopted.pid, Some(pid));
@@ -194,6 +238,7 @@ fn a_second_supervisor_adopts_a_running_daemon_and_ignores_a_foreign_pid() {
     .unwrap();
     let third = supervisor(&fx, Backoff::default());
     let fresh = third.start().unwrap();
+    wait_for_recorded_daemon(&fx, 2);
     assert_ne!(fresh.pid, Some(std::process::id()));
     assert_eq!(link_spawns(&fx).len(), 2);
     third.stop();
@@ -220,4 +265,43 @@ fn a_daemon_whose_socket_never_answers_times_out_and_a_missing_one_is_reported()
     let pid = process.pid.unwrap();
     sup.stop();
     assert!(wait_until(Duration::from_secs(3), || !alive(pid)));
+}
+
+#[test]
+fn status_socket_readiness_can_precede_the_owned_child_start_record() {
+    let fx = Fixture::new();
+    install_fake_link_daemon(&fx);
+    let original = fx.paths.bin_dir.join("link-recording");
+    fs::copy(fx.paths.link_bin(), &original).unwrap();
+    let wrapper = r#"#!/bin/sh
+dir=$(cd "$(dirname "$0")" && pwd)
+: > "$dir/responses/link.start_blocked"
+while [ ! -f "$dir/responses/link.release_start" ]; do sleep 0.01; done
+exec "$dir/link-recording" "$@"
+"#;
+    fs::write(fx.paths.link_bin(), wrapper).unwrap();
+    let _socket = status_socket(&fx);
+    let sup = supervisor(&fx, Backoff::default());
+    let process = sup.start().unwrap();
+    assert!(process.running && sup.ready());
+    assert!(wait_until(Duration::from_secs(3), || fx
+        .paths
+        .bin_dir
+        .join("responses/link.start_blocked")
+        .is_file()));
+    let before_release = link_spawns(&fx).len();
+    fs::write(fx.paths.bin_dir.join("responses/link.release_start"), "go").unwrap();
+    let recorded = wait_until(Duration::from_secs(3), || {
+        let calls = link_spawns(&fx);
+        calls.len() == 1 && calls[0].len() == 3
+    });
+    sup.stop();
+    assert_eq!(
+        before_release, 0,
+        "ready socket is independent of the held child"
+    );
+    assert!(
+        recorded,
+        "the owned child records its actual start after release"
+    );
 }

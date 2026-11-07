@@ -15,7 +15,7 @@ import { valueText } from './dash';
 const EVENT: Record<string, CopyKey> = {
   init: 'log.ev.init', principal_create: 'log.ev.principal_create', principal_disable: 'log.ev.principal_disable',
   project_create: 'log.ev.project_create', secret_put: 'log.ev.secret_put', secret_import: 'log.ev.secret_import',
-  secret_retire: 'log.ev.secret_retire', secret_revoke: 'log.ev.secret_revoke', secret_reveal: 'log.ev.secret_reveal',
+  secret_retire: 'log.ev.secret_retire', secret_revoke: 'log.ev.secret_revoke', secret_delete: 'log.ev.secret_delete', secret_reveal: 'log.ev.secret_reveal',
   secret_reveal_denied: 'log.ev.secret_reveal_denied', connection_create: 'log.ev.connection_create',
   connection_update: 'log.ev.connection_update', connection_disable: 'log.ev.connection_disable',
   connection_switch_credential: 'log.ev.connection_switch_credential', grant_create: 'log.ev.grant_create',
@@ -56,6 +56,7 @@ const RESULT: Record<string, CopyKey | null> = {
 };
 
 const REASON: Record<string, CopyKey | null> = {
+  secret_deleted: 'log.why.secret_deleted',
   // the relay's policy (rust/src/policy.rs, rust/src/gateway.rs, rust/src/tools.rs)
   no_grant: 'log.why.no_grant', grant_expired: 'log.why.grant_expired', grant_exhausted: 'log.why.grant_exhausted',
   grant_revoked: 'log.why.grant_revoked', grant_stale: 'log.why.grant_stale', grant_inactive: 'log.why.grant_inactive',

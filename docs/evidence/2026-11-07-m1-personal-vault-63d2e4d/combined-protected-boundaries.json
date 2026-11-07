@@ -1,0 +1,20 @@
+{
+  "head": "63d2e4d8d1f0d6f2b834401767026da8fddb1b9c",
+  "base": "44e898db3ae0f48991a1fd821c4700e5d1a1eff5",
+  "protected_file_count": 262,
+  "protected_unchanged": true,
+  "different": [],
+  "m2_contract_unchanged": true,
+  "legacy_pyjson_prefix_unchanged": true,
+  "m2a_new_files_equal_original": {
+    "rust/src/team/checkpoint/manifest.rs": true,
+    "rust/src/team/checkpoint/mod.rs": true,
+    "rust/src/team/checkpoint/payload.rs": true,
+    "rust/src/team/checkpoint/provenance.rs": true,
+    "rust/src/team/checkpoint/strict_json.rs": true,
+    "rust/tests/team_checkpoint_legacy_parser_regression.rs": true,
+    "rust/tests/team_checkpoint_manifest.rs": true,
+    "rust/tests/team_checkpoint_payload.rs": true,
+    "rust/tests/team_checkpoint_provenance.rs": true
+  }
+}

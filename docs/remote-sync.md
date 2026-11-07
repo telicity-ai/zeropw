@@ -29,8 +29,10 @@ this feature only.
 ## 2. What is reused
 
 Remote sync is the existing team replication ([team-sync.md](team-sync.md)) carried
-over a new transport. Nothing in the commit, fact, fold, handshake or frame formats
-changes, so `rust/PORTING.md` §1 boundaries 1 and 2 hold:
+over a new transport. Existing v1 signed bytes, handshake and encrypted frames
+remain unchanged. M1 adds a fact kind and encrypted session controls as specified
+in [the deletion contract](whole-secret-deletion.md), preserving the old
+nondeleted formats under `rust/PORTING.md` §1 boundaries 1 and 2:
 
 | Requirement | Existing mechanism reused |
 | --- | --- |
@@ -39,7 +41,7 @@ changes, so `rust/PORTING.md` §1 boundaries 1 and 2 hold:
 | Later sync | Only commits missing from the peer's version vector are sent (§6.3). |
 | Offline edits | Stored locally as commits; exchanged both ways on reconnect (§6.6). |
 | Concurrent edits | Every `secret.put_version` is kept; mutable fields resolve by total order and the losing author gets `team_op_overridden` (§7.2). Nothing is silently lost: the overridden version stays in history and in the vault. |
-| Single-version revocation and connection disable | These irreversible facts (§7.4) are re-applied after every fold, so a stale peer cannot reactivate the revoked version or disabled connection. Revoking one version can leave an older valid version active; whole-secret deletion/tombstones are not implemented. |
+| Single-version revocation and connection disable | These irreversible facts (§7.4) are re-applied after every fold, so a stale peer cannot reactivate the revoked version or disabled connection. Revoking one version can leave an older valid version active. M1 adds permanent whole-ID deletion and a conditional session agreement gate; see [the deletion contract](whole-secret-deletion.md). Acceptance remains open. |
 | Duplicates, lost ACKs, restarts | Hash deduplication, consecutive sequences and vector repair; a commit is applied only after it is durably stored under the state lock. |
 | Authenticity before apply | Signature, environment, sequence, role and format checks before folding (§5.4). |
 | End-to-end encryption | The team handshake (X25519 + Ed25519, SIGMA-style) and ChaCha20-Poly1305 frames run inside the link stream. TURN TLS and QUIC TLS are not relied on for this. |
@@ -111,8 +113,8 @@ where `state` is one of:
 
 | state | meaning |
 | --- | --- |
-| `up_to_date` | session open and the peer's last reported vector, received after our latest local change, equals ours |
-| `syncing` | session open, vectors differ |
+| `up_to_date` | session open, fresh equal stored commit vectors, and (for capable peers or known deletion state) exact current-session durable deletion agreement |
+| `syncing` | session open; commit vectors differ or the required current-session deletion agreement is still pending |
 | `retrying` | no session, a dial failed and another is scheduled |
 | `offline` | no session and no recent contact |
 | `never_connected` | no address or no contact yet |
@@ -141,10 +143,10 @@ allocations and similar terms appear only in the diagnostics view.
 
 - Initial snapshot transfer is not implemented. Onboarding uses signed history;
   a new device cannot recover the required deleted history after compaction.
-- Whole-secret deletion with a permanent tombstone is not implemented. Revoking
-  one version does not delete every version or prevent another valid version from
-  becoming active. Whole-secret no-resurrection needs separate implementation
-  and acceptance evidence; single-version revocation tests do not establish it.
+- M1 implements permanent whole-secret tombstones, administrator deletion and
+  deletion-aware session agreement. [Its contract](whole-secret-deletion.md)
+  separates implementation from platform verification and external acceptance.
+  Old binaries cannot synchronize tombstoned state; update the other device.
 - Sync needs both devices online. Nothing is queued on the server.
 - A server outage blocks new remote connections; local vaults and LAN TCP sync (when
   configured) keep working.

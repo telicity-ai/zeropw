@@ -158,6 +158,7 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 | `project_list` / `project_create` | `{name, environments[]}` | 프로젝트. `project_list`는 팀 환경이 있으면 `team_environments`(`{project, environment, env_id}`)도 준다. 팀 환경 연결표(`team/envs.json`)를 읽지 못하면 프로젝트는 그대로 주고 `team_environments` 대신 `team_environments_error`(`state_corrupt`)를 준다 | `project …` | |
 | `secret_list` / `secret_versions` | `{project?, environment?}` / `{id}` | 값 없는 목록 | `secret list/versions` | |
 | `secret_put` | `{id, kind, project, environment, source}` | 버전 정보 | `secret put --stdin` | |
+| `secret_delete` | `{id, admin_passphrase}` | 삭제 상태·영구 ID·동기화 대기 메타데이터 | `secret delete --id` | 재인증, 공유 환경의 활성 관리자 권한, ID 재사용 금지 |
 | `secret_reveal` | `{id, version?, admin_passphrase}` | `{ref, id, version}` | `secret reveal` | 매번 |
 | `secret_retire` / `secret_revoke` | `{id, version}` | CLI 출력 | `secret retire/revoke` | |
 | `connection_list` / `connection_create_http` / `connection_create_ssh` / `connection_disable` | 연결 필드 | CLI 출력 | `connection …` | 만들기 재인증 |
@@ -230,7 +231,7 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 | 첫 실행 | 새 금고 만들기 또는 다른 Mac의 금고와 연결(어느 쪽이든 이 Mac에 금고를 먼저 만든다): 관리 비밀번호, 복구 코드, 금고 만들기(기본 위치 `personal/main` 포함), 완료 뒤 첫 항목 추가·다른 Mac 연결·받은 초대로 참여 | `password_strength`, `recovery_generate`, `vault_init`, `project_create`, `serve_status`, `serve_start` |
 | 잠금 | 이미 있는 금고는 늘 잠긴 채 열린다. ⌘L, 사이드바 단추, 15분 동안 입력이 없으면 다시 잠근다. 잠금은 이 창의 목록만 가리고 로컬 서비스·에이전트·동기화는 계속된다 | `vault_unlock` |
 | 사이드바 | 금고(모든 항목, 종류별 개수, 위치가 둘 이상이면 위치별), 내 Mac, 서비스 연결, 개발자, 활동, 설정. 아래쪽에 로컬 서비스 상태, 켜기·다시 시도, 복원 확인, 다른 기기 접속 끄기, 모든 사용 멈추기·다시 허용 | `app_status`, `serve_start`, `stop_all`, `resume`, `settings_*` |
-| 금고 | 항목 목록(검색, 이름순·최근 변경순, 키보드 이동), 항목 상세(값 보기·복사는 매번 재인증, 새 값 저장, 버전 기록과 사용 중지·철회, SSH 공개 키, 이 항목을 쓰는 연결, 공유 위치 표시), 항목 추가(비밀번호·API 키·환경변수·SSH 키, 입력·파일·새 SSH 키), 새 위치, `.env` 가져오기(창 어디에 놓아도 열린다). 항목 전체 삭제는 아직 지원하지 않는다고 쓴다 | `secret_*`, `project_*`, `onetime_*`, `file_pick`, `env_file_load`, `secret_import*`, `connection_list` |
+| 금고 | 항목 목록(검색, 이름순·최근 변경순, 키보드 이동), 항목 상세(값 보기·복사는 매번 재인증, 새 값 저장, 버전 기록과 사용 중지·철회, SSH 공개 키, 이 항목을 쓰는 연결, 공유 위치 표시), 항목 추가(비밀번호·API 키·환경변수·SSH 키, 입력·파일·새 SSH 키), 새 위치, `.env` 가져오기(창 어디에 놓아도 열린다). 항목 전체 영구 삭제는 관리자 재인증 뒤 실행하고, 로컬 반영과 다른 기기 반영 대기를 구분한다 | `secret_*`, `project_*`, `onetime_*`, `file_pick`, `env_file_load`, `secret_import*`, `connection_list` |
 | 내 Mac | 이 Mac과 연결한 Mac 목록, 서버 등록, Mac 추가(연결 코드, 요청한 Mac의 지문 확인, 승인·거절), 코드로 연결(미리 보기, 내 지문 보여 주기, 기다리기), 위치별 동기화 상태, 고급 진단(경로·RTT·오류 코드), 연결 해제 | `link_status`, `link_enroll`, `devices_overview`, `pairing_*`, `join_requests`, `approve_join`, `deny_join`, `device_remove` |
 | 서비스 연결 | HTTP API·SSH 연결 목록과 상세(대상, 쓰는 항목, 인증 방식, 허용 메서드·경로, 쓸 수 있는 에이전트), 만들기, ssh 경로 넣기, 끄기, 지원 범위 안내 | `connection_*`, `secret_put`, `grant_list`, `principal_list`, `file_pick` |
 | 개발자 | 에이전트와 권한, 앱 안 터미널, 승인 요청, 다른 사람과 공유(위치 공유, 팀원, 초대 링크, 링크로 참여, 다른 기기 접속 켜기) | `principal_*`, `grant_*`, `terminal_*`, `approvals_*`, `team_*`, `settings_*`, `net_interfaces` |
@@ -318,6 +319,6 @@ SSH 연결을 만들거나 "ssh 경로 넣기"에서 경로를 넣을 때 코어
 - 웹뷰에서 보낸 비밀번호는 Tauri IPC 버퍼에 사본이 남을 수 있다. 관리 비밀번호와 직접 정한 복구 코드는 강도 확인 때문에 입력이 바뀔 때마다 그때까지의 값이 넘어가므로 사본이 여럿일 수 있다(§7). 코어로 넘어온 뒤에는 `Zeroizing`으로 지운다.
 - 이 수정 전의 앱(v0.2.0 포함)으로 만든 SSH 연결은 ssh가 없어서, 연결 화면의 "ssh 경로 넣기"로 ssh를 넣기 전까지 에이전트가 쓸 수 없다(§5). ssh를 넣으면 그 연결에 준 권한은 다시 줘야 한다. 넣은 ssh는 바꿀 수 없어서, 다른 ssh를 쓰려면 연결을 끄고 새 이름으로 다시 만들어야 한다. 끈 연결의 이름은 다시 쓸 수 없다.
 - 잠금은 이 창의 목록만 가린다. 잠겨 있어도 로컬 서비스, 에이전트, 동기화는 계속되며, 같은 macOS 계정의 프로그램은 상태 디렉터리를 그대로 읽을 수 있다(§8.9). 자동 잠금 시간은 15분으로 고정이다.
-- 항목 전체 삭제(영구 tombstone)와 인증된 스냅숏 전송은 아직 없다. 화면은 지원하지 않는다고 쓴다([personal-vault-frontend-2026-11-07.md](personal-vault-frontend-2026-11-07.md) §4).
+- 항목 전체 영구 삭제는 M1으로 통합했다. 항목 상세에서 관리자 비밀번호를 다시 확인하며, 로컬 반영과 다른 기기 반영 대기를 구분한다. 같은 ID 재사용은 금지하고 버전 철회는 별도 동작으로 유지한다([삭제 계약](whole-secret-deletion.md)). 인증된 스냅숏 전송은 아직 없다. 이전 [UI 보고서](personal-vault-frontend-2026-11-07.md) §4는 해당 소스 시점의 기록이다.
 - 관리 비밀번호를 바꾸는 기능은 아직 없다. 사고 종료 절차가 요구하는 비밀번호 교체 단계는 화면에서 수동 단계로 안내한다.
 - 앱은 초대를 링크(`zeropw://join#…`)로만 만든다. 0.1.0 CLI는 링크를 읽지 못하므로 CLI로 합류하는 팀원은 0.2.0을 써야 한다. 0.1.0과 0.2.0 기기를 한 팀에 섞어 쓰는 경우는 시험하지 않았다.

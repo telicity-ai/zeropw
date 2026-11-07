@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 // The vault page against the in-memory mock backend: what the list shows for a view and a
 // search, the empty states, adding an item, revealing a value behind the passphrase, revoking a
-// version and the statement that whole-item deletion is not supported yet.
+// version and permanently deleting an identity after fresh reauthentication.
 import { act, createElement as h, useState } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NO_CONTROL, ShellContext, type Route, type ShellApi } from '../src/app/shell';
-import { t } from '../src/copy';
+import { setLocale, t } from '../src/copy';
 import { call, useMockBackend } from '../src/ipc/client';
 import { createMockBackend, type MockBackend } from '../src/ipc/mock';
 import { VaultPage } from '../src/screens/vault/VaultPage';
@@ -79,6 +79,7 @@ beforeEach(() => {
   document.body.appendChild(host);
   root = createRoot(host);
   toast.mockClear();
+  setLocale('ko');
 });
 afterEach(async () => {
   await act(async () => root.unmount());
@@ -86,6 +87,7 @@ afterEach(async () => {
   document.body.replaceChildren();
   backend?.dispose();
   useMockBackend(null);
+  setLocale('ko');
 });
 
 function useBackend(b: MockBackend) {
@@ -223,11 +225,120 @@ describe('vault page', () => {
     expect(toast).toHaveBeenCalledWith(t('vault.toast.revoked'), 'warn');
   });
 
-  it('says whole-item deletion is not supported instead of offering a button', async () => {
+  it.each(['ko', 'en'] as const)('reauthenticates a permanent deletion and reports pending in %s', async (locale) => {
+    setLocale(locale);
     useBackend(createMockBackend({ initialized: true, latency: 0 }));
-    await render({ page: 'vault', view: 'all', item: 'db-password' });
-    expect(text()).toContain(t('vault.delete'));
-    expect(text()).toContain(t('vault.delete.text'));
-    expect([...document.querySelectorAll('button')].some((b) => /삭제/.test(b.textContent ?? ''))).toBe(false);
+    const original = backend.call.bind(backend);
+    spy.mockImplementation(async (cmd, input) => cmd === 'secret_delete'
+      ? { secret_id: input.id, status: 'deleted', permanent_id: true, provider_revocation_required: true, sync_status: 'pending' }
+      : original(cmd, input));
+    await render({ page: 'vault', view: 'all', item: 'example-api' });
+    await click(button(t('vault.delete.action')));
+    expect(dialog()?.textContent).toContain('example-api');
+    expect(dialog()?.textContent).toContain(t('vault.delete.warn'));
+    expect(dialog()?.textContent).toContain(t('vault.delete.provider'));
+    await submit();
+    expect(dialog()?.textContent).toContain(t('pass.err.empty'));
+    expect(spy.mock.calls.filter((c) => c[0] === 'secret_delete')).toHaveLength(0);
+    await type(field(t('pass.label')), ADMIN);
+    const reloads = spy.mock.calls.filter((c) => c[0] === 'secret_list').length;
+    await submit();
+    expect(spy.mock.calls.filter((c) => c[0] === 'secret_delete').map((c) => c[1])).toEqual([{ id: 'example-api', admin_passphrase: ADMIN }]);
+    expect(dialog()).toBeNull();
+    expect(toast).toHaveBeenCalledWith(t('vault.toast.deleted.pending'), 'warn');
+    expect(toast).not.toHaveBeenCalledWith(t('vault.toast.deleted.local'), 'warn');
+    expect(spy.mock.calls.filter((c) => c[0] === 'secret_list').length).toBeGreaterThan(reloads);
+    expect(text()).not.toContain(ADMIN);
+    // Closing a completed dialog cannot carry the previous password into another delete.
+    await click(button(t('vault.delete.action')));
+    expect(field(t('pass.label')).value).toBe('');
+  });
+
+  it('reports local durability and reloads deleted metadata/history while blocking use', async () => {
+    useBackend(createMockBackend({ initialized: true, latency: 0 }));
+    const original = backend.call.bind(backend);
+    let deleted = false;
+    spy.mockImplementation(async (cmd, input) => {
+      if (cmd === 'secret_delete') {
+        deleted = true;
+        return { secret_id: input.id, status: 'deleted', permanent_id: true, provider_revocation_required: true, sync_status: 'local' };
+      }
+      const out = await original(cmd, input);
+      // Test-owned metadata fixture; the real mock intentionally has no durable deletion.
+      if (cmd === 'secret_list' && deleted) return { ...out, secrets: out.secrets.map((s: { id: string }) => s.id === 'example-api' ? { ...s, deleted: true } : s) };
+      return out;
+    });
+    await render({ page: 'vault', view: 'all', item: 'example-api' });
+    await click(button(t('vault.delete.action')));
+    await type(field(t('pass.label')), ADMIN);
+    await submit();
+    await settle();
+    expect(toast).toHaveBeenCalledWith(t('vault.toast.deleted.local'), 'warn');
+    expect(text()).toContain(t('vault.deleted.title'));
+    expect(text()).toContain(t('vault.versions'));
+    expect(text()).toContain(t('vault.version.n', { n: 1 }));
+    expect(rows()).toContain('example-api');
+    expect(rows()).toContain('db-password');
+    const buttons = [...host.querySelectorAll('button')].map((b) => b.getAttribute('aria-label') ?? b.textContent?.trim());
+    for (const label of [t('vault.act.reveal'), t('vault.act.copy'), t('vault.act.replace'), t('vault.delete.action'), t('vault.detail.more'), t('vault.version.more.aria', { n: 1 })]) expect(buttons).not.toContain(label);
+  });
+
+  it.each([
+    ['AuthFailed', 'admin_reauth_failed', 'error.auth'],
+    ['PolicyDenied', 'team_fact_not_authorized', 'team.err.adminOnly'],
+    ['PolicyDenied', 'member_removed', 'team.err.adminOnly'],
+    ['InternalError', 'storage_failed', 'error.generic'],
+  ] as const)('retains the item/dialog after %s/%s and clears the password', async (error, reason, key) => {
+    useBackend(createMockBackend({ initialized: true, latency: 0 }));
+    const original = backend.call.bind(backend);
+    spy.mockImplementation(async (cmd, input) => {
+      if (cmd === 'secret_delete') throw { error, reason };
+      return original(cmd, input);
+    });
+    await render({ page: 'vault', view: 'all', item: 'example-api' });
+    await click(button(t('vault.delete.action')));
+    await type(field(t('pass.label')), ADMIN);
+    await submit();
+    expect(dialog()?.textContent).toContain(t(key));
+    expect(field(t('pass.label')).value).toBe('');
+    expect(rows()).toContain('example-api');
+    expect(text()).not.toContain(t('vault.deleted.title'));
+    expect(toast).not.toHaveBeenCalled();
+    await submit();
+    expect(spy.mock.calls.filter((c) => c[0] === 'secret_delete')).toHaveLength(1);
+    await type(field(t('pass.label')), 'cancelled-password');
+    await click(button(t('act.cancel'), dialog()!));
+    await click(button(t('vault.delete.action')));
+    expect(field(t('pass.label')).value).toBe('');
+  });
+
+  it('guards duplicate submit and closure while deletion is busy', async () => {
+    useBackend(createMockBackend({ initialized: true, latency: 0 }));
+    const original = backend.call.bind(backend);
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    spy.mockImplementation(async (cmd, input) => {
+      if (cmd !== 'secret_delete') return original(cmd, input);
+      await pending;
+      return { secret_id: input.id, status: 'deleted', permanent_id: true, provider_revocation_required: true, sync_status: 'pending' };
+    });
+    await render({ page: 'vault', view: 'all', item: 'example-api' });
+    await click(button(t('vault.delete.action')));
+    await type(field(t('pass.label')), ADMIN);
+    await submit(); await submit();
+    expect(spy.mock.calls.filter((c) => c[0] === 'secret_delete')).toHaveLength(1);
+    expect(button(t('act.cancel'), dialog()!).getAttribute('aria-disabled')).toBe('true');
+    await click(button(t('act.cancel'), dialog()!));
+    expect(dialog()).not.toBeNull();
+    await act(async () => document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })));
+    expect(dialog()).not.toBeNull();
+    await act(async () => finish()); await settle();
+    expect(dialog()).toBeNull();
+  });
+
+  it('keeps mock deletion explicitly unsupported', async () => {
+    useBackend(createMockBackend({ initialized: true, latency: 0 }));
+    await expect(call('secret_delete', { id: 'example-api', admin_passphrase: ADMIN })).rejects.toMatchObject({ reason: 'mock_unsupported' });
+    expect(backend.inspect().secrets).toContain('example-api');
   });
 });

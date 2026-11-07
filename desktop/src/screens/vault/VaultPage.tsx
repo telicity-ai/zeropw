@@ -6,6 +6,7 @@ import { t, type CopyKey } from '../../copy';
 import { call, toIpcError } from '../../ipc/client';
 import type { EnvFileRef, SecretKind, SecretView, VersionId } from '../../ipc/contract';
 import { teamEnvPairs } from '../../lib/dash';
+import { teamWriteErrorKey } from '../../lib/reasons';
 import { dropErrorKey } from '../../lib/envimport';
 import { useShell, type Intent } from '../../app/shell';
 import { useApp } from '../../ui/app';
@@ -29,6 +30,7 @@ type Dlg =
   | { kind: 'add'; initialKind?: SecretKind }
   | { kind: 'replace'; item: SecretView }
   | { kind: 'reveal'; id: string; version?: VersionId; mode: 'show' | 'copy' }
+  | { kind: 'delete'; id: string }
   | { kind: 'version'; action: 'retire' | 'revoke'; id: string; version: VersionId }
   | { kind: 'import'; file: EnvFileRef };
 
@@ -180,6 +182,7 @@ export function VaultPage({ intent }: { intent?: Intent }) {
               reveal: (version) => setDlg({ kind: 'reveal', id: selected.id, version, mode: 'show' }),
               copy: () => setDlg({ kind: 'reveal', id: selected.id, mode: 'copy' }),
               replace: () => setDlg({ kind: 'replace', item: selected }),
+              delete: () => setDlg({ kind: 'delete', id: selected.id }),
               retire: (version) => setDlg({ kind: 'version', action: 'retire', id: selected.id, version }),
               revoke: (version) => setDlg({ kind: 'version', action: 'revoke', id: selected.id, version }),
               openConnection: (id) => go('services', { item: id }),
@@ -207,6 +210,7 @@ export function VaultPage({ intent }: { intent?: Intent }) {
         }} />
       )}
       {dlg?.kind === 'reveal' && <RevealDialog id={dlg.id} version={dlg.version} mode={dlg.mode} onClose={close} />}
+      {dlg?.kind === 'delete' && <DeleteConfirm id={dlg.id} onClose={close} onDone={() => { close(); vault.reload(); }} />}
       {dlg?.kind === 'version' && <VersionConfirm data={dlg} onClose={close} onDone={() => { close(); vault.reload(); }} />}
       {dlg?.kind === 'import' && <ImportDialog key={dlg.file.import_ref} file={dlg.file} pairs={pairs} onClose={close} onDone={vault.reload} />}
     </div>
@@ -231,6 +235,23 @@ function VersionConfirm({ data, onClose, onDone }: { data: Extract<Dlg, { kind: 
         onDone();
       }}>
       <p className="mono text-sm" data-selectable="">{data.id}</p>
+    </ConfirmDialog>
+  );
+}
+
+function DeleteConfirm({ id, onClose, onDone }: { id: string; onClose(): void; onDone(): void }) {
+  const { toast } = useApp();
+  return (
+    <ConfirmDialog open needPass title={t('vault.delete.title')} description={t('vault.delete.sub')}
+      confirmLabel={t('vault.delete.action')} tone="danger" size="md"
+      warn={t('vault.delete.warn')} info={t('vault.delete.provider')} onClose={onClose}
+      errorFor={(e) => teamWriteErrorKey(toIpcError(e).reason)}
+      run={async (pass) => {
+        const out = await call('secret_delete', { id, admin_passphrase: pass });
+        toast(t(out.sync_status === 'pending' ? 'vault.toast.deleted.pending' : 'vault.toast.deleted.local'), 'warn');
+        onDone();
+      }}>
+      <p className="mono text-sm" data-selectable="">{id}</p>
     </ConfirmDialog>
   );
 }

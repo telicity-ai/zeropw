@@ -168,6 +168,17 @@ meaningful failure-boundary tests, isolated Linux/macOS verification and an actu
 Opus review of its exact head. Keep this milestone open while either platform or
 review evidence is missing.
 
+### M1 integration status, 2026-11-07
+
+The cumulative M1 implementation from `8258a8d` is now ported onto coordinator
+`44e898d` and its current Personal Vault UI. The local integration begins at
+`d93e994`; follow-up fixes and exact-source validation are recorded in the
+separate `m1-personal-vault-integration-20261107` evidence. The
+[deletion contract](whole-secret-deletion.md) describes the stable-ID action,
+local durability and pending other devices. The original native pairing failures
+remain preserved. This source integration is not platform acceptance or an Opus
+review. M1 acceptance and all M2/M2a gates remain open.
+
 ## M2: Authenticated snapshot onboarding after compaction
 
 The separate [M2a schema decision](decisions/m2a-schema-2026-11-07/decision.md)
@@ -182,9 +193,12 @@ selects original-byte cursors and typed Serde seeds without Cargo/feature change
 the bounded implementation at source `7bcecfda8571ae40047fae406915f73d2e25bde0`
 passed PC-R1–R4 and the Linux portion of PC-R5, including the unchanged full
 104-step/1,681-test Rust matrix. [Source-bound implementation report](evidence/2026-11-07-m2a-7bcecfd/REPORT.md).
-Its private attestation/integrity candidates remain inert. Native macOS,
-actual Opus review, M1/UI combined verification and every full-M2 gate remain
-open. The full contract below remains required.
+Its private attestation/integrity candidates remain inert. Later combined M1/UI
+source `63d2e4d8d1f0d6f2b834401767026da8fddb1b9c` passed isolated Linux and native
+macOS full Rust/Desktop matrices and the separate release parser/256KiB-stack
+checks; [exact-source collection](evidence/2026-11-07-m1-personal-vault-63d2e4d/README.md)
+records its product-tree binding. Actual Opus/Astra acceptance and every full-M2
+gate remain open. The full contract below remains required.
 
 ### Decision and exact trust boundary
 

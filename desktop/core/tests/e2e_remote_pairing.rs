@@ -128,13 +128,52 @@ fn daemon(socket: &Path, device_id: &'static str, service: Shared) -> Daemon {
             match listener.accept() {
                 Ok((stream, _)) => {
                     let service = service.clone();
-                    thread::spawn(move || connection(stream, device_id, service));
+                    thread::spawn(move || {
+                        connection(blocking_stream(stream).unwrap(), device_id, service)
+                    });
                 }
                 Err(_) => thread::sleep(Duration::from_millis(5)),
             }
         }
     });
     Daemon { stop }
+}
+
+// Accepted sockets can inherit the nonblocking listener mode on Darwin.
+// The request parser and bridge below use blocking Read/io::copy semantics.
+fn blocking_stream(stream: UnixStream) -> io::Result<UnixStream> {
+    stream.set_nonblocking(false)?;
+    Ok(stream)
+}
+
+#[test]
+fn fake_daemon_stream_waits_for_a_request_instead_of_closing_on_would_block() {
+    let (mut client, accepted) = UnixStream::pair().unwrap();
+    // Force the Darwin inheritance case on both OSes.
+    accepted.set_nonblocking(true).unwrap();
+    let mut accepted = blocking_stream(accepted).unwrap();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let reader = thread::spawn(move || {
+        ready_tx.send(()).unwrap();
+        done_tx.send(request_line(&mut accepted)).unwrap();
+    });
+    ready_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    let premature = done_rx.recv_timeout(Duration::from_millis(50));
+    // Always release the reader before asserting, also on a regression failure.
+    let sent = client.write_all(b"{}\n");
+    let result = if premature.is_ok() {
+        premature.clone()
+    } else {
+        done_rx.recv_timeout(Duration::from_secs(1))
+    };
+    reader.join().unwrap();
+    assert!(
+        premature.is_err(),
+        "bridge closed before any request arrived"
+    );
+    sent.unwrap();
+    assert_eq!(result.unwrap().as_deref(), Some("{}"));
 }
 
 /// One request line, read byte by byte so nothing after it is consumed.
