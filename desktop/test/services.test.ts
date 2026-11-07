@@ -19,7 +19,7 @@ const ADMIN = 'mock-admin-pass';
 let backend: MockBackend;
 let root: Root;
 let host: HTMLDivElement;
-const app: AppApi = { desktop: false, toast: vi.fn(), announce: vi.fn() };
+const app: AppApi = { desktop: false, toast: vi.fn(), announce: vi.fn(), locale: 'ko', language: 'system', setLanguage: async () => undefined };
 
 async function vaultData(): Promise<VaultData> {
   const [listing, secrets] = await Promise.all([call('project_list'), call('secret_list', {})]);
@@ -48,7 +48,7 @@ async function render(route: Route = { page: 'services' }) {
   return value;
 }
 function button(text: string, within: ParentNode = document.body): HTMLButtonElement {
-  const found = [...within.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim() === text);
+  const found = [...within.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.getAttribute('aria-label') === text || b.textContent?.trim() === text);
   if (!found) throw new Error(`Missing button: ${text}`);
   return found;
 }
@@ -131,9 +131,9 @@ describe('services page', () => {
     await render({ page: 'services', item: 'example-api' });
     const detail = host.querySelector('.svc-detail')!;
     expect(detail.textContent).toContain('https://api.example.com');
-    expect(detail.querySelector('.svc-method-fact.is-confirm')?.textContent).toContain('POST');
+    expect(detail.querySelector('.svc-methods-text')?.textContent).toContain(t('service.d.method.confirm', { m: 'POST' }));
     expect(detail.textContent).toContain('agent-1');
-    expect(detail.textContent).toContain(t('service.scope.title'));
+    expect(detail.textContent).toContain(t('service.scope.text'));
   });
 
   it('creates an HTTP connection: the key once, then the connection with the passphrase and methods', async () => {

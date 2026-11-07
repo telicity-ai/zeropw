@@ -121,10 +121,10 @@ export function AddItemDialog({ replace, pairs, initialPlace, placeHint, initial
       <Button size="sm" tone="ghost" icon="close" onClick={() => setFile(null)}>{t('vault.add.file.clear')}</Button>
     </div>
   ) : null;
-  const moreHint = [askPlace ? t('vault.add.more.place') : null, t('vault.add.more.file')].filter(Boolean).join(', ');
+  const moreLabel = t(replace ? 'vault.add.file' : 'vault.add.more.placeFile');
 
   return (
-    <Dialog open title={t(replace ? 'vault.replace.title' : 'vault.add.title')} description={t(replace ? 'vault.replace.sub' : 'vault.add.sub')}
+    <Dialog open title={t(replace ? 'vault.replace.title' : 'vault.add.title')} description={replace ? t('vault.replace.sub') : undefined}
       onClose={onClose} busy={busy} size="sm" onSubmit={() => void submit()}
       footer={<>
         <Button tone="ghost" onClick={onClose} blocked={busy}>{t('act.cancel')}</Button>
@@ -144,7 +144,6 @@ export function AddItemDialog({ replace, pairs, initialPlace, placeHint, initial
           </div>
           <TextField label={t('vault.add.name')} mono value={id} inputRef={idRef} maxLength={64}
             placeholder={t(`vault.add.name.ph.${kind}` as CopyKey)} error={errs.id ? t(errs.id) : null}
-            help={errs.id ? undefined : t(`vault.add.kind.${kind}` as CopyKey)}
             onChange={(v) => { setId(v); setErrs((x) => ({ ...x, id: undefined })); }} data-autofocus="" />
         </>
       )}
@@ -171,9 +170,9 @@ export function AddItemDialog({ replace, pairs, initialPlace, placeHint, initial
       )}
 
       {errs.form && <Banner tone="danger">{t(errs.form)}</Banner>}
-      {replace && <Banner tone="info" compact>{t('vault.provider.note')}</Banner>}
+      {replace && <p className="vault-note">{t('vault.provider.note')}</p>}
 
-      <More hint={replace ? t('vault.add.more.file') : moreHint} open={!!errs.env}>
+      <More label={moreLabel} open={!!errs.env}>
         {askPlace && (
           <SelectField label={t('vault.add.place')} value={place} selectRef={envRef} error={errs.env ? t(errs.env) : null}
             options={pairs.map((p) => ({ value: p.key, label: placeText(p.key) }))}
@@ -187,7 +186,6 @@ export function AddItemDialog({ replace, pairs, initialPlace, placeHint, initial
         {!fileChip && (
           <div><Button size="sm" tone="secondary" icon="file" onClick={() => void pick()}>{t(ssh ? 'vault.add.ssh.useFile' : 'vault.add.file')}</Button></div>
         )}
-        <p className="vault-note">{t('vault.add.sameAccount')}</p>
       </More>
     </Dialog>
   );

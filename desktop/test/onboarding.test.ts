@@ -32,7 +32,7 @@ function fresh(seed: MockSeed = {}): MockBackend {
 const inputsOf = (name: CommandName) => log.filter(([n]) => n === name).map(([, i]) => i);
 
 let root: Root, host: HTMLDivElement;
-const app: AppApi = { desktop: true, toast: vi.fn(), announce: vi.fn() };
+const app: AppApi = { desktop: true, toast: vi.fn(), announce: vi.fn(), locale: 'ko', language: 'system', setLanguage: async () => undefined };
 let finished: Route[] = [];
 
 beforeEach(() => {

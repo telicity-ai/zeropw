@@ -1,6 +1,6 @@
 //! App settings (docs/desktop-app.md §4.5): `settings.json` (0600) in the app data folder, never
-//! inside the state directory. Only the gateway port, the team-sync listen address and the link
-//! service address used for the next enrolment live here.
+//! inside the state directory. Only the gateway port, the team-sync listen address, the link
+//! service address used for the next enrolment and the window's language live here.
 
 use std::fs;
 use std::io;
@@ -13,6 +13,8 @@ use crate::error::AppError;
 use crate::paths::write_private_atomic;
 
 pub const DEFAULT_GATEWAY_PORT: u16 = 47380;
+/// The languages the window has copy for.
+pub const LANGUAGES: [&str; 2] = ["ko", "en"];
 const MAX_SETTINGS_BYTES: u64 = 64 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,6 +30,10 @@ pub struct Settings {
     /// before the field existed and files without it read and write the same.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link_service: Option<String>,
+    /// The window's language, `ko` or `en`, or `null` to follow the system. Left out of the
+    /// file while unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
 }
 
 impl Default for Settings {
@@ -36,6 +42,7 @@ impl Default for Settings {
             gateway_port: DEFAULT_GATEWAY_PORT,
             team_listen: None,
             link_service: None,
+            language: None,
         }
     }
 }
@@ -60,6 +67,11 @@ impl Settings {
             && crate::link::check_service_url(service).is_err()
         {
             return Err(AppError::invalid_input("link_service_invalid").with_detail("link_service"));
+        }
+        if let Some(language) = &self.language
+            && !LANGUAGES.contains(&language.as_str())
+        {
+            return Err(AppError::invalid_input("invalid_language").with_detail("language"));
         }
         Ok(())
     }
@@ -107,6 +119,7 @@ mod tests {
             gateway_port: 48000,
             team_listen: Some("192.168.1.20:47390".into()),
             link_service: None,
+            language: None,
         };
         save(&path, &s).unwrap();
         assert_eq!(load(&path).unwrap(), s);
@@ -138,6 +151,7 @@ mod tests {
                 gateway_port: port,
                 team_listen: listen.map(str::to_owned),
                 link_service: None,
+                language: None,
             };
             assert_eq!(save(&path, &s).unwrap_err().error, "InvalidInput");
         }
@@ -187,5 +201,33 @@ mod tests {
         }
         fs::write(&path, br#"{"gateway_port": 47380, "link_service": "nope"}"#).unwrap();
         assert_eq!(load(&path).unwrap_err().reason, "settings_corrupt");
+    }
+
+    #[test]
+    fn language_is_ko_en_or_unset() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        for lang in ["ko", "en"] {
+            let s = Settings {
+                language: Some(lang.into()),
+                ..Settings::default()
+            };
+            save(&path, &s).unwrap();
+            assert_eq!(load(&path).unwrap(), s);
+        }
+        for bad in ["", "fr", "EN", "ko-KR"] {
+            let s = Settings {
+                language: Some(bad.into()),
+                ..Settings::default()
+            };
+            let err = save(&path, &s).unwrap_err();
+            assert_eq!(
+                (err.reason.as_str(), err.detail.as_deref()),
+                ("invalid_language", Some("language"))
+            );
+        }
+        save(&path, &Settings::default()).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        assert!(json.get("language").is_none());
     }
 }

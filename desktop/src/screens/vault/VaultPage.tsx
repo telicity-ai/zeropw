@@ -9,9 +9,10 @@ import { teamEnvPairs } from '../../lib/dash';
 import { dropErrorKey } from '../../lib/envimport';
 import { useShell, type Intent } from '../../app/shell';
 import { useApp } from '../../ui/app';
-import { Button, IconButton, Segmented } from '../../ui/controls';
+import { Button, IconButton } from '../../ui/controls';
 import { ConfirmDialog } from '../../ui/Dialog';
-import { Badge, EmptyState, LoadError, SkeletonRows } from '../../ui/feedback';
+import { Menu } from '../../ui/disclosure';
+import { EmptyState, LoadError, SkeletonRows } from '../../ui/feedback';
 import { useHotkey, useLoad } from '../../ui/hooks';
 import { Icon } from '../../ui/icons';
 import { KindTile, ListRow, Meta, PaneHeader, SearchBox, useListKeys } from '../../ui/layout';
@@ -33,7 +34,7 @@ type Dlg =
 
 export function VaultPage({ intent }: { intent?: Intent }) {
   const { route, go, vault, clearIntent, envFile, takeEnvFile, narrow, tick } = useShell();
-  const { toast } = useApp();
+  const { toast, locale } = useApp();
   const view = route.view ?? 'all';
   const filter = parseView(view);
   const [query, setQuery] = useState('');
@@ -50,7 +51,7 @@ export function VaultPage({ intent }: { intent?: Intent }) {
   const listing = vault.data?.listing ?? null;
   const pairs = useMemo(() => (listing ? teamEnvPairs(listing) : []), [listing]);
   const multiPlace = pairs.length > 1;
-  const shown = useMemo(() => (secrets ? sortItems(filterItems(secrets, filter, query), sort) : []), [secrets, view, query, sort]);
+  const shown = useMemo(() => (secrets ? sortItems(filterItems(secrets, filter, query), sort) : []), [secrets, view, query, sort, locale]);
   const ids = useMemo(() => shown.map((s) => s.id), [shown]);
   const selectedId = route.item && ids.includes(route.item) ? route.item : narrow.single ? null : ids[0] ?? null;
   const selected = selectedId ? shown.find((s) => s.id === selectedId) ?? null : null;
@@ -69,7 +70,8 @@ export function VaultPage({ intent }: { intent?: Intent }) {
     window.addEventListener('zpw:focus-search', focus);
     return () => window.removeEventListener('zpw:focus-search', focus);
   }, []);
-  useHotkey('n', () => setDlg({ kind: 'add' }));
+  const addKind = filter.by === 'kind' ? filter.kind : undefined;
+  useHotkey('n', () => setDlg({ kind: 'add', initialKind: addKind }));
   useEffect(() => { setQuery(''); }, [view]);
 
   // a .env file picked here; one dropped on the window arrives as the `import` intent
@@ -85,7 +87,7 @@ export function VaultPage({ intent }: { intent?: Intent }) {
 
   useEffect(() => {
     if (!intent) return;
-    if (intent === 'add') { setDlg({ kind: 'add' }); clearIntent(); }
+    if (intent === 'add') { setDlg({ kind: 'add', initialKind: addKind }); clearIntent(); }
     else if (intent === 'import') {
       if (envFile) {
         // a file opened before this one and not yet imported gives way (ImportDialog discards it)
@@ -94,7 +96,7 @@ export function VaultPage({ intent }: { intent?: Intent }) {
       }
       clearIntent();
     }
-  }, [intent, envFile, clearIntent, takeEnvFile]);
+  }, [intent, envFile, clearIntent, takeEnvFile, addKind]);
 
   const taken = useMemo(() => (secrets ?? []).map((s) => s.id), [secrets]);
   const title = filter.by === 'kind' ? kindLabel(filter.kind) : filter.by === 'place' ? placeText(filter.place) : t('nav.all');
@@ -129,13 +131,10 @@ export function VaultPage({ intent }: { intent?: Intent }) {
               meta={<Meta parts={[
                 kindLabel(s.kind),
                 multiPlace && filter.by !== 'place' ? placeText(placeOf(s)) : null,
-                st === 'deleted' ? t('vault.row.deleted') : st === 'active' ? t('vault.row.version', { n: versionText(s.active_version as VersionId) }) : t('vault.row.noActive'),
+                st === 'deleted' ? t('vault.row.deleted') : st === 'none' ? t('vault.row.noActive') : null,
+                nConn > 0 ? t('vault.row.conns', { n: nConn }) : null,
               ]} />}
-              end={<>
-                {st === 'deleted' && <Badge tone="danger">{t('vault.row.deleted')}</Badge>}
-                {st === 'none' && <span className="vault-warn-icon" title={t('vault.row.noActive')}><Icon name="alert" size={13} /></span>}
-                {nConn > 0 && <span className="vault-conn-count" title={t('vault.row.conns.aria', { n: nConn })} aria-label={t('vault.row.conns.aria', { n: nConn })}><Icon name="plug" size={12} />{nConn}</span>}
-              </>} />
+              end={st === 'none' ? <span className="vault-warn-icon" title={t('vault.row.noActive')}><Icon name="alert" size={13} /></span> : undefined} />
           );
         })}
       </div>
@@ -148,9 +147,14 @@ export function VaultPage({ intent }: { intent?: Intent }) {
     <div className={'page vault-page' + (narrow.single ? ' is-single' : '')}>
       <section className={'pane pane-list' + (listHidden ? ' is-hidden' : '')} aria-label={title}>
         <PaneHeader title={title} sub={secrets ? String(shown.length) : undefined} actions={<>
-          <IconButton icon="download" label={t('vault.import')} size="sm" onClick={() => void pickEnv()} />
-          <IconButton icon="folder" label={t('vault.place.add')} size="sm" onClick={() => setPlaceOpen(true)} />
-          <Button size="sm" tone="primary" icon="plus" aria-label={t('vault.add.aria')} title={t('vault.add.aria')} onClick={() => setDlg({ kind: 'add', initialKind: filter.by === 'kind' ? filter.kind : undefined })}>{t('vault.add')}</Button>
+          <Menu label={t('vault.list.more')} items={[
+            { label: t('vault.sort.name'), checked: sort === 'name', onSelect: () => setSort('name') },
+            { label: t('vault.sort.recent'), checked: sort === 'recent', onSelect: () => setSort('recent') },
+            'sep',
+            { label: t('vault.import'), icon: 'download', onSelect: () => void pickEnv() },
+            { label: t('vault.place.add'), icon: 'folder', onSelect: () => setPlaceOpen(true) },
+          ]} />
+          <IconButton icon="plus" label={t('vault.add.aria')} size="sm" onClick={() => setDlg({ kind: 'add', initialKind: filter.by === 'kind' ? filter.kind : undefined })} />
         </>} />
         {secrets && secrets.length > 0 && (
           <div className="pane-toolbar">
@@ -163,8 +167,6 @@ export function VaultPage({ intent }: { intent?: Intent }) {
                   setTimeout(() => document.querySelector<HTMLElement>(`.vault-page [data-id="${CSS.escape(first)}"]`)?.focus(), 0);
                 }
               }} />
-            <Segmented<SortBy> label={t('vault.sort.aria')} size="sm" value={sort} onChange={setSort}
-              options={[{ value: 'name', label: t('vault.sort.name') }, { value: 'recent', label: t('vault.sort.recent') }]} />
           </div>
         )}
         <div className="pane-body">{listBody()}</div>
@@ -186,7 +188,7 @@ export function VaultPage({ intent }: { intent?: Intent }) {
         ) : (
           <>
             <PaneHeader level={2} title="" />
-            <div className="pane-body"><EmptyState compact icon="vault" title={secrets && secrets.length ? t('vault.empty.pick') : t('app.vault')} /></div>
+            <div className="pane-body">{secrets && secrets.length > 0 && <p className="vault-pick">{t('vault.empty.pick')}</p>}</div>
           </>
         )}
       </section>

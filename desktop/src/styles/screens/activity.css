@@ -1,24 +1,31 @@
-/* activity: usage records, alerts and incidents */
-.activity-page .pane-body { background: var(--bg-canvas); }
-.activity { gap: 16px; }
+/* activity: the usage log and alerts as a compact table, and incidents */
+.activity { gap: 14px; max-width: none; }
 .activity-tools { display: flex; align-items: center; gap: 12px; }
-.activity-tools .search { flex: 1; max-width: 420px; }
+.activity-tools .search { flex: 1; max-width: 360px; }
 
-.rec-list { display: flex; flex-direction: column; border-radius: var(--radius-lg); background: var(--bg-raised); box-shadow: var(--shadow-card); overflow: hidden; }
-.rec { display: flex; gap: 11px; padding: 10px 14px; min-width: 0; }
-.rec + .rec { border-top: 0.5px solid var(--border-1); }
-.rec-icon { width: 18px; height: 20px; display: grid; place-items: center; flex: none; color: var(--text-4); }
-.rec.is-alert .rec-icon { color: var(--warn); }
-.rec-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.rec-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.rec-title { font-size: var(--text-md); font-weight: var(--weight-medium); color: var(--text-1); overflow-wrap: anywhere; min-width: 0; }
-.rec-time { margin-left: auto; flex: none; font-size: var(--text-xs); color: var(--text-3); }
-.rec-meta { display: flex; flex-wrap: wrap; gap: 0 6px; font-size: var(--text-sm); color: var(--text-2); }
-.rec-meta span + span::before { content: '·'; margin-right: 6px; color: var(--text-4); }
-.rec-raw { font-size: 11.5px; color: var(--text-3); overflow-wrap: anywhere; word-break: break-all; user-select: text; -webkit-user-select: text; }
+.log { display: flex; flex-direction: column; font-size: var(--text-md); min-width: 0; }
+.log-head, .log-row { display: grid; grid-template-columns: 124px minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1.2fr); column-gap: 14px; align-items: center; padding: 0 10px; }
+.log-head { height: 28px; font-size: var(--text-xs); font-weight: var(--weight-semibold); color: var(--text-3); border-bottom: 0.5px solid var(--border-2); }
+.log-row { min-height: 30px; border-bottom: 0.5px solid var(--border-1); }
+.log-row:hover { background: var(--bg-hover); }
+.log-row.is-open { background: var(--bg-selected-quiet); }
+.log-time { font-size: var(--text-xs); color: var(--text-3); white-space: nowrap; }
+.log-event { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.log-title { color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.log-row.is-failed .log-title { color: var(--danger); }
+.log-flag { flex: none; font-size: var(--text-2xs); font-weight: var(--weight-semibold); color: var(--danger); }
+.log-actor, .log-target { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.log-target { display: flex; align-items: center; gap: 6px; }
+.log-target .truncate { flex: 1; }
+.log-more { flex: none; display: grid; place-items: center; width: 22px; height: 22px; border: 0; border-radius: var(--radius-xs); background: none; color: var(--text-3); }
+.log-more:hover { color: var(--text-1); background: var(--bg-press); }
+.log-more svg { transition: transform var(--dur-fast) var(--ease-out); }
+.log-more[aria-expanded='true'] svg { transform: rotate(180deg); }
+.log-detail { grid-column: 2 / -1; display: flex; flex-direction: column; gap: 3px; padding: 2px 0 8px; font-size: var(--text-sm); color: var(--text-2); overflow-wrap: anywhere; }
+.log-detail .mono { font-size: var(--text-xs); color: var(--text-3); word-break: break-all; user-select: text; -webkit-user-select: text; }
+.log-foot { padding: 10px 10px 0; font-size: var(--text-xs); color: var(--text-3); }
 
-.tile.inc-open { background: var(--warn-soft); color: var(--warn); }
-.rec-more { align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; border: 0; background: none; padding: 1px 4px; margin-left: -4px; border-radius: var(--radius-xs); font-size: var(--text-xs); color: var(--text-3); }
-.rec-more:hover { color: var(--text-1); background: var(--bg-hover); }
-.rec-more svg { transition: transform var(--dur-fast) var(--ease-out); }
-.rec-more[aria-expanded='true'] svg { transform: rotate(90deg); }
+@media (max-width: 760px) {
+  .log-head, .log-row { grid-template-columns: 116px minmax(0, 1fr) minmax(0, 0.8fr); }
+  .log-head > :nth-child(3), .log-row > .log-actor { display: none; }
+}

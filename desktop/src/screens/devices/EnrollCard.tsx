@@ -44,7 +44,7 @@ export const EnrollCard = forwardRef(function EnrollCard({ link, onEnrolled, not
   };
 
   return (
-    <section className="mac-enroll card card-pad" ref={ref} tabIndex={-1} aria-labelledby="mac-enroll-title">
+    <section className="mac-enroll" ref={ref} tabIndex={-1} aria-labelledby="mac-enroll-title">
       <form className="stack" noValidate onSubmit={(e) => { e.preventDefault(); void submit(); }}>
         <div className="stack-sm">
           <h3 id="mac-enroll-title" className="mac-card-title">{t('mac.enroll.title')}</h3>

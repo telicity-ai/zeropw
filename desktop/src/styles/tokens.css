@@ -1,7 +1,9 @@
-/* Personal Vault design tokens (DESIGN.md). Apple-style: the system font, quiet greys, a
-   translucent sidebar over macOS vibrancy, opaque content with floating white cards, glass for
-   things that float (menus, toolbars, dialogs), black pill buttons and the system blue for focus
-   and selection. Every colour a component uses comes from a semantic token below; light and dark
+/* Hallmark · genre: modern-minimal · macrostructure: sidebar-master-detail
+   design-system: DESIGN.md · designed-as-app
+   Pre-emit self-critique (not an external review): P4 H4 E4 S4 R4 V4.
+   Personal Vault: system type, a translucent macOS sidebar, one opaque detail surface,
+   grouped lists, glass only for floating menus and dialogs, blue for the primary action,
+   focus and selection. Every colour a component uses comes from a semantic token below; light and dark
    each define the full palette. Raw hex values never appear outside this file. */
 
 :root {
@@ -12,14 +14,15 @@
   --font-display: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Apple SD Gothic Neo', 'Pretendard Variable', Pretendard, system-ui, sans-serif;
   --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
 
-  --text-2xs: 10.5px;
-  --text-xs: 11.5px;
-  --text-sm: 12.5px;
-  --text-md: 13.5px;
+  /* macOS steps: caption 11, footnote 12, body 13, callout 15, title3 17, title2 22, title1 26 */
+  --text-2xs: 12px;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 13px;
   --text-lg: 15px;
-  --text-xl: 20px;
-  --text-2xl: 26px;
-  --text-3xl: 32px;
+  --text-xl: 17px;
+  --text-2xl: 22px;
+  --text-3xl: 26px;
 
   --weight-regular: 400;
   --weight-medium: 500;
@@ -78,13 +81,13 @@
   --gray-3: #ececf0;
   --gray-ink-1: #1d1d1f;
   --gray-ink-2: #48484c;
-  --gray-ink-3: #86868b;
-  --gray-ink-4: #aeaeb2;
-  --blue-1: #007aff;
+  --gray-ink-3: #65656b;
+  --gray-ink-4: #68686e;
+  --blue-1: #0066d6;
   --blue-2: #0062cc;
   --blue-text: #0066d6;
-  --green-1: #248a3d;
-  --orange-1: #b25000;
+  --green-1: #1e7a35;
+  --orange-1: #9a4500;
   --red-1: #d70015;
   --red-2: #b8000f;
   --teal-1: #0071a4;
@@ -92,12 +95,13 @@
   /* ---- semantic tokens -------------------------------------------------------------------- */
   /* the window: transparent under macOS vibrancy (html.has-vibrancy), a solid grey elsewhere */
   --bg-frame: var(--gray-3);
-  --bg-sidebar-tint: rgba(255, 255, 255, 0.22);
+  --bg-sidebar-tint: transparent;
   --bg-sidebar-selected: rgba(255, 255, 255, 0.62);
   --bg-sidebar-hover: rgba(255, 255, 255, 0.32);
   --bg-list: var(--gray-1);
   --bg-pane: var(--gray-0);
-  --bg-canvas: var(--gray-1);
+  --bg-canvas: var(--gray-0);
+  --bg-group: var(--gray-2);
   --bg-field: var(--gray-0);
   --bg-raised: var(--gray-0);
   --bg-hover: rgba(0, 0, 0, 0.04);
@@ -124,8 +128,9 @@
   --border-2: rgba(0, 0, 0, 0.11);
   --border-3: rgba(0, 0, 0, 0.2);
 
-  --btn-primary-bg: var(--gray-ink-1);
-  --btn-primary-hover: #000000;
+  /* the macOS default button: the system accent */
+  --btn-primary-bg: var(--blue-1);
+  --btn-primary-hover: var(--blue-2);
   --btn-primary-fg: #ffffff;
 
   --accent: var(--blue-1);
@@ -186,9 +191,9 @@
     --gray-3: #262628;
     --gray-ink-1: #f5f5f7;
     --gray-ink-2: #c7c7cc;
-    --gray-ink-3: #98989d;
-    --gray-ink-4: #636366;
-    --blue-1: #0a84ff;
+    --gray-ink-3: #a1a1a6;
+    --gray-ink-4: #8e8e93;
+    --blue-1: #006bd6;
     --blue-2: #409cff;
     --blue-text: #5aa9ff;
     --green-1: #30d158;
@@ -197,10 +202,11 @@
     --red-2: #ff6961;
     --teal-1: #64d2ff;
 
-    --bg-sidebar-tint: rgba(0, 0, 0, 0.12);
+    --bg-sidebar-tint: transparent;
     --bg-sidebar-selected: rgba(255, 255, 255, 0.13);
     --bg-sidebar-hover: rgba(255, 255, 255, 0.07);
     --bg-raised: #2c2c2e;
+    --bg-group: #2c2c2e;
     --bg-field: #2c2c2e;
     --bg-hover: rgba(255, 255, 255, 0.05);
     --bg-press: rgba(255, 255, 255, 0.09);
@@ -220,9 +226,9 @@
     --border-2: rgba(255, 255, 255, 0.12);
     --border-3: rgba(255, 255, 255, 0.22);
 
-    --btn-primary-bg: #f5f5f7;
-    --btn-primary-hover: #ffffff;
-    --btn-primary-fg: #1d1d1f;
+    --btn-primary-bg: var(--blue-1);
+    --btn-primary-hover: var(--blue-2);
+    --btn-primary-fg: #ffffff;
 
     --accent-soft: rgba(10, 132, 255, 0.18);
     --accent-line: rgba(10, 132, 255, 0.45);

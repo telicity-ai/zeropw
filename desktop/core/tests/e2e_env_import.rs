@@ -114,6 +114,7 @@ fn a_dropped_or_picked_env_file_is_previewed_and_imported_without_values_leaving
         gateway_port: common::free_port(),
         team_listen: None,
         link_service: None,
+        language: None,
     })
     .unwrap();
     let code = core.recovery_generate().unwrap();

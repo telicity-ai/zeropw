@@ -52,6 +52,7 @@ fn vault_init_passes_passphrases_only_in_the_envelope_then_starts_serve() {
         gateway_port: port,
         team_listen: None,
         link_service: None,
+        language: None,
     })
     .unwrap();
 
@@ -1072,6 +1073,7 @@ fn recover_stops_a_running_serve_and_starts_it_again() {
         gateway_port: port,
         team_listen: None,
         link_service: None,
+        language: None,
     })
     .unwrap();
     let recover = || {
@@ -1529,6 +1531,7 @@ fn terminal_open_injects_the_principal_token_from_the_store() {
         gateway_port: port,
         team_listen: None,
         link_service: None,
+        language: None,
     })
     .unwrap();
     core.serve_start().unwrap();
@@ -1610,6 +1613,7 @@ fn settings_set_replaces_a_damaged_settings_file() {
             gateway_port: 47380,
             team_listen: None,
             link_service: None,
+            language: None,
         };
         assert_eq!(defaults, Settings::default());
         assert_eq!(core.settings_set(defaults.clone()).unwrap(), defaults);

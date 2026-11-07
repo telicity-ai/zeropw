@@ -52,8 +52,8 @@ export function PlaceDialog({ onClose, onDone }: { onClose(): void; onDone(place
         <Button tone="primary" type="submit" busy={busy}>{t('vault.place.save')}</Button>
       </>}>
       <TextField label={t('vault.place.name')} mono value={name} inputRef={nameRef} maxLength={64} placeholder={t('vault.place.name.ph')}
-        error={nameErr ? t(nameErr) : null} help={t('vault.add.name.help')} data-autofocus="" onChange={(v) => { setName(v); setNameErr(null); }} />
-      <More hint={`${t('vault.place.more.hint')} · ${envs.join(', ') || '—'}`} open={envErr}>
+        error={nameErr ? t(nameErr) : null} data-autofocus="" onChange={(v) => { setName(v); setNameErr(null); }} />
+      <More label={t('vault.place.envs')} hint={envs.join(', ')} open={envErr}>
         <div className="field">
           <div className="field-label"><span id="vault-envs-label">{t('vault.place.envs')}</span></div>
           <div className="chips" role="group" aria-labelledby="vault-envs-label">

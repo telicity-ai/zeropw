@@ -153,8 +153,7 @@ export function ImportDialog({ file, pairs, onClose, onDone }: { file: EnvFileRe
             ))}
           </ul>
         )}
-        <Banner tone="info">{t('vault.imp.left')}</Banner>
-        {result.shared && <Banner tone="info">{t('vault.imp.left.team')}</Banner>}
+        <p className="vault-note">{t('vault.imp.left')}{result.shared ? `. ${t('vault.imp.left.team')}` : ''}</p>
       </Dialog>
     );
   }
@@ -173,7 +172,7 @@ export function ImportDialog({ file, pairs, onClose, onDone }: { file: EnvFileRe
         <SelectField label={t('vault.add.place')} value={env} options={pairs.map((p) => ({ value: p.key, label: placeText(p.key) }))}
           onChange={(v) => { setEnv(v); setErr(null); }} />
       )}
-      {isShared && <Banner tone="info" icon="sync">{t('vault.imp.shared')}</Banner>}
+      {isShared && <p className="vault-note">{t('vault.imp.shared')}</p>}
       {bad ? (
         <>
           <Banner tone="warn">{t(bad.key, bad.vars)}</Banner>
@@ -215,7 +214,7 @@ export function ImportDialog({ file, pairs, onClose, onDone }: { file: EnvFileRe
         </div>
       )}
       {shown && (hasDifferent || hasTaken || !!prefix) && (
-        <More hint={t('vault.imp.more.hint')} open={moreOpen || !prefixOk} onToggle={setMoreOpen}>
+        <More label={t('vault.imp.more.hint')} open={moreOpen || !prefixOk} onToggle={setMoreOpen}>
           {hasDifferent && <Checkbox checked={update} onChange={(v) => { setUpdate(v); setErr(null); }}>{t('vault.imp.update')}</Checkbox>}
           <TextField label={t('vault.imp.prefix')} help={t('vault.imp.prefix.help')} mono value={prefix} inputRef={prefixRef} maxLength={63}
             placeholder={`${splitEnv(env)?.environment ?? 'dev'}.`} error={!prefixOk ? t('vault.err.name') : null} onChange={(v) => { setPrefix(v); setErr(null); }} />

@@ -45,6 +45,7 @@ fn core(fx: &Fixture) -> Core {
         gateway_port: health_server(),
         team_listen: None,
         link_service: None,
+        language: None,
     })
     .unwrap();
     core

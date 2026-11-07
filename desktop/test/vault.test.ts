@@ -17,7 +17,7 @@ import { useLoad } from '../src/ui/hooks';
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const ADMIN = 'mock-admin-pass';
 const toast = vi.fn();
-const app: AppApi = { desktop: false, toast, announce: () => undefined };
+const app: AppApi = { desktop: false, toast, announce: () => undefined, locale: 'ko', language: 'system', setLanguage: async () => undefined };
 let root: Root, host: HTMLDivElement, backend: MockBackend, spy: ReturnType<typeof vi.fn>;
 
 function Harness({ start }: { start: Route }) {

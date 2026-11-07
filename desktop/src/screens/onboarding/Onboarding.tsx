@@ -11,6 +11,7 @@ import { useApp } from '../../ui/app';
 import { Button } from '../../ui/controls';
 import { Banner } from '../../ui/feedback';
 import { Icon, Mark } from '../../ui/icons';
+import { LanguageSelect } from '../../ui/LanguageSelect';
 import { canGoBack, COUNTED, doneActions, neighbour, progressOf, STEP_TITLE, type Path, type Step } from './flow';
 import { AdminStep, CreateStep, RecoveryStep, StepCard, type CreateResult, type RecoveryNotice } from './steps';
 import type { InitAttempts, RecoveryChoice } from './vault';
@@ -84,6 +85,7 @@ export function Onboarding({ incoming, onFinish }: {
               ))}
             </ol>
           )}
+          <LanguageSelect compact />
         </header>
 
         {step === 'welcome' && (

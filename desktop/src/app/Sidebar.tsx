@@ -6,9 +6,7 @@ import { useMemo } from 'react';
 import { t, type CopyKey } from '../copy';
 import type { SecretKind } from '../ipc/contract';
 import { envKey, envPairs, relayState } from '../lib/dash';
-import { hostPort } from '../lib/format';
 import { Button, IconButton } from '../ui/controls';
-import { Kbd } from '../ui/feedback';
 import { Icon, Mark, type IconName } from '../ui/icons';
 import { kindIcon } from '../ui/layout';
 import { placeLabel } from '../lib/places';
@@ -49,12 +47,8 @@ export function Sidebar({ onStop, onResume }: { onStop(): void; onResume(): void
       </div>
       <div className="sidebar-vault" data-tauri-drag-region="">
         <span className="mark"><Mark size={20} /></span>
-        <span className="sidebar-vault-name truncate">{t('app.vault')}</span>
-        <IconButton icon="search" label={t('act.search') + ' ⌘F'} size="sm" onClick={() => { go('vault', { view: view ?? 'all' }); setTimeout(() => window.dispatchEvent(new Event('zpw:focus-search')), 0); }} />
+        <span className="sidebar-vault-name truncate">{t('app.name')}</span>
       </div>
-      <button type="button" className="sidebar-new" title={t('nav.newItem')} onClick={() => go('vault', { view: view ?? 'all', intent: 'add' })}>
-        <Icon name="plus" size={15} /><span>{t('nav.newItem')}</span><Kbd>⌘N</Kbd>
-      </button>
       <nav className="sidebar-scroll" aria-label={t('nav.aria')}>
         <ul className="nav-group" aria-label={t('nav.vault')}>
           <li className="nav-heading" aria-hidden="true">{t('nav.vault')}</li>
@@ -95,7 +89,7 @@ export function Sidebar({ onStop, onResume }: { onStop(): void; onResume(): void
           <span className="svc-dot" aria-hidden="true" />
           <span className="svc-text">
             <span>{t(state === 'live' ? 'svc.on' : state === 'stopped' ? 'svc.stopped' : state === 'held' ? 'svc.held' : 'svc.off')}</span>
-            {state === 'live' && hostPort(serve.url) && <small className="mono">{hostPort(serve.url)}</small>}
+
           </span>
           {!serve.running && state !== 'held' && (
             <Button size="sm" tone="ghost" icon="play" busy={relay.busy} onClick={() => void relay.start()}>{t(relay.problem ? 'act.retry' : 'svc.start')}</Button>
@@ -106,7 +100,7 @@ export function Sidebar({ onStop, onResume }: { onStop(): void; onResume(): void
         {relay.offerListenOff && <Button size="sm" tone="ghost" onClick={relay.confirmListenOff}>{t('svc.listenOff')}</Button>}
         {control.stopped
           ? <Button size="sm" tone="ghost" icon="play" onClick={onResume}>{t('svc.resume')}</Button>
-          : <Button size="sm" tone="quiet" icon="stop" onClick={onStop}>{t('svc.stopAll')}</Button>}
+          : <Button size="sm" tone="quiet" icon="stop" className="svc-stop" onClick={onStop}>{t('svc.stopAll')}</Button>}
         <ul className="nav-group">{navItem('settings', 'settings', 'nav.settings')}</ul>
       </div>
     </aside>

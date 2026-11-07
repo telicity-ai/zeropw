@@ -56,7 +56,8 @@ export interface InviteListItem { invite_id: string; role: string; name: string;
 export interface Member { fingerprint: string; name: string; role: string; status: string; owner: boolean }
 /** `link_service`: the link service a not yet enrolled Mac enrols with by default (null: the
  *  built-in default, which never resolves). Left out of the file while unset. */
-export interface Settings { gateway_port: number; team_listen: string | null; link_service?: string | null }
+/** `language`: the window's language (`ko`, `en`), or null to follow the system. */
+export interface Settings { gateway_port: number; team_listen: string | null; link_service?: string | null; language?: 'ko' | 'en' | null }
 
 /** A `.env` file the core read for an import (picked or dropped). Its content stays in the core
  *  behind `import_ref` for 10 minutes; only the file's base name comes here. */

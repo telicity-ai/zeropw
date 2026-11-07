@@ -2,7 +2,6 @@
 
 import { useEffect, useRef } from 'react';
 import { t, type CopyKey } from '../../copy';
-import { Badge, type Tone } from '../../ui/feedback';
 
 /** An SSH public key (not a secret): selectable text, so it can go onto a server. It takes focus
  *  when it replaces a form inside an open dialog. */
@@ -23,15 +22,12 @@ export function PublicKeyBox({ publicKey, fingerprint, autoFocus }: { publicKey:
   );
 }
 
-const STATUS: Record<string, { key: CopyKey; tone: Tone }> = {
-  active: { key: 'vault.st.active', tone: 'ok' },
-  staged: { key: 'vault.st.staged', tone: 'info' },
-  retired: { key: 'vault.st.retired', tone: 'neutral' },
-  revoked: { key: 'vault.st.revoked', tone: 'danger' },
+const STATUS: Record<string, CopyKey> = {
+  active: 'vault.st.active',
+  staged: 'vault.st.staged',
+  retired: 'vault.st.retired',
+  revoked: 'vault.st.revoked',
 };
 
-/** A version's status as a badge; an unknown status stays as the CLI wrote it. */
-export function VersionBadge({ status }: { status: string }) {
-  const s = STATUS[status];
-  return <Badge tone={s?.tone ?? 'neutral'}>{s ? t(s.key) : status}</Badge>;
-}
+/** A version's status in words; an unknown status stays as the CLI wrote it. */
+export const versionStatusText = (status: string): string => (STATUS[status] ? t(STATUS[status]) : status);

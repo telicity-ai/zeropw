@@ -2,7 +2,7 @@
 // locked; it locks again on ⌘L, from the sidebar, or after IDLE_LOCK_MIN minutes without input.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { t, type CopyKey } from '../copy';
+import { resolveLocale, setLocale, t, type CopyKey, type Locale } from '../copy';
 import { call, inDesktop, on, toIpcError } from '../ipc/client';
 import type { AppStatus, Control, InvitePreview } from '../ipc/contract';
 import { AppContext, type AppApi, type ToastTone } from '../ui/app';
@@ -27,6 +27,31 @@ export function App() {
   const [status, setStatus] = useState<AppStatus | null>(null);
   const [route, setRoute] = useState<Route>({ page: 'vault', view: 'all' });
   const [incoming, setIncoming] = useState<{ ref: string; preview: InvitePreview } | null>(null);
+  const systemLanguages = (): readonly string[] => (typeof navigator !== 'undefined' ? (navigator.languages?.length ? navigator.languages : [navigator.language]) : []);
+  const [language, setLanguagePref] = useState<Locale | 'system'>('system');
+  const [locale, setLocaleState] = useState<Locale>(() => { const l = resolveLocale(null, systemLanguages()); setLocale(l); return l; });
+  const applyLanguage = useCallback((pref: Locale | 'system') => {
+    const l = resolveLocale(pref === 'system' ? null : pref, systemLanguages());
+    setLocale(l);
+    setLanguagePref(pref);
+    setLocaleState(l);
+  }, []);
+  // the saved language (settings.json); an unreadable file keeps the system language
+  useEffect(() => {
+    call('settings_get').then((s) => applyLanguage(s.language ?? 'system'), () => undefined);
+  }, [applyLanguage]);
+  const setLanguage = useCallback(async (pref: Locale | 'system') => {
+    const s = await call('settings_get');
+    await call('settings_set', { ...s, language: pref === 'system' ? null : pref });
+    applyLanguage(pref);
+  }, [applyLanguage]);
+
+  useEffect(() => {
+    if (language !== 'system') return;
+    const update = () => applyLanguage('system');
+    window.addEventListener('languagechange', update);
+    return () => window.removeEventListener('languagechange', update);
+  }, [language, applyLanguage]);
 
   // toasts
   const [toasts, setToasts] = useState<ToastItem[]>([]);
@@ -57,10 +82,22 @@ export function App() {
   const boot = useCallback(() => {
     setPhase('loading');
     call('app_status').then(
-      (s) => { setStatus(s); setPhase(s.initialized ? 'locked' : 'onboarding'); },
+      (s) => {
+        setStatus(s);
+        // review aid for the Vite dev server only (mock core): `?state=ready&open=devices` skips the
+        // lock screen and opens a page. Never in the app (desktop) or a production build.
+        const review = !desktop && import.meta.env.DEV && typeof location !== 'undefined' ? new URLSearchParams(location.search) : null;
+        const open = review?.get('open');
+        if (s.initialized && open) {
+          setRoute({ page: (['vault', 'devices', 'services', 'developer', 'activity', 'settings'].includes(open) ? open : 'vault') as Route['page'], view: review?.get('view') ?? undefined });
+          setPhase('open');
+          return;
+        }
+        setPhase(s.initialized ? 'locked' : 'onboarding');
+      },
       (e) => { setFailure(toIpcError(e).reason === 'kms_missing' ? 'boot.failed.kms' : 'boot.failed'); setPhase('failed'); },
     );
-  }, []);
+  }, [desktop]);
   useEffect(boot, [boot]);
 
   // zeropw://join links opened outside the app: only {ref, preview} arrive; joining needs a click
@@ -104,7 +141,7 @@ export function App() {
   }, [boot]);
 
   const takeIncoming = useCallback(() => setIncoming(null), []);
-  const api: AppApi = useMemo(() => ({ desktop, toast, announce }), [desktop, toast, announce]);
+  const api: AppApi = useMemo(() => ({ desktop, toast, announce, locale, language, setLanguage }), [desktop, toast, announce, locale, language, setLanguage]);
 
   return (
     <AppContext.Provider value={api}>

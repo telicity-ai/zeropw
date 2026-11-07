@@ -69,14 +69,9 @@ export function AgentsTab({ intent }: { intent?: Intent }) {
 
   return (
     <>
-      <Banner tone="neutral" icon="shield">{t('agent.intro')}</Banner>
+      <p className="dev-intro">{t('agent.intro')}</p>
 
-      <Section title={t('agent.list')} id="dev-agents-h" aside={d && d.principals.length > 0 && (
-        <>
-          <Button size="sm" tone="ghost" onClick={() => show({ kind: 'grant' })}>{t('grant.title')}</Button>
-          {addBtn}
-        </>
-      )}>
+      <Section title={t('agent.list')} id="dev-agents-h" aside={d && d.principals.length > 0 ? addBtn : undefined}>
         {!d && load.error ? <LoadError error={load.error} onRetry={load.reload} />
           : !d ? <SkeletonRows n={2} />
             : d.principals.length === 0 ? (
@@ -91,7 +86,7 @@ export function AgentsTab({ intent }: { intent?: Intent }) {
                       <div className="srow">
                         <IconTile icon="user" />
                         <div className="srow-main">
-                          <span className="srow-title mono">{p.id}</span>
+                          <span className="srow-title">{p.id}</span>
                           <span className="srow-meta">{runtimeText(p.runtime)}{gs.length === 0 && ` · ${t('agent.nogrant')}`}</span>
                         </div>
                         <div className="srow-end">
@@ -108,7 +103,7 @@ export function AgentsTab({ intent }: { intent?: Intent }) {
                         <ul className="dev-grants" aria-label={t('agent.grants.aria', { id: p.id })}>
                           {gs.map((g) => (
                             <li key={g.id}>
-                              <span className="mono dev-grant-conn">{g.connection}</span>
+                              <span className="dev-grant-conn">{g.connection}</span>
                               <span className="dev-grant-meta">{grantText(g)}</span>
                               <Button size="sm" tone="quiet" aria-label={t('grant.revoke.aria', { agent: p.id, conn: g.connection })}
                                 onClick={() => show({ kind: 'revoke', grant: g })}>{t('grant.revoke')}</Button>
@@ -134,7 +129,7 @@ export function AgentsTab({ intent }: { intent?: Intent }) {
                     <li key={x.terminal_id} className="srow">
                       <IconTile icon="terminal" />
                       <div className="srow-main">
-                        <span className="srow-title mono">{x.principal}</span>
+                        <span className="srow-title">{x.principal}</span>
                         <span className="srow-meta">{x.as_user ? t('agent.terminal.other', { user: x.as_user }) : t('agent.terminal.same')}</span>
                       </div>
                       <div className="srow-end">
@@ -171,7 +166,7 @@ export function AgentsTab({ intent }: { intent?: Intent }) {
           if (open?.kind !== 'revoke') return;
           await call('grant_revoke', { id: open.grant.id }); toast(t('grant.toast.revoked'), 'ok'); close(); reload();
         }}>
-        {open?.kind === 'revoke' && <KeyValues dense items={[{ k: t('grant.agent'), v: open.grant.principal, mono: true }, { k: t('grant.conn'), v: open.grant.connection, mono: true }]} />}
+        {open?.kind === 'revoke' && <KeyValues dense items={[{ k: t('grant.agent'), v: open.grant.principal }, { k: t('grant.conn'), v: open.grant.connection }]} />}
       </ConfirmDialog>
       <ConfirmDialog open={open?.kind === 'disable'} title={t('agent.disable.title')} description={t('agent.disable.sub')}
         confirmLabel={t('agent.disable.confirm')} tone="danger" warn={t('agent.disable.warn')} info={t('agent.session')} onClose={close}
@@ -179,7 +174,7 @@ export function AgentsTab({ intent }: { intent?: Intent }) {
           if (open?.kind !== 'disable') return;
           await call('principal_disable', { id: open.id }); toast(t('agent.toast.disabled'), 'ok'); close(); reload();
         }}>
-        {open?.kind === 'disable' && <p className="mono text-sm">{open.id}</p>}
+        {open?.kind === 'disable' && <p className="text-sm">{open.id}</p>}
       </ConfirmDialog>
       {/* Ending a terminal stops what the app can reach. A program run as another account, or
           detached with setsid, tmux or screen, can outlive it with its token; only disabling the
@@ -277,7 +272,7 @@ function CreateAgentDialog({ open, onClose, onCreated, onOpenTerminal }: {
           : <><Button tone="ghost" onClick={onClose}>{t('act.close')}</Button><Button tone="primary" icon="terminal" onClick={openTerm} data-autofocus="">{t('agent.openTerminal')}</Button></>}>
         <div role="status">
           <KeyValues dense items={[
-            { k: t('agent.name'), v: made.id, mono: true },
+            { k: t('agent.name'), v: made.id },
             { k: t('agent.where'), v: made.asUser ? t('agent.where.other.text', { user: made.asUser }) : t('agent.where.same.text') },
           ]} />
         </div>

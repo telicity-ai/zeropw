@@ -17,6 +17,7 @@ import { Banner, KeyValues, LoadError, Section, SkeletonRows, Status, type Tone 
 import { useLoad } from '../../ui/hooks';
 import { CorruptBanner, type SettingsCtx } from './SettingsPage';
 import { More } from '../../ui/disclosure';
+import { LanguageSelect } from '../../ui/LanguageSelect';
 
 /** The deployment host planned for the link service. Typed into the field only when asked; it is
  *  not claimed to be running (no deployment or health check has been confirmed). */
@@ -34,6 +35,9 @@ export function SecuritySection({ ctx }: { ctx: SettingsCtx }) {
   const [dialog, setDialog] = useState<'stop' | 'resume' | 'recover' | null>(null);
   return (
     <>
+      <Section>
+        <LanguageSelect />
+      </Section>
       <Section title={t('settings.lock.title')}>
         <div className="card card-pad stack">
           <p className="text-sm">{t('settings.lock.auto', { min: IDLE_LOCK_MIN })}</p>

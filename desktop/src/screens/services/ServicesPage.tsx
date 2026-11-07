@@ -12,10 +12,10 @@ import { sshProgramError } from '../../lib/reasons';
 import { placeLabel } from '../../lib/places';
 import { useShell, type Intent } from '../../app/shell';
 import { useApp } from '../../ui/app';
-import { Button, TextField } from '../../ui/controls';
+import { Button, IconButton, TextField } from '../../ui/controls';
 import { ConfirmDialog } from '../../ui/Dialog';
 import { Menu } from '../../ui/disclosure';
-import { Badge, Banner, EmptyState, KeyValues, LoadError, Section, SkeletonRows, Status, type KV } from '../../ui/feedback';
+import { EmptyState, KeyValues, LoadError, Section, SkeletonRows, Status, type KV } from '../../ui/feedback';
 import { useLoad, useNow } from '../../ui/hooks';
 import { Icon } from '../../ui/icons';
 import { IconTile, ListRow, Meta, PaneHeader, SearchBox, StaticRow, useListKeys } from '../../ui/layout';
@@ -80,7 +80,7 @@ export function ServicesPage({ intent }: { intent?: Intent }) {
   const reload = () => { load.reload(); };
 
   const pairs = useMemo(() => (vault.data ? teamEnvPairs(vault.data.listing) : []), [vault.data]);
-  const addBtn = <Button tone="primary" size="sm" icon="plus" onClick={() => setDialog({ kind: 'create' })}>{t('service.add')}</Button>;
+  const addBtn = <IconButton icon="plus" label={t('service.add')} size="sm" onClick={() => setDialog({ kind: 'create' })} />;
   const single = narrow.single;
   const listHidden = single && showDetail && !!current;
 
@@ -98,7 +98,7 @@ export function ServicesPage({ intent }: { intent?: Intent }) {
           {!all && load.error && <div className="svc-pad"><LoadError error={load.error} onRetry={reload} /></div>}
           {!all && !load.error && <SkeletonRows n={3} />}
           {all && all.length === 0 && (
-            <EmptyState icon="plug" title={t('service.empty.title')} action={addBtn}>{t('service.empty.text')}</EmptyState>
+            <EmptyState icon="plug" title={t('service.empty.title')} action={<Button tone="primary" icon="plus" onClick={() => setDialog({ kind: 'create' })}>{t('service.add')}</Button>}>{t('service.empty.text')}</EmptyState>
           )}
           {all && all.length > 0 && shown.length === 0 && <EmptyState compact icon="search" title={t('service.search.none', { q: q.trim() })} />}
           {shown.length > 0 && (
@@ -109,9 +109,9 @@ export function ServicesPage({ intent }: { intent?: Intent }) {
                   <ListRow key={c.id} id={c.id} selected={current?.id === c.id} label={c.id}
                     onSelect={() => { select(c.id); if (single) setShowDetail(true); }}
                     lead={<IconTile icon={s.kind === 'ssh' ? 'terminal' : 'globe'} tone="service" />}
-                    title={<span className="mono">{c.id}</span>}
+                    title={c.id}
                     meta={<Meta parts={[s.host, placeOf(c), st.tone !== 'ok' ? t(st.key) : null]} />}
-                    end={<Badge tone={s.kind === 'ssh' ? 'info' : 'accent'}>{t(s.kind === 'ssh' ? 'service.kind.ssh' : s.kind === 'http' ? 'service.kind.http' : 'service.kind.other')}</Badge>} />
+                    end={st.tone === 'warn' ? <Icon name="alert" size={13} className="svc-warn-text" /> : undefined} />
                 );
               })}
             </div>
@@ -129,8 +129,8 @@ export function ServicesPage({ intent }: { intent?: Intent }) {
             onGrant={() => go('developer', { view: 'agents', intent: 'add-grant' })} />
         ) : (
           <>
-            <PaneHeader title={t('service.title')} level={2} />
-            <div className="pane-body">{all && all.length > 0 && <EmptyState compact icon="plug" title={t('service.pick.title')}>{t('service.pick.text')}</EmptyState>}</div>
+            <PaneHeader title="" level={2} />
+            <div className="pane-body">{all && all.length > 0 && <p className="svc-pick">{t('service.pick.title')}</p>}</div>
           </>
         )}
       </section>
@@ -161,46 +161,39 @@ function ConnectionDetail({ c, grants, principals, secretKind, onBack, onSshCli,
   const live = grants ? liveGrantsFor(grants, c.id, now) : [];
   const runtimeOf = (p: string) => principals?.find((x) => x.id === p)?.runtime ?? null;
 
+  const kindName = t(s.kind === 'ssh' ? 'service.c.type.ssh' : s.kind === 'http' ? 'service.c.type.http' : 'service.kind.other');
+  const created = typeof c.created_at === 'string' ? shortTime(c.created_at) : null;
   let target: KV[] = [];
   let scope: KV[] = [];
   if (f.kind === 'http') {
-    const auth = f.auth.mode === 'basic' ? t('service.d.auth.basic', { user: f.auth.basicUser || '—' })
+    const auth = f.auth.mode === 'basic' ? t('service.d.auth.basic', { user: f.auth.basicUser || '-' })
       : f.auth.mode === 'header' ? (f.auth.prefix ? t('service.d.auth.headerPrefix', { name: f.auth.headerName, prefix: f.auth.prefix }) : t('service.d.auth.header', { name: f.auth.headerName }))
-        : f.auth.mode === 'bearer' ? t('service.d.auth.bearer') : f.auth.mode || '—';
+        : f.auth.mode === 'bearer' ? t('service.d.auth.bearer') : f.auth.mode || '-';
     target = [
-      { k: t('service.d.address'), v: <span className="row-wrap"><span className="mono">{f.origin}</span><Badge tone={f.tls ? 'ok' : 'warn'} icon={f.tls ? 'lock' : 'alert'}>{t(f.tls ? 'service.d.tls.on' : 'service.d.tls.off')}</Badge></span> },
+      { k: t('service.d.address'), v: <span><span className="mono">{f.origin}</span>{!f.tls && <span className="svc-warn-text"> · {t('service.d.tls.off')}</span>}</span> },
       { k: t('service.d.auth'), v: auth },
       f.privateAllowed ? { k: t('service.d.private'), v: t('state.on') } as KV : null,
-      { k: t('service.d.ca'), v: f.ca ? t('service.d.ca.custom') : t('state.none') },
-      { k: t('service.d.cli'), v: f.cli ? <span className="mono">{f.cli}</span> : t('service.d.cli.none') },
+      f.ca ? { k: t('service.d.ca'), v: t('service.d.ca.custom') } as KV : null,
+      f.cli ? { k: t('service.d.cli'), v: <span className="mono">{f.cli}</span> } as KV : null,
     ].filter((x): x is KV => !!x);
+    const methods = f.methods.map((m) => (f.confirm.includes(m) ? t('service.d.method.confirm', { m }) : m)).join(', ');
     scope = [
-      {
-        k: t('service.d.methods'),
-        v: (
-          <span className="svc-method-list">
-            {f.methods.map((m) => (
-              <span key={m} className={'svc-method-fact' + (f.confirm.includes(m) ? ' is-confirm' : '')}>
-                <span className="mono">{m}</span>{f.confirm.includes(m) && <span className="svc-method-tag">{t('service.d.confirm')}</span>}
-              </span>
-            ))}
-          </span>
-        ),
-      },
+      { k: t('service.d.methods'), v: <span className="svc-methods-text">{methods || '-'}</span> },
       { k: t('service.d.paths'), v: f.paths.length ? <span className="mono">{f.paths.join(', ')}</span> : t('service.d.paths.all') },
     ];
   } else if (f.kind === 'ssh') {
     target = [
       { k: t('service.d.host'), v: <span className="mono">{f.host}{f.port !== '22' ? `:${f.port}` : ''}</span> },
       { k: t('service.d.user'), v: <span className="mono">{f.user}</span> },
-      { k: t('service.d.hostKey'), v: <span className="mono svc-hostkey">{f.hostKeys.join('\n') || '—'}</span> },
+      { k: t('service.d.hostKey'), v: <span className="mono svc-hostkey">{f.hostKeys.join('\n') || '-'}</span> },
       { k: t('service.d.ssh'), v: f.cli ? <span className="mono">{f.cli}</span> : <span className="svc-warn-text">{t('service.d.ssh.none')}</span> },
     ];
   }
+  if (created) target.push({ k: t('service.d.created'), v: <span className="num">{created}</span> });
 
   return (
     <>
-      <PaneHeader level={2} title={<span className="svc-head-kind">{t(s.kind === 'ssh' ? 'service.c.type.ssh' : s.kind === 'http' ? 'service.c.type.http' : 'service.kind.other')}</span>} onBack={onBack}
+      <PaneHeader level={2} title="" onBack={onBack}
         actions={s.active ? <Menu label={t('service.more.aria')} items={[
           { label: t('service.d.agents.give'), icon: 'user', onSelect: onGrant },
           { label: t('service.d.openItem'), icon: 'key', onSelect: () => onOpenItem(String(c.secret_id)) },
@@ -209,44 +202,40 @@ function ConnectionDetail({ c, grants, principals, secretKind, onBack, onSshCli,
         ]} /> : undefined} />
       <div className="pane-body">
         <div className="pane-content svc-detail">
-          <div className="card svc-head-card">
-            <div className="detail-head">
-              <IconTile icon={s.kind === 'ssh' ? 'terminal' : 'globe'} tone="service" size="lg" />
-              <div className="grow">
-                <h3 className="detail-title mono" data-selectable="">{c.id}</h3>
-                <div className="detail-sub">
-                  <Status tone={st.tone}>{t(st.key)}</Status>
-                  <span>{placeOf(c)}</span>
-                </div>
-              </div>
+          <header className="svc-head">
+            <span className="svc-head-glyph" aria-hidden="true"><Icon name={s.kind === 'ssh' ? 'terminal' : 'globe'} size={20} /></span>
+            <div className="grow">
+              <h2 className="detail-title" data-selectable="">{c.id}</h2>
+              <p className="detail-sub">
+                <Status tone={st.tone}>{t(st.key)}</Status><span aria-hidden="true">·</span><span>{kindName}</span><span aria-hidden="true">·</span><span>{placeOf(c)}</span>
+              </p>
             </div>
-            {s.active && s.noCli && (
-              <div className="detail-actions"><Button tone="primary" icon="terminal" onClick={onSshCli}>{t('service.sshcli')}</Button></div>
-            )}
-          </div>
-          {s.active && s.noCli && <Banner tone="warn">{t('service.d.nocli')}</Banner>}
-          {!s.active && <Banner tone="neutral">{t('service.d.off')}</Banner>}
+            {s.active && s.noCli && <Button tone="primary" size="sm" icon="terminal" onClick={onSshCli}>{t('service.sshcli')}</Button>}
+          </header>
+          {s.active && s.noCli && <p className="svc-note is-warn">{t('service.d.nocli')}</p>}
+          {!s.active && <p className="svc-note">{t('service.d.off')}</p>}
 
-          {target.length > 0 && <Section title={t('service.d.target')}><div className="card card-pad"><KeyValues items={target} /></div></Section>}
-          {scope.length > 0 && <Section title={t('service.d.scope')}><div className="card card-pad"><KeyValues items={scope} /></div></Section>}
+          {target.length > 0 && <Section title={t('service.d.target')}><div className="card card-pad"><KeyValues dense items={target} /></div></Section>}
+          {scope.length > 0 && <Section title={t('service.d.scope')}><div className="card card-pad"><KeyValues dense items={scope} /></div></Section>}
 
           <Section title={t('service.d.credential')}>
             <div className="rows">
-              <StaticRow lead={<span className={`tile tile-${secretKind ?? 'api_key'}`} aria-hidden="true"><Icon name={secretKind === 'ssh_private_key' ? 'ssh' : secretKind === 'password' ? 'password' : 'key'} /></span>}
-                title={<span className="mono">{String(c.secret_id)}</span>}
+              <StaticRow onClick={() => onOpenItem(String(c.secret_id))} label={t('service.d.openItem')}
+                lead={<span className={`svc-cred-glyph tile-${secretKind ?? 'api_key'}`} aria-hidden="true"><Icon name={secretKind === 'ssh_private_key' ? 'ssh' : secretKind === 'password' ? 'password' : 'key'} /></span>}
+                title={String(c.secret_id)}
                 meta={<Meta parts={[secretKind ? t(`nav.kind.${secretKind}` as CopyKey) : null, placeOf(c)]} />}
-                end={<Button size="sm" tone="ghost" iconEnd="arrow-right" onClick={() => onOpenItem(String(c.secret_id))}>{t('service.d.openItem')}</Button>} />
+                end={<Icon name="chevron-right" size={14} />} />
             </div>
           </Section>
 
           <Section title={t('service.d.agents')} aside={s.active ? <Button size="sm" tone="ghost" icon="plus" onClick={onGrant}>{t('service.d.agents.give')}</Button> : undefined}>
-            {grants === null ? <Banner tone="neutral" compact>{t('service.d.agents.err')}</Banner>
-              : live.length === 0 ? <p className="muted text-sm">{t('service.d.agents.none')}</p>
+            {grants === null ? <p className="svc-note is-warn">{t('service.d.agents.err')}</p>
+              : live.length === 0 ? <p className="svc-note">{t('service.d.agents.none')}</p>
                 : (
                   <div className="rows">
                     {live.map((g) => (
-                      <StaticRow key={g.id} lead={<span className="tile" aria-hidden="true"><Icon name="user" /></span>}
-                        title={<span className="mono">{g.principal}</span>}
+                      <StaticRow key={g.id}
+                        title={g.principal}
                         meta={<Meta parts={[runtimeOf(g.principal), t('service.d.agents.until', { time: shortTime(g.expires_at) }),
                           g.max_uses !== null && g.max_uses !== undefined ? t('service.d.agents.uses', { uses: String(g.uses), max: String(g.max_uses) }) : t('service.d.agents.usesOpen', { uses: String(g.uses) })]} />} />
                     ))}
@@ -254,16 +243,7 @@ function ConnectionDetail({ c, grants, principals, secretKind, onBack, onSshCli,
                 )}
           </Section>
 
-          <Section title={t('service.d.status')}>
-            <div className="card card-pad">
-              <KeyValues dense items={[
-                { k: t('service.d.created'), v: typeof c.created_at === 'string' ? shortTime(c.created_at) : '—' },
-                c.policy_version !== undefined && c.policy_version !== null ? { k: t('service.d.policy'), v: String(c.policy_version) } : null,
-              ]} />
-            </div>
-          </Section>
-
-          <Banner tone="info" title={t('service.scope.title')}>{t('service.scope.text')}</Banner>
+          <p className="svc-note">{t('service.scope.text')}</p>
         </div>
       </div>
     </>

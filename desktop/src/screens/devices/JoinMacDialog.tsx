@@ -51,15 +51,13 @@ export function JoinMacDialog({ open, pj, onClose }: { open: boolean; pj: PairJo
                 <Fingerprint value={p.preview.fingerprint} />
               </div>
               <More hint={t('mac.pv.more', { n: p.preview.environments.length })}>
-                <div className="card card-pad">
-                  <KeyValues dense items={[
-                    { k: t('mac.pv.places'), v: p.preview.environments.map((e) => placeOf(e.env)).join(', ') },
-                    { k: t('mac.pv.server'), v: p.preview.service_host, mono: true },
-                    !!p.preview.expires_at && { k: t('mac.pv.left'), v: <span className="num">{formatCountdown(msLeft(p.preview.expires_at, now))}</span> },
-                  ]} />
-                </div>
+                <KeyValues dense items={[
+                  { k: t('mac.pv.places'), v: p.preview.environments.map((e) => placeOf(e.env)).join(', ') },
+                  { k: t('mac.pv.server'), v: p.preview.service_host, mono: true },
+                  !!p.preview.expires_at && { k: t('mac.pv.left'), v: <span className="num">{formatCountdown(msLeft(p.preview.expires_at, now))}</span> },
+                ]} />
               </More>
-              <Banner tone="info" compact>{t('mac.joinDlg.check')}</Banner>
+              <p className="field-note">{t('mac.joinDlg.check')}</p>
             </div>
           )}
         </>

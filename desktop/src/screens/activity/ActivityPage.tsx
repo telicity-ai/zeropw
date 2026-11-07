@@ -26,20 +26,44 @@ const tabOf = (view: string | undefined): ActivityTab => (TABS.includes(view as 
 
 export const scopeText = (s: string): string => (s in SCOPE_LABEL ? t(SCOPE_LABEL[s as keyof typeof SCOPE_LABEL]) : s);
 
-interface Shown { view: RecordView; conflict: boolean; text: string }
+/** A failed or refused outcome: shown in the danger colour, with its word. */
+const FAILED_RESULTS = new Set(['denied', 'failed', 'blocked', 'error']);
+const FAILED_EVENT = /(^auth_failed$|_denied$|_rejected$|_refused$|_failed$)/;
+export function isFailure(rec: Record<string, unknown>): boolean {
+  return (typeof rec.result === 'string' && FAILED_RESULTS.has(rec.result)) || (typeof rec.event === 'string' && FAILED_EVENT.test(rec.event));
+}
+
+export interface Shown {
+  view: RecordView;
+  conflict: boolean;
+  failed: boolean;
+  /** Who acted (the caller), through what (the connection), and the rest of the plain parts. */
+  actor: string;
+  target: string;
+  details: string[];
+  text: string;
+}
 
 /** Rows for a list of records or alerts: newest first, with the text a filter matches. */
 export function shownRecords(list: readonly Record<string, unknown>[], kind: 'audit' | 'alert'): Shown[] {
   return list.slice().reverse().map((rec) => {
     const view = recordView(rec, kind);
     const conflict = kind === 'alert' && rec.alert === 'team_op_overridden';
-    return { view, conflict, text: [view.title, ...view.meta, ...view.raw].join(' ').toLowerCase() };
+    // recordView puts the caller first and the connection second when they are there
+    let i = 0;
+    const actor = valueText(rec.caller) ? view.meta[i++] ?? '' : '';
+    const target = valueText(rec.connection) ? view.meta[i++] ?? '' : '';
+    const details = view.meta.slice(i);
+    return {
+      view, conflict, failed: kind === 'audit' && isFailure(rec), actor, target, details,
+      text: [view.title, ...view.meta, ...view.raw].join(' ').toLowerCase(),
+    };
   });
 }
 
 export function ActivityPage({ intent }: { intent?: Intent }) {
   const { route, go, clearIntent, tick, activity, bump } = useShell();
-  const { toast } = useApp();
+  const { toast, locale } = useApp();
   const tab = tabOf(route.view);
   const setTab = (v: ActivityTab) => go('activity', { view: v });
   const [query, setQuery] = useState('');
@@ -66,7 +90,7 @@ export function ActivityPage({ intent }: { intent?: Intent }) {
     if (tab === 'records' && records.data) return shownRecords(records.data.records, 'audit');
     if (tab === 'alerts' && alerts.data) return shownRecords(alerts.data.alerts as unknown as Record<string, unknown>[], 'alert');
     return null;
-  }, [tab, records.data, alerts.data]);
+  }, [tab, records.data, alerts.data, locale]);
   const q = query.trim().toLowerCase();
   const filtered = list ? (q ? list.filter((r) => r.text.includes(q)) : list) : null;
   const skipped = (tab === 'records' ? records.data?.unparseable_lines : tab === 'alerts' ? alerts.data?.unparseable_lines : 0) ?? 0;
@@ -89,7 +113,6 @@ export function ActivityPage({ intent }: { intent?: Intent }) {
               <>
                 <div className="activity-tools">
                   <SearchBox value={query} onChange={setQuery} label={t('activity.filter')} placeholder={t('activity.filter.placeholder')} />
-                  <span className="muted text-xs">{t('activity.limit', { n: RECORD_LIMIT })}</span>
                 </div>
                 {anyConflict && <Banner tone="warn" icon="conflict" title={t('activity.conflict')}>{t('activity.conflict.note')}</Banner>}
                 {!filtered ? (load.error ? <LoadError error={load.error} onRetry={reload} /> : <SkeletonRows />) : filtered.length === 0 ? (
@@ -98,9 +121,16 @@ export function ActivityPage({ intent }: { intent?: Intent }) {
                       ? <EmptyState icon="activity" title={t('activity.records.empty')}>{t('activity.records.empty.sub')}</EmptyState>
                       : <EmptyState icon="info" title={t('activity.alerts.empty')} />
                 ) : (
-                  <ol className="rec-list" aria-label={t(`activity.tab.${tab}` as CopyKey)}>
-                    {filtered.map((r, i) => <RecordItem key={i} shown={r} alert={tab === 'alerts'} />)}
-                  </ol>
+                  <div className="log" role="table" aria-label={t(`activity.tab.${tab}` as CopyKey)}>
+                    <div className="log-head" role="row">
+                      <span role="columnheader">{t('activity.col.time')}</span>
+                      <span role="columnheader">{t(tab === 'alerts' ? 'activity.col.alert' : 'activity.col.event')}</span>
+                      <span role="columnheader">{t('activity.col.actor')}</span>
+                      <span role="columnheader">{t('activity.col.target')}</span>
+                    </div>
+                    {filtered.map((r, i) => <RecordRow key={i} shown={r} />)}
+                    <div className="log-foot" role="row"><span role="cell">{t('activity.limit', { n: RECORD_LIMIT })}</span></div>
+                  </div>
                 )}
                 {skipped > 0 && <p className="muted text-xs">{t('activity.skipped', { n: skipped })}</p>}
               </>
@@ -140,29 +170,35 @@ export function ActivityPage({ intent }: { intent?: Intent }) {
   );
 }
 
-function RecordItem({ shown, alert }: { shown: Shown; alert: boolean }) {
+function RecordRow({ shown }: { shown: Shown }) {
   const v = shown.view;
   const [open, setOpen] = useState(false);
+  const more = shown.details.length > 0 || v.raw.length > 0;
   return (
-    <li className={'rec' + (alert ? ' is-alert' : '')}>
-      <span className="rec-icon" aria-hidden="true"><Icon name={shown.conflict ? 'conflict' : alert ? 'alert' : 'dot'} size={alert ? 14 : 10} /></span>
-      <div className="rec-main">
-        <div className="rec-head">
-          <span className="rec-title">{v.title}</span>
-          {shown.conflict && <Badge tone="warn">{t('activity.conflict')}</Badge>}
-          <time className="rec-time num" dateTime={v.ts}>{shortTime(v.ts)}</time>
-        </div>
-        {v.meta.length > 0 && <div className="rec-meta">{v.meta.map((m, i) => <span key={i}>{m}</span>)}</div>}
-        {v.raw.length > 0 && (
-          <>
-            <button type="button" className="rec-more" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
-              <Icon name="chevron-right" size={11} />{t(open ? 'activity.raw.hide' : 'activity.raw.show')}
-            </button>
-            {open && <div className="rec-raw mono" data-selectable="">{v.raw.join('  ')}</div>}
-          </>
+    <div className={'log-row' + (shown.failed ? ' is-failed' : '') + (open ? ' is-open' : '')} role="row">
+      <time className="log-time num" role="cell" dateTime={v.ts}>{shortTime(v.ts)}</time>
+      <span className="log-event" role="cell">
+        <span className="log-title">{v.title}</span>
+        {shown.failed && <span className="log-flag">{t('activity.failed')}</span>}
+        {shown.conflict && <Badge tone="warn">{t('activity.conflict')}</Badge>}
+      </span>
+      <span className="log-actor" role="cell">{shown.actor}</span>
+      <span className="log-target" role="cell">
+        <span className="truncate">{shown.target}</span>
+        {more && (
+          <button type="button" className="log-more" aria-expanded={open} aria-label={t(open ? 'activity.raw.hide' : 'activity.raw.show')} title={t(open ? 'activity.raw.hide' : 'activity.raw.show')}
+            onClick={() => setOpen((o) => !o)}>
+            <Icon name="chevron-down" size={12} />
+          </button>
         )}
-      </div>
-    </li>
+      </span>
+      {open && (
+        <div className="log-detail" role="cell">
+          {shown.details.length > 0 && <span>{shown.details.join(' · ')}</span>}
+          {v.raw.length > 0 && <span className="mono" data-selectable="">{v.raw.join('  ')}</span>}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -172,7 +208,6 @@ function IncidentItem({ incident: x, onClose }: { incident: Incident; onClose():
   const meta = [t('activity.inc.scopeOf', { scope: scopeText(x.scope) }), shortTime(x.opened_at), valueText(x.runtime), principals].filter(Boolean);
   return (
     <li className="srow">
-      <span className={'tile' + (open ? ' inc-open' : '')} aria-hidden="true"><Icon name={open ? 'alert' : 'shield'} /></span>
       <div className="srow-main">
         <span className="srow-title row"><span className="mono">{x.id}</span><Badge tone={open ? 'warn' : 'neutral'}>{t(open ? 'activity.inc.open' : 'activity.inc.closed')}</Badge></span>
         <span className="srow-meta">{meta.join(' · ')}</span>

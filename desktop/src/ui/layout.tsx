@@ -16,9 +16,9 @@ export function PaneHeader({ title, sub, actions, level = 1, onBack, titleRef }:
   return (
     <header className="pane-head" data-tauri-drag-region="">
       {onBack && <IconButton icon="chevron-left" label={t('nav.back')} size="sm" onClick={onBack} />}
-      <H tabIndex={-1} ref={titleRef} data-page-title={level === 1 ? '' : undefined} data-tauri-drag-region="">
+      {title ? <H tabIndex={-1} ref={titleRef} data-page-title={level === 1 ? '' : undefined} data-tauri-drag-region="">
         {title}{sub && <> <span className="pane-head-sub">{sub}</span></>}
-      </H>
+      </H> : <div className="grow" data-tauri-drag-region="" />}
       {actions && <div className="pane-actions">{actions}</div>}
     </header>
   );

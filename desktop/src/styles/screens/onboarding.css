@@ -1,5 +1,4 @@
-/* First run: one glass card centred on the window (the same material as the lock card), a large
-   title, one line, one black primary button per step and three small dots for progress. */
+/* First run: a quiet, centred sequence with one primary action per step. */
 
 .setup {
   flex: 1; min-width: 0; min-height: 0; overflow-y: auto; display: flex; justify-content: center; align-items: center;
@@ -7,11 +6,9 @@
 }
 .setup-card {
   width: min(460px, 100%); display: flex; flex-direction: column; gap: 6px; margin: auto 0;
-  padding: 26px 32px 28px; border-radius: var(--radius-xl);
-  background: var(--glass-bg); -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur);
-  border: 0.5px solid var(--glass-border); box-shadow: var(--shadow-pop);
+  padding: 26px 24px 28px;
 }
-.setup-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 26px; }
+.setup-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; min-height: 26px; }
 .setup-brand { display: inline-flex; color: var(--text-1); }
 
 .setup-dots { display: flex; gap: 6px; align-items: center; }
@@ -44,8 +41,9 @@
 .setup-incoming { display: flex; align-items: center; gap: 7px; font-size: var(--text-sm); color: var(--accent-text); }
 
 /* welcome */
-.setup-step.is-welcome { gap: 26px; padding-top: 26px; }
-.setup-welcome-actions { display: flex; flex-direction: column; gap: 8px; align-items: stretch; }
+.setup-step.is-welcome { gap: 26px; padding-top: 26px; text-align: center; }
+.setup-welcome-actions { display: flex; flex-direction: column; gap: 8px; align-items: center; }
+.setup-welcome-actions > .btn { width: 240px; max-width: 100%; }
 
 /* strength: one slim bar */
 .meter { display: flex; align-items: center; }

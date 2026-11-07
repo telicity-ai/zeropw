@@ -328,6 +328,7 @@ fn mac(root: &Path, name: &str) -> Core {
         gateway_port: free_port(),
         team_listen: None,
         link_service: None,
+        language: None,
     })
     .unwrap();
     core

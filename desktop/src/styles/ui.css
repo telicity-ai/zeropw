@@ -216,13 +216,17 @@
 
 .fingerprint { display: inline-flex; flex-wrap: wrap; gap: 0 0.55em; letter-spacing: 0.02em; color: var(--text-1); }
 
-.section { display: flex; flex-direction: column; gap: 10px; }
+.section { display: flex; flex-direction: column; gap: 8px; }
 .section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 26px; }
-.section-head h3 { font-size: var(--text-sm); font-weight: var(--weight-semibold); color: var(--text-2); letter-spacing: var(--tracking-body); }
+.section-head h2 { font-size: var(--text-md); font-weight: var(--weight-semibold); color: var(--text-1); letter-spacing: var(--tracking-body); }
 .section-aside { display: flex; gap: 6px; align-items: center; }
 
-.card { background: var(--bg-raised); border: 0; border-radius: var(--radius-lg); box-shadow: var(--shadow-card); }
+/* a grouped list on the white surface (macOS System Settings style): a light fill, no shadow */
+.card { background: var(--bg-group); border: 0; border-radius: var(--radius-md); }
 .card-pad { padding: 14px 16px; }
+.language-choice { max-width: 240px; }
+.language-choice.is-compact { max-width: 160px; }
+.language-choice.is-compact .select { background: transparent; }
 .divider { height: 1px; background: var(--border-1); border: 0; margin: 0; }
 
 /* ---- dialogs -------------------------------------------------------------------------------- */

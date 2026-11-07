@@ -25,7 +25,7 @@ let backend: MockBackend;
 let log: Array<[CommandName, unknown]>;
 let root: Root, host: HTMLDivElement;
 const toast = vi.fn();
-const app: AppApi = { desktop: true, toast, announce: () => undefined };
+const app: AppApi = { desktop: true, toast, announce: () => undefined, locale: 'ko', language: 'system', setLanguage: async () => undefined };
 let takeInvite: ReturnType<typeof vi.fn<(ref: string) => void>>;
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 

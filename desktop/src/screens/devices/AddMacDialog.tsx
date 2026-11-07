@@ -209,7 +209,7 @@ export function RequestCard({ fingerprint, envs, attempts, onDecided }: { finger
         <Fingerprint value={fingerprint} />
         <span className="muted text-xs">{t('mac.req.meta', { n: envs.length, count: attempts })}</span>
       </div>
-      <Banner tone="info" compact>{t('mac.req.check')}</Banner>
+      <p className="field-note">{t('mac.req.check')}</p>
       <PassField value={pass} inputRef={passRef} error={err ? t(err) : null} onChange={(v) => { setPass(v); setErr(null); }} />
       <div className="row mac-request-actions">
         <Button tone="ghost" blocked={busy} onClick={() => void decide(false)}>{t('mac.req.deny')}</Button>

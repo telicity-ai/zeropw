@@ -31,7 +31,7 @@ const LINK_A = 'aaaaaaaaaaaaaaaaaaaaaaaaaa';
 const PASS = 'synthetic-admin-pass';
 const CODE_TEXT_SECRET = 'zplt_synthetic_token';
 
-const app: AppApi = { desktop: true, toast: vi.fn(), announce: vi.fn() };
+const app: AppApi = { desktop: true, toast: vi.fn(), announce: vi.fn(), locale: 'ko', language: 'system', setLanguage: async () => undefined };
 let shell: ShellApi;
 let root: Root, host: HTMLDivElement;
 let handlers: Record<string, (input: never) => unknown>;
@@ -72,7 +72,7 @@ async function render() {
   await flush();
 }
 function button(text: string, within: ParentNode = document.body) {
-  const found = [...within.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.trim() === text);
+  const found = [...within.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.getAttribute('aria-label') === text || b.textContent?.trim() === text || b.querySelector('.mac-connect-text > span')?.textContent === text);
   if (!found) throw new Error(`Missing button: ${text}`);
   return found;
 }
@@ -83,6 +83,10 @@ function field(label: string, within: ParentNode = document.body): HTMLInputElem
   return el as HTMLInputElement;
 }
 async function click(el: HTMLElement) { await act(async () => el.click()); await flush(); }
+async function connectAction(label: string) {
+  await click(button(t('mac.connect'), host));
+  return button(label, host.querySelector<HTMLElement>('[role="menu"]')!);
+}
 async function type(el: HTMLInputElement, value: string) {
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(el, value);
@@ -91,7 +95,7 @@ async function type(el: HTMLInputElement, value: string) {
   await flush();
 }
 const dialog = (id: string) => document.getElementById(id)!;
-const rowText = (name: string) => [...host.querySelectorAll('[role="option"]')].find((r) => r.textContent?.includes(name))?.textContent ?? '';
+const rowText = (name: string) => [...host.querySelectorAll('button[data-mac]')].find((r) => r.textContent?.includes(name))?.textContent ?? '';
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -140,7 +144,7 @@ describe('Mac list', () => {
 
   it('keeps how a Mac is connected under the advanced diagnostics only', async () => {
     await render();
-    const row = [...host.querySelectorAll<HTMLElement>('[role="option"]')].find((r) => r.textContent?.includes('studio'))!;
+    const row = [...host.querySelectorAll<HTMLElement>('button[data-mac]')].find((r) => r.textContent?.includes('studio'))!;
     await click(row);
     const outsideBefore = host.cloneNode(true) as HTMLElement;
     outsideBefore.querySelectorAll('details').forEach((d) => d.remove());
@@ -158,7 +162,11 @@ describe('Mac list', () => {
     handlers.link_enroll = () => linkStatus();
     await render();
     expect(host.textContent).toContain(t('mac.enroll.title'));
-    expect(button(t('mac.add'), host).getAttribute('aria-disabled')).toBe('true');
+    const add = await connectAction(t('mac.add'));
+    expect(add.getAttribute('aria-disabled')).toBe('true');
+    await click(add);
+    expect(document.getElementById('dlg-mac-add')).toBeNull();
+    expect(calls('pairing_create')).toHaveLength(0);
     const code = field(t('mac.enroll.code'), host);
     await type(code, 'ZPL-not-a-code');
     await click(button(t('mac.enroll.go'), host));
@@ -190,7 +198,7 @@ describe('adding a Mac', () => {
     handlers.onetime_copy = () => ({ copied: true, clears_in_s: 60 });
     handlers.approve_join = () => ({ fingerprint: MAC_N, envs: [{ env: 'personal/main', ok: true, invites: ['i1'] }] });
     await render();
-    await click(button(t('mac.add'), host));
+    await click(await connectAction(t('mac.add')));
     const dlg = dialog('dlg-mac-add');
     // essentials first: places (all by default) and the new Mac's name wait behind 더 보기
     expect([...dlg.querySelectorAll('label')].some((l) => l.textContent === t('mac.addDlg.name'))).toBe(false);
@@ -224,7 +232,7 @@ describe('adding a Mac', () => {
     handlers.pairing_create = () => ({ ref: 'ref-unused', expires_at: new Date(Date.now() + 600_000).toISOString(), peer: OWN_LINK, fingerprint: SELF, environments: [{ env: 'personal/main', invite_id: 'i1', shared_now: false }] });
     handlers.join_requests = () => ({ requests: [], errors: [] });
     await render();
-    await click(button(t('mac.add'), host));
+    await click(await connectAction(t('mac.add')));
     const dlg = dialog('dlg-mac-add');
     await type(field(t('pass.label'), dlg), PASS);
     await click(button(t('mac.addDlg.create'), dlg));
@@ -247,7 +255,7 @@ describe('joining another Mac', () => {
         : { done: true, peer: LINK_A, environments: [{ env: 'personal/main', state: 'joined', self_fingerprint: SELF }] };
     };
     await render();
-    await click(button(t('mac.join'), host));
+    await click(await connectAction(t('mac.join')));
     const dlg = dialog('dlg-mac-join');
     await type(field(t('mac.joinDlg.code'), dlg), 'not a code');
     expect(dlg.textContent).toContain(t('pair.join.err'));
@@ -270,7 +278,7 @@ describe('joining another Mac', () => {
     handlers.pairing_preview = () => ({ ref: 'ref-cancel', preview });
     handlers.pairing_join = () => ({ done: false, peer: LINK_A, environments: [{ env: 'personal/main', state: 'pending', self_fingerprint: SELF }] });
     await render();
-    await click(button(t('mac.join'), host));
+    await click(await connectAction(t('mac.join')));
     const dlg = dialog('dlg-mac-join');
     await type(field(t('mac.joinDlg.code'), dlg), code);
     await click(button(t('mac.joinDlg.send'), dlg));

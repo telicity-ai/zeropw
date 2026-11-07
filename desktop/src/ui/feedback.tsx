@@ -111,7 +111,7 @@ export function Section({ title, aside, children, id }: { title?: ReactNode; asi
     <section className="section" aria-labelledby={title && id ? id : undefined}>
       {(title || aside) && (
         <div className="section-head">
-          {title && <h3 id={id}>{title}</h3>}
+          {title && <h2 id={id}>{title}</h2>}
           {aside && <div className="section-aside">{aside}</div>}
         </div>
       )}

@@ -11,7 +11,7 @@ import { useApp } from '../../ui/app';
 import { Button } from '../../ui/controls';
 import { ConfirmDialog } from '../../ui/Dialog';
 import { More } from '../../ui/disclosure';
-import { Badge, Banner, EmptyState, KeyValues, LoadError, Section, SkeletonRows } from '../../ui/feedback';
+import { Badge, EmptyState, KeyValues, LoadError, Section, SkeletonRows } from '../../ui/feedback';
 import type { Load } from '../../ui/hooks';
 
 function bodySummary(a: ApprovalView): string {
@@ -24,8 +24,8 @@ function ApprovalDetails({ a }: { a: ApprovalView }) {
     <>
       <KeyValues dense items={[
         { k: t('appr.req'), v: `${a.method} ${a.target}`, mono: true },
-        { k: t('appr.agent'), v: a.caller, mono: true },
-        { k: t('appr.conn'), v: a.connection, mono: true },
+        { k: t('appr.agent'), v: a.caller },
+        { k: t('appr.conn'), v: a.connection },
       ]} />
       <More hint={bodySummary(a)}>
         <KeyValues dense items={[
@@ -51,7 +51,7 @@ export function ApprovalsTab({ load }: { load: Load<ApprovalView[]> }) {
   const list = load.data;
   return (
     <>
-      <Banner tone="neutral">{t('appr.intro')}</Banner>
+      <p className="dev-intro">{t('appr.intro')}</p>
       <Section title={t('appr.list')} id="dev-appr-h">
         {!list && load.error ? <LoadError error={load.error} onRetry={load.reload} />
           : !list ? <SkeletonRows n={2} />

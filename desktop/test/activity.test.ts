@@ -6,6 +6,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Page, Route, ShellApi } from '../src/app/shell';
 import { NO_CONTROL, ShellContext } from '../src/app/shell';
+import { t } from '../src/copy';
 import { call, useMockBackend } from '../src/ipc/client';
 import { createMockBackend, type MockBackend } from '../src/ipc/mock';
 import { ActivityPage, shownRecords } from '../src/screens/activity/ActivityPage';
@@ -16,7 +17,7 @@ import { AppContext, type AppApi } from '../src/ui/app';
 let root: Root, host: HTMLDivElement, backend: MockBackend;
 const toast = vi.fn();
 const go = vi.fn();
-const app: AppApi = { desktop: true, toast, announce: vi.fn() };
+const app: AppApi = { desktop: true, toast, announce: vi.fn(), locale: 'ko', language: 'system', setLanguage: async () => undefined };
 
 function Driver({ view }: { view: string }) {
   const [route, setRoute] = useState<Route>({ page: 'activity', view });
@@ -59,14 +60,15 @@ afterEach(async () => {
 describe('records and alerts', () => {
   it('lists records newest first and switches to alerts', async () => {
     await render('records');
-    const items = document.querySelectorAll('.rec-list .rec');
+    const items = document.querySelectorAll('[role="table"] .log-row[role="row"]');
     expect(items.length).toBeGreaterThan(0);
     const tail = await call('audit_tail', { limit: 200 });
     const newest = shownRecords(tail.records, 'audit')[0]!;
-    expect(items[0]!.querySelector('.rec-title')!.textContent).toBe(newest.view.title);
-    await click([...document.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find((b) => b.textContent === '알림')!);
+    expect(items[0]!.querySelector('.log-title')!.textContent).toBe(newest.view.title);
+    expect(document.querySelectorAll('[role="columnheader"]')).toHaveLength(4);
+    await click([...document.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find((b) => b.textContent === t('activity.tab.alerts'))!);
     expect(go).toHaveBeenCalledWith('activity', { view: 'alerts' });
-    expect(document.querySelector('[role="radio"][aria-checked="true"]')!.textContent).toBe('알림');
+    expect(document.querySelector('[role="radio"][aria-checked="true"]')!.textContent).toBe(t('activity.tab.alerts'));
   });
 
   it('marks an overridden change as a conflict to check', () => {
@@ -78,24 +80,24 @@ describe('records and alerts', () => {
 describe('incidents', () => {
   it('declares an incident for one agent without a passphrase', async () => {
     await render('incidents');
-    await click(button('사고 선언'));
+    await click(button(t('activity.inc.declare')));
     const d = dialog()!;
-    expect(d.textContent).toContain('범위 안의 에이전트를 끄고 권한을 회수해요');
+    expect(d.textContent).toContain(t('activity.inc.declare.warn'));
     expect(d.querySelector('input[type="password"]')).toBeNull();
-    await click(button('선언하기', d));
+    await click(button(t('activity.inc.declare.confirm'), d));
     expect(dialog()).toBeNull();
-    expect(toast).toHaveBeenCalledWith(expect.stringContaining('사고를 선언했어요'), 'warn');
-    expect(document.body.textContent).toContain('처리 중');
+    expect(toast).toHaveBeenCalledWith(t('toast.activity.declared'), 'warn');
+    expect(document.body.textContent).toContain(t('activity.inc.open'));
     expect((await call('control_get')).incident_open).toBe(true);
   });
 
   it('asks for the passphrase for the widest scope', async () => {
     await render('incidents');
-    await click(button('사고 선언'));
-    await click([...dialog()!.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find((b) => b.textContent === '전체')!);
+    await click(button(t('activity.inc.declare')));
+    await click([...dialog()!.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find((b) => b.textContent === t('inc.scope.all'))!);
     expect(dialog()!.querySelector('input[type="password"]')).not.toBeNull();
-    await click(button('선언하기', dialog()!));
-    expect(dialog()!.textContent).toContain('관리 비밀번호를 입력해 주세요');
+    await click(button(t('activity.inc.declare.confirm'), dialog()!));
+    expect(dialog()!.textContent).toContain(t('pass.err.empty'));
     expect((await call('control_get')).incident_open).toBe(false);
   });
 });

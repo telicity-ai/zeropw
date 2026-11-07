@@ -1532,8 +1532,14 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       }
       const service = next.link_service ?? null;
       if (service !== null && !/^https?:\/\/[a-z0-9.-]+(:\d{1,5})?\/?$/i.test(service)) throw fail('InvalidInput', 'link_service_invalid', 'link_service');
-      // written over the old file without reading it; `link_service` is left out while unset
-      settings = { gateway_port: next.gateway_port, team_listen: next.team_listen, ...(service !== null ? { link_service: service.replace(/\/$/, '') } : {}) };
+      const language = next.language ?? null;
+      if (language !== null && language !== 'ko' && language !== 'en') throw fail('InvalidInput', 'invalid_language', 'language');
+      // written over the old file without reading it; optional fields are left out while unset
+      settings = {
+        gateway_port: next.gateway_port, team_listen: next.team_listen,
+        ...(service !== null ? { link_service: service.replace(/\/$/, '') } : {}),
+        ...(language !== null ? { language } : {}),
+      };
       settingsCorrupt = false;
       return { ...settings };
     },

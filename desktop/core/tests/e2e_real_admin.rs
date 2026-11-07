@@ -159,6 +159,7 @@ fn init_project_secret_put_and_list_without_values() {
         gateway_port: free_port(),
         team_listen: None,
         link_service: None,
+        language: None,
     })
     .unwrap();
 
@@ -592,6 +593,7 @@ fn ssh_connection_made_without_its_ssh_is_repaired_and_runs_on_a_real_sshd() {
         gateway_port: free_port(),
         team_listen: None,
         link_service: None,
+        language: None,
     })
     .unwrap();
     let code = core.recovery_generate().unwrap();
@@ -759,6 +761,7 @@ fn app_made_ssh_connection_runs_agent_exec_on_a_real_sshd() {
         gateway_port: free_port(),
         team_listen: None,
         link_service: None,
+        language: None,
     })
     .unwrap();
     let code = core.recovery_generate().unwrap();

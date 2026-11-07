@@ -6,34 +6,27 @@
 .vault-link:hover { text-decoration: underline; text-underline-offset: 2px; }
 
 /* list */
-.vault-page .lrow-title { font-family: var(--font-mono); font-size: 12.5px; letter-spacing: 0; }
-.vault-conn-count {
-  display: inline-flex; align-items: center; gap: 3px; height: 19px; padding: 0 6px; border-radius: 999px;
-  background: var(--accent-soft); color: var(--accent-text); font-size: var(--text-2xs); font-weight: var(--weight-semibold); font-variant-numeric: tabular-nums;
-}
+.vault-page .lrow-title { font-size: var(--text-md); letter-spacing: 0; }
 .vault-warn-icon { display: inline-flex; color: var(--warn); }
-.vault-page .pane-toolbar .seg { align-self: stretch; }
-.vault-page .pane-toolbar .seg-opt { flex: 1; justify-content: center; }
 
-/* detail: a header card, then sections as cards on the canvas */
-.vault-detail { gap: 20px; }
-.vault-head-kind { color: var(--text-2); font-weight: var(--weight-medium); }
-.vault-head-card { padding: 20px 20px 18px; display: flex; flex-direction: column; gap: 16px; }
-.vault-detail .detail-title { font-family: var(--font-mono); font-size: 20px; letter-spacing: -0.01em; }
-.vault-detail .detail-sub .badge { margin-left: 2px; }
-.vault-current {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-radius: var(--radius-md);
-  background: var(--neutral-soft);
-}
-.vault-current-mask { color: var(--text-3); font-size: 15px; letter-spacing: 0.18em; }
-.vault-current-meta { font-size: var(--text-xs); color: var(--text-3); }
-.vault-ver-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--neutral); margin: 0 4px; }
-.vault-ver-dot.is-active { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
-.vault-ver-dot.is-staged { background: var(--info); }
-.vault-ver-dot.is-revoked { background: var(--danger); }
+/* One item on one surface. Colour identifies the kind; spacing separates the sections. */
+.vault-detail { gap: 24px; }
+.vault-head { display: flex; align-items: flex-start; gap: 12px; padding-bottom: 4px; }
+.vault-head-glyph { display: inline-flex; align-items: center; height: 28px; flex: none; background: none; }
+.vault-detail .detail-title { font-family: var(--font-sans); font-size: var(--text-2xl); }
+.vault-value { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 8px 0; border-top: 1px solid var(--border-1); border-bottom: 1px solid var(--border-1); }
+.vault-value-mask { flex: 1; min-width: 0; overflow: hidden; font-size: var(--text-lg); letter-spacing: 0.12em; color: var(--text-2); }
+.vault-value.is-empty { flex-wrap: wrap; font-size: var(--text-md); }
+.vault-ver { display: flex; gap: 12px; flex-wrap: wrap; align-items: baseline; }
+.vault-ver-st { font-size: var(--text-xs); color: var(--text-3); font-weight: var(--weight-regular); }
+.vault-ver-st.is-active { color: var(--ok); }
+.vault-ver-st.is-revoked { color: var(--danger); }
+.vault-conn-glyph { flex: none; color: var(--text-2); }
+.vault-row-conns { font-size: var(--text-xs); color: var(--text-3); }
+.vault-pick { color: var(--text-3); font-size: var(--text-md); padding: 32px; }
 .vault-pub {
   padding: 10px 12px; border-radius: var(--radius-md); background: var(--neutral-soft); border: 0;
-  font-size: 11.5px; line-height: 1.55; word-break: break-all; color: var(--text-1); user-select: text; -webkit-user-select: text;
+  font-size: var(--text-xs); line-height: 1.55; word-break: break-all; color: var(--text-1); user-select: text; -webkit-user-select: text;
 }
 
 /* add dialog: one compact kind control, then name and value */

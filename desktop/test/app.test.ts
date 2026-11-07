@@ -3,7 +3,7 @@ import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { App, IDLE_LOCK_MIN } from '../src/app/App';
-import { COPY } from '../src/copy';
+import { COPY, COPY_EN, setLocale } from '../src/copy';
 import { useMockBackend } from '../src/ipc/client';
 import { createMockBackend, type MockBackend, type MockSeed } from '../src/ipc/mock';
 
@@ -36,6 +36,8 @@ function setInput(el: HTMLInputElement, value: string) {
 const text = () => document.body.textContent ?? '';
 
 beforeEach(() => {
+  Object.defineProperty(navigator, 'languages', { configurable: true, value: ['ko-KR'] });
+  setLocale('ko');
   host = document.createElement('div');
   document.body.appendChild(host);
   window.matchMedia = ((q: string) => ({ matches: false, media: q, addEventListener() {}, removeEventListener() {} })) as unknown as typeof window.matchMedia;
@@ -45,6 +47,59 @@ afterEach(async () => {
   root = null;
   host.remove();
   backend?.dispose(); backend = null; useMockBackend(null);
+  setLocale('ko');
+});
+
+async function chooseLanguage(value: string) {
+  const select = host.querySelector<HTMLSelectElement>('.language-choice select')!;
+  await act(async () => { select.value = value; select.dispatchEvent(new Event('change', { bubbles: true })); });
+  await settle();
+}
+
+describe('language preference', () => {
+  it('follows the system on first run and changes language without losing the current step or input', async () => {
+    Object.defineProperty(navigator, 'languages', { configurable: true, value: ['en-US'] });
+    seed({ initialized: false });
+    await mount();
+    expect(text()).toContain(COPY_EN['setup.welcome.title']);
+    await act(async () => { [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === COPY_EN['setup.welcome.start'])!.click(); });
+    await settle();
+    const field = host.querySelector<HTMLInputElement>('[data-step="admin"] input[type="password"]')!;
+    await act(async () => setInput(field, 'synthetic draft'));
+    await chooseLanguage('ko');
+    expect(document.documentElement.lang).toBe('ko');
+    expect(text()).toContain(COPY['setup.admin.title']);
+    expect(host.querySelector('[data-step="admin"] input[type="password"]')).toBe(field);
+    expect(field.value).toBe('synthetic draft');
+    expect((await backend!.call('settings_get', undefined)).language).toBe('ko');
+  });
+
+  it('keeps the language and typed input on save failure, retries, and restores the saved choice after restart', async () => {
+    seed({ initialized: true });
+    await mount();
+    const input = host.querySelector<HTMLInputElement>('.lock input[type="password"]')!;
+    await act(async () => setInput(input, 'synthetic draft'));
+    const before = await backend!.call('settings_get', undefined);
+    await backend!.call('settings_set', { ...before, gateway_port: 47400, team_listen: '192.168.1.20:47420', link_service: 'https://fixture.invalid' });
+    backend!.failNext('settings_set', { error: 'IOError', reason: 'settings_unwritable' });
+    await chooseLanguage('en');
+    expect(document.documentElement.lang).toBe('ko');
+    expect(text()).toContain(COPY['language.error']);
+    expect(input.value).toBe('synthetic draft');
+    await chooseLanguage('en');
+    expect(text()).toContain(COPY_EN['lock.title']);
+    expect(input.value).toBe('synthetic draft');
+    expect(await backend!.call('settings_get', undefined)).toMatchObject({ language: 'en', gateway_port: 47400, team_listen: '192.168.1.20:47420', link_service: 'https://fixture.invalid' });
+    await act(async () => root!.unmount());
+    root = null;
+    await mount();
+    expect(document.documentElement.lang).toBe('en');
+    expect(text()).toContain(COPY_EN['lock.title']);
+    expect(host.querySelector<HTMLInputElement>('.lock input[type="password"]')!.value).toBe('');
+    await chooseLanguage('system');
+    expect(document.documentElement.lang).toBe('ko');
+    expect((await backend!.call('settings_get', undefined)).language).toBeUndefined();
+  });
 });
 
 describe('first run and lock', () => {

@@ -110,9 +110,10 @@ export function SharingTab({ intent }: { intent?: Intent }) {
   const listen = parseListen(base.data?.settings?.team_listen);
   return (
     <>
-      <Banner tone="neutral" icon="share" action={<Button size="sm" tone="ghost" icon="laptop" onClick={() => go('devices')}>{t('share.toDevices')}</Button>}>
-        {t('share.intro')} {t('share.intro.devices')}
-      </Banner>
+      <div className="dev-intro-row">
+        <p className="dev-intro">{t('share.intro')} {t('share.intro.devices')}</p>
+        <Button size="sm" tone="ghost" icon="laptop" onClick={() => go('devices')}>{t('share.toDevices')}</Button>
+      </div>
       {base.data?.envsUnread && <Banner tone="info">{t('share.envs.err')}</Banner>}
 
       <Section title={t('share.place')} id="dev-share-place" aside={(

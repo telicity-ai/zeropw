@@ -18,7 +18,7 @@ import { AppContext, type AppApi } from '../src/ui/app';
 
 let root: Root, host: HTMLDivElement, backend: MockBackend;
 const toast = vi.fn();
-const app: AppApi = { desktop: true, toast, announce: vi.fn() };
+const app: AppApi = { desktop: true, toast, announce: vi.fn(), locale: 'ko', language: 'system', setLanguage: async () => undefined };
 let control: Control = NO_CONTROL;
 
 function Driver({ view }: { view: string }) {
