@@ -114,7 +114,7 @@ where `state` is one of:
 | state | meaning |
 | --- | --- |
 | `up_to_date` | session open, fresh equal stored commit vectors, and (for capable peers or known deletion state) exact current-session durable deletion agreement |
-| `syncing` | session open, vectors differ |
+| `syncing` | session open; commit vectors differ or the required current-session deletion agreement is still pending |
 | `retrying` | no session, a dial failed and another is scheduled |
 | `offline` | no session and no recent contact |
 | `never_connected` | no address or no contact yet |
