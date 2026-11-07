@@ -175,7 +175,10 @@ and [bounded Sol task](decisions/m2a-schema-2026-11-07/implementation-task.md)
 freeze the first pure byte/parser/attestation/integrity component. These are
 actual Astra design outputs, not implemented snapshot support. M2-G01 through
 M2-G10 remain open; there is no runtime capability, admission or installation
-authority in that first slice. The full contract below remains required.
+authority in that first slice. A subsequent isolated dependency probe found
+legacy behavior changes from the proposed `raw_value` feature; its parser choice
+is blocked pending a separate Astra revision. The full contract below remains
+required.
 
 ### Decision and exact trust boundary
 

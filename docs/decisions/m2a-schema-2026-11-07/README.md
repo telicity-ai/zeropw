@@ -8,3 +8,5 @@ The two sibling documents are the unchanged outputs of actual `gpt-6-astra`, ult
 This is an approved bounded design, not implementation, test execution, Opus review, full M2 or release acceptance. M2-G01 through M2-G10 remain open. The actual schema is unchanged by this record.
 
 Factual clarification by the Sol coordinator: decision section 12 calls the prior log check “seven synthetic service-secret scans.” The source-bound E2E record actually reports **one separate scan covering seven synthetic service secrets**, in addition to 66 scenario assertions. Preserve that distinction in implementation and acceptance reports. No test was rerun for this document collection.
+
+Parser-choice blocker found after the design: the [isolated36-input dependency probe](../../evidence/2026-11-07-m2a-raw-value-feature-probe/README.md) observed12 legacy behavior changes when adding raw_value. Do **not** enable that feature or implement the blocked parser choice from the original task until a separate Astra revision resolves it. Wire fields/hash definitions are unchanged. The original design/task bytes above remain an audit record, not proof of dependency compatibility.

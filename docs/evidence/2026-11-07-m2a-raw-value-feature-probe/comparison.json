@@ -1,0 +1,1720 @@
+{
+  "state": "BLOCKER_LEGACY_BEHAVIOR_CHANGED",
+  "cases": 36,
+  "different_cases": 12,
+  "same_cases": 24,
+  "different_pyjson": 12,
+  "different_serde_value": 12,
+  "source_before_after_match": true,
+  "registry_before_after_match": true,
+  "commands_exit": [
+    {
+      "name": "baseline-features",
+      "exit": 0
+    },
+    {
+      "name": "baseline-build",
+      "exit": 0
+    },
+    {
+      "name": "baseline-results",
+      "exit": 0
+    },
+    {
+      "name": "raw_value-features",
+      "exit": 0
+    },
+    {
+      "name": "raw_value-build",
+      "exit": 0
+    },
+    {
+      "name": "raw_value-results",
+      "exit": 0
+    }
+  ],
+  "baseline_results_sha256": "9b0fb4e364e1d3a14632c58269bf28f4f3984e48864fe303b621cc02dc87a641",
+  "raw_value_results_sha256": "396354ba7376ac6ca3c187055145a33cca0ee55e0f3fdab1cd66dcad89fc195b",
+  "rows": [
+    {
+      "id": "ordinary",
+      "input": "{\"b\":2,\"a\":[true,null,{\"text\":\"public-metadata\"}]}",
+      "different_paths": [],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"b\": Number(2), \"a\": Array [Bool(true), Null, Object {\"text\": String(\"public-metadata\")}]}",
+          "serialized": "{\"b\":2,\"a\":[true,null,{\"text\":\"public-metadata\"}]}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"a\":[true,null,{\"text\":\"public-metadata\"}],\"b\":2}"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"b\": Number(2), \"a\": Array [Bool(true), Null, Object {\"text\": String(\"public-metadata\")}]}",
+          "serialized": "{\"b\":2,\"a\":[true,null,{\"text\":\"public-metadata\"}]}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"a\":[true,null,{\"text\":\"public-metadata\"}],\"b\":2}"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"b\": Number(2), \"a\": Array [Bool(true), Null, Object {\"text\": String(\"public-metadata\")}]}",
+          "serialized": "{\"b\":2,\"a\":[true,null,{\"text\":\"public-metadata\"}]}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"a\":[true,null,{\"text\":\"public-metadata\"}],\"b\":2}"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"b\": Number(2), \"a\": Array [Bool(true), Null, Object {\"text\": String(\"public-metadata\")}]}",
+          "serialized": "{\"b\":2,\"a\":[true,null,{\"text\":\"public-metadata\"}]}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"a\":[true,null,{\"text\":\"public-metadata\"}],\"b\":2}"
+          }
+        }
+      }
+    },
+    {
+      "id": "ordinary_escaped_key",
+      "input": "{\"\\u0061\":1,\"z\":\"escaped\"}",
+      "different_paths": [],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"a\": Number(1), \"z\": String(\"escaped\")}",
+          "serialized": "{\"a\":1,\"z\":\"escaped\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"a\":1,\"z\":\"escaped\"}"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"a\": Number(1), \"z\": String(\"escaped\")}",
+          "serialized": "{\"a\":1,\"z\":\"escaped\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"a\":1,\"z\":\"escaped\"}"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"a\": Number(1), \"z\": String(\"escaped\")}",
+          "serialized": "{\"a\":1,\"z\":\"escaped\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"a\":1,\"z\":\"escaped\"}"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"a\": Number(1), \"z\": String(\"escaped\")}",
+          "serialized": "{\"a\":1,\"z\":\"escaped\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"a\":1,\"z\":\"escaped\"}"
+          }
+        }
+      }
+    },
+    {
+      "id": "huge_integer",
+      "input": "9007199254740993123456789012345678901234567890",
+      "different_paths": [],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(9007199254740993123456789012345678901234567890)",
+          "serialized": "9007199254740993123456789012345678901234567890",
+          "canonical": {
+            "ok": true,
+            "text": "9007199254740993123456789012345678901234567890"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(9007199254740993123456789012345678901234567890)",
+          "serialized": "9007199254740993123456789012345678901234567890",
+          "canonical": {
+            "ok": true,
+            "text": "9007199254740993123456789012345678901234567890"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(9007199254740993123456789012345678901234567890)",
+          "serialized": "9007199254740993123456789012345678901234567890",
+          "canonical": {
+            "ok": true,
+            "text": "9007199254740993123456789012345678901234567890"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(9007199254740993123456789012345678901234567890)",
+          "serialized": "9007199254740993123456789012345678901234567890",
+          "canonical": {
+            "ok": true,
+            "text": "9007199254740993123456789012345678901234567890"
+          }
+        }
+      }
+    },
+    {
+      "id": "negative_huge_integer",
+      "input": "-9007199254740993123456789012345678901234567890",
+      "different_paths": [],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(-9007199254740993123456789012345678901234567890)",
+          "serialized": "-9007199254740993123456789012345678901234567890",
+          "canonical": {
+            "ok": true,
+            "text": "-9007199254740993123456789012345678901234567890"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(-9007199254740993123456789012345678901234567890)",
+          "serialized": "-9007199254740993123456789012345678901234567890",
+          "canonical": {
+            "ok": true,
+            "text": "-9007199254740993123456789012345678901234567890"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(-9007199254740993123456789012345678901234567890)",
+          "serialized": "-9007199254740993123456789012345678901234567890",
+          "canonical": {
+            "ok": true,
+            "text": "-9007199254740993123456789012345678901234567890"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(-9007199254740993123456789012345678901234567890)",
+          "serialized": "-9007199254740993123456789012345678901234567890",
+          "canonical": {
+            "ok": true,
+            "text": "-9007199254740993123456789012345678901234567890"
+          }
+        }
+      }
+    },
+    {
+      "id": "nested_numbers",
+      "input": "{\"large\":9007199254740993123456789012345678901234567890,\"finite\":[1.25,1e0,-0.0,5e-324,1.7976931348623157e308]}",
+      "different_paths": [],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"large\": Number(9007199254740993123456789012345678901234567890), \"finite\": Array [Number(1.25), Number(1e+0), Number(-0.0), Number(5e-324), Number(1.7976931348623157e+308)]}",
+          "serialized": "{\"large\":9007199254740993123456789012345678901234567890,\"finite\":[1.25,1e+0,-0.0,5e-324,1.7976931348623157e+308]}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"finite\":[1.25,1.0,-0.0,5e-324,1.7976931348623157e+308],\"large\":9007199254740993123456789012345678901234567890}"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"large\": Number(9007199254740993123456789012345678901234567890), \"finite\": Array [Number(1.25), Number(1e+0), Number(-0.0), Number(5e-324), Number(1.7976931348623157e+308)]}",
+          "serialized": "{\"large\":9007199254740993123456789012345678901234567890,\"finite\":[1.25,1e+0,-0.0,5e-324,1.7976931348623157e+308]}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"finite\":[1.25,1.0,-0.0,5e-324,1.7976931348623157e+308],\"large\":9007199254740993123456789012345678901234567890}"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"large\": Number(9007199254740993123456789012345678901234567890), \"finite\": Array [Number(1.25), Number(1e+0), Number(-0.0), Number(5e-324), Number(1.7976931348623157e+308)]}",
+          "serialized": "{\"large\":9007199254740993123456789012345678901234567890,\"finite\":[1.25,1e+0,-0.0,5e-324,1.7976931348623157e+308]}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"finite\":[1.25,1.0,-0.0,5e-324,1.7976931348623157e+308],\"large\":9007199254740993123456789012345678901234567890}"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"large\": Number(9007199254740993123456789012345678901234567890), \"finite\": Array [Number(1.25), Number(1e+0), Number(-0.0), Number(5e-324), Number(1.7976931348623157e+308)]}",
+          "serialized": "{\"large\":9007199254740993123456789012345678901234567890,\"finite\":[1.25,1e+0,-0.0,5e-324,1.7976931348623157e+308]}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"finite\":[1.25,1.0,-0.0,5e-324,1.7976931348623157e+308],\"large\":9007199254740993123456789012345678901234567890}"
+          }
+        }
+      }
+    },
+    {
+      "id": "finite_1.25",
+      "input": "1.25",
+      "different_paths": [],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(1.25)",
+          "serialized": "1.25",
+          "canonical": {
+            "ok": true,
+            "text": "1.25"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(1.25)",
+          "serialized": "1.25",
+          "canonical": {
+            "ok": true,
+            "text": "1.25"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(1.25)",
+          "serialized": "1.25",
+          "canonical": {
+            "ok": true,
+            "text": "1.25"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(1.25)",
+          "serialized": "1.25",
+          "canonical": {
+            "ok": true,
+            "text": "1.25"
+          }
+        }
+      }
+    },
+    {
+      "id": "finite_1e0",
+      "input": "1e0",
+      "different_paths": [],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(1e+0)",
+          "serialized": "1e+0",
+          "canonical": {
+            "ok": true,
+            "text": "1.0"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(1e+0)",
+          "serialized": "1e+0",
+          "canonical": {
+            "ok": true,
+            "text": "1.0"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(1e+0)",
+          "serialized": "1e+0",
+          "canonical": {
+            "ok": true,
+            "text": "1.0"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(1e+0)",
+          "serialized": "1e+0",
+          "canonical": {
+            "ok": true,
+            "text": "1.0"
+          }
+        }
+      }
+    },
+    {
+      "id": "finite_-0.0",
+      "input": "-0.0",
+      "different_paths": [],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(-0.0)",
+          "serialized": "-0.0",
+          "canonical": {
+            "ok": true,
+            "text": "-0.0"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(-0.0)",
+          "serialized": "-0.0",
+          "canonical": {
+            "ok": true,
+            "text": "-0.0"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(-0.0)",
+          "serialized": "-0.0",
+          "canonical": {
+            "ok": true,
+            "text": "-0.0"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(-0.0)",
+          "serialized": "-0.0",
+          "canonical": {
+            "ok": true,
+            "text": "-0.0"
+          }
+        }
+      }
+    },
+    {
+      "id": "finite_5e-324",
+      "input": "5e-324",
+      "different_paths": [],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(5e-324)",
+          "serialized": "5e-324",
+          "canonical": {
+            "ok": true,
+            "text": "5e-324"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(5e-324)",
+          "serialized": "5e-324",
+          "canonical": {
+            "ok": true,
+            "text": "5e-324"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(5e-324)",
+          "serialized": "5e-324",
+          "canonical": {
+            "ok": true,
+            "text": "5e-324"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(5e-324)",
+          "serialized": "5e-324",
+          "canonical": {
+            "ok": true,
+            "text": "5e-324"
+          }
+        }
+      }
+    },
+    {
+      "id": "finite_1.7976931348623157e308",
+      "input": "1.7976931348623157e308",
+      "different_paths": [],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(1.7976931348623157e+308)",
+          "serialized": "1.7976931348623157e+308",
+          "canonical": {
+            "ok": true,
+            "text": "1.7976931348623157e+308"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(1.7976931348623157e+308)",
+          "serialized": "1.7976931348623157e+308",
+          "canonical": {
+            "ok": true,
+            "text": "1.7976931348623157e+308"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(1.7976931348623157e+308)",
+          "serialized": "1.7976931348623157e+308",
+          "canonical": {
+            "ok": true,
+            "text": "1.7976931348623157e+308"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(1.7976931348623157e+308)",
+          "serialized": "1.7976931348623157e+308",
+          "canonical": {
+            "ok": true,
+            "text": "1.7976931348623157e+308"
+          }
+        }
+      }
+    },
+    {
+      "id": "number_singleton_integer",
+      "input": "{\"$serde_json::private::Number\":\"123\"}",
+      "different_paths": [],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(123)",
+          "serialized": "123",
+          "canonical": {
+            "ok": true,
+            "text": "123"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(123)",
+          "serialized": "123",
+          "canonical": {
+            "ok": true,
+            "text": "123"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(123)",
+          "serialized": "123",
+          "canonical": {
+            "ok": true,
+            "text": "123"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(123)",
+          "serialized": "123",
+          "canonical": {
+            "ok": true,
+            "text": "123"
+          }
+        }
+      }
+    },
+    {
+      "id": "number_singleton_huge",
+      "input": "{\"$serde_json::private::Number\":\"9007199254740993123456789012345678901234567890\"}",
+      "different_paths": [],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(9007199254740993123456789012345678901234567890)",
+          "serialized": "9007199254740993123456789012345678901234567890",
+          "canonical": {
+            "ok": true,
+            "text": "9007199254740993123456789012345678901234567890"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(9007199254740993123456789012345678901234567890)",
+          "serialized": "9007199254740993123456789012345678901234567890",
+          "canonical": {
+            "ok": true,
+            "text": "9007199254740993123456789012345678901234567890"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(9007199254740993123456789012345678901234567890)",
+          "serialized": "9007199254740993123456789012345678901234567890",
+          "canonical": {
+            "ok": true,
+            "text": "9007199254740993123456789012345678901234567890"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(9007199254740993123456789012345678901234567890)",
+          "serialized": "9007199254740993123456789012345678901234567890",
+          "canonical": {
+            "ok": true,
+            "text": "9007199254740993123456789012345678901234567890"
+          }
+        }
+      }
+    },
+    {
+      "id": "number_singleton_finite",
+      "input": "{\"$serde_json::private::Number\":\"1.25\"}",
+      "different_paths": [],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(1.25)",
+          "serialized": "1.25",
+          "canonical": {
+            "ok": true,
+            "text": "1.25"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(1.25)",
+          "serialized": "1.25",
+          "canonical": {
+            "ok": true,
+            "text": "1.25"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(1.25)",
+          "serialized": "1.25",
+          "canonical": {
+            "ok": true,
+            "text": "1.25"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(1.25)",
+          "serialized": "1.25",
+          "canonical": {
+            "ok": true,
+            "text": "1.25"
+          }
+        }
+      }
+    },
+    {
+      "id": "number_singleton_object",
+      "input": "{\"$serde_json::private::Number\":\"{\\\"a\\\":1}\"}",
+      "different_paths": [],
+      "baseline": {
+        "pyjson": {
+          "ok": false,
+          "error": "invalid number at line 1 column 1",
+          "category": "Data",
+          "line": 1,
+          "column": 1
+        },
+        "serde_value": {
+          "ok": false,
+          "error": "invalid number at line 1 column 1",
+          "category": "Data",
+          "line": 1,
+          "column": 1
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": false,
+          "error": "invalid number at line 1 column 1",
+          "category": "Data",
+          "line": 1,
+          "column": 1
+        },
+        "serde_value": {
+          "ok": false,
+          "error": "invalid number at line 1 column 1",
+          "category": "Data",
+          "line": 1,
+          "column": 1
+        }
+      }
+    },
+    {
+      "id": "number_singleton_array",
+      "input": "{\"$serde_json::private::Number\":\"[1,{\\\"x\\\":2}]\"}",
+      "different_paths": [],
+      "baseline": {
+        "pyjson": {
+          "ok": false,
+          "error": "invalid number at line 1 column 1",
+          "category": "Data",
+          "line": 1,
+          "column": 1
+        },
+        "serde_value": {
+          "ok": false,
+          "error": "invalid number at line 1 column 1",
+          "category": "Data",
+          "line": 1,
+          "column": 1
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": false,
+          "error": "invalid number at line 1 column 1",
+          "category": "Data",
+          "line": 1,
+          "column": 1
+        },
+        "serde_value": {
+          "ok": false,
+          "error": "invalid number at line 1 column 1",
+          "category": "Data",
+          "line": 1,
+          "column": 1
+        }
+      }
+    },
+    {
+      "id": "number_singleton_null",
+      "input": "{\"$serde_json::private::Number\":\"null\"}",
+      "different_paths": [],
+      "baseline": {
+        "pyjson": {
+          "ok": false,
+          "error": "invalid number at line 1 column 1",
+          "category": "Data",
+          "line": 1,
+          "column": 1
+        },
+        "serde_value": {
+          "ok": false,
+          "error": "invalid number at line 1 column 1",
+          "category": "Data",
+          "line": 1,
+          "column": 1
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": false,
+          "error": "invalid number at line 1 column 1",
+          "category": "Data",
+          "line": 1,
+          "column": 1
+        },
+        "serde_value": {
+          "ok": false,
+          "error": "invalid number at line 1 column 1",
+          "category": "Data",
+          "line": 1,
+          "column": 1
+        }
+      }
+    },
+    {
+      "id": "number_singleton_invalid",
+      "input": "{\"$serde_json::private::Number\":\"not-json\"}",
+      "different_paths": [],
+      "baseline": {
+        "pyjson": {
+          "ok": false,
+          "error": "invalid number at line 1 column 1",
+          "category": "Data",
+          "line": 1,
+          "column": 1
+        },
+        "serde_value": {
+          "ok": false,
+          "error": "invalid number at line 1 column 1",
+          "category": "Data",
+          "line": 1,
+          "column": 1
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": false,
+          "error": "invalid number at line 1 column 1",
+          "category": "Data",
+          "line": 1,
+          "column": 1
+        },
+        "serde_value": {
+          "ok": false,
+          "error": "invalid number at line 1 column 1",
+          "category": "Data",
+          "line": 1,
+          "column": 1
+        }
+      }
+    },
+    {
+      "id": "number_singleton_nonstring",
+      "input": "{\"$serde_json::private::Number\":123}",
+      "different_paths": [],
+      "baseline": {
+        "pyjson": {
+          "ok": false,
+          "error": "invalid type: integer `123`, expected string containing a number at line 1 column 35",
+          "category": "Data",
+          "line": 1,
+          "column": 35
+        },
+        "serde_value": {
+          "ok": false,
+          "error": "invalid type: integer `123`, expected string containing a number at line 1 column 35",
+          "category": "Data",
+          "line": 1,
+          "column": 35
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": false,
+          "error": "invalid type: integer `123`, expected string containing a number at line 1 column 35",
+          "category": "Data",
+          "line": 1,
+          "column": 35
+        },
+        "serde_value": {
+          "ok": false,
+          "error": "invalid type: integer `123`, expected string containing a number at line 1 column 35",
+          "category": "Data",
+          "line": 1,
+          "column": 35
+        }
+      }
+    },
+    {
+      "id": "number_multi_first",
+      "input": "{\"$serde_json::private::Number\":\"123\",\"extra\":true}",
+      "different_paths": [],
+      "baseline": {
+        "pyjson": {
+          "ok": false,
+          "error": "trailing comma at line 1 column 38",
+          "category": "Syntax",
+          "line": 1,
+          "column": 38
+        },
+        "serde_value": {
+          "ok": false,
+          "error": "trailing comma at line 1 column 38",
+          "category": "Syntax",
+          "line": 1,
+          "column": 38
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": false,
+          "error": "trailing comma at line 1 column 38",
+          "category": "Syntax",
+          "line": 1,
+          "column": 38
+        },
+        "serde_value": {
+          "ok": false,
+          "error": "trailing comma at line 1 column 38",
+          "category": "Syntax",
+          "line": 1,
+          "column": 38
+        }
+      }
+    },
+    {
+      "id": "number_multi_last",
+      "input": "{\"extra\":true,\"$serde_json::private::Number\":\"123\"}",
+      "different_paths": [],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"extra\": Bool(true), \"$serde_json::private::Number\": String(\"123\")}",
+          "serialized": "{\"extra\":true,\"$serde_json::private::Number\":\"123\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::Number\":\"123\",\"extra\":true}"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"extra\": Bool(true), \"$serde_json::private::Number\": String(\"123\")}",
+          "serialized": "{\"extra\":true,\"$serde_json::private::Number\":\"123\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::Number\":\"123\",\"extra\":true}"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"extra\": Bool(true), \"$serde_json::private::Number\": String(\"123\")}",
+          "serialized": "{\"extra\":true,\"$serde_json::private::Number\":\"123\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::Number\":\"123\",\"extra\":true}"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"extra\": Bool(true), \"$serde_json::private::Number\": String(\"123\")}",
+          "serialized": "{\"extra\":true,\"$serde_json::private::Number\":\"123\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::Number\":\"123\",\"extra\":true}"
+          }
+        }
+      }
+    },
+    {
+      "id": "number_escaped_key",
+      "input": "{\"$serde_json::private::Numbe\\u0072\":\"123\"}",
+      "different_paths": [],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(123)",
+          "serialized": "123",
+          "canonical": {
+            "ok": true,
+            "text": "123"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(123)",
+          "serialized": "123",
+          "canonical": {
+            "ok": true,
+            "text": "123"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(123)",
+          "serialized": "123",
+          "canonical": {
+            "ok": true,
+            "text": "123"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(123)",
+          "serialized": "123",
+          "canonical": {
+            "ok": true,
+            "text": "123"
+          }
+        }
+      }
+    },
+    {
+      "id": "number_nested",
+      "input": "{\"outer\":[{\"$serde_json::private::Number\":\"{\\\"x\\\":7}\"}]}",
+      "different_paths": [],
+      "baseline": {
+        "pyjson": {
+          "ok": false,
+          "error": "invalid number at line 1 column 1",
+          "category": "Data",
+          "line": 1,
+          "column": 1
+        },
+        "serde_value": {
+          "ok": false,
+          "error": "invalid number at line 1 column 1",
+          "category": "Data",
+          "line": 1,
+          "column": 1
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": false,
+          "error": "invalid number at line 1 column 1",
+          "category": "Data",
+          "line": 1,
+          "column": 1
+        },
+        "serde_value": {
+          "ok": false,
+          "error": "invalid number at line 1 column 1",
+          "category": "Data",
+          "line": 1,
+          "column": 1
+        }
+      }
+    },
+    {
+      "id": "raw_singleton_integer",
+      "input": "{\"$serde_json::private::RawValue\":\"123\"}",
+      "different_paths": [
+        "pyjson",
+        "serde_value"
+      ],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"$serde_json::private::RawValue\": String(\"123\")}",
+          "serialized": "{\"$serde_json::private::RawValue\":\"123\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::RawValue\":\"123\"}"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"$serde_json::private::RawValue\": String(\"123\")}",
+          "serialized": "{\"$serde_json::private::RawValue\":\"123\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::RawValue\":\"123\"}"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(123)",
+          "serialized": "123",
+          "canonical": {
+            "ok": true,
+            "text": "123"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(123)",
+          "serialized": "123",
+          "canonical": {
+            "ok": true,
+            "text": "123"
+          }
+        }
+      }
+    },
+    {
+      "id": "raw_singleton_huge",
+      "input": "{\"$serde_json::private::RawValue\":\"9007199254740993123456789012345678901234567890\"}",
+      "different_paths": [
+        "pyjson",
+        "serde_value"
+      ],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"$serde_json::private::RawValue\": String(\"9007199254740993123456789012345678901234567890\")}",
+          "serialized": "{\"$serde_json::private::RawValue\":\"9007199254740993123456789012345678901234567890\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::RawValue\":\"9007199254740993123456789012345678901234567890\"}"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"$serde_json::private::RawValue\": String(\"9007199254740993123456789012345678901234567890\")}",
+          "serialized": "{\"$serde_json::private::RawValue\":\"9007199254740993123456789012345678901234567890\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::RawValue\":\"9007199254740993123456789012345678901234567890\"}"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(9007199254740993123456789012345678901234567890)",
+          "serialized": "9007199254740993123456789012345678901234567890",
+          "canonical": {
+            "ok": true,
+            "text": "9007199254740993123456789012345678901234567890"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(9007199254740993123456789012345678901234567890)",
+          "serialized": "9007199254740993123456789012345678901234567890",
+          "canonical": {
+            "ok": true,
+            "text": "9007199254740993123456789012345678901234567890"
+          }
+        }
+      }
+    },
+    {
+      "id": "raw_singleton_finite",
+      "input": "{\"$serde_json::private::RawValue\":\"1.25\"}",
+      "different_paths": [
+        "pyjson",
+        "serde_value"
+      ],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"$serde_json::private::RawValue\": String(\"1.25\")}",
+          "serialized": "{\"$serde_json::private::RawValue\":\"1.25\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::RawValue\":\"1.25\"}"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"$serde_json::private::RawValue\": String(\"1.25\")}",
+          "serialized": "{\"$serde_json::private::RawValue\":\"1.25\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::RawValue\":\"1.25\"}"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(1.25)",
+          "serialized": "1.25",
+          "canonical": {
+            "ok": true,
+            "text": "1.25"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(1.25)",
+          "serialized": "1.25",
+          "canonical": {
+            "ok": true,
+            "text": "1.25"
+          }
+        }
+      }
+    },
+    {
+      "id": "raw_singleton_object",
+      "input": "{\"$serde_json::private::RawValue\":\"{\\\"a\\\":1}\"}",
+      "different_paths": [
+        "pyjson",
+        "serde_value"
+      ],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"$serde_json::private::RawValue\": String(\"{\\\"a\\\":1}\")}",
+          "serialized": "{\"$serde_json::private::RawValue\":\"{\\\"a\\\":1}\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::RawValue\":\"{\\\"a\\\":1}\"}"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"$serde_json::private::RawValue\": String(\"{\\\"a\\\":1}\")}",
+          "serialized": "{\"$serde_json::private::RawValue\":\"{\\\"a\\\":1}\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::RawValue\":\"{\\\"a\\\":1}\"}"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"a\": Number(1)}",
+          "serialized": "{\"a\":1}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"a\":1}"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"a\": Number(1)}",
+          "serialized": "{\"a\":1}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"a\":1}"
+          }
+        }
+      }
+    },
+    {
+      "id": "raw_singleton_array",
+      "input": "{\"$serde_json::private::RawValue\":\"[1,{\\\"x\\\":2}]\"}",
+      "different_paths": [
+        "pyjson",
+        "serde_value"
+      ],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"$serde_json::private::RawValue\": String(\"[1,{\\\"x\\\":2}]\")}",
+          "serialized": "{\"$serde_json::private::RawValue\":\"[1,{\\\"x\\\":2}]\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::RawValue\":\"[1,{\\\"x\\\":2}]\"}"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"$serde_json::private::RawValue\": String(\"[1,{\\\"x\\\":2}]\")}",
+          "serialized": "{\"$serde_json::private::RawValue\":\"[1,{\\\"x\\\":2}]\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::RawValue\":\"[1,{\\\"x\\\":2}]\"}"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": true,
+          "kind": "array",
+          "debug": "Array [Number(1), Object {\"x\": Number(2)}]",
+          "serialized": "[1,{\"x\":2}]",
+          "canonical": {
+            "ok": true,
+            "text": "[1,{\"x\":2}]"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "array",
+          "debug": "Array [Number(1), Object {\"x\": Number(2)}]",
+          "serialized": "[1,{\"x\":2}]",
+          "canonical": {
+            "ok": true,
+            "text": "[1,{\"x\":2}]"
+          }
+        }
+      }
+    },
+    {
+      "id": "raw_singleton_null",
+      "input": "{\"$serde_json::private::RawValue\":\"null\"}",
+      "different_paths": [
+        "pyjson",
+        "serde_value"
+      ],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"$serde_json::private::RawValue\": String(\"null\")}",
+          "serialized": "{\"$serde_json::private::RawValue\":\"null\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::RawValue\":\"null\"}"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"$serde_json::private::RawValue\": String(\"null\")}",
+          "serialized": "{\"$serde_json::private::RawValue\":\"null\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::RawValue\":\"null\"}"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": true,
+          "kind": "null",
+          "debug": "Null",
+          "serialized": "null",
+          "canonical": {
+            "ok": true,
+            "text": "null"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "null",
+          "debug": "Null",
+          "serialized": "null",
+          "canonical": {
+            "ok": true,
+            "text": "null"
+          }
+        }
+      }
+    },
+    {
+      "id": "raw_singleton_invalid",
+      "input": "{\"$serde_json::private::RawValue\":\"not-json\"}",
+      "different_paths": [
+        "pyjson",
+        "serde_value"
+      ],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"$serde_json::private::RawValue\": String(\"not-json\")}",
+          "serialized": "{\"$serde_json::private::RawValue\":\"not-json\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::RawValue\":\"not-json\"}"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"$serde_json::private::RawValue\": String(\"not-json\")}",
+          "serialized": "{\"$serde_json::private::RawValue\":\"not-json\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::RawValue\":\"not-json\"}"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": false,
+          "error": "expected ident at line 1 column 2",
+          "category": "Data",
+          "line": 1,
+          "column": 2
+        },
+        "serde_value": {
+          "ok": false,
+          "error": "expected ident at line 1 column 2",
+          "category": "Data",
+          "line": 1,
+          "column": 2
+        }
+      }
+    },
+    {
+      "id": "raw_singleton_nonstring",
+      "input": "{\"$serde_json::private::RawValue\":123}",
+      "different_paths": [
+        "pyjson",
+        "serde_value"
+      ],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"$serde_json::private::RawValue\": Number(123)}",
+          "serialized": "{\"$serde_json::private::RawValue\":123}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::RawValue\":123}"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"$serde_json::private::RawValue\": Number(123)}",
+          "serialized": "{\"$serde_json::private::RawValue\":123}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::RawValue\":123}"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": false,
+          "error": "invalid type: integer `123`, expected raw value at line 1 column 37",
+          "category": "Data",
+          "line": 1,
+          "column": 37
+        },
+        "serde_value": {
+          "ok": false,
+          "error": "invalid type: integer `123`, expected raw value at line 1 column 37",
+          "category": "Data",
+          "line": 1,
+          "column": 37
+        }
+      }
+    },
+    {
+      "id": "raw_multi_first",
+      "input": "{\"$serde_json::private::RawValue\":\"123\",\"extra\":true}",
+      "different_paths": [
+        "pyjson",
+        "serde_value"
+      ],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"$serde_json::private::RawValue\": String(\"123\"), \"extra\": Bool(true)}",
+          "serialized": "{\"$serde_json::private::RawValue\":\"123\",\"extra\":true}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::RawValue\":\"123\",\"extra\":true}"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"$serde_json::private::RawValue\": String(\"123\"), \"extra\": Bool(true)}",
+          "serialized": "{\"$serde_json::private::RawValue\":\"123\",\"extra\":true}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::RawValue\":\"123\",\"extra\":true}"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": false,
+          "error": "trailing comma at line 1 column 40",
+          "category": "Syntax",
+          "line": 1,
+          "column": 40
+        },
+        "serde_value": {
+          "ok": false,
+          "error": "trailing comma at line 1 column 40",
+          "category": "Syntax",
+          "line": 1,
+          "column": 40
+        }
+      }
+    },
+    {
+      "id": "raw_multi_last",
+      "input": "{\"extra\":true,\"$serde_json::private::RawValue\":\"123\"}",
+      "different_paths": [],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"extra\": Bool(true), \"$serde_json::private::RawValue\": String(\"123\")}",
+          "serialized": "{\"extra\":true,\"$serde_json::private::RawValue\":\"123\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::RawValue\":\"123\",\"extra\":true}"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"extra\": Bool(true), \"$serde_json::private::RawValue\": String(\"123\")}",
+          "serialized": "{\"extra\":true,\"$serde_json::private::RawValue\":\"123\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::RawValue\":\"123\",\"extra\":true}"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"extra\": Bool(true), \"$serde_json::private::RawValue\": String(\"123\")}",
+          "serialized": "{\"extra\":true,\"$serde_json::private::RawValue\":\"123\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::RawValue\":\"123\",\"extra\":true}"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"extra\": Bool(true), \"$serde_json::private::RawValue\": String(\"123\")}",
+          "serialized": "{\"extra\":true,\"$serde_json::private::RawValue\":\"123\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::RawValue\":\"123\",\"extra\":true}"
+          }
+        }
+      }
+    },
+    {
+      "id": "raw_escaped_key",
+      "input": "{\"$serde_json::private::RawValu\\u0065\":\"123\"}",
+      "different_paths": [
+        "pyjson",
+        "serde_value"
+      ],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"$serde_json::private::RawValue\": String(\"123\")}",
+          "serialized": "{\"$serde_json::private::RawValue\":\"123\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::RawValue\":\"123\"}"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"$serde_json::private::RawValue\": String(\"123\")}",
+          "serialized": "{\"$serde_json::private::RawValue\":\"123\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::RawValue\":\"123\"}"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(123)",
+          "serialized": "123",
+          "canonical": {
+            "ok": true,
+            "text": "123"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "number",
+          "debug": "Number(123)",
+          "serialized": "123",
+          "canonical": {
+            "ok": true,
+            "text": "123"
+          }
+        }
+      }
+    },
+    {
+      "id": "raw_nested",
+      "input": "{\"outer\":[{\"$serde_json::private::RawValue\":\"{\\\"x\\\":7}\"}]}",
+      "different_paths": [
+        "pyjson",
+        "serde_value"
+      ],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"outer\": Array [Object {\"$serde_json::private::RawValue\": String(\"{\\\"x\\\":7}\")}]}",
+          "serialized": "{\"outer\":[{\"$serde_json::private::RawValue\":\"{\\\"x\\\":7}\"}]}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"outer\":[{\"$serde_json::private::RawValue\":\"{\\\"x\\\":7}\"}]}"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"outer\": Array [Object {\"$serde_json::private::RawValue\": String(\"{\\\"x\\\":7}\")}]}",
+          "serialized": "{\"outer\":[{\"$serde_json::private::RawValue\":\"{\\\"x\\\":7}\"}]}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"outer\":[{\"$serde_json::private::RawValue\":\"{\\\"x\\\":7}\"}]}"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"outer\": Array [Object {\"x\": Number(7)}]}",
+          "serialized": "{\"outer\":[{\"x\":7}]}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"outer\":[{\"x\":7}]}"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"outer\": Array [Object {\"x\": Number(7)}]}",
+          "serialized": "{\"outer\":[{\"x\":7}]}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"outer\":[{\"x\":7}]}"
+          }
+        }
+      }
+    },
+    {
+      "id": "both_reserved_number_first",
+      "input": "{\"$serde_json::private::Number\":\"123\",\"$serde_json::private::RawValue\":\"456\"}",
+      "different_paths": [],
+      "baseline": {
+        "pyjson": {
+          "ok": false,
+          "error": "trailing comma at line 1 column 38",
+          "category": "Syntax",
+          "line": 1,
+          "column": 38
+        },
+        "serde_value": {
+          "ok": false,
+          "error": "trailing comma at line 1 column 38",
+          "category": "Syntax",
+          "line": 1,
+          "column": 38
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": false,
+          "error": "trailing comma at line 1 column 38",
+          "category": "Syntax",
+          "line": 1,
+          "column": 38
+        },
+        "serde_value": {
+          "ok": false,
+          "error": "trailing comma at line 1 column 38",
+          "category": "Syntax",
+          "line": 1,
+          "column": 38
+        }
+      }
+    },
+    {
+      "id": "both_reserved_raw_first",
+      "input": "{\"$serde_json::private::RawValue\":\"123\",\"$serde_json::private::Number\":\"456\"}",
+      "different_paths": [
+        "pyjson",
+        "serde_value"
+      ],
+      "baseline": {
+        "pyjson": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"$serde_json::private::RawValue\": String(\"123\"), \"$serde_json::private::Number\": String(\"456\")}",
+          "serialized": "{\"$serde_json::private::RawValue\":\"123\",\"$serde_json::private::Number\":\"456\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::Number\":\"456\",\"$serde_json::private::RawValue\":\"123\"}"
+          }
+        },
+        "serde_value": {
+          "ok": true,
+          "kind": "object",
+          "debug": "Object {\"$serde_json::private::RawValue\": String(\"123\"), \"$serde_json::private::Number\": String(\"456\")}",
+          "serialized": "{\"$serde_json::private::RawValue\":\"123\",\"$serde_json::private::Number\":\"456\"}",
+          "canonical": {
+            "ok": true,
+            "text": "{\"$serde_json::private::Number\":\"456\",\"$serde_json::private::RawValue\":\"123\"}"
+          }
+        }
+      },
+      "raw_value": {
+        "pyjson": {
+          "ok": false,
+          "error": "trailing comma at line 1 column 40",
+          "category": "Syntax",
+          "line": 1,
+          "column": 40
+        },
+        "serde_value": {
+          "ok": false,
+          "error": "trailing comma at line 1 column 40",
+          "category": "Syntax",
+          "line": 1,
+          "column": 40
+        }
+      }
+    }
+  ]
+}

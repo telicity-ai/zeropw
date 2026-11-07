@@ -1,0 +1,69 @@
+{
+  "product_source": "52e87b07380a2f752c127c5f89e5f8f76c38937f",
+  "serde_json": "1.0.151",
+  "serde": "1.0.229",
+  "baseline_features": [
+    "arbitrary_precision",
+    "preserve_order",
+    "unbounded_depth"
+  ],
+  "added_feature": "raw_value",
+  "case_count": 36,
+  "source_files_sha256": {
+    "Cargo.lock": "dc0168b610996a12b5bef7839d173bd11ebe993a6606e99b99c05f75e27d93dd",
+    "Cargo.toml": "4bf071348521a8f22bddb06f42fecf8c69a09be0f92bd523e41820589cf0d942",
+    "inputs.jsonl": "bea637d8a3a1b1494c01e447697431ec45c4ae5e534d0f7d77c13e45b923df2d",
+    "src/errors.rs": "5a3e93d697fd2a2815bea39225f96dd796b6f59b00d45a63d655ced72ec5becd",
+    "src/main.rs": "b18e842d5dcb316b5342761b1539236d88e49b98f1cdcd94c6da1d350ebd86f1",
+    "src/pyjson.rs": "eb8d93c099c2ab2ac38b3dedd0f6e8fdbf0d26fb4f8fb87fa8ceeba0ce5deeef"
+  },
+  "dependency_versions": {
+    "equivalent": "1.0.3",
+    "hashbrown": "0.17.1",
+    "indexmap": "2.14.2",
+    "itoa": "1.0.18",
+    "memchr": "2.8.3",
+    "proc-macro2": "1.0.107",
+    "quote": "1.0.47",
+    "serde": "1.0.229",
+    "serde_core": "1.0.229",
+    "serde_derive": "1.0.229",
+    "serde_json": "1.0.151",
+    "syn": "3.0.9",
+    "unicode-ident": "1.0.27",
+    "zmij": "1.0.23"
+  },
+  "actual_model": "gpt-6.1-sol",
+  "seed_lock_sha256": "b529deea5205cf1f8d74bf4ca2b5326b18503abd146b7177eaa31602b8d174ad",
+  "lock_note": "Cargo generated the minimal package lock offline before any build/run; final exact lock is shared and --locked for both feature modes. Seed lock and rejected preflight retained.",
+  "reference_dependency_versions": {
+    "equivalent": "1.0.2",
+    "hashbrown": "0.17.1",
+    "indexmap": "2.14.2",
+    "itoa": "1.0.18",
+    "memchr": "2.8.3",
+    "proc-macro2": "1.0.107",
+    "quote": "1.0.47",
+    "serde": "1.0.229",
+    "serde_core": "1.0.229",
+    "serde_derive": "1.0.229",
+    "serde_json": "1.0.151",
+    "syn": "3.0.5",
+    "unicode-ident": "1.0.24",
+    "zmij": "1.0.23"
+  },
+  "transitive_differences_from_reference": {
+    "equivalent": {
+      "reference": "1.0.2",
+      "probe": "1.0.3"
+    },
+    "syn": {
+      "reference": "3.0.5",
+      "probe": "3.0.9"
+    },
+    "unicode-ident": {
+      "reference": "1.0.24",
+      "probe": "1.0.27"
+    }
+  }
+}
