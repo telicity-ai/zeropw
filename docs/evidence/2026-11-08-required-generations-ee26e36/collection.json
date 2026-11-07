@@ -1,0 +1,475 @@
+{
+  "all_bytes_modes_blobs_manifest_matched": true,
+  "all_evidence_hashes_and_modes_matched": true,
+  "artifacts": {
+    "13-wide-commit-source.tar.gz": {
+      "bytes": 7409572,
+      "sha256": "6be1765a3dfa5dd0093263a4b11e3862848b34edc32ebe60ac489f6260ff982d"
+    },
+    "30-full-native.json": {
+      "bytes": 746864,
+      "sha256": "7031dc447aef1ba2c7b35d1b8a0345b1eaaf47429e6aaabd70f356cccfb6b45c"
+    },
+    "30-full-native.stderr": {
+      "bytes": 34244,
+      "sha256": "19f840b1f0e39c77d07f296bc410296e383c39cc98abfb7a61826850615189b9"
+    },
+    "30-full-native.stdout": {
+      "bytes": 154748,
+      "sha256": "241e8d31b7922c48064bd2ce9babe298a0afb646082cf1c586054102689c4d59"
+    },
+    "REPORT.md": {
+      "bytes": 32203,
+      "sha256": "9f60f23d88b7b1e0ad8b4dbf581e1fce3fd6a763a402778eacf08e7aab351027"
+    },
+    "artifact-binding.json": {
+      "bytes": 1236,
+      "sha256": "47289164ec7e331e94587b4679039b0c1bcb15ca37595dc3dd869578b9b3c152"
+    },
+    "evidence-catalog.json": {
+      "bytes": 103031,
+      "sha256": "abfed7f56a4e42aff4c2428e396f0c4e57293d0fea40925ee7ab39674a1ea39d"
+    },
+    "full-source.tar.gz": {
+      "bytes": 7410148,
+      "sha256": "4835beb9e5889a20f2532ade0f5f27183937cb21fff3da9bba077a1e1d884e1c"
+    },
+    "native-resource-release.json": {
+      "bytes": 44337,
+      "sha256": "db8a0fef9331db5603448b943c937fe00cad5a02bfa5f46e25914ef3d7885cf9"
+    },
+    "source-final.json": {
+      "bytes": 354254,
+      "sha256": "81eef219b1adc03f1c450a4ffa7a5bf6a8f1c99f5c5c40235acefb177ed69018"
+    },
+    "uncommitted.patch": {
+      "bytes": 422786,
+      "sha256": "def8afb05cc9861774bc13eea192c312deebc28e9af97362c41b85bee429c200"
+    }
+  },
+  "base": "8ca2cf0163bc7b3c9681d9a0df4e9f4b81e820e0",
+  "base_files": 1266,
+  "canonical_holds": "DOS-1 HIGH OPEN; M2-G01\u2013G10/runtime/review/release and case12 custody/cancellation holds unchanged",
+  "collector_corrections": [
+    {
+      "cause": "Own Git archive reader initially rejected directory records; allow directories for baseline archive only.",
+      "outcome": "exit1"
+    },
+    {
+      "cause": "Own comparison initially interpreted Git archive umask0002 modes0664/0775 as tracked POSIX modes; normalize base archive from Git100644/100755 and independently verify all1266 baseline POSIX modes against preexisting hash-bound prep inventory.",
+      "outcome": "exit1"
+    },
+    {
+      "cause": "Own initial recursive Git-tree calculation recomputed folder for every file; interrupted via own exec session and corrected to compute each subtree once.",
+      "outcome": "interrupted exit130, own process ended"
+    },
+    {
+      "cause": "Own patch parser initially rejected Git no-newline marker; corrected marker handling, then reconstructed every65 path byte exactly.",
+      "outcome": "exit1"
+    },
+    {
+      "cause": "Own timeout comparison expected builder change in common module; exact archive comparison showed only new module private-test rename and integration test file differences, recorded above.",
+      "outcome": "exit1"
+    }
+  ],
+  "collector_errors_scope": "Collector-only DATA tooling, not source/test failures or worker evidence corrections. Submitted evidence and coordinator checkout/ref/index untouched.",
+  "collector_model": "gpt-6.1-sol",
+  "computed_base_tree": "3d889eed2755e3491184f9bec7962c80a7fbfadc",
+  "computed_desktop_tree": "2413844c89265a3e239be2372d34b1e6e1b2d4bb",
+  "computed_final_tree": "a9670b198e985c98d0247be749d6e08d89748bdc",
+  "computed_rust_tree": "4352ebbd0fa84bde0fb444c4d0902ef2510d0620",
+  "deleted": [],
+  "evidence_catalogue_bytes": 72427419,
+  "evidence_catalogue_files": 556,
+  "exact_256kib_selectors": [
+    {
+      "actual_tests": 1,
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_payload",
+        "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "phase": "29-final-debug-exact-1"
+    },
+    {
+      "actual_tests": 1,
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_admission",
+        "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "phase": "29-final-debug-exact-2"
+    },
+    {
+      "actual_tests": 1,
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_semantic_cut",
+        "complete_candidate_depth64_success_late_error_repeat_drop_and_65_refusal_on_256_kib",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "phase": "29-final-debug-exact-3"
+    },
+    {
+      "actual_tests": 1,
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_semantic_cut",
+        "complete_fold_depth64_on_actual_256_kib_stack",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "phase": "29-final-debug-exact-4"
+    },
+    {
+      "actual_tests": 1,
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_generation_depth64_success_late_error_repeat_drop_on_actual_256_kib",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "phase": "29-final-debug-exact-5"
+    },
+    {
+      "actual_tests": 1,
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_generation_depth65_refuses_before_crypto_on_actual_256_kib",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "phase": "29-final-debug-exact-6"
+    },
+    {
+      "actual_tests": 1,
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_wrap_depth64_success_error_repeat_drop_on_actual_256_kib",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "phase": "29-final-debug-exact-7"
+    },
+    {
+      "actual_tests": 1,
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_payload",
+        "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "phase": "29-final-release-exact-1"
+    },
+    {
+      "actual_tests": 1,
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_admission",
+        "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "phase": "29-final-release-exact-2"
+    },
+    {
+      "actual_tests": 1,
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_semantic_cut",
+        "complete_candidate_depth64_success_late_error_repeat_drop_and_65_refusal_on_256_kib",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "phase": "29-final-release-exact-3"
+    },
+    {
+      "actual_tests": 1,
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_semantic_cut",
+        "complete_fold_depth64_on_actual_256_kib_stack",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "phase": "29-final-release-exact-4"
+    },
+    {
+      "actual_tests": 1,
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_generation_depth64_success_late_error_repeat_drop_on_actual_256_kib",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "phase": "29-final-release-exact-5"
+    },
+    {
+      "actual_tests": 1,
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_generation_depth65_refuses_before_crypto_on_actual_256_kib",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "phase": "29-final-release-exact-6"
+    },
+    {
+      "actual_tests": 1,
+      "argv": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_wrap_depth64_success_error_repeat_drop_on_actual_256_kib",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "exit": 0,
+      "phase": "29-final-release-exact-7"
+    }
+  ],
+  "existing_changed": [
+    "rust/src/team/checkpoint/mod.rs",
+    "rust/src/team/checkpoint/semantics.rs",
+    "rust/src/team/envelope.rs"
+  ],
+  "final_bound_phases": [
+    "25-final-clippy",
+    "26-final-debug-compile",
+    "27-final-release-compile",
+    "28-debug-stress-1",
+    "28-debug-stress-2",
+    "28-debug-stress-3",
+    "28-debug-stress-4",
+    "28-release-stress-1",
+    "28-release-stress-2",
+    "28-release-stress-3",
+    "28-release-stress-4",
+    "29-final-debug-exact-1",
+    "29-final-debug-exact-2",
+    "29-final-debug-exact-3",
+    "29-final-debug-exact-4",
+    "29-final-debug-exact-5",
+    "29-final-debug-exact-6",
+    "29-final-debug-exact-7",
+    "29-final-release-exact-1",
+    "29-final-release-exact-2",
+    "29-final-release-exact-3",
+    "29-final-release-exact-4",
+    "29-final-release-exact-5",
+    "29-final-release-exact-6",
+    "29-final-release-exact-7",
+    "29-new-release-final",
+    "29-team-library-release-final",
+    "30-full-native",
+    "31-cache-after",
+    "32-features-after",
+    "33-final-metadata-cleanup"
+  ],
+  "fixture_catalogue_counts": {
+    "team_checkpoint_m2b2_v1": 97,
+    "team_checkpoint_required_generations_v1": 57,
+    "team_checkpoint_semantics_v1": 149,
+    "team_checkpoint_v1": 145
+  },
+  "independent_patch_reconstruction": "all65paths match archive",
+  "kind": "independent static DATA collection, not code review or acceptance",
+  "linux": "NOTASSIGNED / NOTRUN; validation INCOMPLETE",
+  "native_final": {
+    "exit": 0,
+    "failed": 0,
+    "four_signer_probes_explicitly_passed": true,
+    "generator_ignore": "explicit fixture generator; not product check; development generation phase05 and08 exit0 remain source-bound",
+    "ignored": 5,
+    "ignored_names": [
+      "signer::tests::idle_cpu_with_one_and_nine_live_bindings",
+      "signer::tests::per_binding_fd_cost_matches_python_ratio_of_one",
+      "signer::tests::per_client_fd_cost_matches_python_ratio_of_one",
+      "signer::tests::rlimit_probe_served_clients_and_accept_loop_survival",
+      "generate_required_generation_fixtures"
+    ],
+    "integration_targets": 106,
+    "passed": 1819,
+    "source_before_after_equals_export": true,
+    "steps": 111,
+    "test_summaries": 114,
+    "uid": 501
+  },
+  "native_release": {
+    "all_direct_children_waited": true,
+    "all_transports_joined": true,
+    "outstanding_handles": [],
+    "phase_receipts_verified": 69,
+    "released_at_utc": "2026-11-07T23:20:26.110392+00:00",
+    "scope": "This worker assigned fresh Mac501 job only; all own native execution drivers, direct command child handles and SSH transports ended. No whole-machine idle or physical-erasure claim. VM not stopped.",
+    "state": "RELEASED",
+    "transport_receipts_verified": 122
+  },
+  "new_fixture_count": 58,
+  "new_source": [
+    "rust/src/team/checkpoint/semantics/required_generations.rs",
+    "rust/tests/common/team_checkpoint_required_generations.rs",
+    "rust/tests/team_checkpoint_generation_oracle.rs",
+    "rust/tests/team_checkpoint_required_generations.rs"
+  ],
+  "original_wide_trial": {
+    "distinct_from_final": true,
+    "elapsed_seconds": 1800.3480970859528,
+    "exact_archive_and_before_after_match": true,
+    "exit": -15,
+    "integration_test_differences": [
+      "payload refusal asserts exact CheckpointError::StructureInvalid instead of only is_err",
+      "near-limit measurement adds fixture packaging time and formatting",
+      "same11500 distinct keys/11504 ciphertexts and14MB..16MiB assertions, original23000-operation single commit replaced by32-operation original commits; original failure retained as separate source-bound trial",
+      "adds isolated-removal observed original M1 tombstone/support-requirements regression"
+    ],
+    "paths_changed_between_wide_and_final": [
+      "rust/src/team/checkpoint/semantics/required_generations.rs",
+      "rust/tests/team_checkpoint_required_generations.rs"
+    ],
+    "phase": "13-new-release-final",
+    "production_file_difference": "Only private #[test] name changed at line399: empty_required_does_no_private_crypto_and_nonempty_counts_every_blob \u2192 empty_required_does_no_unwrap_or_decrypt_and_nonempty_counts_every_blob. Production algorithm bytes unchanged between phase13 and final.",
+    "timeout": true
+  },
+  "protected_base_files": 1263,
+  "reasoning_effort": "ultra",
+  "source_files": 1328,
+  "total_changed": 65,
+  "unperformed": [
+    "product/dependency/helper/build/test execution by collector",
+    "VM queries",
+    "actual Opus or Astra review/acceptance",
+    "physical two-Mac/sleep-wake",
+    "runtime onboarding",
+    "Oracle deployment/capacity",
+    "repository/ref/index/checkout mutation"
+  ]
+}

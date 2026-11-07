@@ -236,6 +236,23 @@ interactions, generation usability, runtime budgets and all M2 gates remain open
 Measured release process peaks include fixture/parser/prior-test state and reach
 1,050,672 KiB; this is not a transfer budget or Oracle capacity guarantee.
 
+### Required-generation source status, 2026-11-08
+
+The separate [required-generation stage](evidence/2026-11-08-required-generations-ee26e36/README.md)
+is collected at exact source `ee26e36997797fe9893ed9a8314ea497963961e2`, Rust tree
+`4352ebbd0fa84bde0fb444c4d0902ef2510d0620`. It checks required original DEKs and
+all final active/staged ciphertexts of nondeleted secrets, with exact full
+recipient binding and privately zeroizing keys. It is noninstallable and has no
+runtime caller, provider/SSH readiness, receipt/ACK or freshness authority.
+Virtual macOS passed unchanged111 steps/106 targets/1819 tests,0 failures,
+5 ignored (four signer probes separately passed; one fixture generator).
+All14 actual256KiB exact selectors each ran one passing test. Source/modes and
+protected fixtures matched; the assigned own native resource was released.
+Linux remains NOTRUN and validation INCOMPLETE. A valid wide single-commit trial
+timed out at1800seconds and remains incomplete; the final distributed-commit
+probe is different input and does not resolve that inherited cost. No M2,
+review, physical-device, deployment or release gate is closed by this stage.
+
 ### Decision and exact trust boundary
 
 Astra decision, 2026-11-07: implement **administrator-attested bootstrap** for a
