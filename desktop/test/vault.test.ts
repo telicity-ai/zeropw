@@ -228,7 +228,7 @@ describe('vault page', () => {
   it.each(['ko', 'en'] as const)('reauthenticates a permanent deletion and reports pending in %s', async (locale) => {
     setLocale(locale);
     useBackend(createMockBackend({ initialized: true, latency: 0 }));
-    const original = spy.getMockImplementation()!;
+    const original = backend.call.bind(backend);
     spy.mockImplementation(async (cmd, input) => cmd === 'secret_delete'
       ? { secret_id: input.id, status: 'deleted', permanent_id: true, provider_revocation_required: true, sync_status: 'pending' }
       : original(cmd, input));
@@ -256,7 +256,7 @@ describe('vault page', () => {
 
   it('reports local durability and reloads deleted metadata/history while blocking use', async () => {
     useBackend(createMockBackend({ initialized: true, latency: 0 }));
-    const original = spy.getMockImplementation()!;
+    const original = backend.call.bind(backend);
     let deleted = false;
     spy.mockImplementation(async (cmd, input) => {
       if (cmd === 'secret_delete') {
@@ -290,7 +290,7 @@ describe('vault page', () => {
     ['InternalError', 'storage_failed', 'error.generic'],
   ] as const)('retains the item/dialog after %s/%s and clears the password', async (error, reason, key) => {
     useBackend(createMockBackend({ initialized: true, latency: 0 }));
-    const original = spy.getMockImplementation()!;
+    const original = backend.call.bind(backend);
     spy.mockImplementation(async (cmd, input) => {
       if (cmd === 'secret_delete') throw { error, reason };
       return original(cmd, input);
@@ -314,7 +314,7 @@ describe('vault page', () => {
 
   it('guards duplicate submit and closure while deletion is busy', async () => {
     useBackend(createMockBackend({ initialized: true, latency: 0 }));
-    const original = spy.getMockImplementation()!;
+    const original = backend.call.bind(backend);
     let finish!: () => void;
     const pending = new Promise<void>((resolve) => { finish = resolve; });
     spy.mockImplementation(async (cmd, input) => {
