@@ -1,0 +1,13 @@
+{
+  "head": {
+    "head": "795babd269e9c0ed0a6498a476c67c21894f875f",
+    "tree": "f5b76658321b3e089cf0ca849c4815115bfba992",
+    "rust_tree": "9c7d432b44ff7f7244dcd58f9a416c83b31e6c76",
+    "entries": 1098
+  },
+  "matched_sha256_and_git_modes": 1098,
+  "base_nonedited_exact_paths": 940,
+  "worktree": "clean",
+  "git_diff_check_exit": 0,
+  "owned_target_binaries_hashed": 9
+}

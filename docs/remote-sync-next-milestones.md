@@ -200,6 +200,16 @@ checks; [exact-source collection](evidence/2026-11-07-m1-personal-vault-63d2e4d/
 records its product-tree binding. Actual Opus/Astra acceptance and every full-M2
 gate remain open. The full contract below remains required.
 
+### M2b.1 source status, 2026-11-07
+
+Source `795babd269e9c0ed0a6498a476c67c21894f875f` implements the bounded pure
+retained-authority/non-removal-fact candidate and passed isolated Linux Rust
+107 steps/1,735 tests. Native macOS was not assigned or run.
+[Source collection and limitations](evidence/2026-11-07-m2b1-795babd/README.md)
+separate that result from the new M1/UI composition, which still requires its own
+combined verification. Removal-fact semantics, final overlay/generations, runtime
+onboarding and all M2-G01–G10 gates remain open; this candidate cannot install data.
+
 ### Decision and exact trust boundary
 
 Astra decision, 2026-11-07: implement **administrator-attested bootstrap** for a

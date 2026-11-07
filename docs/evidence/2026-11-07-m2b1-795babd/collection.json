@@ -1,0 +1,37 @@
+{
+  "controller_model": "gpt-6.1-sol",
+  "reasoning_effort": "ultra",
+  "source_collection_commit": "0458a0e81a01781e9414e810cb7eed53f02198f9",
+  "source_collection_tree": "c6799cd98f6d1e9e216175564dbb1d9509d24900",
+  "source_collection_rust_tree": "5d3acbd546c5dc3490e95635342572cb064007eb",
+  "source_collection_desktop_tree": "2413844c89265a3e239be2372d34b1e6e1b2d4bb",
+  "parents": [
+    "a4be71aca3cd611c83131bc9670965caa1b5a435",
+    "795babd269e9c0ed0a6498a476c67c21894f875f"
+  ],
+  "tested_worker_head": "795babd269e9c0ed0a6498a476c67c21894f875f",
+  "tested_worker_rust_tree": "9c7d432b44ff7f7244dcd58f9a416c83b31e6c76",
+  "worker_linux": "PASS:107 steps/102 integration targets/1735 tests; exact795babd only",
+  "worker_macos": "NOT ASSIGNED / NOT RUN",
+  "combined_runtime_validation": "NOT RUN; combined Rust tree differs from795babd",
+  "retained_M1_desktop_tree": "2413844c89265a3e239be2372d34b1e6e1b2d4bb",
+  "M1_pairing_adoption_corrections_preserved": true,
+  "evidence_hashes_verified": 87,
+  "source_files_and_modes_verified": 1098,
+  "allowed_changed_paths": 158,
+  "selected_file_sha256": {
+    "REPORT.md": "9d7ef3d0093ff1e4d5051727894943f4d7c9ebeae322bd9c658d13a6608a88d8",
+    "final-validation-summary.json": "8221bc8b8b8aaa3db17b35dbf896c3fed0d635bba40082c205217f99fbf7ee73",
+    "final-static-boundaries.json": "c0d4594a48caab0c69fd9ad4156ce43320ae9dce1a9944b7da52efe680781a5c",
+    "final-head.json": "aba7b6835ed3ffbf9c7b7798080af3d66d75fbf99d5d3dd00d493d62af06dd6e",
+    "final-host-source-check.json": "b2efc029a88f5f4a0039bf7c5f88184e34910b831bc40b6701a095238c5de0ec",
+    "14-resource-measurements.json": "7f606e6f3c5e96133ba709cd057e0b595c6544154599487ef245110c3784a64c",
+    "final-binary-sha256.txt": "c655d9933157a4f3e5546d2fa54dfa1204d38957df775c3ae0164f93775622f3",
+    "independent-fixture-data-hashes.json": "4a4d15e5601808681fb0039f317659f44694068ba06ef17d55acc0539e05089a",
+    "EXTERNAL-SHA256SUMS": "e438a34cd62abbaaefb7860d3e783a929bb62abf9374fe1bf5cbeeffd45986d7",
+    "STATIC-COLLECTION.md": "2c2c46118f14fbf9d2b149ee77c62ab47dca6dbea4a5f44866e0451be371c50e"
+  },
+  "external_raw_evidence_directory": "/Users/ys/Code/zeropw-mlp-evidence/m2b1-authority-20261107/t3-f453296e",
+  "review_dispositions": "Canonical ca01275 dispositions unchanged. Worker blanket legacy-ID wording does not reopen resolved findings. DOS-1 HIGH OPEN. No new Opus result.",
+  "gates": "All M2-G01-G10 OPEN; runtime onboarding unsupported; native/Opus/Astra/physical/crash/packaging/deployment gates unchanged."
+}
