@@ -64,7 +64,7 @@ rust/target/debug/zeropw-demo
 
 ## 내 Mac 사이 원격 동기화 (MLP 작업 중)
 
-[원격 동기화 MLP](docs/remote-sync.md)는 개인 기기 사이 직접 연결과 coturn 중계를 추가하는 작업이다. 아직 미완료이며 v0.2.0 릴리스에 포함되지 않는다. 기록된 소스의 Linux Rust 전체 시험과 실제 네트워크 E2E는 통과했지만 native macOS 시험은 진행 중이며 물리 Mac 2대 인수 시험은 하지 않았다. 보안 리뷰도 미완료이고 초기 snapshot 기능이 없다. 실제 검증 범위와 남은 일은 [날짜별 검증 기록](docs/remote-sync-validation-2026-11-07.md)에 있다.
+[원격 동기화 MLP](docs/remote-sync.md)는 개인 기기 사이 직접 연결과 coturn 중계를 추가하는 작업이다. 아직 미완료이며 v0.2.0 릴리스에 포함되지 않는다. 이전 소스의 Linux Rust 전체 시험과 실제 네트워크 E2E는 통과했다. Native macOS 시험에서 2개 실패를 확인해 Rust 수정을 커밋했으며 새 소스 전체 검증은 대기 중이다. 물리 Mac 2대 인수 시험은 하지 않았다. 보안 리뷰도 미완료이고 초기 snapshot 기능이 없다. 실제 검증 범위와 남은 일은 [날짜별 검증 기록](docs/remote-sync-validation-2026-11-07.md)에 있다.
 
 연결 모듈과 서비스 코드는 별도의 [zeropw-link 저장소](https://github.com/telicity-ai/zeropw-link)에 있으며 현재 비공개다. [자가 호스팅 문서](https://github.com/telicity-ai/zeropw-link/blob/main/docs/self-host.md)는 배포 구성을 설명한다. Oracle VM·DNS·NSG 연결·인증서는 준비했지만 제품 HTTPS/TURN 서비스는 아직 배포하지 않았고, 출시 준비가 끝난 원격 동기화 바이너리를 제공하는 단계는 아니다.
 

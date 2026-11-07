@@ -31,13 +31,14 @@ Bound this slice to one project/environment's secret identity, its derived local
 credentials and dependent HTTP/SSH authorization. Do not add provider-side
 credential deletion, generic file synchronization or automatic secret recreation.
 
-1. Specify an additive, signed deletion fact, provisionally `secret_deleted`,
-   bound to environment and stable secret identity. Require the existing
-   administrator authority checks. Define deletion as permanent for that identity,
-   including versions unknown to the deleting device. A concurrent or later
-   `put_version`, activation or old replay cannot revive it. Creating a new secret
-   with the same display name must use a distinct identity; decide and document
-   the CLI behavior before implementing ID reuse.
+1. Implement `secret delete --id <stable-id>` with administrator reauthentication
+   and, for a shared environment, active team-administrator authority. The existing
+   user-chosen `--id` is the identity: deletion permanently tombstones that ID,
+   including unknown versions. Reuse is rejected; recreation must explicitly use
+   another ID. Do not add a display-name feature. A concurrent/later `put_version`,
+   activation or replay cannot revive the deleted ID. Use the additive signed
+   `secret_deleted` fact with target `{"secret_id":"<stable-id>"}`, bound to the
+   existing environment and fact-authority/signature rules.
 2. Extend fact shape/signature/admission/replay and `Facts` monotonically. Apply
    the deletion overlay on every fold and derivation, including snapshot-seeded
    folds. Preserve the tombstone even if encrypted versions are later removed.
@@ -51,11 +52,93 @@ credential deletion, generic file synchronization or automatic secret recreation
    vault deletion neither revokes a provider key nor erases copies a human already
    obtained. Preserve deletion state across restart, compaction and backup restore;
    do not permit execution from a stale restore before current facts are applied.
-5. Define compatibility before publishing the new fact. Current peers reject
-   unknown fact kinds, and silent omission would be unsafe. Use an explicit
-   capability/version gate with a clear unsupported result for peers unable to
-   honor tombstones; retain all supported existing canonical bytes and fixture
-   meanings. No automatic downgrade that turns deletion into version revocation.
+5. Implement the additive session capability and durable-ack gate below. Current
+   peers reject unknown fact kinds, and commit-vector equality does not include
+   facts. Do not silently omit deletion or downgrade it to version revocation.
+
+### M1 decision: minimal compatible session gate
+
+Astra decision, 2026-11-07: the command policy above and this bounded contract are
+ready for the implementation worker. They remain **unimplemented**, require tests
+and external review, and do not close any current release gate. Grounding:
+`TeamSync::handle_message` ignores unknown message types, `send_vector` currently
+sends before feature negotiation, `handle_vector` records only commit sequences,
+and facts replay separately. Every send path and readiness calculation must honor
+the new gate; adding only a handler is insufficient.
+
+- Keep existing signed commits/facts, handshake, encrypted frame format and all
+  v1 canonical bytes unchanged. Add three bounded control messages **inside the
+  existing authenticated, encrypted team session**, never through service-account
+  metadata or an unauthenticated socket announcement. Use existing canonical JSON
+  helpers. Do not change old persisted fixture meaning or rewrite nondeleted v1
+  state merely to add empty defaults.
+- On each new authenticated session send
+  `{"type":"SYNC_CAPS","v":1,"features":["secret_tombstone_v1"]}` before the
+  new implementation's ordinary data frames. Remember capability only for this
+  session and authenticated peer/environment; never reuse a prior-session result.
+  Each new control frame is at most 1 KiB. Validate types, duplicate/unknown keys,
+  version, at most 16 feature strings and 64 ASCII characters per feature. A
+  well-formed unknown feature is not support for tombstones.
+- A session in an environment with **no admitted tombstones on either known side**
+  retains existing v1 behavior; old peers may ignore `SYNC_CAPS`. Once the local
+  environment contains a tombstone, or a supported peer announces a nonempty
+  tombstone set, require current-session `secret_tombstone_v1` before ordinary
+  replication. Gate initial/periodic `VECTOR`, fact replay, commit/incident
+  broadcasts, held queues, inbound processing and status. Clear readiness
+  immediately. Existing legacy sessions are closed; a new peer that supplies no
+  capability within five seconds of session authentication is closed with local
+  reason `team_peer_feature_unsupported`. Do not send a partial unknown-fact subset
+  and call the replication successful. Never drop stored edits or tombstones.
+- Compute `tombstone_digest` as lowercase hex SHA-256 of the existing canonical
+  encoding of a sorted, unique array of hashes of **all locally admitted signed
+  `secret_deleted` facts** for that environment. Include neither rejected facts
+  nor unverified announcements. The empty-set digest is derived by the same rule.
+  Multiple valid facts for one deleted ID remain distinct hashes; ordering or
+  duplicate delivery cannot change the digest. Preserve this set through fold,
+  compaction and restore. Existing signature/role admission remains mandatory.
+- For a capable session send
+  `{"type":"TOMBSTONE_STATE","digest":"<64-hex>","request_id":"<32-hex>"}`.
+  Generate the 128-bit random request ID anew per session and per changed local
+  set; keep at most one current request per peer. Announce before resuming ordinary
+  vectors, then use the existing bounded fact replay to converge the sets. The
+  digest is a reconciliation hint, not proof or authority to install/delete data.
+  On an incoming changed digest or newly admitted tombstone, clear readiness
+  immediately; receiving the reverse-direction fact must not leave an earlier
+  equality result valid.
+- Reply
+  `{"type":"TOMBSTONE_ACK","digest":"<64-hex>","request_id":"<32-hex>"}`
+  only after signature/authority checks, durable fact storage and durable local
+  application/derivation are complete, and the receiver's own complete admitted
+  set computes to that exact digest. Never echo an unverified advertised digest
+  as an ACK. If sets differ, exchange missing facts in both directions until the
+  union converges; a smaller set cannot acknowledge away additional local facts.
+  A storage/derive error yields no ACK and leaves readiness false. An ACK lost in
+  transit may be retried idempotently on the same request.
+- `up_to_date` on upgraded software requires the existing fresh commit-vector
+  condition **and** an ACK on the current authenticated session matching the
+  sender's current request ID and exact current local tombstone digest, with no
+  conflicting reverse-direction state pending. Revoke this proof on disconnect,
+  restart, local/received deletion or peer digest change. Announcements, a cached
+  capability, vector equality and an ACK from another session do not establish
+  durable deletion delivery. Add metadata/reason handling for unsupported or
+  waiting peers without leaking secret values.
+
+Delete remains locally durable while peers are offline or unsupported; report
+that they have not synchronized, rather than waiting forever or undoing deletion.
+An already-old binary's offline vault/UI cannot be forced to apply a new fact.
+The upgraded side must disconnect/report unsupported and never claim that peer
+is up-to-date. This is the same offline revocation limitation, not permission to
+allow resurrection after a supported peer receives the tombstone. Replacing a
+new binary with old software is not a supported downgrade for tombstoned state;
+state that limitation explicitly without changing old fixture bytes.
+
+Additional gate tests: unchanged nondeleted v1 interoperability; old peer that
+ignores capability frames; cap timeout and reconnect; false/malformed capability;
+new deletion during an established legacy session; ACK before durable application,
+wrong digest/request/session ACK and replay; reverse-direction concurrent deletes;
+commit vectors equal while facts differ; duplicate facts, lost ACK, restart,
+disk-full/derive failure; unknown feature names; size/queue limits. A peer lacking
+support must never be reported as synchronized by the upgraded CLI/UI.
 
 Acceptance cases: delete a secret with several usable versions; delete while an
 offline peer adds or activates a version; deliver delete before/after the commits;

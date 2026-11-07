@@ -31,8 +31,12 @@ Vitest와 fake-daemon 페어링 2개 통과를 실제 네트워크나 물리 Mac
 표시하지 않는다. Linux 전체 Rust 첫 실행은 디스크 부족으로 실패했으나 전체 재실행은
 exit 0(100단계, 1,621통과)으로 끝났고 별도 signer probe도 통과했다. 실제 네트워크
 E2E는 최종 pin `858ddc`에서도 66/66과 7개 합성 서비스 비밀 로그 검사를 통과했다.
-격리 Tart macOS 26.6.2 arm64 VM의 native 전체 Rust/Go 시험은 진행 중이며
-최종 결과는 없다. 물리 Mac 2대 시험은 NOTRUN이다.
+격리 Tart macOS 26.6.2 arm64 VM의 고정 `1f60bc2` 시험은 fmt/strict Clippy 통과 후
+lib 662통과/2실패/4ignored이며 전체 matrix는 계속 진행 중이다. Darwin closed-peer
+SO_RCVTIMEO errno 22에 대한 수정 `d77ce9ed7170f9e2689bc1ecf5244aa9602cc587`의
+Rust tree는 `181f99ddbffedb3b7f5c158d7484afca37be8a8a`로 달라졌다. Linux strict
+all-target Clippy만 통과했고 새 전체 Linux/macOS 검증은 대기 중이다. 이전 Linux/E2E
+통과를 새 Rust tree 통과로 옮기지 않는다. 물리 Mac 2대 시험은 NOTRUN이다.
 
 아래 표는 §4의 각 요구에 붙인 진행 기록이다. `부분`은 구현 또는 일부 시험
 근거만 있다는 뜻이며 체크박스를 채우는 근거가 아니다. 상세 환경·로그·원래
@@ -64,7 +68,7 @@ E2E는 최종 pin `858ddc`에서도 66/66과 7개 합성 서비스 비밀 로그
 | C08 | 부분: loopback 관리 포트/로그 제한 구성. OCI 외부 노출 검사 미실행; DOS-1과 운영 리뷰 미완료 |
 | C09 | 부분: metrics 운영 정책 문서. 실제 배포의 label 수·메모리 장시간 계측 없음 |
 | D01 | 미완료: 암호화 팀 세션/분리 daemon 구현. 프로세스 분리만으로 OS 격리 입증 불가; macOS ACL ZPL-SEC-03 열림 |
-| D02 | 부분: `zpl:` ZeroPW 어댑터 통합 및 PORTING 반영. Linux 전체 Rust 검증 통과, native macOS 시험 진행 중 |
+| D02 | 부분: `zpl:` ZeroPW 어댑터 통합 및 PORTING 반영. 이전 tree Linux 전체 통과. native 2실패로 수정 d77ce9e 전체 재검증 대기 |
 | D03 | **제품 공백**: 초기 snapshot 미구현. 현재 signed-history bootstrap은 compacted history 신규 기기 온보딩 불가 |
 | D04 | 부분: 기존 서명 commit·vector·durable 저장 재사용. Linux 프로세스/coturn 재시작 E2E 통과. crash/ACK 유실/원자성 전체 인수와 snapshot 경로 없음 |
 | D05 | 부분: link 프레임/큐 및 기존 팀 권한 검사. 최종 통합 head의 저장·자원 실패 경계 검증 미완료 |
@@ -78,7 +82,7 @@ E2E는 최종 pin `858ddc`에서도 66/66과 7개 합성 서비스 비밀 로그
 | E07 | NOTRUN: 전체 시나리오 데이터 불일치·95%/60초 재접속 목표 측정 없음 |
 | E08 | 부분: 재배포·복구·health/로그 운영 산출물 및 이전 nspawn 시험. OCI 적용/장애·경보 시험 없음 |
 | E09 | 부분: 등록 DB와 revocation journal 복구 절차/이전 시험. 실제 OCI 백업·복원과 용량 인수 미완료 |
-| E10 | **미완료**: Linux 전체 Rust 검증 통과; native macOS 시험 진행 중/두 Mac NOTRUN. 6개 finding과 partial HIGH DOS-1 수정·시험 후 Opus 대기; SEC03 열림, network/ops 리뷰 미완료, aggregate PASS 없음 |
+| E10 | **미완료**: 이전 tree Linux 전체 통과; native 2실패/새 Rust tree 전체 검증 대기, 두 Mac NOTRUN. 6개 finding과 partial HIGH DOS-1 수정·시험 후 Opus 대기; SEC03 열림, network/ops 리뷰 미완료, aggregate PASS 없음 |
 
 초기 유효 리뷰와 검증은 실제 `claude-opus-5-5` 실행이다. 초기 구현 작업자도
 실제 `claude-opus-5-5`였으며 Sol로 바꿔 기록하지 않는다. 현재 coordinator는
@@ -92,11 +96,12 @@ Linux Go 전체/vet·server/daemon race·shell lint, 배포 단위시험 106개,
 Opus 재인수는 아니다. 이전 Go 실패와 수정한 시험의 종료 조건도 검증 기록에 보존했다.
 최종 pin `858ddc`에서도 패키징 도구 61개, Darwin cross-build, 실제 네트워크
 66/66+7개 합성 비밀 검사가 통과했다. Tart VM은 synthetic-only/no host mounts,
-Rust 1.98.1/Go 1.27.3 환경에서 native 전체 Rust/Go 시험을 진행 중이다.
+Rust 1.98.1/Go 1.27.3 환경에서 native 전체 Rust/Go 시험을 진행 중이며 위 실패를 보존한다.
 Let’s Encrypt 인증서(만료 2027-02-05) 발급과 certbot.timer 활성화는 확인했지만
 제품·HTTPS·TURN listener는 아직 없으며, endpoint 동작을 확인한 것은 아니다.
 OS 80 허용은 netfilter-persistent 1.0.20으로 저장(exit 0)하고 활성화했다.
-인증서 갱신 dry-run은 진행 중이며 통과로 표시하지 않는다.
+인증서 갱신 dry-run은 무작위 대기 중 중단한 첫 로그를 보존한 뒤,
+`oracle-acme-renew-dryrun-no-jitter-20261107.log`에서 exit 0으로 통과했다.
 초기 snapshot과 전체 secret 삭제의 [다음 마일스톤](remote-sync-next-milestones.md)은
 실제 Rust 코드를 근거로 한 제안이며 구현 완료 근거가 아니다.
 원래 severity와 반박 검증은
@@ -228,7 +233,7 @@ coturn 설정 조사 기준 커밋: `ad8885a54ac1d59a39f2cc49ae7662fc2d842c64`.
 - ~~최초 지원 OS~~: §0에서 macOS만으로 확정.
 - 베타 범위: 100명·기기 2대·비밀 텍스트만·양쪽 온라인일 때 동기화 제안. 첨부파일과 서버 보관은 후속.
 - 복구 UX: 이메일 없이 모든 기기를 잃었을 때 복구 코드+암호화 백업을 지원할지. 운영자가 금고를 복호화하는 복구는 제공하지 않음.
-- 배포 입력: `zeropw-turn.telicity.ai` DNS-only A 레코드 확인. NSG 연결과 인증서 발급은 완료했다. OS 80 허용의 저장/서비스 활성화도 확인했다. 갱신 dry-run, 제품 배포·listener TLS·전체 방화벽 인수는 아직 완료되지 않았다. OCI 리전/shape와 저장소 이름은 §0.1 및 검증 기록을 따른다. 비밀값은 채팅으로 받지 않음.
+- 배포 입력: `zeropw-turn.telicity.ai` DNS-only A 레코드 확인. NSG 연결과 인증서 발급은 완료했다. OS 80 허용의 저장/서비스 활성화도 확인했다. 갱신 dry-run도 통과했다. 제품 배포·listener TLS·전체 방화벽 인수는 아직 완료되지 않았다. OCI 리전/shape와 저장소 이름은 §0.1 및 검증 기록을 따른다. 비밀값은 채팅으로 받지 않음.
 - ~~제한 네트워크~~: §0에서 5349 TURN TLS로 시작하기로 확정.
 - 메타데이터 보관: 제안은 최소 기기 등록·회수 상태 영구 보관(서비스 탈퇴까지), rendezvous 최대 5분, 원본 IP 운영 로그 최대 24시간, 익명 집계 7일. 공개 전 실제 로그 설정과 사용자 안내에 일치시킬 것.
 
