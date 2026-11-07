@@ -1,0 +1,18 @@
+{
+  "analysis_exit": 0,
+  "assignment": "Linux driver m2b1-m1-union-9e76a1d",
+  "collection_exit": 0,
+  "corrected_independent_source_audit_exit": 0,
+  "left_intact": [
+    "prepared checkout and its branch/HEAD",
+    "owned guest source/target/caches/temp/input/evidence",
+    "owned external source archives/raw logs/reports"
+  ],
+  "native_macos": "NOT ASSIGNED / NOT RUN",
+  "no_other_assignment_released_or_mutated": true,
+  "original_driver_exit": 1,
+  "original_wrapper_exit": 1,
+  "product_phases_all_exit_zero": true,
+  "status": "released after normal completion with known driver/wrapper exits; evidence analysis complete",
+  "utc": "2026-11-07T12:18:46.729752+00:00"
+}

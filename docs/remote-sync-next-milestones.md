@@ -206,8 +206,10 @@ Source `795babd269e9c0ed0a6498a476c67c21894f875f` implements the bounded pure
 retained-authority/non-removal-fact candidate and passed isolated Linux Rust
 107 steps/1,735 tests. Native macOS was not assigned or run.
 [Source collection and limitations](evidence/2026-11-07-m2b1-795babd/README.md)
-separate that result from the new M1/UI composition, which still requires its own
-combined verification. Removal-fact semantics, final overlay/generations, runtime
+separate that result from the later M1/UI composition. Exact9e76a1d subsequently
+passed the [combined Linux product checks](evidence/2026-11-07-m1-m2b1-union-linux-9e76a1d/README.md):
+Rust107 steps/1,737 tests and Desktop343 frontend+198 core; original driver exit1
+and the corrected independent source audit0 are preserved. Native remains NOTRUN. Removal-fact semantics, final overlay/generations, runtime
 onboarding and all M2-G01–G10 gates remain open; this candidate cannot install data.
 
 ### Decision and exact trust boundary

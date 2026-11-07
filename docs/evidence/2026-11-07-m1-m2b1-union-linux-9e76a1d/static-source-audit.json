@@ -1,0 +1,53 @@
+{
+  "head": "9e76a1dae165863ad97f5af976d5037c12e4d0e7",
+  "utc": "2026-11-07T11:45:49.385220+00:00",
+  "fixture_helper_bindings": [
+    {
+      "path": "rust/tests/common/team_checkpoint.rs",
+      "sha256": "d284a641ab430ee5744c1e114fc760e15c8d62b83b29b08406f358536515615d",
+      "expected_from_committed_evidence": "d284a641ab430ee5744c1e114fc760e15c8d62b83b29b08406f358536515615d"
+    },
+    {
+      "path": "rust/tests/fixtures/team_checkpoint_v1/SHA256SUMS",
+      "sha256": "a5981856f26e687352a97836372816eaba0f98c285f8a8a41645678c8f8ebc88",
+      "expected_from_committed_evidence": "a5981856f26e687352a97836372816eaba0f98c285f8a8a41645678c8f8ebc88"
+    },
+    {
+      "path": "rust/tests/common/team_checkpoint_semantics.rs",
+      "sha256": "bb8ae70ae698ba9034d5f1ae9bbcd73c50773502215fe51707d4139690108390",
+      "expected_from_committed_evidence": "bb8ae70ae698ba9034d5f1ae9bbcd73c50773502215fe51707d4139690108390"
+    },
+    {
+      "path": "rust/tests/fixtures/team_checkpoint_semantics_v1/SHA256SUMS",
+      "sha256": "74877c9b8a930aa21a0c3a8fc5cf3519e11c97c6cd13ba1e3a6107235e19a199",
+      "expected_from_committed_evidence": "74877c9b8a930aa21a0c3a8fc5cf3519e11c97c6cd13ba1e3a6107235e19a199"
+    }
+  ],
+  "fixture_inventories": [
+    {
+      "inventory": "rust/tests/fixtures/team_checkpoint_v1/SHA256SUMS",
+      "entries": 145,
+      "all_sha256_match": true
+    },
+    {
+      "inventory": "rust/tests/fixtures/team_checkpoint_semantics_v1/SHA256SUMS",
+      "entries": 149,
+      "all_sha256_match": true
+    }
+  ],
+  "archive_verification": [
+    {
+      "path": "source-head.tar",
+      "files": 1122,
+      "sha256": "edfa891c2ae0d16d46d849694f44a85b052d130ff7f35ddd6e22af66cfc9679e",
+      "bytes_and_git_executable_modes_match": true
+    },
+    {
+      "path": "staged-source.tar",
+      "files": 1122,
+      "sha256": "68e2edf2c8b4dc59f74fd1cdf2f6306b2a729b147a53f2477a3f18cf9c176326",
+      "bytes_and_git_executable_modes_match": true
+    }
+  ],
+  "worker_source_comparison": " desktop/core/src/commands.rs                |  15 ++++\n desktop/core/tests/core_fake_admin.rs       |  55 ++++++++++++\n desktop/core/tests/e2e_remote_pairing.rs    |  41 ++++++++-\n desktop/core/tests/link_supervisor.rs       |  86 ++++++++++++++++++-\n desktop/src-tauri/build.rs                  |   1 +\n desktop/src-tauri/capabilities/default.json |   1 +\n desktop/src-tauri/src/commands.rs           |   8 ++\n desktop/src/copy/backend.ts                 |   8 +-\n desktop/src/copy/devices.ts                 |   4 +-\n desktop/src/copy/vault.ts                   |  18 +++-\n desktop/src/ipc/contract.ts                 |   1 +\n desktop/src/ipc/mock.ts                     |   1 +\n desktop/src/lib/reasons.ts                  |   3 +-\n desktop/src/lib/records.ts                  |   3 +-\n desktop/src/screens/vault/ItemDetail.tsx    |   6 +-\n desktop/src/screens/vault/VaultPage.tsx     |  21 +++++\n desktop/test/reasons.test.ts                |   4 +-\n desktop/test/records.test.ts                |  11 +++\n desktop/test/vault.test.ts                  | 125 ++++++++++++++++++++++++++--\n rust/src/team/sync.rs                       |  40 +++++++++\n rust/src/team/transport.rs                  |  63 ++++++++++++++\n 21 files changed, 495 insertions(+), 20 deletions(-)\n"
+}

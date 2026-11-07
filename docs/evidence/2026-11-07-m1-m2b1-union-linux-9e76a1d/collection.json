@@ -1,0 +1,32 @@
+{
+  "controller_model": "gpt-6.1-sol",
+  "reasoning_effort": "ultra",
+  "tested_head": "9e76a1dae165863ad97f5af976d5037c12e4d0e7",
+  "collection_predecessor": "f812030e32fe412404a6ea232f4183f0c6fd0c8e",
+  "rust_tree": "5d3acbd546c5dc3490e95635342572cb064007eb",
+  "desktop_tree": "2413844c89265a3e239be2372d34b1e6e1b2d4bb",
+  "product_trees_equal_tested_source": true,
+  "whole_current_head_runtime_rerun": false,
+  "evidence_hashes_verified": 139,
+  "source_files_modes_verified": 1122,
+  "protected_files_verified": 733,
+  "generated_files_accounted": 187,
+  "original_driver_wrapper_exit": 1,
+  "initial_transport_exit": 255,
+  "all12_product_phase_commands_exit": 0,
+  "corrected_independent_source_audit_exit": 0,
+  "no_product_rerun_for_audit_correction": true,
+  "selected_sha256": {
+    "REPORT.md": "691b05915b5ef1b73ff4e4da4340780fca5cd41e4071a56c31578a254d264a0f",
+    "static-source-audit.json": "f4c05173d6fc755832223ba1348b8c6ff80606579b31de10a173e71fcecf96d5",
+    "assignment-release.json": "1c786ebbd72eb8804524b9883c5999e6b4b84f83bbcb16e76e94790b0d0a2fe1",
+    "wrapper-result.json": "25a25d05d91bdd9a71a056a9e4892d40313fc59a6d40aeaeb3d5ac66a82789bb",
+    "EXTERNAL-SHA256SUMS": "12bb07bea26adcfba40651d93a68c14b39b70b7b2ea9d1c06ec33f2076fb167f",
+    "product-binaries.json": "3a59b5f0a7adfb28ee019e6ca20559f4efcd9d30551ae74f55273ade0974c029",
+    "original-driver-result.json": "41cdf867eec9e2fb9f84753a2601d880edf288c66ad1bfb7a7ab7a2b7ef5d7c5",
+    "STATIC-COLLECTION.md": "f6e619a55a95fc9d4f84d0ce839fcee8a68a79d724c570e5e44b626d3e13207a"
+  },
+  "raw_evidence_directory": "/Users/ys/Code/zeropw-mlp-evidence/m2b1-m1-union-9e76a1d",
+  "native": "NOT ASSIGNED / NOT RUN",
+  "acceptance": "All full-M2/native/runtime/review/release gates OPEN; canonical dispositions unchanged"
+}
