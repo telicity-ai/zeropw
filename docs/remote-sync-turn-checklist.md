@@ -51,7 +51,8 @@ test-only 수정 `d942263`의 Linux Clippy/8개 link 시험은 통과했다. 원
 Native link 8개/frame 2개는 통과했지만 전체 Rust는 exit 1로 끝났다
 (100단계, 1,621통과/4실패/4ignored). capture 실패와 signer directory/cleanup
 assertion 3개 실패를 [native manifest](evidence/2026-11-07-macos-rust-d942263.json)에
-보존했다. Go vet는 진행 중이며 native Go/ACL/core 결과는 아직 없다.
+보존했다. 후속 수집에서 Go vet와 native ACL 3개는 통과했으나 Go 전체/race와
+desktop core는 실패했다. 아래 최종 native 결과를 따른다.
 Native link integration은 strict capture 방향 검사에서 11통과/1실패였다.
 동시 기록의 조각이 섞이는 문제를 2프로세스/8스레드/512개 기록으로 재현했고,
 전체 기록에 file lock을 적용한 `945e6a6`에서 Linux Clippy·회귀시험·기존 전송
@@ -74,10 +75,10 @@ Native link integration은 strict capture 방향 검사에서 11통과/1실패�
 | A03 | 부분: Linux link-core `49d6f8d`의 실제 coturn UDP/TCP/TLS 전송 로그. 현재 통합 head·macOS 인수는 별도 |
 | A04 | 부분: QUIC/ICE 전송 및 이전 netns 시험. MTU·손실·열화 전체 행렬과 현재 통합 head의 완료 근거 없음 |
 | A05 | 부분: 별도 link wire/stream 계약과 파서 시험 존재. 최종 고정 head와 전체 종료·취소 경계 검증 필요 |
-| B01 | 부분: 초대 HMAC 저장·트랜잭션 소비 구현. 동시 실패 예산 ZPLINK-OPUS-02 수정·Linux 시험 통과, Opus 재인수 대기 |
-| B02 | 부분: Ed25519 challenge/session 구현. 공용 challenge 고갈 ZPLINK-OPUS-01 수정·Linux 시험 통과, Opus 재인수 대기 |
-| B03 | 부분: 명시적 fingerprint 승인과 desktop 흐름, fake-daemon 시험 2개 통과. 실제 Linux 네트워크 새 `d77ce9e`+`f544478` 통과; native 시험 진행 중/두 Mac 미검증 |
-| B04 | 부분: 세션·등록 제한 구현. challenge 고갈/유실 응답 복구 수정·시험 통과. OPUS-03 orphan 회수/재시작/키 회전도 `858ddc` 시험 통과; Opus 재인수 대기 |
+| B01 | 부분: 초대 HMAC 저장·트랜잭션 소비 구현. 동시 실패 예산 ZPLINK-OPUS-02는 ca01275 Opus 정적 리뷰에서 RESOLVED; 새 quota finding 04는 별도 열림 |
+| B02 | 부분: Ed25519 challenge/session 구현. 공용 challenge 고갈 ZPLINK-OPUS-01 원래 시나리오는 ca01275 Opus에서 RESOLVED; 기기별 고갈 04 열림 |
+| B03 | 부분: 명시적 fingerprint 승인과 desktop 흐름, fake-daemon 시험 2개 통과. 실제 Linux 네트워크 새 `d77ce9e`+`f544478` 통과; native 실행 실패 보존/두 Mac 미검증 |
+| B04 | 부분: 세션·등록 제한 구현. challenge 고갈/유실 응답 복구 수정·시험 통과. OPUS-03 재시작 시험은 통과했으나 ca01275 리뷰에서 key/config 사이 crash 일관성 OPUS-03-R1로 OPEN |
 | B05 | 부분: link `docs/protocol.md`에 구현 API 계약 존재. 최종 수정 head의 통합 검증 필요 |
 | B06 | 부분: 서명된 rendezvous와 replay 제한 구현 및 이전 link 단위시험. 최종 head·macOS 경로 검증 필요 |
 | B07 | 부분: 서비스 계정 권한과 금고 승인 분리. TURN bearer 잔존·회수 보장은 실제 배포 시험과 구분 |
@@ -89,9 +90,9 @@ Native link integration은 strict capture 방향 검사에서 11통과/1실패�
 | C05 | 부분: quota/대역폭 설정과 이전 lab 시험. timestamp별 우회·최종 합산 용량 보장 미완료 |
 | C06 | 부분: 차단 목록 및 이전 coturn lab 존재. 실제 OCI 주소/방화벽 적용과 지원 주소 계열 인수 미완료 |
 | C07 | 부분: TURN 오용 제한 설계·설정. 공용 배포 악용/경보 시험 미완료 |
-| C08 | 부분: loopback 관리 포트/로그 제한 구성. OCI 외부 노출 검사 미실행; DOS-1과 운영 리뷰 미완료 |
+| C08 | 부분: loopback 관리 포트/로그 제한 구성. OCI 외부 노출 검사 미실행; DOS-1 HIGH/OPEN; 운영 정적 리뷰 REVISE, 생략 범위와 실제 배포 인수는 남음 |
 | C09 | 부분: metrics 운영 정책 문서. 실제 배포의 label 수·메모리 장시간 계측 없음 |
-| D01 | 미완료: 암호화 팀 세션/분리 daemon 구현. 프로세스 분리만으로 OS 격리 입증 불가; macOS ACL f544478 수정·Linux 시험/API probe 통과, native 제품 regression/Opus 대기로 ZPL-SEC-03 열림 |
+| D01 | 미완료: 암호화 팀 세션/분리 daemon 구현. 프로세스 분리만으로 OS 격리 입증 불가; macOS ACL f544478 수정·Linux 시험/API probe 통과, ca01275 Opus 판정 INSUFFICIENT_EVIDENCE와 새 08 경로 race로 ZPL-SEC-03 열림 |
 | D02 | 부분: `zpl:` ZeroPW 어댑터 통합 및 PORTING 반영. Linux 945e6a6 전체 100단계/1,623통과. native baseline 2실패/Linux d77 capture 1실패 보존. d942 native 전체 4실패, 원인 진단/수정 인수 미완료 |
 | D03 | **제품 공백**: 초기 snapshot 미구현. 현재 signed-history bootstrap은 compacted history 신규 기기 온보딩 불가 |
 | D04 | 부분: 기존 서명 commit·vector·durable 저장 재사용. Linux 프로세스/coturn 재시작 E2E 통과. crash/ACK 유실/원자성 전체 인수와 snapshot 경로 없음 |
@@ -106,24 +107,29 @@ Native link integration은 strict capture 방향 검사에서 11통과/1실패�
 | E07 | NOTRUN: 전체 시나리오 데이터 불일치·95%/60초 재접속 목표 측정 없음 |
 | E08 | 부분: 재배포·복구·health/로그 운영 산출물 및 이전 nspawn 시험. OCI 적용/장애·경보 시험 없음 |
 | E09 | 부분: 등록 DB와 revocation journal 복구 절차/이전 시험. 실제 OCI 백업·복원과 용량 인수 미완료 |
-| E10 | **미완료**: Linux 945e6a6 전체 통과; native baseline 2실패/Linux d77 1실패 보존. d942 targeted native 8+2 통과/전체 4실패, native Go/core 대기, 두 Mac NOTRUN. 수정 후 Opus 대기; SEC03 열림, network/ops 리뷰 미완료, aggregate PASS 없음 |
+| E10 | **미완료**: Linux 945e6a6 전체 통과; native baseline 2실패/Linux d77 1실패 보존. d942 targeted native 8+2 통과/전체 4실패, native Go/race·desktop core 실패, 두 Mac NOTRUN. ca01275 Opus REVISE; OPUS03·SEC03·DOS1 HIGH와 새04–11 열림, scope 생략 유지, aggregate PASS 없음 |
 
 초기 유효 리뷰와 검증은 실제 `claude-opus-5-5` 실행이다. 초기 구현 작업자도
 실제 `claude-opus-5-5`였으며 Sol로 바꿔 기록하지 않는다. 현재 coordinator는
 `gpt-6.1-sol`, 현재 실제 네트워크 E2E 작업자도 `gpt-6.1-sol`, 이 상태 기록 담당은
 `gpt-6-astra`다. network 리뷰 로그에는
 Opus 5.5와 4.8이 섞였고 결과가 잘려 완료 리뷰로 받지 않았다. Claude 제한의
-확인된 해제 시각은 2026-11-07 12:50 KST이며 이 기록에서 재호출하지 않았다.
+확인된 해제 시각은 2026-11-07 12:50 KST였다. 이후 실제 Opus 5.5가 ca01275를
+정적 리뷰해 REVISE를 반환했다. [원문과 해시](reviews/2026-11-07-link-ca01275-opus/README.md)를
+보존했다. T3 요청 effort medium/fast false와 reviewer 표시 effort 10을 각각 기록한다.
+새 리뷰는 network/resource·deployment/operations 범위에 판정을 냈지만 생략한
+코드 범위가 명시되어 있으며 제품 시험·runtime probe는 하나도 실행하지 않았다.
 link 수정은 `cc733dc` 및 orphan 회수 후 복구 추가 `858ddc`로 커밋되어 비공개 저장소의 [draft PR #1](https://github.com/telicity-ai/zeropw-link/pull/1)에 있다.
 Linux Go 전체/vet·server/daemon race·shell lint, 배포 단위시험 106개, 실제 coturn
 빌드, Darwin cross-build, desktop 패키징 도구 시험 61개가 통과했다. macOS 실행이나
-Opus 재인수는 아니다. 이전 Go 실패와 수정한 시험의 종료 조건도 검증 기록에 보존했다.
+Opus 판정의 근거를 대신하지 않는다. ca01275 리뷰는 별도 정적 검토다. 이전 Go
+실패와 수정한 시험의 종료 조건도 검증 기록에 보존했다.
 이전 pin `858ddc`에서 패키징 도구 61개, Darwin cross-build, 실제 네트워크
 66/66+7개 합성 비밀 검사가 통과했다. Tart VM은 synthetic-only/no host mounts,
 Rust 1.98.1/Go 1.27.3 환경이다. 기존 driver 7245는 fixture deadlock 증거를
 보존한 뒤 중단했다. 대체 driver 8090은 고정 d942 Rust/core와 f544 Go를
 `/Volumes/ZeroPWBuild/verification-20261107-v2/`에서 검증 중이다. 교체 기록은
-`macos/v2-owned-replacement.log`에 있으며, 대기 중인 단계는 통과가 아니다.
+`macos/v2-owned-replacement.log`에 있다. Driver는 종료했고 최종 결과는 아래와 같다.
 Let’s Encrypt 인증서(만료 2027-02-05) 발급과 certbot.timer 활성화는 확인했지만
 제품·HTTPS·TURN listener는 아직 없으며, endpoint 동작을 확인한 것은 아니다.
 OS 80 허용은 netfilter-persistent 1.0.20으로 저장(exit 0)하고 활성화했다.
@@ -135,8 +141,10 @@ link ACL 수정 `f544478`은 Linux vet/Go 전체/server·daemon race와 CGO0 Dar
 시험 cross-compile을 통과했다. 첫 실행은 wrapper TMPDIR 0775로 CA 경로 검사가
 실패해 0700 환경으로 고친 뒤 재실행했으며 제품 검사는 바꾸지 않았다. macOS의
 checked-fd `/bin/chmod -N` OS API probe는 통과했지만 native 제품 시험은 아니다.
-사용자 지정 CA/상위 경로의 ACL 보호도 NOT VERIFIED(자체 점검, 외부 finding 아님)다.
-SEC03은 native 제품 regression과 Opus 확인까지 열린다. `ca01275`는 그 뒤 README만
+사용자 지정 CA/상위 경로의 ACL 보호는 NOT VERIFIED이며, 처음 자체 점검 뒤
+ca01275 Opus에서 새 LOW finding ZPLINK-OPUS-06으로 확인했다.
+SEC03은 뒤늦게 native ACL regression 3개가 full/race 양쪽에서 통과했지만
+readback/탐지·OPUS08·후속 Opus 확인이 남아 열린다. `ca01275`는 그 뒤 README만
 추가한 커밋이다. Linux 용량 확보는 비활성 MLP cache 하나만 대상으로 했고 먼저 제품
 바이너리 5개와 SHA를 보존했다(`linux-cache-reclaim-20261107.log`, 이후 약 11GB 여유).
 추가로 비활성 `integ-dverify`/`integ-desktop`/`desktop-core`의 정상 제품 바이너리를
@@ -146,8 +154,25 @@ Tart guest의 `/bin/chmod` Apple-anchor 서명 확인은 통과했지만 SIP는 
 이미지에서 **disabled**다(`macos/acl-helper-platform-integrity.log`). 이 작업에서
 보안 설정은 변경하지 않았다. 따라서 native 시험은 production OS 격리 증명이나
 물리 Mac 2대 시험이 아니며, 이 환경 한계를 유지한다.
+최종 native 수집 `macos/v2-collection-20261107T041605Z/`에서 driver 8090은
+03:57:48 UTC 종료, all-required-pass false다. f544 Go vet는 통과했으나 full은
+265통과/1실패, race는 76통과/1실패(subtest 포함)이며 둘 다 Darwin의
+127.0.0.2 bind 불가로 listener-cap 시험이 실패했다. ACL 제품 회귀 3개는 두
+실행 모두 통과했고, 이전 858ddc의 합성 seed를 다른 UID가 읽는 원래 노출도
+재현했다(값은 수집하지 않음). d942 desktop fmt는 `Failed to find targets`로
+실패, Clippy/bins는 통과, core는 137통과/2실패(`handshake_channel_closed`)다.
+전체 native PASS는 없으며, 이 결과는 Opus 보고서에 없던 후속 수집 증거다.
 원래 severity와 반박 검증은
 [partial archive](reviews/2026-11-07-link-initial.partial.json)에 그대로 보존했다.
+ca01275 리뷰에서 원래 OPUS01/02·SEC01/02/04는 해당 시나리오 RESOLVED,
+OPUS03은 crash 일관성 OPEN, SEC03은 INSUFFICIENT_EVIDENCE다. DOS-1은
+부분 완화했지만 HIGH/OPEN을 유지한다. 새 OPUS04–10은 LOW, OPUS11은 JSON
+`nit`/Markdown NIT/LOW다. 기기 quota, 계정 TURN 용량, CA ACL, root healthcheck,
+state 경로 race, 비용 주장, artifact 신뢰, 문서/IPv6 lockout 문제를 모두 열린 채
+기록하며 원래 severity를 낮추지 않는다. 리뷰 완료는 배포·native 인수 완료가 아니다.
+macOS 긴 TMPDIR의 signer 선택/cleanup 문제는 별도 [Astra 결정](decisions/2026-11-07-signer-socket-path.md)에
+범위를 정했다. 구현·검증 완료 기록이 아니며 link Opus 판정과 구분한다.
+
 
 ## 1. 확정된 결정과 범위
 

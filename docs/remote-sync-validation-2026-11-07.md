@@ -13,7 +13,7 @@ a dated evidence record, not a change to the acceptance requirements. The
 | Rust reader-fix source (later verification below) | `d77ce9ed7170f9e2689bc1ecf5244aa9602cc587`; Rust tree `181f99ddbffedb3b7f5c158d7484afca37be8a8a`, different from the earlier passing Linux tree |
 | Later test-only correction | `7f0421af335911b4ff21aebf7eb8447dbe20de5c` changes only `rust/tests/team_link_transport.rs`; product source remains the `d77ce9e` implementation. Full Linux verification passed at this revision; later native-fixture correction `d942263` has separate focused evidence |
 | Latest diagnostic-record fix | `945e6a6fa9865f015c51cb0dcabd43b0b1e2c6af` serializes complete wire-capture records across threads/processes. Its regression was added at `55c833b`. Focused and complete Linux checks passed at this revision, Rust tree `f147723da8e8b5b6e42ae678819f20d57ffc36bb`; native verification remains separate |
-| Current link fixes and sidecar pin | ACL fix `f544478a48cea66be816efbed50967bafcacc8ac`; working `desktop/zeropw-link.json` now pins it. Native product regression and post-fix Opus acceptance are pending. The new `d77ce9e`/`f544478` E2E and pin-packaging checks passed; native acceptance remains separate |
+| Current link fixes and sidecar pin | ACL fix `f544478a48cea66be816efbed50967bafcacc8ac`; working `desktop/zeropw-link.json` now pins it. Three native ACL regressions subsequently passed, but full native Go failed; post-fix Opus returned REVISE at `ca01275` before that evidence was collected. The new `d77ce9e`/`f544478` E2E and pin-packaging checks passed; native acceptance remains separate |
 | Link README follow-up | `ca01275c60037b2e008714e646c79a57aa6c1462` changes only the root README after `f544478` |
 | E2E fixture/evidence | Earlier fixture/evidence commit `28abd9a450d8328424db5334443f1dd4bbd5cc24`; final `858ddc` run evidence is committed under `docs/evidence/remote-sync-e2e-2026-11-07-858ddc/` at the compared revision. Both runs use CLI source `41d217f26a030042c9f0b1caac9417715470c0e1` |
 | Link publication | Private [telicity-ai/zeropw-link](https://github.com/telicity-ai/zeropw-link), [draft PR #1](https://github.com/telicity-ai/zeropw-link/pull/1); not merged or release accepted |
@@ -23,7 +23,7 @@ a dated evidence record, not a change to the acceptance requirements. The
 | Current real-network E2E worker | Actual `gpt-6.1-sol` |
 | This documentation recorder | Actual `gpt-6-astra`; evidence reconciliation, not an Opus review |
 | Valid initial review scopes | Actual `claude-opus-5-5`: crypto/auth and secrets/logs, including the seven finding verification results |
-| Incomplete network reviewer | Logs contain `claude-opus-5-5` and `claude-opus-4-8`; malformed/truncated output, not an accepted complete review |
+| Initial incomplete network reviewer | Logs contain `claude-opus-5-5` and `claude-opus-4-8`; malformed/truncated output, not an accepted complete review |
 
 External raw test logs are under `/Users/ys/Code/zeropw-mlp-evidence/`.
 Paths below are relative to that directory. Logs and test source must be retained
@@ -60,7 +60,7 @@ it does not establish working native macOS delivery or a deployed service.
 | New Rust fix verification | `d77ce9e`, tree `181f99ddbffedb3b7f5c158d7484afca37be8a8a` | Linux strict all-target Clippy and 244 focused team tests PASS. Full `integ/rust-verify-d77ce9e-linux.log` FINISHED FAILED: 100 steps; 1,621 tests passed, 1 failed, 4 ordinary-run ignored; only `test:team_link_transport` failed on capture/delivery accounting |
 | Test-only correction verification | `7f0421a`, `integ/link-wire-capture-proof-linux.log` and `integ/rust-verify-7f0421a-linux.log`; [full result manifest](evidence/2026-11-07-linux-rust-7f0421a.json) | PASS, exit 0: strict Clippy/12-test target, then all 100 unchanged full-matrix steps; 1,622 passed, 0 failed, 4 ordinary-library ignored with all four signer probes explicitly run |
 | Native-fixture correction | `d94226364eae32a67a739312a8cd393cc64f3909`, `integ/link-fixture-concurrent-writer-linux.log` | Linux strict library Clippy and all eight link unit tests PASS, exit 0. Native v2 driver reports 8/8 link and 2/2 Unix-frame tests passed; complete native Rust subsequently FAILED as recorded below |
-| New native verification handoff | Replacement driver 8090, frozen `d942263` Rust/core and `f544478` Go; `/Volumes/ZeroPWBuild/verification-20261107-v2/` | Full Rust FINISHED FAILED, exit 1: 100 steps, four failed steps, 1,621 passed/4 failed/4 ordinary ignored. Go vet was running and native Go/ACL/core phases had not started as of 03:53:15 UTC. Original driver 7245 remains archived/interrupted, never PASS. VM execution is not two physical Macs |
+| New native verification handoff | Replacement driver 8090, frozen `d942263` Rust/core and `f544478` Go; `/Volumes/ZeroPWBuild/verification-20261107-v2/` | Full Rust FINISHED FAILED, exit 1: 100 steps, four failed steps, 1,621 passed/4 failed/4 ordinary ignored. Driver finished 03:57:48 UTC, all-required-pass false; subsequent Go/core results are below. Original driver 7245 remains archived/interrupted, never PASS. VM execution is not two physical Macs |
 | Frozen native full failure evidence | [Exact phase/source/log manifest](evidence/2026-11-07-macos-rust-d942263.json), `macos/v2-collection-20261107035319Z/rust-d942-full.log` | Failed steps: `lib-and-bins`, `test:signer_e2e`, `test:team_link_transport`, `test:vault_context`. Includes known capture-format failure and three unresolved signer directory/cleanup assertions. No full native PASS |
 | Native capture-proof failure | `d942263`, `macos/rust-d942-targeted-link-integration.log` | FAILED, exit 101: 11 passed, 1 failed on an invalid capture direction token. This is separate from the earlier writer deadlock. Original strict format and all secret scans remain; malformed records were not skipped |
 | Diagnostic capture concurrency regression | `55c833b` then `945e6a6`, isolated Linux; `integ/wire-capture-concurrency-before-fix.log` and `integ/wire-capture-concurrency-after-fix.log` | Before-fix regression FAILED, exit 101; a retained synthetic capture confirms interleaved records. Fix PASS, exit 0: strict all-target Clippy, the 512-record/two-process/eight-thread test and all 12 link integration tests. Native verification remains separate |
@@ -123,8 +123,8 @@ existing `rustix`, without adding a new dependency. The fix is implemented;
 Linux strict all-target Clippy and 244 focused team tests passed. The full Linux
 matrix subsequently finished with one capture-accounting assertion failure,
 detailed below; it did not pass overall. The new `d77ce9e`/`f544478` E2E passed
-for its scenario scope. New native verification is now in the durable guest
-handoff; pending phases have no recorded success.
+for its scenario scope. The durable guest handoff subsequently finished with the source-specific
+failures and ACL passes recorded below; there is no overall native success.
 
 ## Product gaps and unverified boundaries
 
@@ -144,7 +144,7 @@ handoff; pending phases have no recorded success.
 - Both devices must be online. No server-side offline vault copy is implemented
   or approved by this record. Existing SSH signing remains in scope.
 
-## Initial adversarial review and fixes
+## Initial adversarial review and post-fix REVISE
 
 The lossless [partial review archive](reviews/2026-11-07-link-initial.partial.json)
 preserves the original finding severity, location, failure scenario, evidence and
@@ -154,15 +154,15 @@ confirm the original findings; they are not post-fix acceptance.
 
 | Finding | Original severity | Original issue | Status at this record |
 | --- | --- | --- | --- |
-| ZPLINK-OPUS-01 | medium | Unauthenticated challenges can exhaust the shared pool needed for session renewal | FIX IMPLEMENTED/TESTED at `cc733dc`; post-fix Opus acceptance pending |
-| ZPLINK-OPUS-02 | low | Enrollment failure-budget check/charge race under concurrent requests | FIX IMPLEMENTED/TESTED at `cc733dc`; post-fix Opus acceptance pending |
-| ZPLINK-OPUS-03 | low | Lost enrollment response leaves an orphan device and a stuck local identity | FIX IMPLEMENTED/TESTED at `858ddc`, including revoked-orphan recovery after restart; post-fix Opus acceptance pending |
-| ZPL-SEC-01 | low | Socket client sends invite/link tokens without checking server peer UID | FIX IMPLEMENTED/TESTED at `cc733dc`; post-fix Opus acceptance pending |
-| ZPL-SEC-02 | low | Service-CA ownership/path checks and separate stat/read permit trust substitution | FIX IMPLEMENTED/TESTED at `cc733dc`; post-fix Opus acceptance pending |
-| ZPL-SEC-03 | low | macOS inherited ACLs can bypass mode-only state privacy checks | OPEN: fix committed at `f544478`, Linux checks and OS-only API probe passed; native product regression and Opus acceptance pending |
-| ZPL-SEC-04 | low | Root executes coturn build output writable by shared `nobody` UID | FIX IMPLEMENTED/TESTED at `cc733dc`; post-fix Opus acceptance pending |
-| DOS-1 | high (partial output) | No pre-HTTP global/per-client connection cap at `internal/server/server.go:343` | Cap implemented/tested at `cc733dc`; original full review and post-fix acceptance remain INCOMPLETE |
-| Deployment/operations scope | No verdict returned | Reviewer did not finish | INCOMPLETE |
+| ZPLINK-OPUS-01 | medium | Unauthenticated challenges can exhaust the shared pool needed for session renewal | RESOLVED by static post-fix Opus at `ca01275` for the original scenario; implementation/test evidence at `cc733dc` remains separate |
+| ZPLINK-OPUS-02 | low | Enrollment failure-budget check/charge race under concurrent requests | RESOLVED by static post-fix Opus at `ca01275` for the original scenario; implementation/test evidence at `cc733dc` remains separate |
+| ZPLINK-OPUS-03 | low | Lost enrollment response leaves an orphan device and a stuck local identity | OPEN at `ca01275`: lost-response/restart recovery present, but rotation can crash between device/config writes (ZPLINK-OPUS-03-R1) |
+| ZPL-SEC-01 | low | Socket client sends invite/link tokens without checking server peer UID | RESOLVED by static post-fix Opus at `ca01275` for the original scenario; implementation/test evidence at `cc733dc` remains separate |
+| ZPL-SEC-02 | low | Service-CA ownership/path checks and separate stat/read permit trust substitution | RESOLVED by static post-fix Opus at `ca01275` for the original scenario; implementation/test evidence at `cc733dc` remains separate |
+| ZPL-SEC-03 | low | macOS inherited ACLs can bypass mode-only state privacy checks | INSUFFICIENT_EVIDENCE in the review: native results were unavailable then. Later three native ACL regressions passed; readback/detection, OPUS-08 and renewed review remain open |
+| ZPL-SEC-04 | low | Root executes coturn build output writable by shared `nobody` UID | RESOLVED by static post-fix Opus at `ca01275` for the original scenario; implementation/test evidence at `cc733dc` remains separate |
+| DOS-1 | high (partial output) | No pre-HTTP global/per-client connection cap at `internal/server/server.go:343` | HIGH / OPEN at `ca01275`: cap partially mitigates single-IP exhaustion; small-set network monopolization, fairness/tunability and target-shape measurement remain unresolved |
+| Deployment/operations scope | Initial reviewer returned no verdict | New static scope reviewed at `ca01275`, within explicit omissions | REVISE; OPUS-07/09/10/11 and deployment acceptance remain open |
 
 The fixes include separate registered-device session-challenge capacity, atomic
 enrollment failure-budget reservations, session-based recovery of a committed
@@ -189,9 +189,10 @@ file ACLs before reads/writes. It uses the fixed `/bin/chmod` path, a sanitized
 non-secret environment, only the checked descriptor as fd 3, a two-second
 deadline and fail-closed errors. It does not modify a custom CA or ancestor
 directories. Protection against ACLs on custom-CA files/ancestors remains
-**NOT VERIFIED**; this is a coordinator self-assessment, not a new external
-Opus finding. ZPL-SEC-03 remains open until native product regression and Opus
-acceptance, regardless of the successful OS-only API probe.
+**NOT VERIFIED**. Initially a coordinator self-assessment, this is now the
+independent LOW finding ZPLINK-OPUS-06 in the post-fix Opus report. ZPL-SEC-03
+remains open for its residual requirements and subsequent Opus acceptance. Later native regression evidence is recorded separately below; it does
+not resolve the readback/detection requirement or OPUS-08.
 
 Native guest metadata in `macos/acl-helper-platform-integrity.log` confirms
 `/bin/chmod` passes Apple-anchor code-signature verification, with SHA-256
@@ -214,12 +215,40 @@ sources, logs and prior E2E inputs were preserved. Evidence is
 `linux-cache-reclaim-20261107.log`; about 11 GB was free afterward. This cleanup
 is environment maintenance, not test success or a change to acceptance criteria.
 
-The network review's raw `StructuredOutput` input ends mid-sentence; the archive
-preserves that input without reconstructing the missing text. Its mixed-model log
-does not become a valid Opus 5.5 review by assigning it an Opus role name. The
-deployment/operations reviewer returned no result. Claude reported a five-hour
-limit resetting **2026-11-07 12:50 KST**; it has not been retried in this record.
-No aggregate PASS exists, and no new review covers the security fixes.
+The initial network review's raw `StructuredOutput` remains malformed/truncated,
+with mixed-model logs; the initial deployment reviewer returned no result. Neither
+historical run is relabeled complete. After the previously recorded 12:50 KST
+limit reset, a new actual `claude-opus-5-5` review returned **REVISE** for exact
+link head `ca01275c60037b2e008714e646c79a57aa6c1462`, written
+2026-11-07T04:10:22Z. Its [lossless archive](reviews/2026-11-07-link-ca01275-opus/README.md)
+contains the original JSON/Markdown and hashes. Coordinator-requested T3 effort
+was `medium`, fast mode `false`; the reviewer reported visible effort **10**.
+Both observations are recorded without rewriting the original report.
+
+The new network/resource and deployment/operations scopes returned a verdict
+within the report's explicit omissions. The reviewer ran **no product tests or
+runtime probes**; the original-scenario RESOLVED dispositions are static review,
+not new test results. Most node/signaling state-machine code, streams, several
+daemon/service-client/store paths, deployment helpers and test harnesses were not
+fully reviewed. Exact coverage is in report §1. No aggregate PASS exists.
+
+| New finding | Original returned severity | Open issue at `ca01275` |
+| --- | --- | --- |
+| ZPLINK-OPUS-04 | low | Known active-device public key can exhaust that device's session-challenge quota |
+| ZPLINK-OPUS-05 | low | One five-device account can occupy all configured TURN allocations/bandwidth |
+| ZPLINK-OPUS-06 | low | macOS ACL modification rights on custom CA and ancestors are unchecked |
+| ZPLINK-OPUS-07 | low | Healthcheck executes network-facing probe parsers as unsandboxed root |
+| ZPLINK-OPUS-08 | low | State paths re-resolved after checks permit parent-swap/inherited-ACL exposure |
+| ZPLINK-OPUS-09 | low | Monthly bandwidth/cost wording omits 31-day months, overhead and per-direction semantics |
+| ZPLINK-OPUS-10 | low | Self-attesting artifact digests and weaker coturn-bundle extraction do not bind installed artifacts to reviewed bytes |
+| ZPLINK-OPUS-11 | nit (JSON); NIT/LOW (Markdown) | Stale ACL/recovery documentation and missing IPv6 SSH lockout guard |
+
+These are returned findings, not implementation or reproduction claims. Original
+severity/evidence/rebuttals remain unchanged. DOS-1 stays HIGH/OPEN despite its
+separate residual assessment; OPUS-03-R1 and SEC-03 remain release blockers.
+The [signer path decision](decisions/2026-11-07-signer-socket-path.md) separately
+bounds the ZeroPW macOS long-TMPDIR correction; it is not part of this link review
+and supplies no passing test evidence.
 
 ## Oracle provisioning and deployment
 
@@ -353,8 +382,8 @@ The v2 targeted link integration then failed on its strict direction-token check
 (11 passed, 1 failed, exit 101). The raw log SHA-256 is
 `c07a16d24d28dfc0ef6d1ddbdf6e1a69864fbc8e36d812887db5972cb8807795`;
 `macos/v2-capture-proof-failure.md` preserves the open result. The complete frozen
-v2 Rust matrix failed separately as recorded above; independent Go/core checks
-continue without source mutation.
+v2 Rust matrix failed separately as recorded above. The independent Go/core
+checks subsequently finished without source mutation, with failures below.
 
 The coordinator added a concurrent-record regression at `55c833b`. Two processes
 with four threads each write 64 uniquely tagged 64-byte records per thread. The
@@ -391,6 +420,34 @@ active verification target were preserved. This separate reclamation is logged
 in `linux-cache-reclaim-m1-capacity-20261107.log`; the VM then had about 18 GiB
 free. It is not a product test or resource-capacity result.
 
+## Later collected native Go, ACL and desktop results
+
+Collection `macos/v2-collection-20261107T041605Z/` records driver 8090 finished
+at 03:57:48 UTC with **all required phases passed = false**. These results were
+not available to the Opus review; they supplement evidence without rewriting its
+original INSUFFICIENT_EVIDENCE disposition or claiming external acceptance.
+
+| Frozen source / phase | Result |
+| --- | --- |
+| Link `f544478`, Go vet | PASS |
+| Link `f544478`, full Go | FAILED: 265 passed, 1 failed, including subtests |
+| Link `f544478`, server/daemon race | FAILED: 76 passed, 1 failed, including subtests |
+| Link `f544478`, native Darwin ACL regressions | All three PASS in both full/race runs; this is product-test evidence in the SIP-disabled guest, not overall native acceptance |
+| Original link `858ddc` ACL reproduction | Another UID could read the synthetic seed under 0700/0600 modes; no seed value was collected |
+| Desktop `d942263`, fmt | FAILED: `Failed to find targets`; not a formatting PASS |
+| Desktop `d942263`, Clippy and binaries | PASS |
+| Desktop `d942263`, core | FAILED: 137 passed, 2 pairing tests failed with `handshake_channel_closed` |
+
+Both Go failures are `TestIdleSocketsAreLimitedBeforeHTTPAndCapacityReturns`:
+Darwin could not bind `127.0.0.2` (`can't assign requested address`). Preserve the
+failure and repair/verify the platform fixture explicitly; do not treat it as a
+passing listener-cap test. The three native ACL passes supply missing runtime
+evidence for SEC-03, but do not close its post-normalization readback/detection
+concerns, OPUS-08 state-path race or post-fix review requirement. The original
+exposure reproduction is synthetic evidence, not inspection of a production key.
+Desktop pairing failures remain unresolved; signer-path diagnosis does not by
+itself explain or fix them. No full native PASS or two-Mac acceptance exists.
+
 ## Remaining acceptance work
 
 Earlier Linux Rust verification, `858ddc` real-network E2E, cross-build and
@@ -401,15 +458,15 @@ Latest `945e6a6` complete Linux verification has passed; finish the native
 capture correction. Neither Linux PASS validates subsequent code changes.
 The new
 Rust/link E2E and `f544478` packaging-tooling checks passed;
-obtain post-fix Opus acceptance at the committed link head
-without changing the original severities; complete the network and operations
-review scopes; implement/verify initial snapshots and whole-secret deletion;
+resolve the returned `ca01275` REVISE findings and obtain exact-head Opus
+acceptance without changing original severities; cover the listed network and
+operations omissions; implement/verify initial snapshots and whole-secret deletion;
 obtain isolated macOS and two-Mac evidence, including ACL protection; then validate
 the deployed HTTPS/TURN service and its operating limits. Finish product
 firewall/listener/TLS acceptance and complete native
-packaging/runtime checks on the final ZeroPW head. Native full Rust and Go tests
-in the Tart VM are handed off with the completed frozen Rust failure preserved; no
-overall native PASS is recorded. The bounded proposed
+packaging/runtime checks on the final ZeroPW head. Native full Rust, Go/race and desktop-core runs finished with the failures
+recorded above; preserve them and verify their corrections. No overall native
+PASS is recorded. The bounded proposed
 [next milestones](remote-sync-next-milestones.md) address authenticated snapshot
 onboarding and whole-secret tombstones; they are not implemented work.
 
