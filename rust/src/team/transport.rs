@@ -44,7 +44,34 @@ fn capture_wire(direction: &str, bytes: &[u8]) {
 }
 
 pub type MembershipCheck = Arc<dyn Fn(&str, &str) -> Option<DeviceRecord> + Send + Sync>;
-pub type InviteCheck = Arc<dyn Fn(&str, &DeviceRecord, &[u8], &[u8]) -> bool + Send + Sync>;
+/// What an invitation proof decides for a non-member initiator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InviteDecision {
+    /// The proof consumed an invitation: the session goes to the sync layer.
+    Accept,
+    /// No valid invitation: the handshake fails without detail.
+    Reject,
+    /// The proof is valid for an approval-required invitation this device is
+    /// not approved for yet (docs/remote-sync.md §3.2): the handshake
+    /// completes, one encrypted [`JOIN_PENDING_TYPE`] frame is sent and the
+    /// session is closed, never handed to the sync layer.
+    Pending,
+}
+pub type InviteCheck =
+    Arc<dyn Fn(&str, &DeviceRecord, &[u8], &[u8]) -> InviteDecision + Send + Sync>;
+/// The one frame an approval-pending joiner receives.
+pub const JOIN_PENDING_TYPE: &str = "JOIN_PENDING";
+/// The handshake-failed hook's reason for a pending join: not a failure to
+/// audit as one (the join request is audited where it is recorded).
+pub const JOIN_PENDING_REASON: &str = "join_pending";
+/// How long the responder keeps reading (and discarding) after the
+/// JOIN_PENDING frame, so closing with unread input cannot reset the
+/// connection before the joiner has read it.
+const JOIN_PENDING_LINGER: Duration = Duration::from_secs(2);
+/// [`Session::transport_kind`] of a session carried by TCP.
+pub const TCP_TRANSPORT_KIND: &str = "tcp";
+/// [`Session::transport_kind`] of a session the zeropw-link daemon carries.
+pub const LINK_TRANSPORT_KIND: &str = "link";
 pub type HandshakeFailedHook = Arc<dyn Fn(&str, Option<&str>) + Send + Sync>;
 pub type OnSession = Arc<dyn Fn(Arc<dyn Session>) + Send + Sync>;
 pub type InviteProof = Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync>;
@@ -86,6 +113,11 @@ pub trait Session: Send + Sync {
     /// it: a dial hint, never a reason to trust the peer, whose identity is
     /// the team handshake's alone.
     fn link_address(&self) -> Option<String> {
+        None
+    }
+    /// What carries the session, for the sync status (`"tcp"`, `"link"`);
+    /// `None` when unknown (the in-process test transport).
+    fn transport_kind(&self) -> Option<&'static str> {
         None
     }
 }
@@ -135,6 +167,10 @@ pub(crate) trait ByteChannel: Send + Sync {
     fn send(&self, bytes: &[u8]) -> std::result::Result<(), SessionClosed>;
     fn recv(&self, timeout: Duration) -> std::result::Result<Option<Vec<u8>>, SessionClosed>;
     fn close(&self);
+    /// [`Session::transport_kind`] of the sessions this channel carries.
+    fn kind(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 struct EncryptedSession {
@@ -280,6 +316,15 @@ impl Session for EncryptedSession {
     fn link_address(&self) -> Option<String> {
         self.link_address.get().cloned()
     }
+    /// `"link"` for a session the zeropw-link daemon carries (dialed or
+    /// accepted through it), whatever the local byte channel; otherwise the
+    /// channel's own kind.
+    fn transport_kind(&self) -> Option<&'static str> {
+        if self.link_address.get().is_some() {
+            return Some(LINK_TRANSPORT_KIND);
+        }
+        self.channel.kind()
+    }
 }
 
 enum QueueItem {
@@ -350,6 +395,8 @@ fn queue_pair() -> (Arc<dyn ByteChannel>, Arc<dyn ByteChannel>) {
 /// Both get the same frame limit, absolute read deadlines, write timeout and
 /// wire capture.
 pub(crate) trait StreamSocket: Read + Write + Send + Sync + Sized + 'static {
+    /// [`Session::transport_kind`] of the sessions this socket carries.
+    const KIND: &'static str;
     fn duplicate(&self) -> std::io::Result<Self>;
     fn set_read_limit(&self, timeout: Option<Duration>) -> std::io::Result<()>;
     fn set_write_limit(&self, timeout: Option<Duration>) -> std::io::Result<()>;
@@ -358,6 +405,7 @@ pub(crate) trait StreamSocket: Read + Write + Send + Sync + Sized + 'static {
     fn configure(&self) {}
 }
 impl StreamSocket for TcpStream {
+    const KIND: &'static str = TCP_TRANSPORT_KIND;
     fn duplicate(&self) -> std::io::Result<Self> {
         self.try_clone()
     }
@@ -374,7 +422,10 @@ impl StreamSocket for TcpStream {
         let _ = self.set_nodelay(true);
     }
 }
+/// The only Unix streams a team session runs over are the ones the
+/// zeropw-link daemon hands over after a dial or accept.
 impl StreamSocket for UnixStream {
+    const KIND: &'static str = LINK_TRANSPORT_KIND;
     fn duplicate(&self) -> std::io::Result<Self> {
         self.try_clone()
     }
@@ -503,6 +554,9 @@ impl<S: StreamSocket> ByteChannel for SocketChannel<S> {
         self.closed.store(true, Ordering::SeqCst);
         self.shutdown.shut_down();
     }
+    fn kind(&self) -> Option<&'static str> {
+        Some(S::KIND)
+    }
 }
 
 fn recv_plain(
@@ -607,17 +661,40 @@ fn respond(
         return Err(HandshakeFailed::with_fp("signature_invalid", fp));
     }
     let hash = Sha256::digest(&t);
+    let mut pending = false;
     if member.is_none() {
         let proof = if msg3.get("invite_proof").is_some() {
             b64d(msg3.get("invite_proof"))?
         } else {
             vec![]
         };
-        if !invite.is_some_and(|check| check(env_id, &initiator, &hash, &proof)) {
-            return Err(HandshakeFailed::with_fp("invite_invalid", fp));
+        match invite.map_or(InviteDecision::Reject, |check| {
+            check(env_id, &initiator, &hash, &proof)
+        }) {
+            InviteDecision::Accept => {}
+            InviteDecision::Reject => return Err(HandshakeFailed::with_fp("invite_invalid", fp)),
+            InviteDecision::Pending => pending = true,
         }
     }
     let (i2r, r2i) = keys(&shared, &hash)?;
+    if pending {
+        // Only a party that proved the invitation secret gets here: tell it,
+        // encrypted, that the join waits for approval, and hand nothing on.
+        let session = EncryptedSession::new(
+            channel.clone(),
+            initiator,
+            env_id.to_owned(),
+            r2i,
+            i2r,
+            *b"R2I\0",
+            *b"I2R\0",
+        );
+        if session.send(&json!({"type": JOIN_PENDING_TYPE})).is_ok() {
+            linger(channel.as_ref(), Instant::now() + JOIN_PENDING_LINGER);
+        }
+        session.close();
+        return Err(HandshakeFailed::with_fp(JOIN_PENDING_REASON, fp));
+    }
     Ok(Arc::new(EncryptedSession::new(
         channel,
         initiator,
@@ -627,6 +704,18 @@ fn respond(
         *b"R2I\0",
         *b"I2R\0",
     )))
+}
+/// Read and discard until the peer closes or `deadline` passes.
+fn linger(channel: &dyn ByteChannel, deadline: Instant) {
+    while let Some(remaining) = deadline
+        .checked_duration_since(Instant::now())
+        .filter(|d| !d.is_zero())
+    {
+        match channel.recv(remaining) {
+            Ok(Some(_)) => {}
+            Ok(None) | Err(_) => return,
+        }
+    }
 }
 fn initiate(
     channel: Arc<dyn ByteChannel>,

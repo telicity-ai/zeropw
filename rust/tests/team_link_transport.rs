@@ -32,6 +32,7 @@ use zeropw::team::identity::{DeviceKey, DeviceRecord};
 use zeropw::team::link::{LinkConfig, LinkTransport};
 use zeropw::team::membership;
 use zeropw::team::sync::{self, TeamSync};
+use zeropw::team::sync_status;
 use zeropw::team::transport::{MembershipCheck, Session, SessionClosed, Transport};
 
 const SECRET: &[u8] = b"synthetic-link-transport-secret-0123456789";
@@ -292,6 +293,62 @@ fn an_inbound_link_session_teaches_the_dial_back_address() {
     });
     // B learned A's address back from A's inbound session.
     assert_eq!(b.peers(&env)[a.fp()], json!([da.address()]));
+}
+
+/// docs/remote-sync.md §3.3 over the link: both ends of a link session
+/// (the inviter accepted it, the joiner dialed it) report the transport as
+/// `link`, not the local Unix stream's TCP-like framing, and a redial the
+/// daemon refuses is reported with the adapter's fixed reason.
+#[test]
+fn sync_state_reports_link_sessions_and_link_dial_failures() {
+    let root = TempDir::new().unwrap();
+    let net = LinkNet::new();
+    let (da, db) = (net.daemon("a"), net.daemon("b"));
+    let (a, env) = owner(root.path(), "a", Some(&da));
+    a.team.enable_sync_state();
+    a.team.start(Some("")).unwrap();
+    let b = Node::new(context(root.path(), "b"), Some(&db));
+    b.team.enable_sync_state();
+    b.team.start(Some("")).unwrap();
+    b.join(&invite_to(&a, &env, &[da.address()])).unwrap();
+    let (a_fp, b_fp) = (a.fp(), b.fp());
+    let peer = |node: &Node, fp: &str| -> Value {
+        sync_status::status(&node.ctx, &env).unwrap()["peers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["fingerprint"] == fp)
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
+    wait("both ends report a link session", || {
+        let (at_a, at_b) = (peer(&a, &b_fp), peer(&b, &a_fp));
+        at_a["session"] == true
+            && at_a["transport"] == "link"
+            && at_b["session"] == true
+            && at_b["transport"] == "link"
+    });
+    let file = |node: &Node| {
+        node.ctx
+            .state
+            .read_json(&sync_status::path(&env), Value::Null)
+            .unwrap()
+    };
+    assert_eq!(file(&a)["peers"][&b_fp]["transport"], "link");
+    assert_eq!(file(&b)["peers"][&a_fp]["transport"], "link");
+
+    // B's Mac goes away with its daemon: A redials B's learned `zpl:`
+    // address, the daemon answers peer_offline, and that is the last error.
+    drop(b);
+    db.kill();
+    wait("A retries B with the link's reason", || {
+        let at_a = peer(&a, &b_fp);
+        at_a["state"] == "retrying"
+            && at_a["session"] == false
+            && at_a["transport"].is_null()
+            && at_a["last_error"] == "link_peer_offline"
+    });
+    assert!(file(&a)["peers"][&b_fp]["dial_failures"].as_u64().unwrap() >= 1);
 }
 
 /// A peer known at an unreachable `HOST:PORT` (sorted first) and a working
@@ -973,6 +1030,33 @@ fn cli_serve_and_join_through_link_sockets() {
         .map(|m| m.len())
         .or_else(|| versions.as_array().map(Vec::len));
     assert_eq!(count, Some(2), "{shown}");
+
+    // Both serves run link-only (no --team-listen) and still write
+    // sync_state.json: `team sync-status` sees the session, carried by the
+    // link, on both Macs.
+    let sync_peer = |admin: &native_e2e::Admin, env: &str, fp: &str| -> Value {
+        let status = admin.ok(&["team", "sync-status", "--env", env]);
+        if status["serve_updated_at"].is_null() {
+            return Value::Null;
+        }
+        status["peers"]
+            .as_array()
+            .and_then(|peers| peers.iter().find(|p| p["fingerprint"] == fp))
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
+    native_e2e::until(Duration::from_secs(30), || {
+        let (at_a, at_b) = (
+            sync_peer(&a, "demo/dev", &b_fp),
+            sync_peer(&b, "team-shared/dev", &a_fp),
+        );
+        (at_a["session"] == true
+            && at_a["transport"] == "link"
+            && at_b["session"] == true
+            && at_b["transport"] == "link")
+            .then_some(())
+    })
+    .expect("a link-only serve did not report its link session");
 
     // `team peers --add` takes only well-formed link addresses.
     let refused = b
