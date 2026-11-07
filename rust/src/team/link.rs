@@ -779,15 +779,26 @@ mod tests {
     fn reply_lines_are_bounded_complete_and_timely() {
         let read = |bytes: &[u8], close: bool, wait: Duration| {
             let (mut client, mut daemon) = UnixStream::pair().unwrap();
-            daemon.write_all(bytes).unwrap();
-            if close {
-                drop(daemon);
-                read_reply_line(&mut client, ReplyWait::Until(Instant::now() + wait))
-            } else {
-                let result = read_reply_line(&mut client, ReplyWait::Until(Instant::now() + wait));
-                drop(daemon);
-                result
+            let bytes = bytes.to_vec();
+            let (release, held) = std::sync::mpsc::channel();
+            // Darwin's socket-pair send buffer can be smaller than this
+            // oversized fixture. Write concurrently so testing the read
+            // bound cannot deadlock before the reader even starts.
+            let writer = thread::spawn(move || {
+                daemon
+                    .set_write_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                daemon.write_all(&bytes).unwrap();
+                if !close {
+                    held.recv_timeout(Duration::from_secs(2)).unwrap();
+                }
+            });
+            let result = read_reply_line(&mut client, ReplyWait::Until(Instant::now() + wait));
+            if !close {
+                release.send(()).unwrap();
             }
+            writer.join().unwrap();
+            result
         };
         let short = Duration::from_millis(300);
         let longest = vec![b'x'; DAEMON_LINE_MAX_BYTES - 1];
