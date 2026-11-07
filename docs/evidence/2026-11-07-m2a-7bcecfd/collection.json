@@ -1,0 +1,41 @@
+{
+  "source_commit": "7bcecfda8571ae40047fae406915f73d2e25bde0",
+  "fixture_parent": "e781a21074f64bf610a34f01035f613df9e19f76",
+  "fixture_rust_tree_equals_current": "9982d235d7b464edf7a520c450f1db4c33ad86d0",
+  "changed_files": [
+    "rust/src/team/checkpoint/manifest.rs",
+    "rust/src/team/checkpoint/mod.rs",
+    "rust/src/team/checkpoint/payload.rs",
+    "rust/src/team/checkpoint/provenance.rs",
+    "rust/src/team/checkpoint/strict_json.rs",
+    "rust/src/team/mod.rs",
+    "rust/tests/team_checkpoint_legacy_parser_regression.rs",
+    "rust/tests/team_checkpoint_manifest.rs",
+    "rust/tests/team_checkpoint_payload.rs",
+    "rust/tests/team_checkpoint_provenance.rs"
+  ],
+  "protected_paths_unchanged": true,
+  "evidence_entries_verified": 69,
+  "evidence_bytes_read": 8247866,
+  "manifest_sha256": "ed61c2825831600ef13c86892584c569804d74eb6efdeacd6932224156d9bd69",
+  "report_sha256": "6d2b7c53720ff365fa7a9d784b7dc12bcc717f7144f1b43c15252a254ee573f6",
+  "actual_recorder": "gpt-6.1-sol, ultra",
+  "scope": "Data-only coordinator checksum/path collection; no execution or acceptance",
+  "native_macos": "NOTRUN",
+  "Opus": "NOTRUN",
+  "M2-G01-G10": "OPEN",
+  "coordinator_mapping": {
+    "43723aecad3c1f3fca471d155ed5418b9f784329": "5686afe49e55859c7cdf342b0346a45924f8748e",
+    "1aa5525e6166b99c0465eb888e9de947bac89433": "b7d92525e970ba097e44d11cda84eb99dcc100b1",
+    "7bcecfda8571ae40047fae406915f73d2e25bde0": "74bb09ade04d6b0b078dd2e8cec0753eab32091a"
+  },
+  "collected_rust_tree": "24fceecbec4b559aa8d1e31331ef5be0033ca2fa",
+  "new_integrated_head_runtime": "NOTRUN; no new full-head PASS inferred",
+  "static_collection": {
+    "scope": "Two bounded independent Sol static collection audits, not Opus or execution/acceptance",
+    "result": "No blocking in-scope defect found within explicitly read scopes",
+    "parser_report_sha256": "a62818431bb000bc67336824f9d1f5845f4876a6c5d30386e2350eb7627fa18d",
+    "integrity_report_sha256": "0a49fe72610d2522daa4ce2178a6338b291e673c9879eaa562cba80335af3fe0",
+    "omissions": "See exact scope/omissions in both reports; full-M2/dependencies/native not accepted"
+  }
+}

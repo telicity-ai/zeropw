@@ -179,8 +179,12 @@ authority in that first slice. A subsequent isolated dependency probe found
 legacy behavior changes from the proposed `raw_value` feature. The separate
 [parser revision](decisions/m2a-schema-2026-11-07/parser-compatibility-revision.md)
 selects original-byte cursors and typed Serde seeds without Cargo/feature changes;
-its isolated feasibility gates remain pending. The full contract below remains
-required.
+the bounded implementation at source `7bcecfda8571ae40047fae406915f73d2e25bde0`
+passed PC-R1–R4 and the Linux portion of PC-R5, including the unchanged full
+104-step/1,681-test Rust matrix. [Source-bound implementation report](evidence/2026-11-07-m2a-7bcecfd/REPORT.md).
+Its private attestation/integrity candidates remain inert. Native macOS,
+actual Opus review, M1/UI combined verification and every full-M2 gate remain
+open. The full contract below remains required.
 
 ### Decision and exact trust boundary
 

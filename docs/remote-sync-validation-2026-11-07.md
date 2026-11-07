@@ -4,6 +4,21 @@ Status: **incomplete; no release acceptance and no aggregate Opus PASS**. This i
 a dated evidence record, not a change to the acceptance requirements. The
 [TURN checklist](remote-sync-turn-checklist.md) keeps its completion gates open.
 
+Bounded M2a source `7bcecfda8571ae40047fae406915f73d2e25bde0` is now
+collected as three implementation commits through coordinator `74bb09a`, with
+the same Rust tree `24fceecbec4b559aa8d1e31331ef5be0033ca2fa`. This adds
+strict original-byte parsing, pinned-context manifest/chunk/component integrity
+and inert candidate provenance. It adds no runtime handler, admission, install
+or snapshot support. [Complete report](evidence/2026-11-07-m2a-7bcecfd/REPORT.md).
+PC-R1–R4 and required Linux checks passed at that exact worker source:
+104 unchanged verification steps, 1,681 tests, all 99 integration targets,
+four signer probes and ten doc tests. All 810 worker source entries matched
+before/after; 69 evidence hashes were checked at collection. Cargo/features,
+old helpers, fixtures, harness/CI and verification scripts remain unchanged.
+Native macOS, actual Opus, new combined-head verification and M2-G01–G10
+remain open. The ongoing M1/UI worker received this frozen dependency for
+subsequent combined verification; no in-progress worker result is claimed here.
+
 Latest connection-module execution is at exact link
 `6e7939d779522631907d2d3cbd938930628d4089`: Linux full Go/race passed
 305 tests/subtests each; native macOS full Go/race passed 314 each, with
@@ -44,9 +59,9 @@ helper and 146 new fixture files were added, with all 652 original files unchang
 Four isolated generation/crypto/golden tests, strict helper Clippy, formatting,
 independent byte/hash checks and deterministic regeneration passed.
 [Collection and execution record](evidence/2026-11-07-m2a-fixtures/REPORT.md).
-This is fixture consistency, not parser, semantic admission, full-matrix, native
-or Opus acceptance. The feature-neutral verifier implementation is a separate
-ongoing task; PC-R1–R5 and M2-G01–G10 remain open until their actual evidence.
+This original fixture result is consistency, not parser, semantic admission,
+full-matrix, native or Opus acceptance. The later bounded verifier's separate
+source-bound evidence is recorded above; every full-M2 gate remains open.
 
 Latest service-fix evidence: link `e115879f6a73d8f95e359a116da38ebb334d5ced`
 passed isolated Linux vet, the full Go suite, server/daemon race checks and
