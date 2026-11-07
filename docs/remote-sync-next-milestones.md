@@ -170,6 +170,13 @@ review evidence is missing.
 
 ## M2: Authenticated snapshot onboarding after compaction
 
+The separate [M2a schema decision](decisions/m2a-schema-2026-11-07/decision.md)
+and [bounded Sol task](decisions/m2a-schema-2026-11-07/implementation-task.md)
+freeze the first pure byte/parser/attestation/integrity component. These are
+actual Astra design outputs, not implemented snapshot support. M2-G01 through
+M2-G10 remain open; there is no runtime capability, admission or installation
+authority in that first slice. The full contract below remains required.
+
 ### Decision and exact trust boundary
 
 Astra decision, 2026-11-07: implement **administrator-attested bootstrap** for a
