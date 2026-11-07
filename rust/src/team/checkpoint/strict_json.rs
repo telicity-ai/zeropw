@@ -17,6 +17,7 @@ pub(super) enum Error {
     Json,
     Duplicate,
     Limit,
+    Schema,
 }
 
 type Result<T> = std::result::Result<T, Error>;
@@ -29,6 +30,9 @@ pub(super) struct Span<'a> {
 }
 
 impl Span<'_> {
+    pub(super) fn range(&self) -> Range<usize> {
+        self.range.clone()
+    }
     pub(super) fn bytes(&self) -> &[u8] {
         // Only the checked cursor publishes ranges; there is no peer offset API.
         &self.source[self.range.clone()]
@@ -50,17 +54,22 @@ enum Role {
     PayloadDescriptor,
     Chunks,
     Chunk,
+    ChunkFrame,
     Payload,
     Components,
     Component(usize),
     Devices,
     Device,
+    DeviceRecord,
     Snapshot,
     Document,
     Secrets,
     Secret,
     Versions,
     Version,
+    VersionOrder,
+    VersionIds,
+    VersionId,
     Commits,
     CommitEntries,
     CommitEntry,
@@ -72,6 +81,7 @@ enum Role {
     Removals,
     Pending,
     PendingEntry,
+    SelfPlaced,
     Wraps,
     WrapEntries,
     WrapEntry,
@@ -87,6 +97,7 @@ impl Role {
             | (Descriptor, "byte_length" | "item_count")
             | (PayloadDescriptor, "byte_length")
             | (Chunk, "index" | "byte_length")
+            | (ChunkFrame, "v" | "index")
             | (Payload, "v")
             | (Commit, "author_seq")
             | (WrapEntry, "source_op_index") => UInt,
@@ -98,6 +109,7 @@ impl Role {
             (Manifest, "payload") => PayloadDescriptor,
             (PayloadDescriptor, "chunks") => Chunks,
             (Payload, "components") => Components,
+            (Device, "record") => DeviceRecord,
             (Component(0), "data") => Devices,
             (Component(1), "data") => Snapshot,
             (Component(2), "data") => Commits,
@@ -105,6 +117,8 @@ impl Role {
             (Component(4), "data") => Removals,
             (Component(5), "data") => Wraps,
             (Snapshot, "document") => Document,
+            (Snapshot, "version_order") => VersionOrder,
+            (VersionOrder, _) => VersionIds,
             (Document, "secrets") => Secrets,
             (Secrets, _) => Secret,
             (Secret, "versions") => Versions,
@@ -114,6 +128,7 @@ impl Role {
             (Facts, "records") => FactEntries,
             (FactEntry, "record") => Fact,
             (Removals, "pending") => Pending,
+            (Removals, "self_placed") => SelfPlaced,
             (Wraps, "entries") => WrapEntries,
             _ => Any,
         }
@@ -132,6 +147,7 @@ impl Role {
             Pending => PendingEntry,
             PendingEntry if index < 2 => UInt,
             WrapEntries => WrapEntry,
+            VersionIds => VersionId,
             _ => Any,
         }
     }
@@ -145,6 +161,7 @@ struct Counts {
     facts: usize,
     versions: usize,
     combined: usize,
+    wraps: usize,
 }
 
 fn increment(count: &mut usize, max: usize) -> Result<()> {
@@ -174,6 +191,7 @@ impl Counts {
                 };
                 *counter += 1;
             }
+            Role::WrapEntry => self.wraps = self.wraps.checked_add(1).ok_or(Error::Limit)?,
             _ => {}
         }
         Ok(())
@@ -187,6 +205,7 @@ struct Index<'a> {
     components: [Option<Span<'a>>; 6],
     commits: Vec<Span<'a>>,
     facts: Vec<Span<'a>>,
+    wraps: Vec<Span<'a>>,
     counts: Counts,
 }
 
@@ -198,6 +217,7 @@ struct Frame {
     keys: BTreeSet<String>,
     key: Option<String>,
     value: Option<Value>,
+    collect: bool,
 }
 
 struct State<'a> {
@@ -207,7 +227,9 @@ struct State<'a> {
     ancestors: usize,
     role: Role,
     build: bool,
-    frames: Vec<Box<Frame>>,
+    project: bool,
+    enforce: bool,
+    frames: Vec<Frame>,
     output: Option<Value>,
     index: Index<'a>,
     failure: Error,
@@ -347,7 +369,7 @@ impl<'a> State<'a> {
     }
 
     fn frame(&mut self) -> Result<&mut Frame> {
-        self.frames.last_mut().map(Box::as_mut).ok_or(Error::Json)
+        self.frames.last_mut().ok_or(Error::Json)
     }
 
     fn fail<E: de::Error>(&mut self, error: Error) -> E {
@@ -355,6 +377,7 @@ impl<'a> State<'a> {
         E::custom("checkpoint syntax refused")
     }
 
+    #[inline(never)]
     fn start(&mut self) -> Result<()> {
         #[cfg(test)]
         if let Some(hook) = self.before_value {
@@ -364,7 +387,7 @@ impl<'a> State<'a> {
         self.index.counts.enter(self.role)?;
         self.entries += 1;
         self.ws();
-        self.frames.push(Box::new(Frame {
+        self.frames.push(Frame {
             role: self.role,
             start: self.pos,
             ancestors: self.ancestors + self.frames.len(),
@@ -372,13 +395,47 @@ impl<'a> State<'a> {
             keys: BTreeSet::new(),
             key: None,
             value: None,
-        }));
+            collect: self.build
+                && self.frames.last().is_none_or(|f| f.collect)
+                && !(self.project
+                    && (matches!(
+                        self.role,
+                        Role::CommitEntry
+                            | Role::FactEntry
+                            | Role::WrapEntry
+                            | Role::Secret
+                            | Role::VersionIds
+                    ) || self.frames.last().is_some_and(|f| {
+                        f.role == Role::Document
+                            && self.role == Role::Any
+                            && !matches!(f.key.as_deref(), Some("format" | "env_id"))
+                    }))),
+        });
         self.max_frames = self.max_frames.max(self.frames.len());
         Ok(())
     }
 
+    #[inline(never)]
     fn finish(&mut self) -> Result<()> {
         let frame = self.frames.pop().ok_or(Error::Json)?;
+        if self.enforce {
+            if let Some(fields) = frame.role.fields()
+                && (frame.keys.len() != fields.len()
+                    || fields.iter().any(|key| !frame.keys.contains(*key)))
+            {
+                return Err(Error::Schema);
+            }
+            let required: &[&str] = match frame.role {
+                Role::Document => &["format", "env_id", "secrets"],
+                Role::Secret => &["versions"],
+                _ => &[],
+            };
+            if required.iter().any(|key| !frame.keys.contains(*key))
+                || matches!(frame.role, Role::Descriptors | Role::Components) && frame.count != 6
+            {
+                return Err(Error::Schema);
+            }
+        }
         let span = Span {
             source: self.source,
             range: frame.start..self.pos,
@@ -399,6 +456,7 @@ impl<'a> State<'a> {
         match frame.role {
             Role::CommitEntry => self.index.commits.push(span.clone()),
             Role::FactEntry => self.index.facts.push(span.clone()),
+            Role::WrapEntry => self.index.wraps.push(span.clone()),
             _ => {}
         }
         if let Some(parent) = self.frames.last_mut() {
@@ -458,6 +516,7 @@ impl fmt::Display for Error {
             Self::Json => "team_checkpoint_json_invalid",
             Self::Duplicate => "team_checkpoint_duplicate_key",
             Self::Limit => "team_checkpoint_limit_exceeded",
+            Self::Schema => "team_checkpoint_schema_unsupported",
         })
     }
 }
@@ -467,6 +526,16 @@ impl<'de> DeserializeSeed<'de> for Seed<'_, '_> {
     #[inline(never)]
     fn deserialize<D: de::Deserializer<'de>>(self, de: D) -> std::result::Result<(), D::Error> {
         self.0.start().map_err(|e| self.0.fail(e))?;
+        if self.0.enforce
+            && (self
+                .0
+                .role
+                .container()
+                .is_some_and(|kind| self.0.byte() != Some(kind))
+                || self.0.role == Role::VersionId && self.0.byte() != Some(b'"'))
+        {
+            return Err(self.0.fail(Error::Schema));
+        }
         if self.0.role == Role::UInt && matches!(self.0.byte(), Some(b'{' | b'[')) {
             return Err(self.0.fail(Error::Json));
         }
@@ -504,7 +573,7 @@ fn scalar<'de, D: de::Deserializer<'de>>(
     IgnoredAny::deserialize(de)?;
     state.pos = end;
     state.scalars += 1;
-    if state.build {
+    if state.frame().map_err(de::Error::custom)?.collect {
         state.frame().map_err(de::Error::custom)?.value = Some(value);
     }
     Ok(())
@@ -516,7 +585,7 @@ fn object<'de, D: de::Deserializer<'de>>(
     de: D,
 ) -> std::result::Result<(), D::Error> {
     state.pos += 1;
-    if state.build {
+    if state.frame().map_err(de::Error::custom)?.collect {
         state.frame().map_err(de::Error::custom)?.value = Some(Value::Object(Map::new()));
     }
     de.deserialize_map(ObjectVisitor(state))
@@ -528,7 +597,7 @@ fn array<'de, D: de::Deserializer<'de>>(
     de: D,
 ) -> std::result::Result<(), D::Error> {
     state.pos += 1;
-    if state.build {
+    if state.frame().map_err(de::Error::custom)?.collect {
         state.frame().map_err(de::Error::custom)?.value = Some(Value::Array(Vec::new()));
     }
     de.deserialize_seq(ArrayVisitor(state))
@@ -573,10 +642,19 @@ impl<'de> Visitor<'de> for ObjectVisitor<'_, '_> {
 
 #[inline(never)]
 fn map_child(state: &mut State<'_>) -> Result<Role> {
+    let enforce = state.enforce;
     let frame = state.frame()?;
     let key = frame.key.as_ref().ok_or(Error::Json)?;
     if !frame.keys.insert(key.clone()) {
         return Err(Error::Duplicate);
+    }
+    if enforce
+        && frame
+            .role
+            .fields()
+            .is_some_and(|fields| !fields.contains(&key.as_str()))
+    {
+        return Err(Error::Schema);
     }
     if frame.role == Role::Vector && frame.count >= 256 {
         return Err(Error::Limit);
@@ -606,7 +684,11 @@ impl<'de> Visitor<'de> for ArrayVisitor<'_, '_> {
             let frame = self.0.frame().map_err(de::Error::custom)?;
             if matches!(
                 frame.role,
-                Role::Heads | Role::Descriptors | Role::Components | Role::Pending
+                Role::Heads
+                    | Role::Descriptors
+                    | Role::Components
+                    | Role::Pending
+                    | Role::SelfPlaced
             ) && frame.count
                 >= match frame.role {
                     Role::Components | Role::Descriptors => 6,
@@ -638,6 +720,8 @@ fn new_state<'a>(span: Span<'a>, role: Role, build: bool) -> Box<State<'a>> {
         ancestors: span.ancestors,
         role,
         build,
+        project: false,
+        enforce: false,
         frames: Vec::new(),
         output: None,
         index: Index {
@@ -645,6 +729,7 @@ fn new_state<'a>(span: Span<'a>, role: Role, build: bool) -> Box<State<'a>> {
             components: std::array::from_fn(|_| None),
             commits: Vec::new(),
             facts: Vec::new(),
+            wraps: Vec::new(),
             counts: Counts::default(),
         },
         failure: Error::Json,
@@ -1054,9 +1139,7 @@ mod gate_tests {
         assert_eq!(state.index.counts.versions, 1);
         let mut counts = state.index.counts.clone();
         assert_eq!(counts.enter(Role::Version), Err(Error::Limit));
-        let one_more = text
-            .replacen("\"facts\"", "\"facts\"", 1)
-            .replace("\"records\":[{}]", "\"records\":[{},invalid]");
+        let one_more = text.replace("\"records\":[{}]", "\"records\":[{},invalid]");
         assert!(matches!(
             run(root(one_more.as_bytes()), Role::Payload, true),
             Err(Error::Limit)
@@ -1290,4 +1373,174 @@ mod callback_tests {
             assert!(refused);
         }
     }
+}
+
+impl Role {
+    fn fields(self) -> Option<&'static [&'static str]> {
+        use Role::*;
+        Some(match self {
+            Manifest => &[
+                "type",
+                "domain",
+                "v",
+                "trust_model",
+                "env_id",
+                "signer",
+                "recipient",
+                "recipient_role",
+                "invite_id",
+                "approval_id",
+                "approval_sha256",
+                "session_nonce",
+                "onboarding_nonce",
+                "transfer_id",
+                "recipient_authorization_id",
+                "recipient_admission_commit_hash",
+                "authorization_expires_at_ms",
+                "created_at_ms",
+                "expires_at_ms",
+                "required_features",
+                "vector",
+                "heads",
+                "counts",
+                "components",
+                "admitted_fact_hashes_sha256",
+                "tombstone_digest",
+                "expected_final_document_sha256",
+                "payload",
+                "sig",
+            ],
+            Counts => &["devices", "commits", "facts", "versions", "recipient_wraps"],
+            Head => &["author", "author_seq", "commit_hash", "hlc"],
+            Hlc => &["wall_ms", "counter"],
+            Descriptor => &["name", "byte_length", "sha256", "item_count"],
+            PayloadDescriptor => &["byte_length", "sha256", "chunks"],
+            Chunk => &["index", "byte_length", "sha256"],
+            ChunkFrame => &[
+                "type",
+                "v",
+                "transfer_id",
+                "manifest_hash",
+                "index",
+                "data_b64",
+            ],
+            Payload => &["format", "v", "env_id", "components"],
+            Component(_) => &["name", "data"],
+            Device => &["fingerprint", "record"],
+            DeviceRecord => &["sign_pub", "agree_pub", "sig"],
+            Snapshot => &[
+                "document",
+                "vector",
+                "version_order",
+                "expected_final_document_sha256",
+            ],
+            Commits => &[
+                "records",
+                "genesis_commit_hash",
+                "recipient_admission_commit_hash",
+                "authority_commit_hashes",
+            ],
+            CommitEntry | FactEntry => &["hash", "record"],
+            Commit => &[
+                "format",
+                "env_id",
+                "author",
+                "author_seq",
+                "hlc",
+                "seen",
+                "ops",
+                "sig",
+            ],
+            Facts => &["records", "admitted_fact_hashes", "tombstone_fact_hashes"],
+            Fact => &["format", "env_id", "kind", "target", "author", "hlc", "sig"],
+            Removals => &["bounds", "pending", "self_placed", "witness_commit_hashes"],
+            Wraps => &["entries", "unavailable_generations"],
+            WrapEntry => &[
+                "generation_id",
+                "recipient",
+                "source_commit_hash",
+                "source_op_index",
+                "wrap",
+            ],
+            _ => return None,
+        })
+    }
+
+    fn container(self) -> Option<u8> {
+        use Role::*;
+        match self {
+            Any | UInt | VersionId => None,
+            Heads | Descriptors | Chunks | Components | Devices | CommitEntries | FactEntries
+            | Pending | PendingEntry | SelfPlaced | WrapEntries | VersionIds => Some(b'['),
+            _ => Some(b'{'),
+        }
+    }
+}
+
+pub(super) struct PayloadIndex<'a> {
+    pub(super) components: [Span<'a>; 6],
+    pub(super) commits: Vec<Span<'a>>,
+    pub(super) facts: Vec<Span<'a>>,
+    pub(super) wraps: Vec<Span<'a>>,
+    pub(super) metadata: Value,
+    pub(super) counts: [usize; 5],
+}
+
+pub(super) fn manifest(bytes: &[u8]) -> Result<Value> {
+    checked_value(bytes, 65_536, Role::Manifest)
+}
+
+pub(super) fn chunk_frame(bytes: &[u8]) -> Result<Value> {
+    checked_value(bytes, 131_072, Role::ChunkFrame)
+}
+
+fn checked_value(bytes: &[u8], cap: usize, role: Role) -> Result<Value> {
+    preflight(bytes, cap, 0)?;
+    let span = root(bytes);
+    let mut state = new_state(span.clone(), role, true);
+    state.enforce = true;
+    traverse(&mut state, &span)?;
+    state.output.take().ok_or(Error::Json)
+}
+
+pub(super) fn payload(bytes: &[u8]) -> Result<PayloadIndex<'_>> {
+    let span = root(bytes);
+    preflight(bytes, 16_777_216, 0)?;
+    // All counts and every legacy child are validated before building metadata.
+    let mut validation = new_state(span.clone(), Role::Payload, false);
+    validation.enforce = true;
+    traverse(&mut validation, &span)?;
+    drop(validation);
+    let mut metadata = new_state(span.clone(), Role::Payload, true);
+    metadata.project = true;
+    metadata.enforce = true;
+    traverse(&mut metadata, &span)?;
+    let components = metadata
+        .index
+        .components
+        .iter_mut()
+        .map(|s| s.take().ok_or(Error::Schema))
+        .collect::<Result<Vec<_>>>()?;
+    let counts = &metadata.index.counts;
+    Ok(PayloadIndex {
+        components: components.try_into().map_err(|_| Error::Schema)?,
+        commits: std::mem::take(&mut metadata.index.commits),
+        facts: std::mem::take(&mut metadata.index.facts),
+        wraps: std::mem::take(&mut metadata.index.wraps),
+        counts: [
+            counts.devices,
+            counts.commits,
+            counts.facts,
+            counts.versions,
+            counts.wraps,
+        ],
+        metadata: metadata.output.take().ok_or(Error::Json)?,
+    })
+}
+
+pub(super) fn materialize(span: &Span<'_>) -> Result<Value> {
+    run(span.clone(), Role::Any, true)?
+        .output
+        .take()
+        .ok_or(Error::Json)
 }
