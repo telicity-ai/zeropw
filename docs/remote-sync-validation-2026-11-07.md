@@ -4,6 +4,17 @@ Status: **incomplete; no release acceptance and no aggregate Opus PASS**. This i
 a dated evidence record, not a change to the acceptance requirements. The
 [TURN checklist](remote-sync-turn-checklist.md) keeps its completion gates open.
 
+The coordinator prepared an immutable Rust-only M1+M2a composition for the
+[actual Astra M2b.1 task](decisions/m2b-admission-2026-11-07/implementation-task.md).
+It retains exact M1 backend8258a8d and156 M2a additions, with both module
+declarations; all407 expected Rust blobs/executable bits match.
+[Exact preparation scope](evidence/2026-11-07-m1-m2a-composition/README.md).
+This is not a new combined verification PASS. Modern PersonalVault core/UI
+deletion integration, pairing corrections and their source-bound evidence remain
+the separate active worker's responsibility; old dashboard files stay removed.
+The next pure authority-analysis slice adds no runtime installation or ACK.
+AllM2-G01–G10, native/physical acceptance and final Opus gates remain open.
+
 The new actual Opus5.5 review of frozen link3eb9727 was interrupted by provider
 safeguards after static reading and169-file integrity verification. The offered
 automatic4.8 switch was declined under the existing model instructions. Only an
@@ -51,8 +62,9 @@ This is branch integration, not a new release or integrated-head test PASS.
 The [source UI report](personal-vault-i18n-2026-11-07.md) retains its native
 TLS/pairing/supervisor failures.
 
-M1 worker source `8258a8d2eac7541e229f414151271bb3faa215f8` is complete
-but **not yet integrated into this UI**. Its exact-head Linux Rust and desktop
+M1 worker source `8258a8d2eac7541e229f414151271bb3faa215f8` is complete.
+Its Rust backend is now collected in the composition above; its permanent-delete
+core/UI action is **not yet integrated into this UI**. Its exact-head Linux Rust and desktop
 matrices passed; native Rust passed, while native desktop failed two unchanged
 remote-pairing assertions. The [collected report](evidence/2026-11-07-m1-source/REPORT.md)
 preserves those failures and incomplete native core coverage. A coordinator
