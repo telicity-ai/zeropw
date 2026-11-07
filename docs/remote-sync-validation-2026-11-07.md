@@ -471,3 +471,13 @@ PASS is recorded. The bounded proposed
 onboarding and whole-secret tombstones; they are not implemented work.
 
 This report does not mark any unrun test passed or accept risk on the user's behalf.
+
+## First fixes after the ca01275 REVISE review
+
+The unchanged Opus report was published as a commit-bound [COMMENT review](https://github.com/telicity-ai/zeropw-link/pull/1#pullrequestreview-5810064781). No approval or later Opus PASS exists. Link follow-up commits `d2fa9be` and `f366757` remove root health-probe execution and make revoked identity rotation recoverable across durable prefixes. Linux vet, focused/full Go and server/daemon races passed at f366; native focused rotation tests also passed at exactly that source (three named tests and four durable-prefix subtests, source146-file before/after checks, exit0). Native log SHA256: `c9094dd88b06fd8440f54dd934c43faf70cf2036cfb8ee79b819581a9d801264`. These are injected persistence interruptions, not OS power-loss tests.
+
+Link `83eb55d` additionally refuses an IPv6 SSH lockout before applying the IPv4-only firewall. Linux lint and all114 deployment checks passed. An earlier108-check PASS covered the health-probe change; the initial run and direct diagnostic failed ENOSPC and are retained. Only inactive completed integ-rverify caches were reclaimed, after normal executables were moved and hashed; active M1 source/target/logs stayed untouched. This housekeeping does not validate code.
+
+The [finished native v2 manifest](evidence/2026-11-07-macos-v2-final.json) preserves frozen d942/f544 phase results, including three native ACL regressions passing but full Go/race failures on the unassigned127.0.0.2 address, full Rust failures and desktop fmt/core failures. It is not the f366 focused result and establishes no full native PASS.
+
+Follow-up link documentation at `5444fed` binds these fixes to evidence and corrects TURN fairness, monthly-cost and lost-VM recovery claims. The ZeroPW sidecar remains pinned to f544 until a final reviewed integration. DOS-1, remaining state/CA protection and artifact-gate findings, full post-fix review and deployment remain open. The known Rust signer path issue has an Astra-approved bounded decision, still awaiting implementation.
