@@ -1,0 +1,2104 @@
+{
+  "identity": {
+    "recorded_at": "2026-11-07T13:58:40.924965+00:00",
+    "base_head": "f812030e32fe412404a6ea232f4183f0c6fd0c8e",
+    "head_unchanged": true,
+    "branch": "refs/heads/t3/complete-cut-semantics",
+    "base_full_tree": "99d637ec210388c1a1b6340a2a3c5ae1fc38d3a0",
+    "base_rust_tree": "5d3acbd546c5dc3490e95635342572cb064007eb",
+    "desktop_tree": "2413844c89265a3e239be2372d34b1e6e1b2d4bb",
+    "export_full_tree": "7f5955995904ef27379ba3b5493e79a8938b171a",
+    "export_rust_tree": "4536b42fb5206b446d4c6760c37c80281bcd3cbe",
+    "source_files": 1230,
+    "changed_files": 108,
+    "protected_unchanged_files": 1122,
+    "new_fixture_files": 98,
+    "patch_sha256": "651b8cbf026c03b6678bd2625d9453160e930e5b2af29478d3d832908f3fd1bd",
+    "source_archive_sha256": "71f8444f60106cac441f7817f67f4dd7311cd57f4cd04c1bbc1d7b9e8af80ab7",
+    "source_manifest_sha256": "667227c064deee35321b423df16d3f2be84687cfc1254885ef22d741f936c6b6",
+    "uncommitted_export_not_a_commit": true,
+    "index_change": "Intent-to-add only for 105 new paths",
+    "actual_dispatch_sha256": "d64c1073086a865ea95b58c20e91d2541b1c51b8f747cb71754d310ee963e273"
+  },
+  "model": "gpt-6.1-sol",
+  "reasoning": "ultra",
+  "platform": "Linux aarch64, parity UID/GID 2000, assigned Lima job m2b2a-f812030",
+  "native": "NOT ASSIGNED / NOTRUN",
+  "bounded_two_platform_validation": "INCOMPLETE",
+  "source_files_before_after_equal": 1230,
+  "phases": [
+    {
+      "index": 0,
+      "command": [
+        "python3",
+        "-I",
+        "/home/parity/jobs/m2b2a-f812030/registry-audit.py"
+      ],
+      "start": "2026-11-07T13:16:24.107824+00:00",
+      "end": "2026-11-07T13:16:25.354679+00:00",
+      "exit": 0,
+      "test_results": [],
+      "verify_steps": [],
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0,
+      "log_sha256": "c80622959371999ef485b42438c5558cde656f5b7c6f7dc27f3effb8a6fc0b71"
+    },
+    {
+      "index": 1,
+      "command": [
+        "cargo",
+        "tree",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--target",
+        "all",
+        "-e",
+        "features",
+        "-i",
+        "serde_json"
+      ],
+      "start": "2026-11-07T13:16:25.354912+00:00",
+      "end": "2026-11-07T13:16:25.440233+00:00",
+      "exit": 0,
+      "test_results": [],
+      "verify_steps": [],
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0,
+      "log_sha256": "d5db46e6f9a8416598833d176f7557a1302e680feb4505fbee4285f1976101eb"
+    },
+    {
+      "index": 2,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_semantic_cut",
+        "--test",
+        "team_checkpoint_removal_oracle",
+        "--",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "start": "2026-11-07T13:16:25.440367+00:00",
+      "end": "2026-11-07T13:22:58.296520+00:00",
+      "exit": 0,
+      "test_results": [
+        {
+          "target": "team_checkpoint_removal_oracle",
+          "step": null,
+          "outcome": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_checkpoint_semantic_cut",
+          "step": null,
+          "outcome": "ok",
+          "passed": 17,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        }
+      ],
+      "verify_steps": [],
+      "passed": 18,
+      "failed": 0,
+      "ignored": 0,
+      "log_sha256": "21064e07fe0dbb31f131e8c23bedd45263315d45103377a30067eab7de562ccf"
+    },
+    {
+      "index": 3,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_admission",
+        "--test",
+        "team_checkpoint_authority_oracle",
+        "--test",
+        "team_checkpoint_manifest",
+        "--test",
+        "team_checkpoint_payload",
+        "--test",
+        "team_checkpoint_provenance",
+        "--test",
+        "team_checkpoint_legacy_parser_regression",
+        "--test",
+        "whole_secret_tombstone",
+        "--",
+        "--test-threads=1"
+      ],
+      "start": "2026-11-07T13:22:58.300459+00:00",
+      "end": "2026-11-07T13:23:44.619146+00:00",
+      "exit": 0,
+      "test_results": [
+        {
+          "target": "team_checkpoint_admission",
+          "step": null,
+          "outcome": "ok",
+          "passed": 17,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_checkpoint_authority_oracle",
+          "step": null,
+          "outcome": "ok",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_checkpoint_legacy_parser_regression",
+          "step": null,
+          "outcome": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_checkpoint_manifest",
+          "step": null,
+          "outcome": "ok",
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_checkpoint_payload",
+          "step": null,
+          "outcome": "ok",
+          "passed": 13,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_checkpoint_provenance",
+          "step": null,
+          "outcome": "ok",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "whole_secret_tombstone",
+          "step": null,
+          "outcome": "ok",
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        }
+      ],
+      "verify_steps": [],
+      "passed": 57,
+      "failed": 0,
+      "ignored": 0,
+      "log_sha256": "9cfb6d12d66947074d8036c0156656c41d8deea0c2228393415cfaf91f345e24"
+    },
+    {
+      "index": 4,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "team::checkpoint",
+        "--",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "start": "2026-11-07T13:23:44.620931+00:00",
+      "end": "2026-11-07T13:24:04.420063+00:00",
+      "exit": 0,
+      "test_results": [
+        {
+          "target": "src/lib.rs",
+          "step": null,
+          "outcome": "ok",
+          "passed": 14,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 692
+        }
+      ],
+      "verify_steps": [],
+      "passed": 14,
+      "failed": 0,
+      "ignored": 0,
+      "log_sha256": "449fe80c9bda11c8efbef571e2f5392a366c899a601bfa4a1804759dd28adcdb"
+    },
+    {
+      "index": 5,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--release",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "team::checkpoint",
+        "--",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "start": "2026-11-07T13:24:04.421138+00:00",
+      "end": "2026-11-07T13:26:35.600736+00:00",
+      "exit": 0,
+      "test_results": [
+        {
+          "target": "src/lib.rs",
+          "step": null,
+          "outcome": "ok",
+          "passed": 14,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 692
+        }
+      ],
+      "verify_steps": [],
+      "passed": 14,
+      "failed": 0,
+      "ignored": 0,
+      "log_sha256": "964fb744c6d6a0970abd151e9b588b2897f031c1739a41110e3867d6661a5bd6"
+    },
+    {
+      "index": 6,
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--offline",
+        "--release",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_semantic_cut",
+        "--test",
+        "team_checkpoint_removal_oracle",
+        "--",
+        "--nocapture",
+        "--test-threads=1"
+      ],
+      "start": "2026-11-07T13:26:35.602068+00:00",
+      "end": "2026-11-07T13:29:39.631118+00:00",
+      "exit": 0,
+      "test_results": [
+        {
+          "target": "team_checkpoint_removal_oracle",
+          "step": null,
+          "outcome": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_checkpoint_semantic_cut",
+          "step": null,
+          "outcome": "ok",
+          "passed": 17,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        }
+      ],
+      "verify_steps": [],
+      "passed": 18,
+      "failed": 0,
+      "ignored": 0,
+      "log_sha256": "984d40a758461345aa205505406350431c641a50936a39066bbf2db0f9534b6a"
+    },
+    {
+      "index": 7,
+      "command": [
+        "bash",
+        "rust/verify.sh"
+      ],
+      "start": "2026-11-07T13:29:39.633718+00:00",
+      "end": "2026-11-07T13:54:14.426664+00:00",
+      "exit": 0,
+      "test_results": [
+        {
+          "target": "src/lib.rs",
+          "step": "lib-and-bins",
+          "outcome": "ok",
+          "passed": 702,
+          "failed": 0,
+          "ignored": 4,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "src/bin/zeropw-admin.rs",
+          "step": "lib-and-bins",
+          "outcome": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "src/bin/zeropw-agent.rs",
+          "step": "lib-and-bins",
+          "outcome": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "src/bin/zeropw-demo.rs",
+          "step": "lib-and-bins",
+          "outcome": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "src/bin/zeropw-democli.rs",
+          "step": "lib-and-bins",
+          "outcome": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "src/bin/zeropw_session.rs",
+          "step": "lib-and-bins",
+          "outcome": "ok",
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "admin_expanduser_parity",
+          "step": "test:admin_expanduser_parity",
+          "outcome": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "admin_input_envelope",
+          "step": "test:admin_input_envelope",
+          "outcome": "ok",
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "admin_secret_import",
+          "step": "test:admin_secret_import",
+          "outcome": "ok",
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "admin_sigint_cleanup_boundaries",
+          "step": "test:admin_sigint_cleanup_boundaries",
+          "outcome": "ok",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "admin_sigint_exit",
+          "step": "test:admin_sigint_exit",
+          "outcome": "ok",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "agent_help",
+          "step": "test:agent_help",
+          "outcome": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "agent_proxy_parity",
+          "step": "test:agent_proxy_parity",
+          "outcome": "ok",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "astra_cleanup_publication_order",
+          "step": "test:astra_cleanup_publication_order",
+          "outcome": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "astra_cli_runtime_round2",
+          "step": "test:astra_cli_runtime_round2",
+          "outcome": "ok",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "astra_cli_runtime_round3",
+          "step": "test:astra_cli_runtime_round3",
+          "outcome": "ok",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "astra_cli_runtime_round4",
+          "step": "test:astra_cli_runtime_round4",
+          "outcome": "ok",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "astra_projects_final",
+          "step": "test:astra_projects_final",
+          "outcome": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "astra_pty_portability",
+          "step": "test:astra_pty_portability",
+          "outcome": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "astra_response_acceptance",
+          "step": "test:astra_response_acceptance",
+          "outcome": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "astra_response_final",
+          "step": "test:astra_response_final",
+          "outcome": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "astra_response_final_recheck",
+          "step": "test:astra_response_final_recheck",
+          "outcome": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "astra_response_review",
+          "step": "test:astra_response_review",
+          "outcome": "ok",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "astra_response_round2",
+          "step": "test:astra_response_round2",
+          "outcome": "ok",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "astra_response_round3",
+          "step": "test:astra_response_round3",
+          "outcome": "ok",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "astra_response_round4",
+          "step": "test:astra_response_round4",
+          "outcome": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "astra_run_context_lease",
+          "step": "test:astra_run_context_lease",
+          "outcome": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "astra_runtime_final",
+          "step": "test:astra_runtime_final",
+          "outcome": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "astra_runtime_review",
+          "step": "test:astra_runtime_review",
+          "outcome": "ok",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "astra_sigint_cleanup",
+          "step": "test:astra_sigint_cleanup",
+          "outcome": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "astra_sigint_cleanup_final",
+          "step": "test:astra_sigint_cleanup_final",
+          "outcome": "ok",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "astra_team_fact_catchup",
+          "step": "test:astra_team_fact_catchup",
+          "outcome": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "astra_team_fact_duplicate_diagnostic",
+          "step": "test:astra_team_fact_duplicate_diagnostic",
+          "outcome": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "astra_team_reconnect_diagnostic",
+          "step": "test:astra_team_reconnect_diagnostic",
+          "outcome": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "astra_team_review",
+          "step": "test:astra_team_review",
+          "outcome": "ok",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "astra_team_round2",
+          "step": "test:astra_team_round2",
+          "outcome": "ok",
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "astra_team_round3",
+          "step": "test:astra_team_round3",
+          "outcome": "ok",
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "astra_team_round4",
+          "step": "test:astra_team_round4",
+          "outcome": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "base_cli_error_parity",
+          "step": "test:base_cli_error_parity",
+          "outcome": "ok",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "canonical_helpers",
+          "step": "test:canonical_helpers",
+          "outcome": "ok",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "cli_commands",
+          "step": "test:cli_commands",
+          "outcome": "ok",
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "cli_grant_limits_parity",
+          "step": "test:cli_grant_limits_parity",
+          "outcome": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "cli_parity",
+          "step": "test:cli_parity",
+          "outcome": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "democli_parity",
+          "step": "test:democli_parity",
+          "outcome": "ok",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "escaped_builtin_http_parity",
+          "step": "test:escaped_builtin_http_parity",
+          "outcome": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "fake_upstream",
+          "step": "test:fake_upstream",
+          "outcome": "ok",
+          "passed": 20,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "gateway",
+          "step": "test:gateway",
+          "outcome": "ok",
+          "passed": 149,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "gateway_oracle",
+          "step": "test:gateway_oracle",
+          "outcome": "ok",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "gateway_replay_status_parity",
+          "step": "test:gateway_replay_status_parity",
+          "outcome": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "gateway_tls_parity",
+          "step": "test:gateway_tls_parity",
+          "outcome": "ok",
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "gateway_x1_credential_e2e",
+          "step": "test:gateway_x1_credential_e2e",
+          "outcome": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "ledger_float_parity",
+          "step": "test:ledger_float_parity",
+          "outcome": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "native_admin_cli",
+          "step": "test:native_admin_cli",
+          "outcome": "ok",
+          "passed": 26,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "native_admin_cli_more",
+          "step": "test:native_admin_cli_more",
+          "outcome": "ok",
+          "passed": 26,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "native_agent_cli",
+          "step": "test:native_agent_cli",
+          "outcome": "ok",
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "native_atomic_cli",
+          "step": "test:native_atomic_cli",
+          "outcome": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "native_cli_e2e",
+          "step": "test:native_cli_e2e",
+          "outcome": "ok",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "native_response_cli",
+          "step": "test:native_response_cli",
+          "outcome": "ok",
+          "passed": 17,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "native_team_cli",
+          "step": "test:native_team_cli",
+          "outcome": "ok",
+          "passed": 20,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "native_team_e2e",
+          "step": "test:native_team_e2e",
+          "outcome": "ok",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "policy_oracle",
+          "step": "test:policy_oracle",
+          "outcome": "ok",
+          "passed": 26,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "policy_parity_close",
+          "step": "test:policy_parity_close",
+          "outcome": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "python_numeric_comparison_parity",
+          "step": "test:python_numeric_comparison_parity",
+          "outcome": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "relay_escape_parity",
+          "step": "test:relay_escape_parity",
+          "outcome": "ok",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "response",
+          "step": "test:response",
+          "outcome": "ok",
+          "passed": 32,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "response_contract",
+          "step": "test:response_contract",
+          "outcome": "ok",
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "response_integer_boundaries",
+          "step": "test:response_integer_boundaries",
+          "outcome": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "response_parity_gaps",
+          "step": "test:response_parity_gaps",
+          "outcome": "ok",
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "runs",
+          "step": "test:runs",
+          "outcome": "ok",
+          "passed": 21,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "runtime_fix_boundaries",
+          "step": "test:runtime_fix_boundaries",
+          "outcome": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "runtime_parity_gaps",
+          "step": "test:runtime_parity_gaps",
+          "outcome": "ok",
+          "passed": 15,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "serve_request_log",
+          "step": "test:serve_request_log",
+          "outcome": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "server_accept_resilience",
+          "step": "test:server_accept_resilience",
+          "outcome": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "signer_e2e",
+          "step": "test:signer_e2e",
+          "outcome": "ok",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "signer_oracle",
+          "step": "test:signer_oracle",
+          "outcome": "ok",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "sshwire",
+          "step": "test:sshwire",
+          "outcome": "ok",
+          "passed": 86,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "state_dir_cross_language",
+          "step": "test:state_dir_cross_language",
+          "outcome": "ok",
+          "passed": 6,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "store_cross_process_lock",
+          "step": "test:store_cross_process_lock",
+          "outcome": "ok",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "store_oracle",
+          "step": "test:store_oracle",
+          "outcome": "ok",
+          "passed": 2,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_checkpoint_admission",
+          "step": "test:team_checkpoint_admission",
+          "outcome": "ok",
+          "passed": 17,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_checkpoint_authority_oracle",
+          "step": "test:team_checkpoint_authority_oracle",
+          "outcome": "ok",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_checkpoint_legacy_parser_regression",
+          "step": "test:team_checkpoint_legacy_parser_regression",
+          "outcome": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_checkpoint_manifest",
+          "step": "test:team_checkpoint_manifest",
+          "outcome": "ok",
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_checkpoint_payload",
+          "step": "test:team_checkpoint_payload",
+          "outcome": "ok",
+          "passed": 13,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_checkpoint_provenance",
+          "step": "test:team_checkpoint_provenance",
+          "outcome": "ok",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_checkpoint_removal_oracle",
+          "step": "test:team_checkpoint_removal_oracle",
+          "outcome": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_checkpoint_semantic_cut",
+          "step": "test:team_checkpoint_semantic_cut",
+          "outcome": "ok",
+          "passed": 17,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_derive_lazy_parity",
+          "step": "test:team_derive_lazy_parity",
+          "outcome": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_envelope_parity_edges",
+          "step": "test:team_envelope_parity_edges",
+          "outcome": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_fold",
+          "step": "test:team_fold",
+          "outcome": "ok",
+          "passed": 31,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_fold_lazy_parity",
+          "step": "test:team_fold_lazy_parity",
+          "outcome": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_invite_link",
+          "step": "test:team_invite_link",
+          "outcome": "ok",
+          "passed": 19,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_link_transport",
+          "step": "test:team_link_transport",
+          "outcome": "ok",
+          "passed": 12,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_membership_sync",
+          "step": "test:team_membership_sync",
+          "outcome": "ok",
+          "passed": 10,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_oracle",
+          "step": "test:team_oracle",
+          "outcome": "ok",
+          "passed": 35,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_pairing_approval",
+          "step": "test:team_pairing_approval",
+          "outcome": "ok",
+          "passed": 13,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_parity_gaps",
+          "step": "test:team_parity_gaps",
+          "outcome": "ok",
+          "passed": 16,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_remaining_contract",
+          "step": "test:team_remaining_contract",
+          "outcome": "ok",
+          "passed": 26,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_secret_import",
+          "step": "test:team_secret_import",
+          "outcome": "ok",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_share_policy_version_parity",
+          "step": "test:team_share_policy_version_parity",
+          "outcome": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_snapshot_total_parity",
+          "step": "test:team_snapshot_total_parity",
+          "outcome": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_snapshot_version_order_parity",
+          "step": "test:team_snapshot_version_order_parity",
+          "outcome": "ok",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_sync_status",
+          "step": "test:team_sync_status",
+          "outcome": "ok",
+          "passed": 8,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_transport",
+          "step": "test:team_transport",
+          "outcome": "ok",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "team_uncaught_scope_parity",
+          "step": "test:team_uncaught_scope_parity",
+          "outcome": "ok",
+          "passed": 3,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "tools_server",
+          "step": "test:tools_server",
+          "outcome": "ok",
+          "passed": 27,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "vault_context",
+          "step": "test:vault_context",
+          "outcome": "ok",
+          "passed": 46,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "vault_context_oracle",
+          "step": "test:vault_context_oracle",
+          "outcome": "ok",
+          "passed": 32,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "vault_public_parity",
+          "step": "test:vault_public_parity",
+          "outcome": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "whole_secret_tombstone",
+          "step": "test:whole_secret_tombstone",
+          "outcome": "ok",
+          "passed": 9,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "target": "src/lib.rs",
+          "step": "signer-probes",
+          "outcome": "ok",
+          "passed": 4,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 702
+        },
+        {
+          "target": "doc-tests",
+          "step": "doc-tests",
+          "outcome": "ok",
+          "passed": 27,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        }
+      ],
+      "verify_steps": [
+        {
+          "name": "fmt",
+          "exit": 0
+        },
+        {
+          "name": "clippy",
+          "exit": 0
+        },
+        {
+          "name": "lib-and-bins",
+          "exit": 0
+        },
+        {
+          "name": "test:admin_expanduser_parity",
+          "exit": 0
+        },
+        {
+          "name": "test:admin_input_envelope",
+          "exit": 0
+        },
+        {
+          "name": "test:admin_secret_import",
+          "exit": 0
+        },
+        {
+          "name": "test:admin_sigint_cleanup_boundaries",
+          "exit": 0
+        },
+        {
+          "name": "test:admin_sigint_exit",
+          "exit": 0
+        },
+        {
+          "name": "test:agent_help",
+          "exit": 0
+        },
+        {
+          "name": "test:agent_proxy_parity",
+          "exit": 0
+        },
+        {
+          "name": "test:astra_cleanup_publication_order",
+          "exit": 0
+        },
+        {
+          "name": "test:astra_cli_runtime_round2",
+          "exit": 0
+        },
+        {
+          "name": "test:astra_cli_runtime_round3",
+          "exit": 0
+        },
+        {
+          "name": "test:astra_cli_runtime_round4",
+          "exit": 0
+        },
+        {
+          "name": "test:astra_projects_final",
+          "exit": 0
+        },
+        {
+          "name": "test:astra_pty_portability",
+          "exit": 0
+        },
+        {
+          "name": "test:astra_response_acceptance",
+          "exit": 0
+        },
+        {
+          "name": "test:astra_response_final",
+          "exit": 0
+        },
+        {
+          "name": "test:astra_response_final_recheck",
+          "exit": 0
+        },
+        {
+          "name": "test:astra_response_review",
+          "exit": 0
+        },
+        {
+          "name": "test:astra_response_round2",
+          "exit": 0
+        },
+        {
+          "name": "test:astra_response_round3",
+          "exit": 0
+        },
+        {
+          "name": "test:astra_response_round4",
+          "exit": 0
+        },
+        {
+          "name": "test:astra_run_context_lease",
+          "exit": 0
+        },
+        {
+          "name": "test:astra_runtime_final",
+          "exit": 0
+        },
+        {
+          "name": "test:astra_runtime_review",
+          "exit": 0
+        },
+        {
+          "name": "test:astra_sigint_cleanup",
+          "exit": 0
+        },
+        {
+          "name": "test:astra_sigint_cleanup_final",
+          "exit": 0
+        },
+        {
+          "name": "test:astra_team_fact_catchup",
+          "exit": 0
+        },
+        {
+          "name": "test:astra_team_fact_duplicate_diagnostic",
+          "exit": 0
+        },
+        {
+          "name": "test:astra_team_reconnect_diagnostic",
+          "exit": 0
+        },
+        {
+          "name": "test:astra_team_review",
+          "exit": 0
+        },
+        {
+          "name": "test:astra_team_round2",
+          "exit": 0
+        },
+        {
+          "name": "test:astra_team_round3",
+          "exit": 0
+        },
+        {
+          "name": "test:astra_team_round4",
+          "exit": 0
+        },
+        {
+          "name": "test:base_cli_error_parity",
+          "exit": 0
+        },
+        {
+          "name": "test:canonical_helpers",
+          "exit": 0
+        },
+        {
+          "name": "test:cli_commands",
+          "exit": 0
+        },
+        {
+          "name": "test:cli_grant_limits_parity",
+          "exit": 0
+        },
+        {
+          "name": "test:cli_parity",
+          "exit": 0
+        },
+        {
+          "name": "test:democli_parity",
+          "exit": 0
+        },
+        {
+          "name": "test:escaped_builtin_http_parity",
+          "exit": 0
+        },
+        {
+          "name": "test:fake_upstream",
+          "exit": 0
+        },
+        {
+          "name": "test:gateway",
+          "exit": 0
+        },
+        {
+          "name": "test:gateway_oracle",
+          "exit": 0
+        },
+        {
+          "name": "test:gateway_replay_status_parity",
+          "exit": 0
+        },
+        {
+          "name": "test:gateway_tls_parity",
+          "exit": 0
+        },
+        {
+          "name": "test:gateway_x1_credential_e2e",
+          "exit": 0
+        },
+        {
+          "name": "test:ledger_float_parity",
+          "exit": 0
+        },
+        {
+          "name": "test:native_admin_cli",
+          "exit": 0
+        },
+        {
+          "name": "test:native_admin_cli_more",
+          "exit": 0
+        },
+        {
+          "name": "test:native_agent_cli",
+          "exit": 0
+        },
+        {
+          "name": "test:native_atomic_cli",
+          "exit": 0
+        },
+        {
+          "name": "test:native_cli_e2e",
+          "exit": 0
+        },
+        {
+          "name": "test:native_response_cli",
+          "exit": 0
+        },
+        {
+          "name": "test:native_team_cli",
+          "exit": 0
+        },
+        {
+          "name": "test:native_team_e2e",
+          "exit": 0
+        },
+        {
+          "name": "test:policy_oracle",
+          "exit": 0
+        },
+        {
+          "name": "test:policy_parity_close",
+          "exit": 0
+        },
+        {
+          "name": "test:python_numeric_comparison_parity",
+          "exit": 0
+        },
+        {
+          "name": "test:relay_escape_parity",
+          "exit": 0
+        },
+        {
+          "name": "test:response",
+          "exit": 0
+        },
+        {
+          "name": "test:response_contract",
+          "exit": 0
+        },
+        {
+          "name": "test:response_integer_boundaries",
+          "exit": 0
+        },
+        {
+          "name": "test:response_parity_gaps",
+          "exit": 0
+        },
+        {
+          "name": "test:runs",
+          "exit": 0
+        },
+        {
+          "name": "test:runtime_fix_boundaries",
+          "exit": 0
+        },
+        {
+          "name": "test:runtime_parity_gaps",
+          "exit": 0
+        },
+        {
+          "name": "test:serve_request_log",
+          "exit": 0
+        },
+        {
+          "name": "test:server_accept_resilience",
+          "exit": 0
+        },
+        {
+          "name": "test:signer_e2e",
+          "exit": 0
+        },
+        {
+          "name": "test:signer_oracle",
+          "exit": 0
+        },
+        {
+          "name": "test:sshwire",
+          "exit": 0
+        },
+        {
+          "name": "test:state_dir_cross_language",
+          "exit": 0
+        },
+        {
+          "name": "test:store_cross_process_lock",
+          "exit": 0
+        },
+        {
+          "name": "test:store_oracle",
+          "exit": 0
+        },
+        {
+          "name": "test:team_checkpoint_admission",
+          "exit": 0
+        },
+        {
+          "name": "test:team_checkpoint_authority_oracle",
+          "exit": 0
+        },
+        {
+          "name": "test:team_checkpoint_legacy_parser_regression",
+          "exit": 0
+        },
+        {
+          "name": "test:team_checkpoint_manifest",
+          "exit": 0
+        },
+        {
+          "name": "test:team_checkpoint_payload",
+          "exit": 0
+        },
+        {
+          "name": "test:team_checkpoint_provenance",
+          "exit": 0
+        },
+        {
+          "name": "test:team_checkpoint_removal_oracle",
+          "exit": 0
+        },
+        {
+          "name": "test:team_checkpoint_semantic_cut",
+          "exit": 0
+        },
+        {
+          "name": "test:team_derive_lazy_parity",
+          "exit": 0
+        },
+        {
+          "name": "test:team_envelope_parity_edges",
+          "exit": 0
+        },
+        {
+          "name": "test:team_fold",
+          "exit": 0
+        },
+        {
+          "name": "test:team_fold_lazy_parity",
+          "exit": 0
+        },
+        {
+          "name": "test:team_invite_link",
+          "exit": 0
+        },
+        {
+          "name": "test:team_link_transport",
+          "exit": 0
+        },
+        {
+          "name": "test:team_membership_sync",
+          "exit": 0
+        },
+        {
+          "name": "test:team_oracle",
+          "exit": 0
+        },
+        {
+          "name": "test:team_pairing_approval",
+          "exit": 0
+        },
+        {
+          "name": "test:team_parity_gaps",
+          "exit": 0
+        },
+        {
+          "name": "test:team_remaining_contract",
+          "exit": 0
+        },
+        {
+          "name": "test:team_secret_import",
+          "exit": 0
+        },
+        {
+          "name": "test:team_share_policy_version_parity",
+          "exit": 0
+        },
+        {
+          "name": "test:team_snapshot_total_parity",
+          "exit": 0
+        },
+        {
+          "name": "test:team_snapshot_version_order_parity",
+          "exit": 0
+        },
+        {
+          "name": "test:team_sync_status",
+          "exit": 0
+        },
+        {
+          "name": "test:team_transport",
+          "exit": 0
+        },
+        {
+          "name": "test:team_uncaught_scope_parity",
+          "exit": 0
+        },
+        {
+          "name": "test:tools_server",
+          "exit": 0
+        },
+        {
+          "name": "test:vault_context",
+          "exit": 0
+        },
+        {
+          "name": "test:vault_context_oracle",
+          "exit": 0
+        },
+        {
+          "name": "test:vault_public_parity",
+          "exit": 0
+        },
+        {
+          "name": "test:whole_secret_tombstone",
+          "exit": 0
+        },
+        {
+          "name": "signer-probes",
+          "exit": 0
+        },
+        {
+          "name": "doc-tests",
+          "exit": 0
+        }
+      ],
+      "passed": 1766,
+      "failed": 0,
+      "ignored": 4,
+      "log_sha256": "ce07b09383a91ff9a8f1dc387230d521cfc43990eaf035e167b64a64151a3187"
+    },
+    {
+      "index": 8,
+      "command": [
+        "cargo",
+        "tree",
+        "--locked",
+        "--offline",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--target",
+        "all",
+        "-e",
+        "features",
+        "-i",
+        "serde_json"
+      ],
+      "start": "2026-11-07T13:54:14.460953+00:00",
+      "end": "2026-11-07T13:54:14.542808+00:00",
+      "exit": 0,
+      "test_results": [],
+      "verify_steps": [],
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0,
+      "log_sha256": "d5db46e6f9a8416598833d176f7557a1302e680feb4505fbee4285f1976101eb"
+    },
+    {
+      "index": 9,
+      "command": [
+        "python3",
+        "-I",
+        "/home/parity/jobs/m2b2a-f812030/registry-audit.py"
+      ],
+      "start": "2026-11-07T13:54:14.543123+00:00",
+      "end": "2026-11-07T13:54:17.596289+00:00",
+      "exit": 0,
+      "test_results": [],
+      "verify_steps": [],
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0,
+      "log_sha256": "c80622959371999ef485b42438c5558cde656f5b7c6f7dc27f3effb8a6fc0b71"
+    },
+    {
+      "index": 10,
+      "command": [
+        "df",
+        "-Pk",
+        "/home/parity/jobs/m2b2a-f812030"
+      ],
+      "start": "2026-11-07T13:54:17.596415+00:00",
+      "end": "2026-11-07T13:54:17.599980+00:00",
+      "exit": 0,
+      "test_results": [],
+      "verify_steps": [],
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0,
+      "log_sha256": "19dd4f6e8e15c02b89fa5c871e839fffcd4b8572273ae9a53776dc81a9aae0fd"
+    }
+  ],
+  "resource_measurements": [
+    {
+      "scope": "5700-original-removals-and-5700-earliest-witnesses-one-target",
+      "platform": "linux",
+      "payload_bytes": 16510770,
+      "original_commits": 5705,
+      "original_facts": 5700,
+      "operations": 5705,
+      "removal_witnesses": 5700,
+      "semantic_microseconds": 40682804,
+      "process_vmhwm_before_kib": 295344,
+      "process_vmhwm_after_kib": 295400,
+      "phase": 2,
+      "profile": "debug",
+      "process_scope": "new-target focused process, including fixture construction/allocator/prior tests"
+    },
+    {
+      "scope": "complete-original-records-near-byte-cap",
+      "platform": "linux",
+      "payload_bytes": 15762410,
+      "original_commits": 31620,
+      "original_facts": 0,
+      "operations": 31620,
+      "removal_witnesses": 0,
+      "semantic_microseconds": 26294652,
+      "process_vmhwm_before_kib": 367780,
+      "process_vmhwm_after_kib": 367780,
+      "phase": 2,
+      "profile": "debug",
+      "process_scope": "new-target focused process, including fixture construction/allocator/prior tests"
+    },
+    {
+      "scope": "wide-original-and-unflushed-snapshot-490000-public-entries",
+      "platform": "linux",
+      "payload_bytes": 16669202,
+      "original_commits": 6,
+      "original_facts": 0,
+      "operations": 6,
+      "removal_witnesses": 0,
+      "semantic_microseconds": 17824197,
+      "process_vmhwm_before_kib": 751624,
+      "process_vmhwm_after_kib": 875388,
+      "phase": 2,
+      "profile": "debug",
+      "process_scope": "new-target focused process, including fixture construction/allocator/prior tests"
+    },
+    {
+      "scope": "wide-late-semantic-error",
+      "semantic_microseconds": 18268226,
+      "process_vmhwm_kib": 1047268,
+      "payload_bytes": 16669202,
+      "phase": 2,
+      "profile": "debug",
+      "process_scope": "new-target focused process, including fixture construction/allocator/prior tests"
+    },
+    {
+      "scope": "5700-original-removals-and-5700-earliest-witnesses-one-target",
+      "platform": "linux",
+      "payload_bytes": 16510770,
+      "original_commits": 5705,
+      "original_facts": 5700,
+      "operations": 5705,
+      "removal_witnesses": 5700,
+      "semantic_microseconds": 9430178,
+      "process_vmhwm_before_kib": 291668,
+      "process_vmhwm_after_kib": 291668,
+      "phase": 6,
+      "profile": "release",
+      "process_scope": "new-target focused process, including fixture construction/allocator/prior tests"
+    },
+    {
+      "scope": "complete-original-records-near-byte-cap",
+      "platform": "linux",
+      "payload_bytes": 15762410,
+      "original_commits": 31620,
+      "original_facts": 0,
+      "operations": 31620,
+      "removal_witnesses": 0,
+      "semantic_microseconds": 3942493,
+      "process_vmhwm_before_kib": 364972,
+      "process_vmhwm_after_kib": 364972,
+      "phase": 6,
+      "profile": "release",
+      "process_scope": "new-target focused process, including fixture construction/allocator/prior tests"
+    },
+    {
+      "scope": "wide-original-and-unflushed-snapshot-490000-public-entries",
+      "platform": "linux",
+      "payload_bytes": 16669202,
+      "original_commits": 6,
+      "original_facts": 0,
+      "operations": 6,
+      "removal_witnesses": 0,
+      "semantic_microseconds": 4960478,
+      "process_vmhwm_before_kib": 749108,
+      "process_vmhwm_after_kib": 872832,
+      "phase": 6,
+      "profile": "release",
+      "process_scope": "new-target focused process, including fixture construction/allocator/prior tests"
+    },
+    {
+      "scope": "wide-late-semantic-error",
+      "semantic_microseconds": 5679123,
+      "process_vmhwm_kib": 1050672,
+      "payload_bytes": 16669202,
+      "phase": 6,
+      "profile": "release",
+      "process_scope": "new-target focused process, including fixture construction/allocator/prior tests"
+    }
+  ],
+  "full_steps": 109,
+  "full_integration_targets": 104,
+  "full_passed": 1766,
+  "full_failed": 0,
+  "full_default_ignored": 4,
+  "all_m2_gates": "OPEN",
+  "dos_1": "HIGH OPEN / OPEN_NOT_FIXED_PARTIALLY_MITIGATED",
+  "review_acceptance": "NOT PERFORMED; no Opus/Astra substitution",
+  "created_at": "2026-11-07T13:58:41.043955+00:00"
+}

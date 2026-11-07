@@ -216,6 +216,20 @@ Linux fixture has a concrete privileged-control gap and two NOTRUN checks, so
 those observations do not close external acceptance or the general M2 gates. Removal-fact semantics, final overlay/generations, runtime
 onboarding and all M2-G01–G10 gates remain open; this candidate cannot install data.
 
+### M2b.2a source status, 2026-11-07
+
+The [complete supplied cut candidate](evidence/2026-11-07-m2b2a-complete-cut-651b8cb/README.md)
+is collected at controller source `6ba0a0f56ef40d66f1129d3c39631eeedf23d602`,
+with the exact tested Rust tree `4536b42fb5206b446d4c6760c37c80281bcd3cbe`.
+Linux full verification passed 109 steps / 104 integration targets / 1,766 tests;
+focused debug/release and actual 256 KiB stack checks passed. Native macOS is
+NOTRUN for this changed tree. This pure sibling checks only complete supplied
+cuts and a finite isolated-removal class; it cannot install or acknowledge data,
+prove required-key usability or support runtime onboarding. General gaps/removal
+interactions, generation usability, runtime budgets and all M2 gates remain open.
+Measured release process peaks include fixture/parser/prior-test state and reach
+1,050,672 KiB; this is not a transfer budget or Oracle capacity guarantee.
+
 ### Decision and exact trust boundary
 
 Astra decision, 2026-11-07: implement **administrator-attested bootstrap** for a

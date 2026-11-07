@@ -1,0 +1,53 @@
+{
+  "actual_implementation_model": "gpt-6.1-sol",
+  "reasoning_effort": "ultra",
+  "worker_base": "f812030e32fe412404a6ea232f4183f0c6fd0c8e",
+  "worker_export_is_uncommitted": true,
+  "worker_export_full_tree": "7f5955995904ef27379ba3b5493e79a8938b171a",
+  "worker_export_rust_tree": "4536b42fb5206b446d4c6760c37c80281bcd3cbe",
+  "controller_source_commit": "6ba0a0f56ef40d66f1129d3c39631eeedf23d602",
+  "controller_rust_tree_equals_tested_export": true,
+  "desktop_tree": "2413844c89265a3e239be2372d34b1e6e1b2d4bb",
+  "patch_sha256": "651b8cbf026c03b6678bd2625d9453160e930e5b2af29478d3d832908f3fd1bd",
+  "source_archive_sha256": "71f8444f60106cac441f7817f67f4dd7311cd57f4cd04c1bbc1d7b9e8af80ab7",
+  "source_manifest_sha256": "667227c064deee35321b423df16d3f2be84687cfc1254885ef22d741f936c6b6",
+  "allowed_changed_paths": 108,
+  "source_files_modes_verified": 1230,
+  "protected_base_paths_verified": 1122,
+  "evidence_hashes_verified": 565,
+  "old_fixture_entries_verified": [
+    145,
+    149
+  ],
+  "new_fixture_entries_verified": 97,
+  "all_final_phase_exits": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "linux_rust_steps": 109,
+  "linux_integration_targets": 104,
+  "linux_rust_passed": 1766,
+  "linux_rust_failed": 0,
+  "native": "NOT ASSIGNED / NOTRUN for this changed Rust tree",
+  "release_late_error_process_vmhwm_kib": 1050672,
+  "memory_scope": "Includes fixture/parser/allocator/prior tests; not per-transfer bound or runtime/Oracle capacity evidence",
+  "runtime_callers_install_receipt_ACK": "NOT IMPLEMENTED",
+  "review_acceptance": "NOT Opus/Astra; all M2-G01-G10 and DOS-1 HIGH remain OPEN",
+  "external_evidence": "/Users/ys/Code/zeropw-mlp-evidence/m2b2a-complete-cut-sol-20261107/t3-81e01948",
+  "selected_sha256": {
+    "REPORT.md": "6810609ee43a0dcec47ef0ddf7fc18889307a89727c79ab86cf9b2fbc7595e5f",
+    "validation-summary.json": "3cb6214dda0d56b6e67f5e15151fd300294e455453791b82da5e48df484f7f0e",
+    "resource-measurements.json": "f5910eacc8d3598fea2e9a8274d4d673db8407a04b7a6714bdc098b339739cb6",
+    "EXTERNAL-SHA256SUMS": "a7249aadac1f32c38dabdf56e721aa3e94cfb291fdb466db1d1051154f4c51c2",
+    "STATIC-COLLECTION.md": "ec733ed8141c7b008e02f3e6c31126295e1f648050ffbe829f4061cab68c8f46"
+  }
+}
