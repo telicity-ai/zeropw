@@ -1,0 +1,1 @@
+{"author":"copdsqhgjnkjc4rardm2bv2bmi","author_seq":3,"env_id":"copdsqhgjnkjc4rardm2bv2bmi-0123456789abcdef0123456789abcdef","format":"zeropw-team-commit-v1","hlc":"3000-0000","ops":[{"fingerprint":"gr2q7gf5lh6pzfdnurnkvputhm","op":"member.set_role","role":"admin"},{"op":"settings.update","sync_interval_seconds":11}],"seen":{"copdsqhgjnkjc4rardm2bv2bmi":2}}

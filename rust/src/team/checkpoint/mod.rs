@@ -29,12 +29,39 @@
 //! use zeropw::team::{checkpoint::CandidateProvenanceV1, sync::Fact};
 //! fn admit(candidate: CandidateProvenanceV1) -> Fact { candidate.into() }
 //! ```
+//! ```compile_fail
+//! use zeropw::team::checkpoint::RetainedAuthorityCandidate;
+//! let proof: RetainedAuthorityCandidate<'_, '_, '_> = Default::default();
+//! ```
+//! ```compile_fail
+//! use zeropw::team::{checkpoint::RetainedAuthorityCandidate, fold::Facts};
+//! fn install(p: RetainedAuthorityCandidate<'_, '_, '_>) -> Facts { p.into() }
+//! ```
+//! ```compile_fail
+//! use zeropw::team::checkpoint::RetainedAuthorityCandidate;
+//! fn receipt(p: RetainedAuthorityCandidate<'_, '_, '_>) { p.receipt_fact(); }
+//! ```
+//! ```compile_fail
+//! use zeropw::team::checkpoint::{CandidateProvenanceV1, verify_retained_authority};
+//! fn check(p: CandidateProvenanceV1) { verify_retained_authority(&p); }
+//! ```
+//! ```compile_fail
+//! use zeropw::team::checkpoint::RetainedAuthorityCandidate;
+//! fn mutate(p: &mut RetainedAuthorityCandidate<'_, '_, '_>) { p.facts.clear(); }
+//! ```
 
+mod admission;
 mod manifest;
 mod payload;
 mod provenance;
 mod strict_json;
 
+pub use admission::{
+    FactRoleInterval, KnownOriginalFact, LocalIdKind, LocalIdScope, LocalMapping,
+    LocalRestrictions, ObservedBinding, ObservedInventory, OccupiedLocalId,
+    RequiredTombstoneSupport, RetainedAuthorityCandidate, SemanticBindings, SemanticError,
+    SemanticLocalInputs, verify_retained_authority,
+};
 pub use manifest::{
     AuthenticatedSessionExpectations, AuthorHead, ChunkDescriptor, ComponentDescriptor,
     ExpectedContext, LocalApprovalDescription, ManifestAttestation, RecipientRole,
