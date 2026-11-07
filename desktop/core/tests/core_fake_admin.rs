@@ -1658,8 +1658,14 @@ fn secret_delete_requires_reauthentication_in_envelope_and_returns_only_metadata
         fx.last("secret_delete").args(),
         ["secret", "delete", "--id=api"]
     );
-    assert_eq!(out, json!({"secret_id":"api","status":"deleted","permanent_id":true,"provider_revocation_required":true,"sync_status":"pending"}));
-    assert_eq!(fx.last("secret_delete").stdin_json(), json!({"admin_passphrase":ADMIN_PASS}));
+    assert_eq!(
+        out,
+        json!({"secret_id":"api","status":"deleted","permanent_id":true,"provider_revocation_required":true,"sync_status":"pending"})
+    );
+    assert_eq!(
+        fx.last("secret_delete").stdin_json(),
+        json!({"admin_passphrase":ADMIN_PASS})
+    );
     assert!(!out.to_string().contains(ADMIN_PASS));
     assert_argv_clean(&fx, &[ADMIN_PASS]);
     let before = fx.calls().len();
@@ -1679,5 +1685,11 @@ fn secret_delete_rejects_unknown_fields_without_echoing_them() {
         "id":"api", "admin_passphrase":ADMIN_PASS, "value":"synthetic-extra-secret"
     }));
     assert!(parsed.is_err());
-    assert!(!parsed.err().unwrap().to_string().contains("synthetic-extra-secret"));
+    assert!(
+        !parsed
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("synthetic-extra-secret")
+    );
 }

@@ -4537,6 +4537,31 @@ mod retry_tests {
         assert!(state.dial_pending.is_empty());
     }
 
+    #[test]
+    fn m1_checked_adoption_does_not_report_success_after_caps_send_failure() {
+        let root = TempDir::new().unwrap();
+        let (session, tx) = scripted_with(
+            DeviceKey::generate().record().unwrap(),
+            true,
+            Duration::ZERO,
+        );
+        let (team, fp) = dialing_team(&root, session.clone(), None);
+        // Queuing a frame in this scripted channel does not authenticate or
+        // deliver it. A failed CAPS send closes it before the receiver reads.
+        tx.send(json!({"type":JOIN_PENDING_TYPE})).unwrap();
+        let error = team
+            .adopt_outbound_session_checked("retry-env", session, "retry-address")
+            .expect_err("dropped CAPS session is not a successful adoption");
+        assert_eq!(error.reason, "team_session_closed");
+        assert!(!team.take_join_pending("retry-env", &fp));
+        assert!(
+            !team.envs.lock().unwrap()["retry-env"]
+                .sessions
+                .contains_key(&fp)
+        );
+        team.stop();
+    }
+
     /// Dials by address: a live address hands out the next queued session,
     /// any other fails at once. Every dialed address is recorded.
     struct RouteTransport {
@@ -8946,6 +8971,21 @@ impl TeamSync {
         self.send_vector(env_id, &session);
         self.send_peers(env_id, &session)?;
         self.retry_pending_incidents_to(env_id, &session);
+        // CAPS or an initial send can already have closed this accepted
+        // session. Report that failure to a synchronous join instead of
+        // returning success and waiting for a pending mark that cannot arrive.
+        // A receiver that actually authenticated JOIN_PENDING may have closed
+        // its session too; preserve only that explicit current-attempt mark.
+        if session.is_closed()
+            && !self
+                .envs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(env_id)
+                .is_some_and(|env| env.sync.join_pending.contains(fp))
+        {
+            return Err(Error::state("team_session_closed"));
+        }
         Ok(true)
     }
     /// `adopt_outbound_session`: hand a session the caller dialed itself

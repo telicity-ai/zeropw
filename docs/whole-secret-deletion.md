@@ -97,4 +97,4 @@ that a remote offline binary has applied a new fact.
 Source integration is based on M1 `8258a8d` over coordinator `44e898d`, with the current Personal Vault UI preserved. The task evidence is stored separately under `m1-personal-vault-integration-20261107`; source-bound results must be read there. The original M1 native desktop pairing failures remain preserved and are not acceptance for this integration.
 No Opus review or physical two-Mac acceptance is claimed. M1 remains open until
 both platform matrices and external review cover the final head. M2 authenticated
-snapshot onboarding remains a separate proposal.
+snapshot onboarding remains a separate decided milestone. All M2/M2a gates remain open.
