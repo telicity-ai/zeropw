@@ -10,6 +10,7 @@ import { shortTime } from '../../lib/format';
 import { useApp } from '../../ui/app';
 import { Button } from '../../ui/controls';
 import { ConfirmDialog } from '../../ui/Dialog';
+import { More } from '../../ui/disclosure';
 import { Badge, Banner, EmptyState, KeyValues, LoadError, Section, SkeletonRows } from '../../ui/feedback';
 import type { Load } from '../../ui/hooks';
 
@@ -25,17 +26,21 @@ function ApprovalDetails({ a }: { a: ApprovalView }) {
         { k: t('appr.req'), v: `${a.method} ${a.target}`, mono: true },
         { k: t('appr.agent'), v: a.caller, mono: true },
         { k: t('appr.conn'), v: a.connection, mono: true },
-        { k: t('appr.when'), v: shortTime(a.created_at) },
-        a.origin ? { k: t('appr.origin'), v: a.origin, mono: true } : null,
-        { k: t('appr.body'), v: bodySummary(a) },
       ]} />
-      {a.bodyPreview !== null && a.bodyPreview !== '' && (
-        <div className="stack-sm">
-          <div className="field-label"><span id="appr-body-lbl">{t('appr.body.preview')}</span>{a.bodyTruncated && <span className="field-aside">{t('appr.body.cut')}</span>}</div>
-          <pre className="code" role="region" aria-labelledby="appr-body-lbl" tabIndex={0}>{a.bodyPreview}</pre>
-        </div>
-      )}
-      {!!a.bodyBytes && a.bodyPreview === null && <p className="muted text-sm">{t('appr.body.binary')}</p>}
+      <More hint={bodySummary(a)}>
+        <KeyValues dense items={[
+          { k: t('appr.when'), v: shortTime(a.created_at) },
+          a.origin ? { k: t('appr.origin'), v: a.origin, mono: true } : null,
+          { k: t('appr.body'), v: bodySummary(a) },
+        ]} />
+        {a.bodyPreview !== null && a.bodyPreview !== '' && (
+          <div className="stack-sm">
+            <div className="field-label"><span id="appr-body-lbl">{t('appr.body.preview')}</span>{a.bodyTruncated && <span className="field-aside">{t('appr.body.cut')}</span>}</div>
+            <pre className="code" role="region" aria-labelledby="appr-body-lbl" tabIndex={0}>{a.bodyPreview}</pre>
+          </div>
+        )}
+        {!!a.bodyBytes && a.bodyPreview === null && <p className="muted text-sm">{t('appr.body.binary')}</p>}
+      </More>
     </>
   );
 }

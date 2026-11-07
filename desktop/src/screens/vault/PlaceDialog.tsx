@@ -9,6 +9,7 @@ import { isValidName } from '../../lib/validators';
 import { useApp } from '../../ui/app';
 import { Button, Chip, TextField } from '../../ui/controls';
 import { Dialog } from '../../ui/Dialog';
+import { More } from '../../ui/disclosure';
 import { Icon } from '../../ui/icons';
 
 const ENVS = ['main', 'dev', 'staging', 'prod'] as const;
@@ -51,16 +52,18 @@ export function PlaceDialog({ onClose, onDone }: { onClose(): void; onDone(place
         <Button tone="primary" type="submit" busy={busy}>{t('vault.place.save')}</Button>
       </>}>
       <TextField label={t('vault.place.name')} mono value={name} inputRef={nameRef} maxLength={64} placeholder={t('vault.place.name.ph')}
-        error={nameErr ? t(nameErr) : null} help={t('vault.add.name.help')} onChange={(v) => { setName(v); setNameErr(null); }} />
-      <div className="field">
-        <div className="field-label"><span id="vault-envs-label">{t('vault.place.envs')}</span></div>
-        <div className="chips" role="group" aria-labelledby="vault-envs-label">
-          {ENVS.map((e) => <Chip key={e} on={envs.includes(e)} onToggle={() => toggle(e)}>{e}</Chip>)}
+        error={nameErr ? t(nameErr) : null} help={t('vault.add.name.help')} data-autofocus="" onChange={(v) => { setName(v); setNameErr(null); }} />
+      <More hint={`${t('vault.place.more.hint')} · ${envs.join(', ') || '—'}`} open={envErr}>
+        <div className="field">
+          <div className="field-label"><span id="vault-envs-label">{t('vault.place.envs')}</span></div>
+          <div className="chips" role="group" aria-labelledby="vault-envs-label">
+            {ENVS.map((e) => <Chip key={e} on={envs.includes(e)} onToggle={() => toggle(e)}>{e}</Chip>)}
+          </div>
+          <div className={'field-note' + (envErr ? ' is-error' : '')} role={envErr ? 'alert' : undefined}>
+            {envErr ? <><Icon name="alert" size={13} />{t('vault.place.err.envs')}</> : t('vault.place.envs.help')}
+          </div>
         </div>
-        <div className={'field-note' + (envErr ? ' is-error' : '')} role={envErr ? 'alert' : undefined}>
-          {envErr ? <><Icon name="alert" size={13} />{t('vault.place.err.envs')}</> : t('vault.place.envs.help')}
-        </div>
-      </div>
+      </More>
     </Dialog>
   );
 }

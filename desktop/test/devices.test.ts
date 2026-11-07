@@ -142,7 +142,11 @@ describe('Mac list', () => {
     await render();
     const row = [...host.querySelectorAll<HTMLElement>('[role="option"]')].find((r) => r.textContent?.includes('studio'))!;
     await click(row);
-    const details = host.querySelector('details.mac-disclosure')!;
+    const outsideBefore = host.cloneNode(true) as HTMLElement;
+    outsideBefore.querySelectorAll('details').forEach((d) => d.remove());
+    expect(outsideBefore.textContent).not.toMatch(/relay-/i);
+    const details = [...host.querySelectorAll<HTMLDetailsElement>('details.more')].find((d) => d.querySelector('summary')?.textContent?.includes(t('mac.diag')))!;
+    await act(async () => { details.open = true; details.dispatchEvent(new Event('toggle')); });
     expect(details.textContent).toContain('relay-tls');
     const outside = host.cloneNode(true) as HTMLElement;
     outside.querySelectorAll('details').forEach((d) => d.remove());
@@ -188,6 +192,9 @@ describe('adding a Mac', () => {
     await render();
     await click(button(t('mac.add'), host));
     const dlg = dialog('dlg-mac-add');
+    // essentials first: places (all by default) and the new Mac's name wait behind 더 보기
+    expect([...dlg.querySelectorAll('label')].some((l) => l.textContent === t('mac.addDlg.name'))).toBe(false);
+    expect(dlg.textContent).toContain(t('mac.addDlg.more', { n: 2 }));
     await click(button(t('mac.addDlg.create'), dlg));
     expect(dlg.textContent).toContain(t('pass.err.empty'));
     expect(calls('pairing_create')).toHaveLength(0);

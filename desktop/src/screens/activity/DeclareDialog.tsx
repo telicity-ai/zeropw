@@ -12,6 +12,7 @@ import { useApp } from '../../ui/app';
 import { Button, PassField, Segmented, SelectField, TextField } from '../../ui/controls';
 import { Dialog, isAuthError, passErrorKey } from '../../ui/Dialog';
 import { Banner } from '../../ui/feedback';
+import { More } from '../../ui/disclosure';
 
 export const SCOPE_LABEL: Record<IncidentScope, CopyKey> = { principal: 'inc.scope.principal', runtime: 'inc.scope.runtime', all: 'inc.scope.all' };
 
@@ -60,7 +61,7 @@ export function DeclareDialog({ open, principals, openScope, onClose, onDone, on
     setErrs(e);
     if (e.who) { whoRef.current?.focus(); return; }
     if (e.runtime) { rtRef.current?.focus(); return; }
-    if (e.reason) { reasonRef.current?.focus(); return; }
+    if (e.reason) { setTimeout(() => reasonRef.current?.focus(), 50); return; }
     if (e.pass) { passRef.current?.focus(); return; }
     running.current = true; setBusy(true); setUnchanged(false);
     try {
@@ -122,15 +123,17 @@ export function DeclareDialog({ open, principals, openScope, onClose, onDone, on
         <SelectField label={t('activity.inc.runtime')} value={rt} selectRef={rtRef} error={errs.runtime ? t(errs.runtime) : null}
           options={runtimes.map((r) => ({ value: r, label: r }))} onChange={(v) => { setRuntime(v); setErrs((x) => ({ ...x, runtime: undefined })); }} />
       )}
-      <TextField label={t('activity.inc.reason')} aside={t('activity.inc.reason.aside')} value={reason} inputRef={reasonRef} maxLength={200}
-        error={errs.reason ? t(errs.reason) : null} onChange={(v) => { setReason(v); setErrs((x) => ({ ...x, reason: undefined })); }} />
       <Banner tone="warn">{t('activity.inc.declare.warn')}</Banner>
       {stopsAll && <Banner tone="info">{t('activity.inc.all.note')}</Banner>}
-      <Banner tone="neutral">{t('activity.inc.session')}</Banner>
       {scope === 'all' && (
         <PassField value={pass} inputRef={passRef} error={errs.pass ? t(errs.pass) : null}
           onChange={(v) => { setPass(v); setErrs((x) => ({ ...x, pass: undefined })); }} />
       )}
+      <More hint={t('activity.inc.more')} open={!!errs.reason}>
+        <TextField label={t('activity.inc.reason')} aside={t('activity.inc.reason.aside')} value={reason} inputRef={reasonRef} maxLength={200}
+          error={errs.reason ? t(errs.reason) : null} onChange={(v) => { setReason(v); setErrs((x) => ({ ...x, reason: undefined })); }} />
+        <Banner tone="neutral">{t('activity.inc.session')}</Banner>
+      </More>
       {errs.form && <Banner tone="danger">{t(errs.form)}</Banner>}
     </Dialog>
   );

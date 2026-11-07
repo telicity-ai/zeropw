@@ -143,6 +143,11 @@ describe('diagnostics', () => {
   it('shows value-free state', async () => {
     await seed({ linkEnrolled: true });
     await render('about');
+    // the summary stays short; addresses and paths are under 자세한 상태
+    expect(document.body.textContent ?? '').not.toContain('127.0.0.1:47380');
+    const more = document.querySelector<HTMLDetailsElement>('details.more')!;
+    await act(async () => { more.open = true; more.dispatchEvent(new Event('toggle')); });
+    await settle();
     const text = document.body.textContent ?? '';
     expect(text).toContain('127.0.0.1:47380');
     expect(text).not.toContain('mock-admin-pass');

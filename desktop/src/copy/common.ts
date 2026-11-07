@@ -9,6 +9,7 @@ export const COMMON = {
   'nav.aria': '탐색',
   'nav.vault': '금고',
   'nav.all': '모든 항목',
+  'nav.newItem': '새 항목',
   'nav.kind.password': '비밀번호',
   'nav.kind.api_key': 'API 키',
   'nav.kind.env_var': '환경변수',

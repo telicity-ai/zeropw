@@ -15,7 +15,8 @@ import {
 import { useApp } from '../../ui/app';
 import { Button, Checkbox, SelectField, TextField } from '../../ui/controls';
 import { Dialog } from '../../ui/Dialog';
-import { Badge, Banner, EmptyState, KeyValues, SkeletonRows } from '../../ui/feedback';
+import { More } from '../../ui/disclosure';
+import { Badge, Banner, EmptyState, SkeletonRows } from '../../ui/feedback';
 import { Icon } from '../../ui/icons';
 import { placeText } from './logic';
 
@@ -41,6 +42,7 @@ export function ImportDialog({ file, pairs, onClose, onDone }: { file: EnvFileRe
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<Msg | null>(null);
   const [result, setResult] = useState<ImportReport | null>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
   const done = useRef(false);
   const running = useRef(false);
   const prefixRef = useRef<HTMLInputElement>(null);
@@ -111,7 +113,8 @@ export function ImportDialog({ file, pairs, onClose, onDone }: { file: EnvFileRe
     const pair = splitEnv(env);
     if (running.current || !preview || !pair) return;
     if (blocker) {
-      if (blocker === 'imp.err.taken') prefixRef.current?.focus();
+      if (blocker === 'imp.err.taken') { setMoreOpen(true); setTimeout(() => prefixRef.current?.focus(), 40); }
+      if (blocker === 'imp.err.conflict') setMoreOpen(true);
       setErr(blocker === 'vault.imp.wait' ? null : { key: blocker });
       return;
     }
@@ -160,14 +163,13 @@ export function ImportDialog({ file, pairs, onClose, onDone }: { file: EnvFileRe
   const blockedBy = shown?.entries.find((e) => sel.has(e.name) && e.blocked_by && plannedAction(e, true, update) !== 'unchanged');
   const label = n > 0 ? t(isShared ? 'vault.imp.go.shared' : 'vault.imp.go', { n }) : t('vault.imp.go.none');
   return (
-    <Dialog open title={t('vault.imp.title')} description={t('vault.imp.sub')} onClose={onClose} busy={busy} size="lg" onSubmit={() => void run()}
+    <Dialog open title={t('vault.imp.title')} description={<><span className="mono">{file.name}</span> · {t('vault.imp.sub')}</>} onClose={onClose} busy={busy} size="md" onSubmit={() => void run()}
       footer={<>
         <Button tone="ghost" onClick={onClose} blocked={busy}>{t('act.cancel')}</Button>
         {!bad && <Button tone="primary" type="submit" busy={busy} blocked={blocker !== null}
           onBlocked={() => void run()}>{label}</Button>}
       </>}>
-      <KeyValues dense items={[{ k: t('vault.imp.file'), v: file.name, mono: true }]} />
-      {pairs.length === 0 ? <Banner tone="info">{t('vault.noPlace.text')}</Banner> : (
+      {pairs.length === 0 ? <Banner tone="info">{t('vault.noPlace.text')}</Banner> : pairs.length > 1 && (
         <SelectField label={t('vault.add.place')} value={env} options={pairs.map((p) => ({ value: p.key, label: placeText(p.key) }))}
           onChange={(v) => { setEnv(v); setErr(null); }} />
       )}
@@ -212,10 +214,12 @@ export function ImportDialog({ file, pairs, onClose, onDone }: { file: EnvFileRe
           {forced && <div className="field-note is-warn">{t('vault.imp.forced')}</div>}
         </div>
       )}
-      {shown && hasDifferent && <Checkbox checked={update} onChange={(v) => { setUpdate(v); setErr(null); }}>{t('vault.imp.update')}</Checkbox>}
-      {(hasTaken || prefix) && (
-        <TextField label={t('vault.imp.prefix')} help={t('vault.imp.prefix.help')} mono value={prefix} inputRef={prefixRef} maxLength={63}
-          placeholder={`${splitEnv(env)?.environment ?? 'dev'}.`} error={!prefixOk ? t('vault.err.name') : null} onChange={(v) => { setPrefix(v); setErr(null); }} />
+      {shown && (hasDifferent || hasTaken || !!prefix) && (
+        <More hint={t('vault.imp.more.hint')} open={moreOpen || !prefixOk} onToggle={setMoreOpen}>
+          {hasDifferent && <Checkbox checked={update} onChange={(v) => { setUpdate(v); setErr(null); }}>{t('vault.imp.update')}</Checkbox>}
+          <TextField label={t('vault.imp.prefix')} help={t('vault.imp.prefix.help')} mono value={prefix} inputRef={prefixRef} maxLength={63}
+            placeholder={`${splitEnv(env)?.environment ?? 'dev'}.`} error={!prefixOk ? t('vault.err.name') : null} onChange={(v) => { setPrefix(v); setErr(null); }} />
+        </More>
       )}
       {err && <Banner tone="danger">{t(err.key, err.vars)}</Banner>}
     </Dialog>

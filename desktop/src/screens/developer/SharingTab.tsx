@@ -27,6 +27,7 @@ import { IconTile } from '../../ui/layout';
 import { OneTimeValue, type Handed } from '../../ui/OneTime';
 import { roleText, useIntentOnce } from './common';
 import { ListenSetup } from './ListenSetup';
+import { Menu, More } from '../../ui/disclosure';
 
 type Incoming = { ref: string; preview: InvitePreview };
 type Role = 'user' | 'admin';
@@ -165,8 +166,8 @@ export function SharingTab({ intent }: { intent?: Intent }) {
                       {m.owner && <Badge tone="accent">{t('share.owner')}</Badge>}
                       {m.status !== 'active' && <Badge>{m.status === 'removed' ? t('share.removed') : String(m.status)}</Badge>}
                       {!m.owner && m.status === 'active' && (
-                        <Button size="sm" tone="quiet" aria-label={t('share.remove.aria', { name: String(m.name ?? '') })}
-                          onClick={() => show({ kind: 'remove', env: cur, member: m })}>{t('share.remove')}</Button>
+                        <Menu label={t('share.member.more.aria', { name: String(m.name ?? '') })}
+                          items={[{ label: t('share.remove'), icon: 'close', danger: true, onSelect: () => show({ kind: 'remove', env: cur, member: m }) }]} />
                       )}
                     </div>
                   </li>
@@ -192,7 +193,8 @@ export function SharingTab({ intent }: { intent?: Intent }) {
                       <div className="srow-main"><span className="srow-title">{String(i.name)}</span><span className="srow-meta num">{meta}</span></div>
                       <div className="srow-end">
                         <Badge tone={pending ? 'accent' : 'neutral'}>{INVITE_STATUS[status] ? t(INVITE_STATUS[status] as CopyKey) : String(status)}</Badge>
-                        {pending && <Button size="sm" tone="quiet" aria-label={t('share.inv.revoke.aria', { name: String(i.name) })} onClick={() => void revokeInvite(i)}>{t('share.inv.revoke')}</Button>}
+                        {pending && <Menu label={t('share.inv.more.aria', { name: String(i.name) })}
+                          items={[{ label: t('share.inv.revoke'), icon: 'close', danger: true, onSelect: () => void revokeInvite(i) }]} />}
                       </div>
                     </li>
                   );
@@ -287,7 +289,7 @@ function InviteDialog({ open, env: pageEnv, pairs, onEnv, shared: pageShared, se
   const turnOn = async () => {
     if (running.current) return;
     const p = parsePort(port);
-    if (p === null || !ip) { setNetOpen(true); setErrs({ port: 'set.listen.port.err' }); portRef.current?.focus(); return; }
+    if (p === null || !ip) { setNetOpen(true); setErrs({ port: 'set.listen.port.err' }); setTimeout(() => portRef.current?.focus(), 50); return; }
     running.current = true; onBusy(true); setListenBusy(true); setListenErr(null);
     try {
       await relay.run(() => turnOnListen(ip, p));
@@ -420,15 +422,14 @@ function InviteDialog({ open, env: pageEnv, pairs, onEnv, shared: pageShared, se
             </div>
             {!listen && (
               <div className="dev-prereq-body">
-                <details className="dev-details" open={netOpen} onToggle={(e) => setNetOpen(e.currentTarget.open)}>
-                  <summary>{t('share.listen.address')} <span className="mono">{ip ? `${ip}:${port}` : t('share.need.listen.off')}</span></summary>
+                <More label={t('share.listen.address')} hint={<span className="mono">{ip ? `${ip}:${port}` : t('share.need.listen.off')}</span>} open={netOpen} onToggle={setNetOpen}>
                   <div className="dev-listen-fields">
                     <SelectField label={t('share.listen.iface')} value={ip} options={addressChoices(interfaces, ip)} fieldClassName="grow"
                       onChange={(v) => { setIp(v); setListenErr(null); }} />
                     <TextField label={t('share.listen.port')} mono value={port} inputRef={portRef} inputMode="numeric" maxLength={5} fieldClassName="dev-port"
                       error={errs.port ? t(errs.port) : null} onChange={(v) => { setPort(v); setErrs((x) => ({ ...x, port: undefined })); setListenErr(null); }} />
                   </div>
-                </details>
+                </More>
                 <div className="row-wrap">
                   <Button size="sm" tone="secondary" ref={listenBtn} busy={listenBusy} blocked={busy} onClick={() => void turnOn()}>{t('share.listen.on')}</Button>
                   <span className="muted text-xs">{t('share.need.firewall')}</span>
@@ -454,14 +455,14 @@ function InviteDialog({ open, env: pageEnv, pairs, onEnv, shared: pageShared, se
       )}
       {!made && (
         <>
-          <div className="form-grid">
-            <Segmented<Role> label={t('share.role')} hideLabel={false} value={role} onChange={(v) => { if (!running.current) setRole(v); }}
-              options={[{ value: 'user', label: t('share.role.user') }, { value: 'admin', label: t('share.role.admin') }]} />
-            <TextField label={t('share.name')} value={name} inputRef={nameRef} maxLength={64} placeholder={t('share.name.ph')} readOnly={busy}
-              error={errs.name ? t(errs.name) : null} onChange={(v) => { if (running.current) return; setName(v); setErrs((x) => ({ ...x, name: undefined })); }} />
-          </div>
+          <TextField label={t('share.name')} value={name} inputRef={nameRef} maxLength={64} placeholder={t('share.name.ph')} readOnly={busy}
+            error={errs.name ? t(errs.name) : null} onChange={(v) => { if (running.current) return; setName(v); setErrs((x) => ({ ...x, name: undefined })); }} />
           <PassField value={pass} inputRef={passRef} readOnly={busy} error={errs.pass ? t(errs.pass) : null}
             onChange={(v) => { if (running.current) return; setPass(v); setErrs((x) => ({ ...x, pass: undefined })); }} />
+          <More hint={t('share.more.role', { role: t(role === 'admin' ? 'share.role.admin' : 'share.role.user') })}>
+            <Segmented<Role> label={t('share.role')} hideLabel={false} value={role} onChange={(v) => { if (!running.current) setRole(v); }}
+              options={[{ value: 'user', label: t('share.role.user') }, { value: 'admin', label: t('share.role.admin') }]} />
+          </More>
           {sharedHere.includes(env) && <Banner tone="ok" compact>{t('share.toast.shared')}</Banner>}
           {shared === null && <p className="muted text-sm" role="status">{t(loadFailed ? 'error.load' : 'state.loading')}</p>}
           {(errs.form || readResult) && (
@@ -583,7 +584,7 @@ function JoinDialog({ open, incoming, onBusy, onClose, onEnv, onChanged, onJoine
     const h = heldRef.current;
     if (!h) { linkRef.current?.focus(); return; }
     const parsed = parseLocalName(local);
-    if (!parsed) { setErr(null); setLocalOpen(true); setLocalErr('share.join.local.err'); requestAnimationFrame(() => localRef.current?.focus()); return; }
+    if (!parsed) { setErr(null); setLocalOpen(true); setLocalErr('share.join.local.err'); setTimeout(() => localRef.current?.focus(), 50); return; }
     running.current = true; onBusy(true); setBusy(true);
     previews.current.invalidate();
     setText(''); // the core holds the invite behind the reference
@@ -649,20 +650,20 @@ function JoinDialog({ open, incoming, onBusy, onClose, onEnv, onChanged, onJoine
         onChange={(v) => { if (!running.current) onLink(v); }} />
       {p && (
         <>
-          <div className="card card-pad" role="region" aria-label={t('share.join.pv')}>
+          <div className="card card-pad stack-sm" role="region" aria-label={t('share.join.pv')}>
+            <span className="muted text-sm">{t('share.join.inviter')}</span>
+            <Fingerprint value={p.inviter} />
+          </div>
+          <More hint={t('share.join.details', { role: roleText(p.role) })} open={localOpen} onToggle={setLocalOpen}>
             <KeyValues dense items={[
-              { k: t('share.join.inviter'), v: <Fingerprint value={p.inviter} /> },
               { k: t('share.join.env'), v: p.env_id.slice(0, 10) + '…', mono: true },
               { k: t('share.join.role'), v: roleText(p.role) },
               { k: t('share.join.addr'), v: addr, mono: true },
               { k: t('share.join.left'), v: <span className="num">{formatCountdown(msLeft(p.expires_at, now))}</span> },
             ]} />
-          </div>
-          <details className="dev-details" open={localOpen} onToggle={(e) => setLocalOpen(e.currentTarget.open)}>
-            <summary>{t('share.join.local')} <span className="mono">{local}</span></summary>
-            <TextField label={t('share.join.local')} hideLabel mono value={local} readOnly={busy} inputRef={localRef} help={t('share.join.local.help')}
+            <TextField label={t('share.join.local')} mono value={local} readOnly={busy} inputRef={localRef} help={t('share.join.local.help')}
               error={localErr ? t(localErr) : null} onChange={(v) => { localEdited.current = true; setLocal(v); setLocalErr(null); }} />
-          </details>
+          </More>
           <Banner tone="warn">{t('share.join.check')}</Banner>
         </>
       )}

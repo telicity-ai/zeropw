@@ -10,6 +10,7 @@ import { addressChoices, DEFAULT_TEAM_PORT, defaultListenIp, parsePort } from '.
 import { ListenError, listenErrorLines, relayLeftOff, turnOnListen } from '../../lib/relay';
 import { Button, SelectField, TextField } from '../../ui/controls';
 import { Banner } from '../../ui/feedback';
+import { More } from '../../ui/disclosure';
 
 export function ListenSetup({ interfaces, onDone, onFailed, run, note = true, onBusy }: {
   interfaces: NetInterface[];
@@ -43,7 +44,7 @@ export function ListenSetup({ interfaces, onDone, onFailed, run, note = true, on
   const turnOn = async () => {
     if (running.current) return;
     const p = parsePort(port);
-    if (p === null || !ip) { setOpen(true); setErr([{ key: 'set.listen.port.err' }]); portRef.current?.focus(); return; }
+    if (p === null || !ip) { setOpen(true); setErr([{ key: 'set.listen.port.err' }]); setTimeout(() => portRef.current?.focus(), 50); return; }
     running.current = true; onBusy?.(true); setBusy(true); setErr(null);
     try {
       onDone(`${ip}:${p}`, await run(() => turnOnListen(ip, p)));
@@ -61,8 +62,7 @@ export function ListenSetup({ interfaces, onDone, onFailed, run, note = true, on
   return (
     <div className="dev-listen">
       {note && <Banner tone="info">{t('share.listen.need')}</Banner>}
-      <details className="dev-details" open={open} onToggle={(e) => setOpen(e.currentTarget.open)}>
-        <summary>{t('share.listen.address')} <span className="mono">{ip ? `${ip}:${port}` : t('share.need.listen.off')}</span></summary>
+      <More label={t('share.listen.address')} hint={<span className="mono">{ip ? `${ip}:${port}` : t('share.need.listen.off')}</span>} open={open} onToggle={setOpen}>
         <div className="dev-listen-fields">
           <SelectField label={t('share.listen.iface')} value={ip} options={addressChoices(interfaces, ip)}
             onChange={(v) => { setIp(v); setErr(null); }} fieldClassName="grow" />
@@ -70,9 +70,9 @@ export function ListenSetup({ interfaces, onDone, onFailed, run, note = true, on
             error={portInvalid ? t('set.listen.port.err') : null} fieldClassName="dev-port"
             onChange={(v) => { setPort(v); setErr(null); }} />
         </div>
-      </details>
+      </More>
       <div className="row-wrap">
-        <Button size="sm" tone="secondary" busy={busy} onClick={() => void turnOn()}>{t('share.listen.on')}</Button>
+        <Button size="sm" tone="primary" busy={busy} onClick={() => void turnOn()}>{t('share.listen.on')}</Button>
         <span className="muted text-xs">{t('share.need.firewall')}</span>
       </div>
       {err && !portInvalid && <div className="field-note is-error" role="alert">{tLines(err)}</div>}

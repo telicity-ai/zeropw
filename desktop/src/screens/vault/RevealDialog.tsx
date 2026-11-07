@@ -11,7 +11,7 @@ import { REVEAL_SECONDS } from '../../lib/dash';
 import { useApp } from '../../ui/app';
 import { Button, PassField } from '../../ui/controls';
 import { Dialog, passErrorKey } from '../../ui/Dialog';
-import { Banner, KeyValues } from '../../ui/feedback';
+import { Banner } from '../../ui/feedback';
 import { OneTimeValue } from '../../ui/OneTime';
 import { versionText } from './logic';
 
@@ -61,21 +61,14 @@ export function RevealDialog({ id, version, mode, onClose }: { id: string; versi
   const asking = ref === null;
   return (
     <Dialog open title={t(show ? 'vault.reveal.title' : 'vault.copy.title')} onClose={onClose} busy={busy} size="sm"
-      description={asking ? (show ? t('vault.reveal.sub', { s: REVEAL_SECONDS }) : t('vault.copy.sub')) : undefined}
+      description={<><span className="mono">{id}</span>{version !== undefined && <> · {t('vault.version.n', { n: versionText(version) })}</>}{asking && <> · {show ? t('vault.reveal.sub', { s: REVEAL_SECONDS }) : t('vault.copy.sub')}</>}</>}
       onSubmit={asking ? () => void go() : undefined}
       footer={asking ? <>
         <Button tone="ghost" onClick={onClose} blocked={busy}>{t('act.cancel')}</Button>
         <Button tone="primary" type="submit" busy={busy} icon={show ? 'eye' : 'copy'}>{t(show ? 'vault.reveal.go' : 'vault.copy.go')}</Button>
       </> : <Button tone="secondary" onClick={onClose}>{t('act.done')}</Button>}>
-      <KeyValues dense items={[
-        { k: t('vault.add.name'), v: id, mono: true },
-        version !== undefined ? { k: t('vault.versions'), v: t('vault.version.n', { n: versionText(version) }) } : null,
-      ]} />
       {asking ? (
-        <>
-          <PassField value={pass} onChange={(v) => { setPass(v); setErr(null); }} inputRef={passRef} error={err ? t(err) : null} data-autofocus="" />
-          <p className="vault-note">{t('vault.reveal.note')}</p>
-        </>
+        <PassField value={pass} onChange={(v) => { setPass(v); setErr(null); }} inputRef={passRef} error={err ? t(err) : null} help={t('vault.reveal.note')} data-autofocus="" />
       ) : (
         <OneTimeValue valueRef={ref} masked={t('vault.current.masked')} label={t('vault.reveal.label', { id })} autoShow allowCopy={false}
           hideAfterS={REVEAL_SECONDS} multiline />

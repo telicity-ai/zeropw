@@ -1,6 +1,8 @@
 // Strings for the settings area.
 
 export const SETTINGS = {
+  'settings.sync.address': '주소와 포트',
+  'settings.about.details': '자세한 상태',
   'settings.title': '설정',
   'settings.sections': '설정 항목',
   'settings.sec.security': '잠금과 보안',
@@ -88,7 +90,6 @@ export const SETTINGS = {
   'settings.dev.running': '켜짐',
   'settings.dev.stopped': '꺼짐',
   'settings.dev.address': '주소',
-  'settings.dev.pid': '프로세스',
   'settings.dev.start': '켜기',
   'settings.dev.restart': '다시 켜기',
   'settings.dev.port': '로컬 서비스 포트',

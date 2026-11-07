@@ -1,6 +1,9 @@
 // Strings for the activity area: usage records, alerts and incidents.
 
 export const ACTIVITY = {
+  'activity.inc.more': '이유 적기, 이미 열린 세션',
+  'activity.raw.show': '자세히',
+  'activity.raw.hide': '접기',
   'activity.title': '활동',
   'activity.tabs': '활동 종류',
   'activity.tab.records': '사용 기록',

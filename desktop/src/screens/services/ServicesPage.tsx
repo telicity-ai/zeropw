@@ -14,6 +14,7 @@ import { useShell, type Intent } from '../../app/shell';
 import { useApp } from '../../ui/app';
 import { Button, TextField } from '../../ui/controls';
 import { ConfirmDialog } from '../../ui/Dialog';
+import { Menu } from '../../ui/disclosure';
 import { Badge, Banner, EmptyState, KeyValues, LoadError, Section, SkeletonRows, Status, type KV } from '../../ui/feedback';
 import { useLoad, useNow } from '../../ui/hooks';
 import { Icon } from '../../ui/icons';
@@ -199,25 +200,31 @@ function ConnectionDetail({ c, grants, principals, secretKind, onBack, onSshCli,
 
   return (
     <>
-      <PaneHeader level={2} title={<span className="mono">{c.id}</span>} onBack={onBack}
-        actions={<>
-          {s.active && s.noCli && <Button size="sm" tone="primary" icon="terminal" onClick={onSshCli}>{t('service.sshcli')}</Button>}
-          {s.active && <Button size="sm" tone="ghost" icon="stop" onClick={onDisable}>{t('service.disable')}</Button>}
-        </>} />
+      <PaneHeader level={2} title={<span className="svc-head-kind">{t(s.kind === 'ssh' ? 'service.c.type.ssh' : s.kind === 'http' ? 'service.c.type.http' : 'service.kind.other')}</span>} onBack={onBack}
+        actions={s.active ? <Menu label={t('service.more.aria')} items={[
+          { label: t('service.d.agents.give'), icon: 'user', onSelect: onGrant },
+          { label: t('service.d.openItem'), icon: 'key', onSelect: () => onOpenItem(String(c.secret_id)) },
+          'sep',
+          { label: t('service.disable'), icon: 'stop', danger: true, onSelect: onDisable },
+        ]} /> : undefined} />
       <div className="pane-body">
         <div className="pane-content svc-detail">
-          <div className="detail-head">
-            <IconTile icon={s.kind === 'ssh' ? 'terminal' : 'globe'} tone="service" size="lg" />
-            <div className="grow">
-              <h3 className="detail-title mono">{c.id}</h3>
-              <div className="detail-sub">
-                <Badge tone={s.kind === 'ssh' ? 'info' : 'accent'}>{t(s.kind === 'ssh' ? 'service.kind.ssh' : s.kind === 'http' ? 'service.kind.http' : 'service.kind.other')}</Badge>
-                <Status tone={st.tone}>{t(st.key)}</Status>
-                <span>{placeOf(c)}</span>
+          <div className="card svc-head-card">
+            <div className="detail-head">
+              <IconTile icon={s.kind === 'ssh' ? 'terminal' : 'globe'} tone="service" size="lg" />
+              <div className="grow">
+                <h3 className="detail-title mono" data-selectable="">{c.id}</h3>
+                <div className="detail-sub">
+                  <Status tone={st.tone}>{t(st.key)}</Status>
+                  <span>{placeOf(c)}</span>
+                </div>
               </div>
             </div>
+            {s.active && s.noCli && (
+              <div className="detail-actions"><Button tone="primary" icon="terminal" onClick={onSshCli}>{t('service.sshcli')}</Button></div>
+            )}
           </div>
-          {s.active && s.noCli && <Banner tone="warn" action={<Button size="sm" tone="secondary" onClick={onSshCli}>{t('service.sshcli')}</Button>}>{t('service.d.nocli')}</Banner>}
+          {s.active && s.noCli && <Banner tone="warn">{t('service.d.nocli')}</Banner>}
           {!s.active && <Banner tone="neutral">{t('service.d.off')}</Banner>}
 
           {target.length > 0 && <Section title={t('service.d.target')}><div className="card card-pad"><KeyValues items={target} /></div></Section>}

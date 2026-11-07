@@ -16,7 +16,6 @@ export const VAULT = {
   'vault.row.version': '버전 {n}',
   'vault.row.noActive': '쓸 수 있는 버전 없음',
   'vault.row.deleted': '영구 삭제됨',
-  'vault.row.conns': '연결 {n}개',
   'vault.row.conns.aria': '이 항목을 쓰는 연결 {n}개',
 
   // empty states
@@ -28,7 +27,6 @@ export const VAULT = {
   'vault.empty.search.title': '찾는 항목이 없어요',
   'vault.empty.search.text': '"{q}"와 맞는 이름, 종류, 위치가 없어요',
   'vault.empty.pick': '왼쪽에서 항목을 골라 주세요',
-  'vault.noPlace.title': '항목을 넣을 위치가 없어요',
   'vault.noPlace.text': '위치를 먼저 하나 만들어 주세요',
 
   // detail
@@ -42,11 +40,12 @@ export const VAULT = {
   'vault.current.masked': '••••••••••••',
   'vault.current.none': '쓰는 버전이 없어요. 새 값을 저장하면 다시 쓸 수 있어요',
   'vault.current.help': '보기와 복사는 관리 비밀번호를 다시 확인한 뒤에 해요',
+  'vault.detail.more': '항목 더 보기',
+  'vault.version.more.aria': '버전 {n} 더 보기',
   'vault.versions': '버전 기록',
   'vault.version.n': '버전 {n}',
   'vault.version.reveal.aria': '버전 {n} 값 보기',
   'vault.version.retire': '사용 중지',
-  'vault.version.retire.aria': '버전 {n} 사용 중지',
   'vault.version.revoke': '철회',
   'vault.version.revoke.aria': '버전 {n} 철회',
   'vault.st.active': '사용 중',
@@ -73,7 +72,10 @@ export const VAULT = {
 
   // add / replace
   'vault.add.title': '새 항목',
-  'vault.add.sub': '값은 저장하면 화면에서 지워지고 이 Mac의 금고에 암호화돼요',
+  'vault.add.sub': '저장하면 이 Mac의 금고에 암호화돼요',
+  'vault.add.more.place': '위치',
+  'vault.add.more.file': '파일',
+  'vault.add.ssh.useFile': '키 파일 쓰기',
   'vault.add.kind': '종류',
   'vault.add.kind.password': '로그인 비밀번호나 데이터베이스 암호',
   'vault.add.kind.api_key': '서비스 API 토큰',
@@ -91,12 +93,7 @@ export const VAULT = {
   'vault.add.file': '파일에서 불러오기',
   'vault.add.file.loaded': '{name} 파일을 불러왔어요',
   'vault.add.file.clear': '파일 빼기',
-  'vault.add.ssh.source': '개인 키',
-  'vault.add.ssh.gen': '새 키 만들기',
-  'vault.add.ssh.file': '파일에서',
   'vault.add.ssh.gen.help': '이 Mac에서 Ed25519 키를 만들고 공개 키를 보여 줘요',
-  'vault.add.ssh.file.help': '암호 없는 Ed25519 개인 키 파일만 쓸 수 있어요',
-  'vault.add.ssh.pick': '키 파일 고르기',
   'vault.add.save': '저장',
   'vault.add.sameAccount': '같은 macOS 계정에서 도는 프로그램은 금고 파일을 열 수 있어요',
   'vault.replace.title': '새 값 저장',
@@ -137,7 +134,8 @@ export const VAULT = {
 
   // places
   'vault.place.title': '새 위치',
-  'vault.place.sub': '항목을 묶어 두는 곳이에요. 개발용이면 dev, staging, prod처럼 나눌 수 있어요',
+  'vault.place.sub': '항목을 묶어 두는 곳이에요',
+  'vault.place.more.hint': '구역',
   'vault.place.name': '이름',
   'vault.place.name.ph': 'work',
   'vault.place.envs': '구역',
@@ -149,12 +147,12 @@ export const VAULT = {
   // .env import
   'vault.imp.title': '.env 가져오기',
   'vault.imp.sub': '비밀로 보이는 항목만 골라 뒀어요. 일반 설정값은 넣지 않는 게 좋아요',
-  'vault.imp.file': '파일',
   'vault.imp.shared': '공유하는 위치예요. 넣으면 승인한 기기로도 보내요',
   'vault.imp.items': '항목',
   'vault.imp.empty': '값이 빈 줄 {n}개는 건너뛰어요',
   'vault.imp.none': '가져올 항목이 없어요',
   'vault.imp.prefix': '이름 앞에 붙이기',
+  'vault.imp.more.hint': '이름 앞에 붙이기, 기존 값 바꾸기',
   'vault.imp.prefix.help': '다른 위치에 같은 이름이 있을 때 써요',
   'vault.imp.update': '값이 다른 항목은 새 값으로 바꾸기',
   'vault.imp.blocked': '{conn} 연결의 CLI 설정에 같은 값이 있어 넣을 수 없어요',

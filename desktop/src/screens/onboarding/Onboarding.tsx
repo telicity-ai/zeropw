@@ -76,41 +76,27 @@ export function Onboarding({ incoming, onFinish }: {
     <div className="setup" ref={host} aria-label={t('setup.aria')} role="main">
       <div className="setup-card">
         <header className="setup-head" data-tauri-drag-region="">
-          <span className="setup-brand"><Mark size={20} /><span>{t('app.name')}</span></span>
+          <span className="setup-brand"><Mark size={22} /></span>
           {(p || step === 'done') && (
-            <ol className="setup-steps" aria-label={t('setup.aria')}>
-              {COUNTED.map((s, i) => {
-                const doneHere = step === 'done' || (p !== null && i < p.index);
-                return (
-                  <li key={s} aria-current={p?.index === i ? 'step' : undefined} data-done={doneHere ? '' : undefined}>
-                    <span className="setup-step-dot" aria-hidden="true">{doneHere ? <Icon name="check" size={10} /> : i + 1}</span>
-                    <span className="setup-step-label">{t(STEP_TITLE[s as 'admin' | 'recovery' | 'create'])}</span>
-                  </li>
-                );
-              })}
+            <ol className="setup-dots" aria-label={p ? t('setup.progress', { n: p.index + 1, total: p.total, title: t(STEP_TITLE[step as 'admin' | 'recovery' | 'create']) }) : t('setup.done.title')}>
+              {COUNTED.map((s, i) => (
+                <li key={s} aria-hidden="true" data-on={step === 'done' || (p !== null && i <= p.index) ? '' : undefined} data-current={p?.index === i ? '' : undefined} />
+              ))}
             </ol>
           )}
         </header>
 
         {step === 'welcome' && (
-          <div className="setup-step" data-step="welcome">
+          <div className="setup-step is-welcome" data-step="welcome">
             <div className="setup-step-head">
               <h1 className="setup-title" tabIndex={-1} data-step-title="">{t('setup.welcome.title')}</h1>
               <p className="setup-sub">{t('setup.welcome.sub')}</p>
             </div>
-            <div className="setup-choices">
-              <button type="button" className="setup-choice" data-step-focus="" onClick={() => start('new')}>
-                <span className="tile tile-service" aria-hidden="true"><Icon name="vault" /></span>
-                <span className="setup-choice-text"><strong>{t('setup.welcome.new')}</strong><span>{t('setup.welcome.new.sub')}</span></span>
-                <Icon name="chevron-right" />
-              </button>
-              <button type="button" className="setup-choice" onClick={() => start('connect')}>
-                <span className="tile tile-device" aria-hidden="true"><Icon name="laptop" /></span>
-                <span className="setup-choice-text"><strong>{t('setup.welcome.connect')}</strong><span>{t('setup.welcome.connect.sub')}</span></span>
-                <Icon name="chevron-right" />
-              </button>
+            {incoming && <p className="setup-incoming"><Icon name="link" size={13} />{t('setup.incoming')}</p>}
+            <div className="setup-welcome-actions">
+              <Button tone="primary" size="lg" full data-step-focus="" onClick={() => start('new')}>{t('setup.welcome.start')}</Button>
+              <button type="button" className="setup-link" onClick={() => start('connect')}>{t('setup.welcome.connect')}</button>
             </div>
-            {incoming && <Banner tone="accent" icon="link">{t('setup.incoming')}</Banner>}
           </div>
         )}
 
@@ -132,12 +118,11 @@ export function Onboarding({ incoming, onFinish }: {
         {step === 'done' && (
           <StepCard name="done" title={t('setup.done.title')} sub={t(path === 'connect' ? 'setup.done.sub.connect' : 'setup.done.sub')}>
             {result && !result.serviceOn && <Banner tone="warn">{t('setup.done.serviceOff')}</Banner>}
-            {incoming && <Banner tone="accent" icon="link">{t('setup.incoming')}</Banner>}
+            {incoming && <p className="setup-incoming"><Icon name="link" size={13} />{t('setup.incoming')}</p>}
             <div className="setup-done-actions">
-              {doneActions(path, !!incoming).map((a, i) => (
-                <Button key={a.key} tone={a.tone} size={a.tone === 'ghost' ? 'md' : 'lg'} full={a.tone !== 'ghost'}
-                  data-step-focus={i === 0 ? '' : undefined} onClick={() => onFinish(a.route)}>{t(a.key)}</Button>
-              ))}
+              {doneActions(path, !!incoming).map((a, i) => a.tone === 'ghost'
+                ? <button key={a.key} type="button" className="setup-link" onClick={() => onFinish(a.route)}>{t(a.key)}</button>
+                : <Button key={a.key} tone={a.tone} size="lg" full data-step-focus={i === 0 ? '' : undefined} onClick={() => onFinish(a.route)}>{t(a.key)}</Button>)}
             </div>
             <p className="setup-note">{t('setup.done.backup')}</p>
           </StepCard>

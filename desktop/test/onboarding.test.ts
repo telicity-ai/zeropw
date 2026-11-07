@@ -85,11 +85,10 @@ async function submit() {
 }
 const step = () => [...host.querySelectorAll<HTMLElement>('[data-step]')].find(visible)?.dataset.step;
 
-/** The creation lines all finished: go on from the create step. */
+/** Every creation line succeeded: the first run went straight on to the end, with no extra step. */
 async function created() {
-  expect(step()).toBe('create');
-  expect(host.querySelectorAll('.mk-lines li[data-state="done"]')).toHaveLength(3);
-  await click(button(t('act.continue')));
+  await settle();
+  expect(step()).toBe('done');
 }
 async function throughAdmin() {
   await type(t('setup.admin.field'), ADMIN);
@@ -100,7 +99,7 @@ async function confirmGenerated() {
   const groups = [...host.querySelectorAll('.rec-g')].map((g) => g.textContent ?? '');
   expect(groups).toHaveLength(6);
   expect(groups.every((g) => /^[A-Z2-7]{4}$/.test(g))).toBe(true);
-  await click(field(t('setup.rec.ack')));
+  await click(button(t('setup.rec.ackBtn')));
   // the code leaves the screen while it is being confirmed
   expect([...host.querySelectorAll('.rec-g')].every((g) => g.textContent === '••••')).toBe(true);
   const slots = [...host.querySelectorAll('label')].filter(visible).map((l) => l.textContent?.match(/^(\d)번째 묶음$/)?.[1]).filter(Boolean).map(Number);
@@ -114,14 +113,17 @@ describe('first run', () => {
     const b = fresh();
     await render();
     expect(step()).toBe('welcome');
-    await click(button(t('setup.welcome.new')));
+    // one primary action; the other path is a quiet text button
+    expect(host.querySelectorAll('[data-step="welcome"] .btn-primary')).toHaveLength(1);
+    await click(button(t('setup.welcome.start')));
     expect(step()).toBe('admin');
 
-    // a weak passphrase does not go on, a strong one does once both fields match
+    // a weak passphrase does not go on, and the confirmation only appears for a good one
     await type(t('setup.admin.field'), 'short');
-    await type(t('setup.admin.confirm'), 'short');
+    expect(() => field(t('setup.admin.confirm'))).toThrow();
     await submit();
     expect(step()).toBe('admin');
+    expect(host.textContent).toContain(t('setup.admin.need.len'));
     expect(inputsOf('password_strength').length).toBeGreaterThan(0);
     await throughAdmin();
     expect(step()).toBe('recovery');
@@ -129,7 +131,8 @@ describe('first run', () => {
 
     // a wrong group keeps it here
     const groups = [...host.querySelectorAll('.rec-g')].map((g) => g.textContent ?? '');
-    await click(field(t('setup.rec.ack')));
+    await click(button(t('setup.rec.ackBtn')));
+    expect([...host.querySelectorAll('.rec-g')].every((g) => g.textContent === '••••')).toBe(true);
     const slots = [...host.querySelectorAll('label')].filter(visible).map((l) => l.textContent?.match(/^(\d)번째 묶음$/)?.[1]).filter(Boolean).map(Number);
     await type(t('setup.rec.verify.slot', { n: slots[0]! }), 'ZZZZ');
     await submit();
@@ -140,8 +143,8 @@ describe('first run', () => {
     await submit();
     await settle();
     await created();
+    expect(host.querySelectorAll('.mk-lines')).toHaveLength(0);
 
-    expect(step()).toBe('done');
     const init = inputsOf('vault_init') as Array<{ admin_passphrase: string; recovery: { ref?: string } }>;
     expect(init).toHaveLength(1);
     const generated = inputsOf('recovery_generate');
@@ -179,14 +182,17 @@ describe('first run', () => {
   it('takes a chosen recovery code and refuses one that contains the passphrase', async () => {
     fresh();
     await render();
-    await click(button(t('setup.welcome.new')));
+    await click(button(t('setup.welcome.start')));
     await throughAdmin();
+    // other ways to set the code sit behind one quiet row
+    expect(() => button(t('setup.rec.own'))).toThrow();
+    await act(async () => { (host.querySelector('details.more') as HTMLDetailsElement).open = true; host.querySelector('details.more')!.dispatchEvent(new Event('toggle')); });
+    await settle();
     await click(button(t('setup.rec.own')));
     await type(t('setup.rec.own.field'), `${ADMIN}-copy`);
     expect(host.textContent).toContain(t('setup.rec.own.similar'));
     await type(t('setup.rec.own.field'), OWN_CODE);
     await type(t('setup.rec.own.confirm'), OWN_CODE);
-    await click(field(t('setup.rec.ack')));
     await submit();
     await settle();
     await created();
@@ -200,7 +206,7 @@ describe('first run', () => {
   it('lets the person finish when the local service does not start', async () => {
     const b = fresh({ relayFails: 2 });
     await render();
-    await click(button(t('setup.welcome.new')));
+    await click(button(t('setup.welcome.start')));
     await throughAdmin();
     await confirmGenerated();
     await submit();
@@ -221,7 +227,7 @@ describe('first run', () => {
     fresh();
     await render({ ref: 'r1', preview: {} as never });
     expect(host.textContent).toContain(t('setup.incoming'));
-    await click(button(t('setup.welcome.new')));
+    await click(button(t('setup.welcome.start')));
     await throughAdmin();
     await confirmGenerated();
     await submit();

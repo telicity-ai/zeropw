@@ -10,6 +10,7 @@ import type { LinkStatus } from '../../ipc/contract';
 import { enrollErrorKey } from '../../lib/pairing';
 import { useShell } from '../../app/shell';
 import { Button, PassField, TextField } from '../../ui/controls';
+import { More } from '../../ui/disclosure';
 import { Banner } from '../../ui/feedback';
 
 export const EnrollCard = forwardRef(function EnrollCard({ link, onEnrolled, note }: { link: LinkStatus; onEnrolled(): void; note?: CopyKey | null }, ref: Ref<HTMLElement>) {
@@ -52,17 +53,14 @@ export const EnrollCard = forwardRef(function EnrollCard({ link, onEnrolled, not
         {note && <Banner tone="info" compact>{t(note)}</Banner>}
         <PassField label={t('mac.enroll.code')} value={code} inputRef={codeRef} mono autoComplete="off" placeholder="ZPL-…" maxLength={64}
           error={err ? t(err) : null} onChange={(v) => { setCode(v); setErr(null); }} />
-        <details className="mac-disclosure" open={more} onToggle={(e) => setMore((e.target as HTMLDetailsElement).open)}>
-          <summary>{t('mac.enroll.more')} <span className="mono muted">{service}</span></summary>
-          <div className="stack">
-            <TextField label={t('mac.enroll.server')} mono value={service} help={t('mac.enroll.server.help')}
-              onChange={(v) => { setService(v); setErr(null); }} />
-            <TextField label={t('mac.enroll.name')} value={name} maxLength={64} help={t('mac.enroll.name.help')} onChange={setName} />
-          </div>
-        </details>
+        <More label={t('mac.enroll.more')} hint={<span className="mono">{service.replace(/^https?:\/\//, '')}</span>} open={more} onToggle={setMore}>
+          <TextField label={t('mac.enroll.server')} mono value={service} help={t('mac.enroll.server.help')}
+            onChange={(v) => { setService(v); setErr(null); }} />
+          <TextField label={t('mac.enroll.name')} value={name} maxLength={64} help={t('mac.enroll.name.help')} onChange={setName} />
+          <div><Button tone="ghost" size="sm" icon="settings" onClick={() => go('settings', { view: 'server' })}>{t('mac.enroll.settings')}</Button></div>
+        </More>
         <div className="row">
           <Button tone="primary" type="submit" busy={busy}>{t('mac.enroll.go')}</Button>
-          <Button tone="ghost" icon="settings" onClick={() => go('settings', { view: 'server' })}>{t('mac.enroll.settings')}</Button>
         </div>
         <p className="field-note">{t('mac.server.note')}</p>
       </form>

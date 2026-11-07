@@ -148,6 +148,9 @@ describe('agents', () => {
 
   it('gives a permission only with the administrator passphrase', async () => {
     await render({ page: 'developer', intent: 'add-grant' as Intent });
+    // essentials first: the duration and use limit wait behind 더 보기 with their defaults
+    expect(dialog().textContent).not.toContain(t('grant.ttl.8h'));
+    expect(dialog().textContent).toContain(t('grant.more', { ttl: t('grant.ttl.1h') }));
     await submit(t('grant.confirm'));
     expect(dialog().textContent).toContain(t('pass.err.empty'));
     expect(callsOf('grant_create')).toHaveLength(0);

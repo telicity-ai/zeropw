@@ -12,7 +12,8 @@ import {
   recoveryRefStale, verifyRecoveryGroups, verifyStates,
 } from '../../lib/validators';
 import { useApp } from '../../ui/app';
-import { Button, Checkbox, PassField, TextField } from '../../ui/controls';
+import { Button, PassField, TextField } from '../../ui/controls';
+import { More } from '../../ui/disclosure';
 import { Banner } from '../../ui/feedback';
 import { Icon } from '../../ui/icons';
 import { useSecureGate } from '../../ui/secure';
@@ -21,7 +22,8 @@ import { createVault, ensurePersonalPlace, ensureService, InitError, type InitAt
 
 // ------------------------------------------------------------------------------------- frame
 
-/** One step: a heading, a form whose Enter goes on, and the footer. */
+/** One step: a large title, one line, a form whose Enter goes on, and one primary button (a quiet
+ *  back on the left when going back is allowed). */
 export function StepCard({ name, title, sub, children, back, next, foot, onSubmit }: {
   name: string; title: ReactNode; sub?: ReactNode; children?: ReactNode;
   back?: (() => void) | null; next?: ReactNode; foot?: ReactNode; onSubmit?(): void;
@@ -48,27 +50,14 @@ export function StepCard({ name, title, sub, children, back, next, foot, onSubmi
   );
 }
 
-/** Strength in four cells with its word next to it (colour never carries it alone). */
+/** A slim strength bar; its word is read out (colour never carries it alone). */
 export function Meter({ score, filled }: { score: number; filled: boolean }) {
   const level = filled ? meterLevel(score) : 0;
   const word = t(`setup.meter.${level}` as CopyKey);
   return (
-    <div className="meter" data-level={level}>
-      <div className="meter-cells" aria-hidden="true">{[1, 2, 3, 4].map((i) => <i key={i} className={i <= level ? 'on' : undefined} />)}</div>
-      <span className="meter-word">{t('setup.meter', { level: word })}</span>
+    <div className="meter" data-level={level} role="img" aria-label={t('setup.meter', { level: word })}>
+      <div className="meter-bar"><i style={{ width: `${level * 25}%` }} /></div>
     </div>
-  );
-}
-
-export function Rules({ items, id }: { items: readonly { ok: boolean; label: string; id?: string }[]; id?: string }) {
-  return (
-    <ul className="rules" id={id} aria-label={t('setup.rules')}>
-      {items.map((r) => (
-        <li key={r.label} id={r.id} data-ok={r.ok ? '' : undefined}>
-          <Icon name={r.ok ? 'check' : 'dot'} size={12} /><span>{r.label}</span><span className="sr-only">{r.ok ? ' ✓' : ''}</span>
-        </li>
-      ))}
-    </ul>
   );
 }
 
@@ -83,29 +72,35 @@ export function AdminStep({ onBack, onNext }: { onBack(): void; onNext(pass: str
   const ok = adminReady(rules);
   const passRef = useRef<HTMLInputElement>(null);
   const pass2Ref = useRef<HTMLInputElement>(null);
+  const firstOk = rules.len && rules.strong;
+  // the confirmation appears once the passphrase itself is good enough (and stays once typed in)
+  const showConfirm = firstOk || pass2 !== '';
   const rk = reasonKey(reason);
 
+  // one help line: the first rule still unmet, or that it is good
+  const help: { key: CopyKey; tone: 'need' | 'ok' } = !pass ? { key: 'setup.admin.need.start', tone: 'need' }
+    : !rules.len ? { key: 'setup.admin.need.len', tone: 'need' }
+      : !rules.strong ? { key: rk ?? 'setup.admin.need.strong', tone: 'need' }
+        : { key: 'setup.admin.ok', tone: 'ok' };
+
   const next = () => {
-    if (!ok) { setTried(true); (rules.len && rules.strong ? pass2Ref.current : passRef.current)?.focus(); return; }
+    if (!ok) { setTried(true); (firstOk ? pass2Ref.current : passRef.current)?.focus(); return; }
     onNext(pass);
   };
 
   return (
     <StepCard name="admin" title={t('setup.admin.title')} sub={t('setup.admin.sub')} back={onBack} onSubmit={next}
-      next={<Button tone="primary" type="submit" blocked={!ok} onBlocked={next} iconEnd="arrow-right">{t('act.next')}</Button>}>
+      next={<Button tone="primary" size="lg" type="submit" blocked={!ok} onBlocked={next}>{t('act.next')}</Button>}>
       <div className="stack-sm">
         <PassField label={t('setup.admin.field')} value={pass} onChange={setPass} inputRef={passRef} autoComplete="new-password"
-          data-step-focus="" help={rk ? t(rk) : undefined} />
+          data-step-focus="" error={tried && !firstOk ? t(help.key) : null}
+          help={<span className={'setup-help is-' + help.tone}>{t(help.key)}</span>} />
         <Meter score={score} filled={!!pass} />
       </div>
-      <PassField label={t('setup.admin.confirm')} value={pass2} onChange={setPass2} inputRef={pass2Ref} autoComplete="new-password" allowShow={false}
-        error={tried && rules.len && rules.strong && !rules.match ? t('setup.rule.match') : null} />
-      <Rules id="setup-admin-rules" items={[
-        { ok: rules.len, label: t('setup.rule.len') },
-        { ok: rules.match, label: t('setup.rule.match') },
-        { ok: rules.strong, label: t('setup.rule.strong') },
-      ]} />
-      {tried && !ok && <p className="setup-hint" role="status">{t('setup.notReady')}</p>}
+      {showConfirm && (
+        <PassField label={t('setup.admin.confirm')} value={pass2} onChange={setPass2} inputRef={pass2Ref} autoComplete="new-password" allowShow={false}
+          error={(tried || pass2.length >= pass.length) && pass2 !== '' && !rules.match ? t('setup.admin.need.match') : null} />
+      )}
     </StepCard>
   );
 }
@@ -137,7 +132,6 @@ export function RecoveryStep({ active, admin, notice, onBack, onNext }: {
   const code2Ref = useRef<HTMLInputElement>(null);
   const v1Ref = useRef<HTMLInputElement>(null);
   const v2Ref = useRef<HTMLInputElement>(null);
-  const ackBox = useRef<HTMLDivElement>(null);
   const { score } = useStrength(own ? code : '');
   const ownRules = recoveryOwnRules(code, code2, admin, score);
 
@@ -207,14 +201,13 @@ export function RecoveryStep({ active, admin, notice, onBack, onNext }: {
   const genOk = groups.length === RECOVERY_GROUP_COUNT && !!refRef.current;
   const ok = own ? ownRules.strong && ownRules.match : genOk;
   const verified = own ? ack : ack && verifyRecoveryGroups(groups, slots, [v1, v2]);
-  const ready = ok && ack && verified;
   const vstate = verifyStates(groups, slots, [v1, v2]);
   const verifying = ack && !own;
 
   const toggleOwn = () => {
     const next = !own;
     setOwn(next); setCode(''); setCode2(''); resetAck(); setNote(null);
-    if (next) setTimeout(() => codeRef.current?.focus(), 0);
+    if (next) { discard(); setTimeout(() => codeRef.current?.focus(), 0); }
     else if (!refRef.current) void generate();
   };
   const regen = () => { setOwn(false); setCode(''); setCode2(''); setNote(null); void generate(); };
@@ -230,19 +223,23 @@ export function RecoveryStep({ active, admin, notice, onBack, onNext }: {
     }
   };
 
+  // generated code: "written down" first (shows the two checks), then create; own code: create
   const next = () => {
-    if (!ready) {
-      if (own && !ok) { (ownRules.strong ? code2Ref : codeRef).current?.focus(); return; }
-      if (!ack) { ackBox.current?.querySelector('input')?.focus(); return; }
+    if (own) {
+      if (!ok) { (ownRules.strong ? code2Ref : codeRef).current?.focus(); return; }
+      discard();
+      setNote(null);
+      onNext({ typed: code });
+      return;
+    }
+    if (!genOk) return;
+    if (!ack) { onAck(true); return; }
+    if (!verified) {
       setTried(true);
       (vstate[0] ? v1Ref : v2Ref).current?.focus();
       return;
     }
-    if (own) {
-      discard();
-      setNote(null);
-      onNext({ typed: code });
-    } else if (refRef.current) {
+    if (refRef.current) {
       // the core forgets the code after 10 minutes: make a new one now rather than fail later
       if (recoveryRefStale(madeAt.current, Date.now())) {
         setNote('setup.rec.expired'); announce(t('setup.rec.expired'));
@@ -253,6 +250,8 @@ export function RecoveryStep({ active, admin, notice, onBack, onNext }: {
       onNext({ ref: refRef.current });
     }
   };
+  const primary = own || ack ? t('setup.rec.next') : t('setup.rec.ackBtn');
+  const primaryReady = own ? ok : genOk && (!ack || verified);
 
   const hide = verifying || blurred;
   const ownHint = own && ownRules.same ? t('setup.rec.own.same') : own && ownRules.similar ? t('setup.rec.own.similar') : null;
@@ -263,11 +262,11 @@ export function RecoveryStep({ active, admin, notice, onBack, onNext }: {
   };
 
   return (
-    <StepCard name="recovery" title={t('setup.rec.title')} sub={t('setup.rec.sub')} back={onBack} onSubmit={next}
-      next={<Button tone="primary" type="submit" blocked={!ready} onBlocked={next}>{t('setup.rec.next')}</Button>}>
+    <StepCard name="recovery" title={t('setup.rec.title')} sub={t(own ? 'setup.rec.own.sub' : 'setup.rec.sub')} back={onBack} onSubmit={next}
+      next={<Button tone="primary" size="lg" type="submit" blocked={!primaryReady} onBlocked={next} data-step-focus={!own ? '' : undefined}>{primary}</Button>}>
       {note && <Banner tone="warn">{t(note)}</Banner>}
       {!own && (
-        <div className="rec-box" data-step-focus-box="">
+        <div className="rec-box">
           <ol className={'rec-groups' + (hide ? ' is-hidden' : '')} aria-label={t('setup.rec.groups')}>
             {Array.from({ length: RECOVERY_GROUP_COUNT }, (_, k) => (
               <li key={k}>
@@ -276,40 +275,45 @@ export function RecoveryStep({ active, admin, notice, onBack, onNext }: {
               </li>
             ))}
           </ol>
-          {showGroups && !hide && <p className="rec-full"><span>{t('setup.rec.full')}</span><code className="mono">{canonicalRecovery(groups)}</code></p>}
-          {hide && <p className="rec-mask" role="status">{t(verifying ? 'setup.rec.verifying' : 'setup.rec.hidden')}</p>}
+          {hide && !verifying && <p className="rec-mask" role="status">{t('setup.rec.hidden')}</p>}
           {!groups.length && !genFailed && <p className="rec-mask" role="status">{t('setup.rec.loading')}</p>}
           {genFailed && <Banner tone="danger" action={<Button size="sm" tone="ghost" icon="refresh" onClick={() => void generate()}>{t('act.retry')}</Button>}>{t('setup.rec.genFailed')}</Banner>}
+          {verifying && (
+            <div className="rec-verify">
+              <p className="setup-hint">{t('setup.rec.verify')}</p>
+              <div className="rec-verify-fields">
+                {([0, 1] as const).map((i) => (
+                  <TextField key={i} mono label={t('setup.rec.verify.slot', { n: slots[i] + 1 })} maxLength={4} autoComplete="off" autoCapitalize="characters"
+                    inputRef={i === 0 ? v1Ref : v2Ref} value={i === 0 ? v1 : v2} error={verifyErr(i)}
+                    onChange={(v) => { (i === 0 ? setV1 : setV2)(normalizeGroup(v)); setTried(false); }} />
+                ))}
+              </div>
+              <button type="button" className="setup-link" onClick={() => onAck(false)}>{t('setup.rec.showAgain')}</button>
+            </div>
+          )}
         </div>
       )}
       {own && (
         <div className="stack">
           <div className="stack-sm">
-            <PassField label={t('setup.rec.own.field')} value={code} onChange={(v) => { setCode(v); resetAck(); }} inputRef={codeRef} autoComplete="off" error={ownHint} />
+            <PassField label={t('setup.rec.own.field')} value={code} onChange={(v) => { setCode(v); resetAck(); }} inputRef={codeRef} autoComplete="off"
+              error={ownHint} help={!ownHint && code && !ownRules.strong ? t('setup.rec.own.rule.strong') : undefined} />
             <Meter score={score} filled={!!code} />
           </div>
-          <PassField label={t('setup.rec.own.confirm')} value={code2} onChange={(v) => { setCode2(v); resetAck(); }} inputRef={code2Ref} autoComplete="off" allowShow={false} />
-          <Rules items={[{ ok: ownRules.strong, label: t('setup.rec.own.rule.strong') }, { ok: ownRules.match, label: t('setup.rule.match') }]} />
+          {(ownRules.strong || code2 !== '') && (
+            <PassField label={t('setup.rec.own.confirm')} value={code2} onChange={(v) => { setCode2(v); resetAck(); }} inputRef={code2Ref} autoComplete="off" allowShow={false}
+              error={code2 !== '' && code2.length >= code.length && !ownRules.match ? t('setup.admin.need.match') : null} />
+          )}
         </div>
       )}
-      <div className="rec-tools">
-        <Button size="sm" tone="ghost" icon="refresh" onClick={regen}>{t('setup.rec.regen')}</Button>
-        <Button size="sm" tone="quiet" aria-expanded={own} onClick={toggleOwn}>{t(own ? 'setup.rec.useGen' : 'setup.rec.own')}</Button>
-      </div>
-      <Banner tone="info">{t('setup.rec.warn')}</Banner>
-      <div ref={ackBox}><Checkbox checked={ack} onChange={onAck}>{t('setup.rec.ack')}</Checkbox></div>
-      {verifying && (
-        <div className="rec-verify">
-          <p className="setup-hint">{t('setup.rec.verify')}</p>
-          <div className="form-grid">
-            {([0, 1] as const).map((i) => (
-              <TextField key={i} mono label={t('setup.rec.verify.slot', { n: slots[i] + 1 })} maxLength={4} autoComplete="off" autoCapitalize="characters"
-                inputRef={i === 0 ? v1Ref : v2Ref} value={i === 0 ? v1 : v2} error={verifyErr(i)}
-                onChange={(v) => { (i === 0 ? setV1 : setV2)(normalizeGroup(v)); setTried(false); }} />
-            ))}
-          </div>
+      <p className="setup-note">{t('setup.rec.warn')}</p>
+      <More label={t('setup.rec.more')} open={own}>
+        <div className="rec-tools">
+          {!own && <Button size="sm" tone="secondary" icon="refresh" onClick={regen}>{t('setup.rec.regen')}</Button>}
+          <Button size="sm" tone="secondary" aria-pressed={own} onClick={toggleOwn}>{t(own ? 'setup.rec.useGen' : 'setup.rec.own')}</Button>
         </div>
-      )}
+        {showGroups && !hide && !own && <p className="rec-full"><span>{t('setup.rec.full')}</span><code className="mono" data-selectable="">{canonicalRecovery(groups)}</code></p>}
+      </More>
     </StepCard>
   );
 }
@@ -383,26 +387,31 @@ export function CreateStep({ created, secrets, attempts, onCreated, onRecoveryPr
         mark('service', 'fail'); setServiceErr(relayError(err.reason, err.detail));
       }
       setFinished(true);
-      announce(t('setup.create.title.done'));
       result.current = { serviceOn, placeOk };
+      if (serviceOn && placeOk) {
+        // nothing to decide: go straight to the end (the done step announces itself)
+        onDone(result.current);
+        return;
+      }
+      announce(t('setup.create.title.partial'));
       setTimeout(() => nextRef.current?.focus({ preventScroll: true }), 0);
     } finally {
       running.current = false;
     }
-  }, [secrets, attempts, onCreated, onRecoveryProblem, announce]);
+  }, [secrets, attempts, onCreated, onRecoveryProblem, onDone, announce]);
 
   useEffect(() => { void run(); }, []);
 
   const anyFail = placeErr || !!serviceErr;
-  const title = fatal ? t('setup.create.title.fail') : finished ? t('setup.create.title.done') : t('setup.create.title.run');
+  const title = fatal ? t('setup.create.title.fail') : finished ? t('setup.create.title.partial') : t('setup.create.title.run');
   const working = !finished && !fatal;
 
   return (
     <StepCard name="create" title={title} back={fatal === 'init' ? onBack : null} onSubmit={() => { if (finished) onDone(result.current); }}
       foot={finished && anyFail ? <Button tone="ghost" icon="refresh" onClick={() => void run()}>{t('act.retry')}</Button> : undefined}
       next={fatal
-        ? <Button tone="primary" icon="refresh" onClick={() => void run()}>{t('act.retry')}</Button>
-        : <Button ref={nextRef} tone="primary" type="submit" busy={working} blocked={!finished} iconEnd="arrow-right">{t(anyFail ? 'setup.create.later' : 'act.continue')}</Button>}>
+        ? <Button tone="primary" size="lg" icon="refresh" onClick={() => void run()}>{t('act.retry')}</Button>
+        : <Button ref={nextRef} tone="primary" size="lg" type="submit" busy={working} blocked={!finished}>{t(anyFail ? 'setup.create.later' : 'act.continue')}</Button>}>
       <ol className="mk-lines" aria-live="polite">
         {LINES.map((l) => {
           const s = lines[l];

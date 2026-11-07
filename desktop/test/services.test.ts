@@ -63,6 +63,20 @@ async function type(name: string, value: string) {
 }
 const dialog = () => document.querySelector<HTMLElement>('[role="dialog"]');
 const fieldOf = (name: string) => document.querySelector(`[name="${name}"]`)?.closest('.field') ?? null;
+async function openMore() {
+  const more = dialog()!.querySelector<HTMLDetailsElement>('details.more')!;
+  await act(async () => { more.open = true; more.dispatchEvent(new Event('toggle')); });
+  await settle();
+}
+async function choose(name: string, value: string) {
+  const el = document.querySelector<HTMLSelectElement>(`select[name="${name}"]`);
+  if (!el) throw new Error(`Missing select ${name}`);
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!.call(el, value);
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+}
+const menuButton = (label: string) => document.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)!;
 
 beforeEach(() => {
   backend = createMockBackend({ initialized: true, sshWithoutCli: true });
@@ -126,8 +140,14 @@ describe('services page', () => {
     await render({ page: 'services', item: 'example-api' });
     await click(button(t('service.add'), host));
     expect(dialog()).not.toBeNull();
+    // only the essentials show: the method chips wait behind "더 보기"
+    expect(dialog()!.querySelector('.svc-method')).toBeNull();
     await type('conn-id', 'github-api');
     await type('conn-target', 'https://api.github.com');
+    // an item already in the vault is offered first; this connection gets a new value
+    await choose('conn-key-pick', '__new__');
+    await settle();
+    await openMore();
     // POST: off → confirm each time
     await click(dialog()!.querySelector<HTMLButtonElement>('.svc-method[aria-label^="POST"]')!);
     await type('conn-key', 'ghp_synthetic_value_0001');
@@ -164,9 +184,27 @@ describe('services page', () => {
     expect(backend.calls()).not.toContain('secret_put');
   });
 
+  it('shows only the SSH essentials and opens "더 보기" for an error inside it', async () => {
+    await render();
+    await click(button(t('service.add'), host));
+    await click([...dialog()!.querySelectorAll<HTMLButtonElement>('[role="radio"]')].find((b) => b.textContent?.includes(t('service.c.type.ssh')))!);
+    for (const n of ['conn-ssh-id', 'conn-ssh-user', 'conn-ssh-host', 'conn-ssh-hostkey', 'conn-pass']) expect(document.querySelector(`[name="${n}"]`), n).not.toBeNull();
+    expect(document.querySelector('[name="conn-ssh-port"]')).toBeNull();
+    await openMore();
+    await type('conn-ssh-port', '99999');
+    await act(async () => { const d = dialog()!.querySelector<HTMLDetailsElement>('details.more')!; d.open = false; d.dispatchEvent(new Event('toggle')); });
+    await settle();
+    expect(document.querySelector('[name="conn-ssh-port"]')).toBeNull();
+    await click(button(t('service.c.submit'), dialog()!));
+    await settle(80);
+    expect(fieldOf('conn-ssh-port')?.textContent).toContain(t('service.c.ssh.port.err'));
+    expect(backend.calls()).not.toContain('connection_create_ssh');
+  });
+
   it('disables a connection only after confirming', async () => {
     await render({ page: 'services', item: 'example-api' });
-    await click(button(t('service.disable'), host));
+    await click(menuButton(t('service.more.aria')));
+    await click(button(t('service.disable'), document.querySelector<HTMLElement>('[role="menu"]')!));
     expect(dialog()?.textContent).toContain(t('service.disable.warn'));
     expect(backend.calls()).not.toContain('connection_disable');
     await click(button(t('service.disable.confirm'), dialog()!));

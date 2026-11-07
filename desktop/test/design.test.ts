@@ -45,7 +45,7 @@ describe('design tokens', () => {
   it('gives the dark scheme its own value for every palette colour', () => {
     const light = tokens.slice(0, tokens.indexOf('@media (prefers-color-scheme: dark)'));
     const dark = tokens.slice(tokens.indexOf('@media (prefers-color-scheme: dark)'));
-    const palette = [...light.matchAll(/(--(?:paper|ink|line|pine|amber|red|blue|green|kind)-[a-z0-9-]+)\s*:/g)].map((m) => m[1]!);
+    const palette = [...light.matchAll(/(--(?:gray|blue|green|orange|red|teal|kind)-[a-z0-9-]+)\s*:/g)].map((m) => m[1]!);
     expect(palette.length).toBeGreaterThan(20);
     for (const p of palette) expect(dark, p).toContain(`${p}:`);
   });

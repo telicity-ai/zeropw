@@ -69,6 +69,7 @@ async function submit() {
   await settle(40);
 }
 const dialog = () => document.querySelector<HTMLElement>('.dialog');
+const kindOption = (label: string) => [...document.querySelectorAll<HTMLButtonElement>('.dialog [role="radio"]')].find((b) => b.textContent?.includes(label))!;
 const rows = () => [...host.querySelectorAll<HTMLElement>('.lrow .lrow-title')].map((x) => x.textContent);
 
 beforeEach(() => {
@@ -153,7 +154,10 @@ describe('vault page', () => {
     await render();
     await click(button(t('vault.add.aria')));
     expect(dialog()?.textContent).toContain(t('vault.add.title'));
-    await click([...document.querySelectorAll<HTMLButtonElement>('.vault-kind')].find((b) => b.textContent?.includes(t('nav.kind.api_key')))!);
+    // the kind is one compact choice; the place and file options wait behind "더 보기"
+    await click(kindOption(t('nav.kind.api_key')));
+    expect(dialog()?.querySelector('details.more')?.hasAttribute('open')).toBe(false);
+    expect(dialog()?.querySelector('select')).toBeNull();
     // nothing typed: the name and value are asked for, nothing is sent
     await submit();
     expect(spy.mock.calls.some((c) => c[0] === 'secret_put')).toBe(false);
@@ -174,7 +178,8 @@ describe('vault page', () => {
     useBackend(createMockBackend({ initialized: true, latency: 0 }));
     await render();
     await click(button(t('vault.add.aria')));
-    await click([...document.querySelectorAll<HTMLButtonElement>('.vault-kind')].find((b) => b.textContent?.includes(t('nav.kind.ssh_private_key')))!);
+    await click(kindOption(t('nav.kind.ssh_private_key')));
+    // a new key is made by default: no value to type
     await type(field(t('vault.add.name')), 'deploy-key');
     await submit();
     expect(spy.mock.calls.find((c) => c[0] === 'secret_put')?.[1]).toMatchObject({ kind: 'ssh_private_key', source: { generate_ed25519: true } });
@@ -207,7 +212,9 @@ describe('vault page', () => {
   it('revokes a version after a danger confirmation that names the provider', async () => {
     useBackend(createMockBackend({ initialized: true, latency: 0 }));
     await render({ page: 'vault', view: 'all', item: 'example-api' });
-    await click(button(t('vault.version.revoke.aria', { n: 1 })));
+    // version actions sit in the version's menu
+    await click(button(t('vault.version.more.aria', { n: 1 })));
+    await click(button(t('vault.version.revoke'), document.querySelector<HTMLElement>('[role="menu"]')!));
     expect(dialog()?.textContent).toContain(t('vault.provider.note'));
     await submit();
     expect(spy.mock.calls.find((c) => c[0] === 'secret_revoke')?.[1]).toEqual({ id: 'example-api', version: 1 });

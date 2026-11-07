@@ -1,6 +1,14 @@
 // Strings for the developer area: agents, permissions, the in-app terminal, approvals, sharing.
 
 export const DEVELOPER = {
+  'share.member.more.aria': '{name} 더 보기',
+  'share.inv.more.aria': '{name} 초대 더 보기',
+  'share.more.role': '역할: {role}',
+  'share.join.details': '역할: {role}, 이 Mac에서 쓸 이름',
+  'agent.more.aria': '{id} 더 보기',
+  'term.more.aria': '{id} 터미널 더 보기',
+  'grant.more': '{ttl}, 사용 횟수 제한 없음',
+  'grant.more.max': '{ttl}, 최대 {n}회',
   // tabs
   'agent.tabs': '개발자 화면',
   'agent.tab.agents': '에이전트',
@@ -19,7 +27,6 @@ export const DEVELOPER = {
   'agent.nogrant': '권한 없음',
   'agent.off': '꺼짐',
   'agent.disable': '끄기',
-  'agent.disable.aria': '{id} 끄기',
   'agent.disable.title': '에이전트를 끌까요?',
   'agent.disable.sub': '이 에이전트의 토큰으로 오는 새 요청을 더는 받지 않아요',
   'agent.disable.warn': '끈 에이전트는 다시 켤 수 없어요',
@@ -143,7 +150,6 @@ export const DEVELOPER = {
   'share.role.user': '사용만',
   'share.role.admin': '관리 가능',
   'share.remove': '내보내기',
-  'share.remove.aria': '{name} 내보내기',
   'share.remove.title': '이 기기를 내보낼까요?',
   'share.remove.sub': '이 기기는 더는 동기화하지 못해요',
   'share.remove.warn': '이미 받은 값은 그 기기에 남아요. 내보낸 뒤 이 위치의 값을 바꾸고 서비스에서도 예전 키를 폐기하세요',
@@ -158,7 +164,6 @@ export const DEVELOPER = {
   'share.inv.left': '{time} 남음',
   'share.inv.usedBy': '참여: {fp}',
   'share.inv.revoke': '취소',
-  'share.inv.revoke.aria': '{name} 초대 취소',
   'share.inv.revoked.toast': '링크를 취소했어요. 이미 참여한 기기가 있으면 내보내고 값을 바꾸세요',
   'share.err.used': '이미 쓰인 링크예요',
 
@@ -247,7 +252,6 @@ export const DEVELOPER = {
   'term.hide.aria': '{name} 터미널 숨기기',
   'term.dead': '끝남',
   'term.end': '끝내기',
-  'term.end.aria': '{id} 터미널 끝내기',
   'term.end.title': '터미널을 끝낼까요?',
   'term.end.sub': '이 터미널의 셸과 거기서 시작한 프로그램을 멈춰요',
   'term.end.note': 'sudo로 다른 계정에서 실행한 프로그램과 setsid, tmux, screen으로 떼어 낸 프로그램은 남을 수 있어요. 그 토큰은 에이전트를 꺼야만 막혀요',

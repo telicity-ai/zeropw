@@ -27,7 +27,7 @@ export function DeveloperPage({ intent }: { intent?: Intent }) {
   const count = approvals.data?.length ?? 0;
   const shown: DevTab = want ?? tab;
   return (
-    <div className="page">
+    <div className="page dev-page">
       <div className="pane">
         <PaneHeader title={t('nav.developer')} actions={(
           <Segmented<DevTab> label={t('agent.tabs')} size="sm" value={tab} onChange={(v) => go('developer', { view: v })}

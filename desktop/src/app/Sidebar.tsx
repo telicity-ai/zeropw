@@ -50,9 +50,10 @@ export function Sidebar({ onStop, onResume }: { onStop(): void; onResume(): void
       <div className="sidebar-vault" data-tauri-drag-region="">
         <span className="mark"><Mark size={20} /></span>
         <span className="sidebar-vault-name truncate">{t('app.vault')}</span>
+        <IconButton icon="search" label={t('act.search') + ' ⌘F'} size="sm" onClick={() => { go('vault', { view: view ?? 'all' }); setTimeout(() => window.dispatchEvent(new Event('zpw:focus-search')), 0); }} />
       </div>
-      <button type="button" className="sidebar-search" title={t('act.search')} onClick={() => { go('vault', { view: view ?? 'all' }); setTimeout(() => window.dispatchEvent(new Event('zpw:focus-search')), 0); }}>
-        <Icon name="search" size={14} /><span>{t('act.search')}</span><Kbd>⌘F</Kbd>
+      <button type="button" className="sidebar-new" title={t('nav.newItem')} onClick={() => go('vault', { view: view ?? 'all', intent: 'add' })}>
+        <Icon name="plus" size={15} /><span>{t('nav.newItem')}</span><Kbd>⌘N</Kbd>
       </button>
       <nav className="sidebar-scroll" aria-label={t('nav.aria')}>
         <ul className="nav-group" aria-label={t('nav.vault')}>

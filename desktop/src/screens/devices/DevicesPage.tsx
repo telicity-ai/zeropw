@@ -16,6 +16,7 @@ import { useShell, type Intent } from '../../app/shell';
 import { useApp } from '../../ui/app';
 import { Button } from '../../ui/controls';
 import { ConfirmDialog } from '../../ui/Dialog';
+import { Menu, More } from '../../ui/disclosure';
 import { Badge, Banner, EmptyState, Fingerprint, KeyValues, LoadError, Section, SkeletonRows, Status } from '../../ui/feedback';
 import { useLoad, usePoll } from '../../ui/hooks';
 import { IconTile, ListRow, PaneHeader, StaticRow, useListKeys } from '../../ui/layout';
@@ -118,8 +119,8 @@ export function DevicesPage({ intent }: { intent?: Intent }) {
         </div>
       </section>
       <section className={'pane pane-detail' + (detailHidden ? ' is-hidden' : '')} aria-label={row ? row.name : t('mac.self')}>
-        <PaneHeader level={2} title={row ? row.name : t('mac.self')} onBack={single ? () => setDetailOpen(false) : undefined}
-          actions={row ? <Button size="sm" tone="ghost" icon="close" onClick={() => setDialog({ kind: 'remove', row })}>{t('mac.remove')}</Button> : undefined} />
+        <PaneHeader level={2} title={<span className="sr-only">{row ? row.name : t('mac.self')}</span>} onBack={single ? () => setDetailOpen(false) : undefined}
+          actions={row ? <Menu label={t('act.more')} items={[{ label: t('mac.remove'), icon: 'close', danger: true, onSelect: () => setDialog({ kind: 'remove', row }) }]} /> : undefined} />
         <div className="pane-body">
           <div className="pane-content">
             {o?.devices_error && <Banner tone="warn">{t('mac.err.records')}</Banner>}
@@ -216,10 +217,9 @@ function SelfDetail({ o, enrollRef, enrollNote, onEnrolled, onRetry }: {
         </Section>
       )}
       {st !== 'unenrolled' && st !== 'unavailable' && link.device_id && (
-        <details className="mac-disclosure">
-          <summary>{t('mac.diag')}</summary>
-          <KeyValues dense items={[{ k: t('mac.diag.linkId'), v: link.device_id, mono: true }]} />
-        </details>
+        <More label={t('mac.diag')}>
+          <div className="card card-pad"><KeyValues dense items={[{ k: t('mac.diag.linkId'), v: link.device_id, mono: true }]} /></div>
+        </More>
       )}
     </>
   );
@@ -286,16 +286,15 @@ function MacDetail({ o, row }: { o: DevicesOverview; row: DeviceRow }) {
             )}
         </Section>
       )}
-      <details className="mac-disclosure">
-        <summary>{t('mac.diag')}</summary>
-        <KeyValues dense items={[
+      <More label={t('mac.diag')}>
+        <div className="card card-pad"><KeyValues dense items={[
           { k: t('mac.diag.path'), v: d.path === null ? t('mac.diag.none') : <>{t(d.path === 'direct' ? 'mac.diag.direct' : 'mac.diag.relay')}{d.pathLabel && <span className="mono muted"> {d.pathLabel}</span>}</> },
           { k: t('mac.diag.rtt'), v: d.rttMs === null ? t('mac.diag.none') : t('mac.diag.ms', { n: d.rttMs }), mono: d.rttMs !== null },
           { k: t('mac.diag.transport'), v: d.transport ?? t('mac.diag.none'), mono: !!d.transport },
           { k: t('mac.diag.error'), v: d.lastError ?? t('mac.diag.none'), mono: !!d.lastError },
           !!row.linkId && { k: t('mac.diag.linkId'), v: row.linkId, mono: true },
-        ]} />
-      </details>
+        ]} /></div>
+      </More>
     </>
   );
 }

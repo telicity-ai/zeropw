@@ -16,6 +16,7 @@ import { useShell } from '../../app/shell';
 import { useApp } from '../../ui/app';
 import { Button, Chip, PassField, TextField } from '../../ui/controls';
 import { Dialog, isAuthError, passErrorKey } from '../../ui/Dialog';
+import { More } from '../../ui/disclosure';
 import { Banner, Fingerprint, Section } from '../../ui/feedback';
 import { useNow } from '../../ui/hooks';
 import { Icon } from '../../ui/icons';
@@ -80,7 +81,7 @@ export function AddMacDialog({ open, link, onClose, onChanged }: { open: boolean
     if (!pass) e.pass = 'pass.err.empty';
     setErrs(e);
     if (e.envs) return;
-    if (e.name) { nameRef.current?.focus(); return; }
+    if (e.name) { setTimeout(() => nameRef.current?.focus(), 50); return; }
     if (e.pass) { passRef.current?.focus(); return; }
     running.current = true; setBusy(true);
     try {
@@ -91,7 +92,7 @@ export function AddMacDialog({ open, link, onClose, onChanged }: { open: boolean
     } catch (err) {
       const ipc = toIpcError(err);
       if (isAuthError(err)) { setErrs({ pass: passErrorKey(err) }); passRef.current?.focus(); }
-      else if (ipc.reason === 'invalid_name') { setErrs({ name: 'mac.addDlg.name.err' }); nameRef.current?.focus(); }
+      else if (ipc.reason === 'invalid_name') { setErrs({ name: 'mac.addDlg.name.err' }); setTimeout(() => nameRef.current?.focus(), 50); }
       else setErrs({ form: ipc.reason === 'link_not_enrolled' ? 'mac.needEnroll' : ipc.reason === 'serve_without_link' || ipc.reason === 'serve_not_running' ? 'mac.addDlg.needRelay' : 'error.generic' });
       onChanged();
     } finally { running.current = false; setBusy(false); setPass(''); }
@@ -114,23 +115,25 @@ export function AddMacDialog({ open, link, onClose, onChanged }: { open: boolean
         </>}>
       {!made && (
         <>
-          <div className="field">
-            <div className="field-label"><span id="mac-add-places">{t('mac.addDlg.places')}</span></div>
-            {all.length === 0
-              ? <p className="field-note">{t(vault.data ? 'mac.addDlg.noPlaces' : 'state.loading')}</p>
-              : (
-                <div className="chips" role="group" aria-labelledby="mac-add-places">
-                  {all.map((env) => {
-                    const [p, e] = env.split('/') as [string, string];
-                    return <Chip key={env} on={envs.includes(env)} onToggle={() => toggle(env)}>{placeLabel(p, e)}</Chip>;
-                  })}
-                </div>
-              )}
-            {errs.envs && <div className="field-note is-error" role="alert"><Icon name="alert" size={13} />{t(errs.envs)}</div>}
-          </div>
-          <Banner tone="info" compact>{t('mac.addDlg.share')}</Banner>
-          <TextField label={t('mac.addDlg.name')} value={name} inputRef={nameRef} maxLength={64} error={errs.name ? t(errs.name) : null}
-            onChange={(v) => { setName(v); setErrs((x) => ({ ...x, name: undefined })); }} />
+          <More hint={t('mac.addDlg.more', { n: envs.length })} open={!!errs.envs || !!errs.name}>
+            <div className="field">
+              <div className="field-label"><span id="mac-add-places">{t('mac.addDlg.places')}</span></div>
+              {all.length === 0
+                ? <p className="field-note">{t(vault.data ? 'mac.addDlg.noPlaces' : 'state.loading')}</p>
+                : (
+                  <div className="chips" role="group" aria-labelledby="mac-add-places">
+                    {all.map((env) => {
+                      const [p, e] = env.split('/') as [string, string];
+                      return <Chip key={env} on={envs.includes(env)} onToggle={() => toggle(env)}>{placeLabel(p, e)}</Chip>;
+                    })}
+                  </div>
+                )}
+              {errs.envs && <div className="field-note is-error" role="alert"><Icon name="alert" size={13} />{t(errs.envs)}</div>}
+            </div>
+            <Banner tone="info" compact>{t('mac.addDlg.share')}</Banner>
+            <TextField label={t('mac.addDlg.name')} value={name} inputRef={nameRef} maxLength={64} error={errs.name ? t(errs.name) : null}
+              onChange={(v) => { setName(v); setErrs((x) => ({ ...x, name: undefined })); }} />
+          </More>
           <PassField value={pass} inputRef={passRef} error={errs.pass ? t(errs.pass) : null}
             onChange={(v) => { setPass(v); setErrs((x) => ({ ...x, pass: undefined })); }} />
           {errs.form && <Banner tone="danger">{t(errs.form)}</Banner>}

@@ -96,6 +96,8 @@ export const DEVICES = {
   'mac.addDlg.title': 'Mac 추가',
   'mac.addDlg.sub': '다른 Mac에 넣을 일회용 연결 코드를 만들어요',
   'mac.addDlg.places': '함께 쓸 위치',
+  'mac.pv.more': '위치 {n}곳, 서버, 남은 시간',
+  'mac.addDlg.more': '위치 {n}곳, 새 Mac 이름',
   'mac.addDlg.places.err': '하나 이상 골라 주세요',
   'mac.addDlg.noPlaces': '함께 쓸 위치가 없어요',
   'mac.addDlg.share': '아직 공유하지 않은 위치는 이때 공유돼요. 공유는 되돌릴 수 없어요',

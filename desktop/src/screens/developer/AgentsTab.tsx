@@ -12,6 +12,7 @@ import { useShell, type Intent } from '../../app/shell';
 import { useApp } from '../../ui/app';
 import { Button, PassField, Segmented, SelectField, TextField } from '../../ui/controls';
 import { ConfirmDialog, Dialog, isAuthError, passErrorKey } from '../../ui/Dialog';
+import { Menu, More } from '../../ui/disclosure';
 import { Badge, Banner, EmptyState, KeyValues, LoadError, Section, SkeletonRows, Status } from '../../ui/feedback';
 import { useLoad, useNow } from '../../ui/hooks';
 import { IconTile } from '../../ui/layout';
@@ -98,7 +99,7 @@ export function AgentsTab({ intent }: { intent?: Intent }) {
                           {active && (
                             <>
                               <Button size="sm" tone="ghost" aria-label={t('grant.give.aria', { id: p.id })} onClick={() => show({ kind: 'grant', principal: p.id })}>{t('grant.give')}</Button>
-                              <Button size="sm" tone="quiet" aria-label={t('agent.disable.aria', { id: p.id })} onClick={() => show({ kind: 'disable', id: p.id })}>{t('agent.disable')}</Button>
+                              <Menu label={t('agent.more.aria', { id: p.id })} items={[{ label: t('agent.disable'), icon: 'stop', danger: true, onSelect: () => show({ kind: 'disable', id: p.id }) }]} />
                             </>
                           )}
                         </div>
@@ -143,8 +144,7 @@ export function AgentsTab({ intent }: { intent?: Intent }) {
                           onClick={() => (shown ? setView(null) : showTerminal({ key: `attach-${x.terminal_id}`, name: x.principal, source: { kind: 'attach', terminalId: x.terminal_id }, terminalId: x.terminal_id }))}>
                           {t(shown ? 'term.hide' : 'term.attach')}
                         </Button>
-                        <Button size="sm" tone="quiet" aria-label={t('term.end.aria', { id: x.principal })}
-                          onClick={() => show({ kind: 'end', terminalId: x.terminal_id, principal: x.principal, asUser: x.as_user })}>{t('term.end')}</Button>
+                        <Menu label={t('term.more.aria', { id: x.principal })} items={[{ label: t('term.end'), icon: 'stop', danger: true, onSelect: () => show({ kind: 'end', terminalId: x.terminal_id, principal: x.principal, asUser: x.as_user }) }]} />
                       </div>
                     </li>
                   );
@@ -353,7 +353,7 @@ function GrantDialog({ open, principal, principals, connections, onClose, onDone
     setErrs(e);
     if (e.who) { whoRef.current?.focus(); return; }
     if (e.conn) { connRef.current?.focus(); return; }
-    if (e.max) { maxRef.current?.focus(); return; }
+    if (e.max) { setTimeout(() => maxRef.current?.focus(), 50); return; }
     if (e.pass) { passRef.current?.focus(); return; }
     running.current = true; setBusy(true);
     try {
@@ -378,12 +378,14 @@ function GrantDialog({ open, principal, principals, connections, onClose, onDone
         <SelectField label={t('grant.conn')} value={conn} selectRef={connRef} error={errs.conn ? t(errs.conn) : null}
           options={connections.map((c) => ({ value: c.id, label: c.id }))} onChange={(v) => { setConn(v); setErrs((x) => ({ ...x, conn: undefined })); }} />
       </div>
-      <Segmented<GrantTtl> label={t('grant.ttl')} hideLabel={false} value={ttl} onChange={setTtl}
-        options={GRANT_TTLS.map((x) => ({ value: x, label: t(TTL_LABEL[x]) }))} />
-      <TextField label={t('grant.max')} aside={t('grant.max.aside')} help={t('grant.max.help')} mono value={max} inputRef={maxRef} inputMode="numeric" maxLength={9}
-        error={errs.max ? t(errs.max) : null} onChange={(v) => { setMax(v); setErrs((x) => ({ ...x, max: undefined })); }} />
       <PassField value={pass} inputRef={passRef} error={errs.pass ? t(errs.pass) : null}
         onChange={(v) => { setPass(v); setErrs((x) => ({ ...x, pass: undefined })); }} />
+      <More hint={max.trim() ? t('grant.more.max', { ttl: t(TTL_LABEL[ttl]), n: max.trim() }) : t('grant.more', { ttl: t(TTL_LABEL[ttl]) })} open={!!errs.max}>
+        <Segmented<GrantTtl> label={t('grant.ttl')} hideLabel={false} value={ttl} onChange={setTtl}
+          options={GRANT_TTLS.map((x) => ({ value: x, label: t(TTL_LABEL[x]) }))} />
+        <TextField label={t('grant.max')} aside={t('grant.max.aside')} help={t('grant.max.help')} mono value={max} inputRef={maxRef} inputMode="numeric" maxLength={9}
+          error={errs.max ? t(errs.max) : null} onChange={(v) => { setMax(v); setErrs((x) => ({ ...x, max: undefined })); }} />
+      </More>
       {errs.form && <Banner tone="danger">{t(errs.form)}</Banner>}
     </Dialog>
   );

@@ -48,6 +48,12 @@ export function App() {
     annT.current = setTimeout(() => { setLive(annQ.current.join(' · ')); annQ.current = []; }, 60);
   }, []);
 
+  // macOS vibrancy (tauri.conf.json windowEffects): the page lets the sidebar material show
+  useEffect(() => {
+    const mac = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform || navigator.userAgent);
+    if (desktop && mac) document.documentElement.classList.add('has-vibrancy');
+  }, [desktop]);
+
   const boot = useCallback(() => {
     setPhase('loading');
     call('app_status').then(

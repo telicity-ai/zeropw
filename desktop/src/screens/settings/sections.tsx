@@ -16,6 +16,7 @@ import { ConfirmDialog, Dialog } from '../../ui/Dialog';
 import { Banner, KeyValues, LoadError, Section, SkeletonRows, Status, type Tone } from '../../ui/feedback';
 import { useLoad } from '../../ui/hooks';
 import { CorruptBanner, type SettingsCtx } from './SettingsPage';
+import { More } from '../../ui/disclosure';
 
 /** The deployment host planned for the link service. Typed into the field only when asked; it is
  *  not claimed to be running (no deployment or health check has been confirmed). */
@@ -225,7 +226,7 @@ export function SyncSection({ ctx }: { ctx: SettingsCtx }) {
   const turnOn = async () => {
     if (!s || running.current) return;
     const p = parsePort(tport);
-    if (p === null || !ip) { setErrLines([{ key: 'set.listen.port.err' }]); portRef.current?.focus(); return; }
+    if (p === null || !ip) { setErrLines([{ key: 'set.listen.port.err' }]); setTimeout(() => portRef.current?.focus(), 50); return; }
     running.current = true; setBusy(true); setErrLines(null);
     try {
       await relay.run(() => turnOnListen(ip, p));
@@ -234,7 +235,7 @@ export function SyncSection({ ctx }: { ctx: SettingsCtx }) {
       setErrLines(listenErrorLines(e));
       const down = relayLeftOff(e);
       if (down) relay.report(down);
-      portRef.current?.focus();
+      setTimeout(() => portRef.current?.focus(), 50);
     }
     ctx.reload(); bump();
     running.current = false; setBusy(false);
@@ -248,12 +249,14 @@ export function SyncSection({ ctx }: { ctx: SettingsCtx }) {
           <form className="card card-pad stack" noValidate onSubmit={(e) => { e.preventDefault(); void turnOn(); }}>
             <Status tone={listen ? 'ok' : 'neutral'}>{listen ? t('settings.sync.on', { address: `${listen.ip}:${listen.port}` }) : t('settings.sync.off')}</Status>
             <p className="text-sm muted">{t('settings.sync.what')}</p>
-            <div className="settings-listen">
-              <SelectField label={t('settings.sync.iface')} value={ip} options={addressChoices(ctx.interfaces, ip, listen?.ip)}
-                onChange={(v) => { ctx.setField('ip', v); setErrLines(null); }} />
-              <TextField label={t('settings.sync.port')} mono value={tport} inputRef={portRef} inputMode="numeric" maxLength={5}
-                onChange={(v) => { ctx.setField('tport', v); setErrLines(null); }} />
-            </div>
+            <More label={t('settings.sync.address')} hint={<span className="mono">{ip ? `${ip}:${tport}` : '—'}</span>} open={!!errLines}>
+              <div className="settings-listen">
+                <SelectField label={t('settings.sync.iface')} value={ip} options={addressChoices(ctx.interfaces, ip, listen?.ip)}
+                  onChange={(v) => { ctx.setField('ip', v); setErrLines(null); }} />
+                <TextField label={t('settings.sync.port')} mono value={tport} inputRef={portRef} inputMode="numeric" maxLength={5}
+                  onChange={(v) => { ctx.setField('tport', v); setErrLines(null); }} />
+              </div>
+            </More>
             {errLines && <div className="field-note is-error" role="alert">{tLines(errLines)}</div>}
             <div className="row-wrap">
               <Button tone="primary" type="submit" busy={busy}>{t(listen ? 'settings.sync.change' : 'settings.sync.turnOn')}</Button>
@@ -286,7 +289,7 @@ export function DeveloperSection({ ctx }: { ctx: SettingsCtx }) {
   const savePort = async () => {
     if (!s || running.current) return;
     const p = parsePort(port, MIN_GATEWAY_PORT);
-    if (p === null) { setErr('settings.dev.port.err'); portRef.current?.focus(); return; }
+    if (p === null) { setErr('settings.dev.port.err'); setTimeout(() => portRef.current?.focus(), 50); return; }
     // the same port: nothing to save, but a service that is off is started on it
     if (p === s.gateway_port) { if (!serve.running && !relay.busy) void relay.start(); return; }
     running.current = true; setBusy(true);
@@ -295,7 +298,7 @@ export function DeveloperSection({ ctx }: { ctx: SettingsCtx }) {
       await call('settings_set', { ...cur, gateway_port: p });
     } catch (e) {
       setErr(toIpcError(e).reason === 'invalid_port' ? 'settings.dev.port.err' : 'error.generic');
-      portRef.current?.focus();
+      setTimeout(() => portRef.current?.focus(), 50);
       running.current = false; setBusy(false);
       return;
     }
@@ -312,7 +315,6 @@ export function DeveloperSection({ ctx }: { ctx: SettingsCtx }) {
           <p className="text-sm muted">{t('settings.dev.what')}</p>
           {serve.running && <KeyValues dense items={[
             serve.url ? { k: t('settings.dev.address'), v: serve.url, mono: true } : null,
-            serve.pid !== null ? { k: t('settings.dev.pid'), v: String(serve.pid), mono: true } : null,
           ]} />}
           {!serve.running && relay.problem && <Banner tone="danger">{t(relay.problem.key, { reason: relay.problem.reason })}</Banner>}
           <div className="row">
@@ -323,7 +325,7 @@ export function DeveloperSection({ ctx }: { ctx: SettingsCtx }) {
         </div>
       </Section>
       {s && (
-        <Section title={t('settings.dev.port')}>
+        <More label={t('settings.dev.port')} hint={<span className="mono">{port}</span>} open={!!err}>
           <form className="card card-pad stack" noValidate onSubmit={(e) => { e.preventDefault(); void savePort(); }}>
             <div className="settings-port">
               <TextField label={t('settings.dev.port')} hideLabel mono value={port} inputRef={portRef} inputMode="numeric" maxLength={5}
@@ -331,7 +333,7 @@ export function DeveloperSection({ ctx }: { ctx: SettingsCtx }) {
             </div>
             <div className="row"><Button tone="primary" type="submit" busy={busy || relay.busy}>{t('settings.dev.save')}</Button></div>
           </form>
-        </Section>
+        </More>
       )}
     </>
   );
@@ -404,38 +406,45 @@ export function AboutSection({ ctx }: { ctx: SettingsCtx }) {
       <div className="card card-pad">
         <KeyValues items={[
           { k: t('settings.about.app'), v: t('settings.about.appValue') },
-          status.data ? { k: t('settings.about.stateDir'), v: status.data.state_dir, mono: true } : null,
-          { k: t('settings.about.service'), v: serve.running ? `${t('settings.dev.running')} · ${serve.url ?? ''}${serve.pid !== null ? ` · pid ${serve.pid}` : ''}` : t('settings.dev.stopped') },
-          { k: t('settings.about.settings'), v: ctx.corrupt ? t('settings.about.settings.corrupt') : ctx.settings ? t('settings.about.settings.ok') : '—' },
+          { k: t('settings.about.service'), v: serve.running ? t('settings.dev.running') : t('settings.dev.stopped') },
           { k: t('settings.about.link'), v: linkText },
-          l?.problem ? { k: t('settings.about.problem'), v: l.problem, mono: true } : null,
-          l?.running ? { k: t('settings.about.enrolled'), v: yes(l.enrolled) } : null,
           l?.enrolled ? { k: t('settings.about.online'), v: yes(l.online) } : null,
-          l?.enrolled ? { k: t('settings.about.host'), v: l.service_host, mono: true } : null,
-          l?.enrolled ? { k: t('settings.about.peers'), v: t('settings.about.peersN', { n: l.peers.length }) } : null,
         ]} />
       </div>
+      <More label={t('settings.about.details')}>
+        <div className="card card-pad">
+          <KeyValues dense items={[
+            status.data ? { k: t('settings.about.stateDir'), v: status.data.state_dir, mono: true } : null,
+            { k: t('settings.about.service'), v: serve.running ? `${serve.url ?? ''}${serve.pid !== null ? ` · pid ${serve.pid}` : ''}` : t('settings.dev.stopped'), mono: serve.running },
+            { k: t('settings.about.settings'), v: ctx.corrupt ? t('settings.about.settings.corrupt') : ctx.settings ? t('settings.about.settings.ok') : '—' },
+            l?.problem ? { k: t('settings.about.problem'), v: l.problem, mono: true } : null,
+            l?.running ? { k: t('settings.about.enrolled'), v: yes(l.enrolled) } : null,
+            l?.enrolled ? { k: t('settings.about.host'), v: l.service_host, mono: true } : null,
+            l?.enrolled ? { k: t('settings.about.peers'), v: t('settings.about.peersN', { n: l.peers.length }) } : null,
+          ]} />
+        </div>
+        {l && l.peers.length > 0 && (
+          <ul className="rows" aria-label={t('settings.about.peers')}>
+            {l.peers.map((p) => (
+              <li className="srow" key={p.device_id}>
+                <div className="srow-main">
+                  <span className="srow-title">{p.name}</span>
+                  <span className="srow-meta">
+                    {[
+                      p.path === null ? t('settings.about.path.none') : p.path === 'direct' ? t('settings.about.path.direct') : `${t('settings.about.path.relay')} (${p.path})`,
+                      p.rtt_ms !== null ? t('settings.about.rtt', { ms: p.rtt_ms }) : null,
+                      p.revoked ? t('settings.server.st.revoked') : null,
+                    ].filter(Boolean).join(' · ')}
+                  </span>
+                  {p.last_error && <span className="srow-meta mono">{p.last_error}</span>}
+                </div>
+                <div className="srow-end"><Status tone={p.online ? 'ok' : 'neutral'}>{t(p.online ? 'state.on' : 'state.off')}</Status></div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </More>
       {link.error && <LoadError error={link.error} onRetry={() => undefined} />}
-      {l && l.peers.length > 0 && (
-        <ul className="rows" aria-label={t('settings.about.peers')}>
-          {l.peers.map((p) => (
-            <li className="srow" key={p.device_id}>
-              <div className="srow-main">
-                <span className="srow-title">{p.name}</span>
-                <span className="srow-meta">
-                  {[
-                    p.path === null ? t('settings.about.path.none') : p.path === 'direct' ? t('settings.about.path.direct') : `${t('settings.about.path.relay')} (${p.path})`,
-                    p.rtt_ms !== null ? t('settings.about.rtt', { ms: p.rtt_ms }) : null,
-                    p.revoked ? t('settings.server.st.revoked') : null,
-                  ].filter(Boolean).join(' · ')}
-                </span>
-                {p.last_error && <span className="srow-meta mono">{p.last_error}</span>}
-              </div>
-              <div className="srow-end"><Status tone={p.online ? 'ok' : 'neutral'}>{t(p.online ? 'state.on' : 'state.off')}</Status></div>
-            </li>
-          ))}
-        </ul>
-      )}
     </>
   );
 }

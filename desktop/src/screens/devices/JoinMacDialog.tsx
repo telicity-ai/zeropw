@@ -9,6 +9,7 @@ import { formatCountdown } from '../../lib/validators';
 import { placeLabel } from '../../lib/places';
 import { Button, PassField } from '../../ui/controls';
 import { Dialog } from '../../ui/Dialog';
+import { More } from '../../ui/disclosure';
 import { Banner, Fingerprint, KeyValues, Spinner, Status } from '../../ui/feedback';
 import { useNow } from '../../ui/hooks';
 import type { PairJoin } from './usePairJoin';
@@ -44,13 +45,20 @@ export function JoinMacDialog({ open, pj, onClose }: { open: boolean; pj: PairJo
             error={pj.error ? t(pj.error) : p.kind === 'stopped' ? t(p.key) : null} />
           {p.kind === 'preview' && (
             <div className="mac-preview" role="region" aria-label={t('mac.pv.name')}>
-              <KeyValues items={[
-                { k: t('mac.pv.name'), v: p.preview.name },
-                { k: t('mac.pv.fp'), v: <Fingerprint value={p.preview.fingerprint} /> },
-                { k: t('mac.pv.places'), v: p.preview.environments.map((e) => placeOf(e.env)).join(', ') },
-                { k: t('mac.pv.server'), v: p.preview.service_host, mono: true },
-                !!p.preview.expires_at && { k: t('mac.pv.left'), v: <span className="num">{formatCountdown(msLeft(p.preview.expires_at, now))}</span> },
-              ]} />
+              <div className="mac-compare-side">
+                <span className="mac-compare-label">{t('mac.pv.name')}</span>
+                <strong className="wrap-anywhere">{p.preview.name}</strong>
+                <Fingerprint value={p.preview.fingerprint} />
+              </div>
+              <More hint={t('mac.pv.more', { n: p.preview.environments.length })}>
+                <div className="card card-pad">
+                  <KeyValues dense items={[
+                    { k: t('mac.pv.places'), v: p.preview.environments.map((e) => placeOf(e.env)).join(', ') },
+                    { k: t('mac.pv.server'), v: p.preview.service_host, mono: true },
+                    !!p.preview.expires_at && { k: t('mac.pv.left'), v: <span className="num">{formatCountdown(msLeft(p.preview.expires_at, now))}</span> },
+                  ]} />
+                </div>
+              </More>
               <Banner tone="info" compact>{t('mac.joinDlg.check')}</Banner>
             </div>
           )}

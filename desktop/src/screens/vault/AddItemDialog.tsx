@@ -12,9 +12,10 @@ import { isValidName } from '../../lib/validators';
 import { useApp } from '../../ui/app';
 import { Button, PassField, Segmented, SelectField, TextField } from '../../ui/controls';
 import { Dialog } from '../../ui/Dialog';
+import { More } from '../../ui/disclosure';
 import { Banner, KeyValues } from '../../ui/feedback';
 import { Icon } from '../../ui/icons';
-import { KindTile } from '../../ui/layout';
+import { kindIcon } from '../../ui/layout';
 import { KINDS, kindLabel, placeOf, placeText } from './logic';
 import { PublicKeyBox } from './parts';
 
@@ -38,7 +39,6 @@ export function AddItemDialog({ replace, pairs, initialPlace, placeHint, initial
   const [env, setEnv] = useState(replace ? placeOf(replace) : initialPlace);
   const [value, setValue] = useState('');
   const [file, setFile] = useState<{ file_token: string; name: string } | null>(null);
-  const [sshSource, setSshSource] = useState<'gen' | 'file'>('gen');
   const [errs, setErrs] = useState<Errs>({});
   const [busy, setBusy] = useState(false);
   const [pub, setPub] = useState<{ key: string; fp: string | null } | null>(null);
@@ -64,9 +64,10 @@ export function AddItemDialog({ replace, pairs, initialPlace, placeHint, initial
       if (!isValidName(id)) next.id = 'vault.err.name';
       else if (taken.includes(id)) next.id = 'vault.err.exists';
     }
-    if (ssh ? sshSource === 'file' && !file : !value && !file) next.value = ssh ? 'vault.err.sshValue' : 'vault.err.value';
+    // an SSH key without a picked file is generated in Rust
+    if (!ssh && !value && !file) next.value = 'vault.err.value';
     setErrs(next);
-    if (next.env) envRef.current?.focus();
+    if (next.env) setTimeout(() => envRef.current?.focus(), 40);
     else if (next.id) idRef.current?.focus();
     else if (next.value) valueRef.current?.focus();
     return !next.env && !next.id && !next.value;
@@ -76,7 +77,7 @@ export function AddItemDialog({ replace, pairs, initialPlace, placeHint, initial
     if (running.current || !check()) return;
     const pair = splitEnv(place);
     if (!pair) return;
-    const source: SecretSource = file ? { file_token: file.file_token } : ssh && sshSource === 'gen' ? { generate_ed25519: true } : { typed: value };
+    const source: SecretSource = file ? { file_token: file.file_token } : ssh ? { generate_ed25519: true } : { typed: value };
     running.current = true; setBusy(true);
     try {
       const out = await call('secret_put', { id, kind, project: pair.project, environment: pair.environment, source });
@@ -91,7 +92,7 @@ export function AddItemDialog({ replace, pairs, initialPlace, placeHint, initial
     } catch (e) {
       const r = toIpcError(e).reason;
       const team = teamWriteErrorKey(r);
-      if (team) { setErrs(replace ? { form: team } : { env: team }); envRef.current?.focus(); }
+      if (team) { setErrs(replace ? { form: team } : { env: team }); setTimeout(() => envRef.current?.focus(), 40); }
       else if (r === 'invalid_secret_id') { setErrs({ id: 'vault.err.name' }); idRef.current?.focus(); }
       else if (r === 'secret_identity_mismatch') { setErrs({ id: 'vault.err.exists' }); idRef.current?.focus(); }
       else if (r === 'invalid_secret_value' || r === 'file_token_unknown' || r === 'file_unreadable') {
@@ -110,9 +111,21 @@ export function AddItemDialog({ replace, pairs, initialPlace, placeHint, initial
   }
 
   const clearValueErr = () => setErrs((x) => ({ ...x, value: undefined }));
+  const chooseKind = (k: SecretKind) => { setKind(k); setFile(null); setValue(''); clearValueErr(); };
+  // the place is asked only when there is a choice (or it needs fixing); it is always sent
+  const askPlace = !replace && (pairs.length > 1 || !!errs.env);
+  const fileName = file?.name ?? null;
+  const fileChip = fileName ? (
+    <div className="vault-file">
+      <span className="vault-file-name"><Icon name="file" size={14} />{t('vault.add.file.loaded', { name: fileName })}</span>
+      <Button size="sm" tone="ghost" icon="close" onClick={() => setFile(null)}>{t('vault.add.file.clear')}</Button>
+    </div>
+  ) : null;
+  const moreHint = [askPlace ? t('vault.add.more.place') : null, t('vault.add.more.file')].filter(Boolean).join(', ');
+
   return (
     <Dialog open title={t(replace ? 'vault.replace.title' : 'vault.add.title')} description={t(replace ? 'vault.replace.sub' : 'vault.add.sub')}
-      onClose={onClose} busy={busy} size="md" onSubmit={() => void submit()}
+      onClose={onClose} busy={busy} size="sm" onSubmit={() => void submit()}
       footer={<>
         <Button tone="ghost" onClick={onClose} blocked={busy}>{t('act.cancel')}</Button>
         <Button tone="primary" type="submit" busy={busy}>{t(replace ? 'vault.replace.save' : 'vault.add.save')}</Button>
@@ -125,81 +138,57 @@ export function AddItemDialog({ replace, pairs, initialPlace, placeHint, initial
         ]} />
       ) : (
         <>
-          <div className="field">
-            <div className="field-label"><span id="vault-kind-label">{t('vault.add.kind')}</span></div>
-            <div className="vault-kinds" role="radiogroup" aria-labelledby="vault-kind-label">
-              {KINDS.map((k) => (
-                <button key={k} type="button" role="radio" aria-checked={kind === k} className="vault-kind" tabIndex={kind === k ? 0 : -1}
-                  data-autofocus={kind === k ? '' : undefined}
-                  onClick={() => { setKind(k); setFile(null); setValue(''); clearValueErr(); }}
-                  onKeyDown={(e) => {
-                    const dir = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0;
-                    if (!dir) return;
-                    e.preventDefault();
-                    const next = KINDS[(KINDS.indexOf(kind) + dir + KINDS.length) % KINDS.length]!;
-                    setKind(next); setFile(null); setValue(''); clearValueErr();
-                    (e.currentTarget.parentElement?.querySelector(`[data-kind="${next}"]`) as HTMLElement | null)?.focus();
-                  }} data-kind={k}>
-                  <KindTile kind={k} />
-                  <span className="vault-kind-text">
-                    <strong>{kindLabel(k)}</strong>
-                    <span>{t(`vault.add.kind.${k}` as CopyKey)}</span>
-                  </span>
-                  {kind === k && <Icon name="check" size={14} />}
-                </button>
-              ))}
-            </div>
+          <div className="vault-kind-seg">
+            <Segmented<SecretKind> label={t('vault.add.kind')} value={kind} onChange={chooseKind}
+              options={KINDS.map((k) => ({ value: k, label: kindLabel(k), icon: kindIcon(k) }))} />
           </div>
-          <div className="form-grid">
-            <TextField label={t('vault.add.name')} mono value={id} inputRef={idRef} maxLength={64}
-              placeholder={t(`vault.add.name.ph.${kind}` as CopyKey)} error={errs.id ? t(errs.id) : null} help={t('vault.add.name.help')}
-              onChange={(v) => { setId(v); setErrs((x) => ({ ...x, id: undefined })); }} />
-            <div className="stack-sm">
-              <SelectField label={t('vault.add.place')} value={place} selectRef={envRef} error={errs.env ? t(errs.env) : null}
-                options={pairs.map((p) => ({ value: p.key, label: placeText(p.key) }))}
-                onChange={(v) => { setEnv(v); setErrs((x) => ({ ...x, env: undefined })); }}
-                aside={<button type="button" className="vault-link" onClick={onNewPlace}>{t('vault.place.add')}</button>} />
-            </div>
-          </div>
+          <TextField label={t('vault.add.name')} mono value={id} inputRef={idRef} maxLength={64}
+            placeholder={t(`vault.add.name.ph.${kind}` as CopyKey)} error={errs.id ? t(errs.id) : null}
+            help={errs.id ? undefined : t(`vault.add.kind.${kind}` as CopyKey)}
+            onChange={(v) => { setId(v); setErrs((x) => ({ ...x, id: undefined })); }} data-autofocus="" />
         </>
       )}
 
       {ssh ? (
         <div className="stack-sm">
-          <Segmented label={t('vault.add.ssh.source')} hideLabel={false} value={sshSource}
-            options={[{ value: 'gen', label: t('vault.add.ssh.gen'), icon: 'plus' }, { value: 'file', label: t('vault.add.ssh.file'), icon: 'file' }]}
-            onChange={(v) => { setSshSource(v); setFile(null); clearValueErr(); }} />
-          {sshSource === 'gen'
-            ? <p className="vault-note">{t('vault.add.ssh.gen.help')}</p>
-            : (
-              <div className="vault-file">
-                {file
-                  ? <span className="vault-file-name"><Icon name="file" size={14} />{t('vault.add.file.loaded', { name: file.name })}</span>
-                  : <span className="vault-note">{t('vault.add.ssh.file.help')}</span>}
-                <Button size="sm" tone="secondary" icon="file" onClick={() => void pick()}>{t('vault.add.ssh.pick')}</Button>
-              </div>
-            )}
+          {fileChip ?? (
+            <div className="vault-gen">
+              <Icon name="ssh" size={15} />
+              <span className="grow">{t('vault.add.ssh.gen.help')}</span>
+            </div>
+          )}
           {errs.value && <div className="field-note is-error" role="alert"><Icon name="alert" size={13} />{t(errs.value)}</div>}
         </div>
-      ) : file ? (
+      ) : fileChip ? (
         <div className="field">
           <div className="field-label"><span>{t('vault.add.value')}</span></div>
-          <div className="vault-file">
-            <span className="vault-file-name"><Icon name="file" size={14} />{t('vault.add.file.loaded', { name: file.name })}</span>
-            <Button size="sm" tone="ghost" icon="close" onClick={() => setFile(null)}>{t('vault.add.file.clear')}</Button>
-          </div>
+          {fileChip}
         </div>
       ) : (
-        <div className="stack-sm">
-          <PassField label={t('vault.add.value')} autoComplete="off" value={value} inputRef={valueRef} mono placeholder={t('vault.add.value.ph')}
-            error={errs.value ? t(errs.value) : null} onChange={(v) => { setValue(v); clearValueErr(); }}
-            data-autofocus={replace ? '' : undefined} />
-          <div><Button size="sm" tone="quiet" icon="file" onClick={() => void pick()}>{t('vault.add.file')}</Button></div>
-        </div>
+        <PassField label={t('vault.add.value')} autoComplete="off" value={value} inputRef={valueRef} mono placeholder={t('vault.add.value.ph')}
+          error={errs.value ? t(errs.value) : null} onChange={(v) => { setValue(v); clearValueErr(); }}
+          data-autofocus={replace ? '' : undefined} />
       )}
 
       {errs.form && <Banner tone="danger">{t(errs.form)}</Banner>}
-      <Banner tone={replace ? 'info' : 'neutral'} compact>{t(replace ? 'vault.provider.note' : 'vault.add.sameAccount')}</Banner>
+      {replace && <Banner tone="info" compact>{t('vault.provider.note')}</Banner>}
+
+      <More hint={replace ? t('vault.add.more.file') : moreHint} open={!!errs.env}>
+        {askPlace && (
+          <SelectField label={t('vault.add.place')} value={place} selectRef={envRef} error={errs.env ? t(errs.env) : null}
+            options={pairs.map((p) => ({ value: p.key, label: placeText(p.key) }))}
+            onChange={(v) => { setEnv(v); setErrs((x) => ({ ...x, env: undefined })); }}
+            aside={<button type="button" className="vault-link" onClick={onNewPlace}>{t('vault.place.add')}</button>} />
+        )}
+        {!replace && !askPlace && (
+          <div className="row"><span className="vault-note grow">{t('vault.add.place')} · {placeText(place)}</span>
+            <button type="button" className="vault-link" onClick={onNewPlace}>{t('vault.place.add')}</button></div>
+        )}
+        {!fileChip && (
+          <div><Button size="sm" tone="secondary" icon="file" onClick={() => void pick()}>{t(ssh ? 'vault.add.ssh.useFile' : 'vault.add.file')}</Button></div>
+        )}
+        <p className="vault-note">{t('vault.add.sameAccount')}</p>
+      </More>
     </Dialog>
   );
 }

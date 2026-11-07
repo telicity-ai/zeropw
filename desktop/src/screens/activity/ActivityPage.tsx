@@ -76,7 +76,7 @@ export function ActivityPage({ intent }: { intent?: Intent }) {
   const closing = dialog?.kind === 'close' ? dialog.incident : null;
 
   return (
-    <div className="page">
+    <div className="page activity-page">
       <div className="pane">
         <PaneHeader title={t('activity.title')} actions={<>
           <Segmented<ActivityTab> label={t('activity.tabs')} value={tab} onChange={setTab} size="sm"
@@ -142,6 +142,7 @@ export function ActivityPage({ intent }: { intent?: Intent }) {
 
 function RecordItem({ shown, alert }: { shown: Shown; alert: boolean }) {
   const v = shown.view;
+  const [open, setOpen] = useState(false);
   return (
     <li className={'rec' + (alert ? ' is-alert' : '')}>
       <span className="rec-icon" aria-hidden="true"><Icon name={shown.conflict ? 'conflict' : alert ? 'alert' : 'dot'} size={alert ? 14 : 10} /></span>
@@ -152,7 +153,14 @@ function RecordItem({ shown, alert }: { shown: Shown; alert: boolean }) {
           <time className="rec-time num" dateTime={v.ts}>{shortTime(v.ts)}</time>
         </div>
         {v.meta.length > 0 && <div className="rec-meta">{v.meta.map((m, i) => <span key={i}>{m}</span>)}</div>}
-        {v.raw.length > 0 && <div className="rec-raw mono" data-selectable="">{v.raw.join('  ')}</div>}
+        {v.raw.length > 0 && (
+          <>
+            <button type="button" className="rec-more" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+              <Icon name="chevron-right" size={11} />{t(open ? 'activity.raw.hide' : 'activity.raw.show')}
+            </button>
+            {open && <div className="rec-raw mono" data-selectable="">{v.raw.join('  ')}</div>}
+          </>
+        )}
       </div>
     </li>
   );
