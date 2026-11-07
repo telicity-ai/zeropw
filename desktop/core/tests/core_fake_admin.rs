@@ -1638,3 +1638,58 @@ fn app_status_before_init_does_not_run_the_cli() {
     assert!(fx.calls().is_empty());
     let _ = ok(core.recovery_generate());
 }
+
+#[test]
+fn secret_delete_requires_reauthentication_in_envelope_and_returns_only_metadata() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    fx.respond(
+        "secret_delete",
+        r#"{"secret_id":"api","status":"deleted","permanent_id":true,"provider_revocation_required":true,"sync_status":"pending"}"#,
+    );
+    let out = core
+        .secret_delete(SecretDeleteIn {
+            id: "api".into(),
+            admin_passphrase: pass(),
+        })
+        .unwrap();
+    assert_eq!(out["status"], "deleted");
+    assert_eq!(
+        fx.last("secret_delete").args(),
+        ["secret", "delete", "--id=api"]
+    );
+    assert_eq!(
+        out,
+        json!({"secret_id":"api","status":"deleted","permanent_id":true,"provider_revocation_required":true,"sync_status":"pending"})
+    );
+    assert_eq!(
+        fx.last("secret_delete").stdin_json(),
+        json!({"admin_passphrase":ADMIN_PASS})
+    );
+    assert!(!out.to_string().contains(ADMIN_PASS));
+    assert_argv_clean(&fx, &[ADMIN_PASS]);
+    let before = fx.calls().len();
+    assert!(
+        core.secret_delete(SecretDeleteIn {
+            id: "api".into(),
+            admin_passphrase: SecretString::from("")
+        })
+        .is_err()
+    );
+    assert_eq!(fx.calls().len(), before);
+}
+
+#[test]
+fn secret_delete_rejects_unknown_fields_without_echoing_them() {
+    let parsed = serde_json::from_value::<SecretDeleteIn>(json!({
+        "id":"api", "admin_passphrase":ADMIN_PASS, "value":"synthetic-extra-secret"
+    }));
+    assert!(parsed.is_err());
+    assert!(
+        !parsed
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("synthetic-extra-secret")
+    );
+}

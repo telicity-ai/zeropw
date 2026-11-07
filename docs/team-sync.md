@@ -245,6 +245,13 @@ The rejecting node records the signed, peer-held removal in `team status` under 
 
 Local `secret.put_version` commits must use the current DEK generation, including after ordinary admin removal. Pending removal repair and generation validation are serialized with the local state transaction. Received historical commits may still contain versions encrypted under an older known generation; they retain their signed history and are not reencrypted. This does not give a removed device new signing or membership authority, and it is not an immediate global revocation guarantee for offline peers.
 
+M1 adds the administrator-only `secret_deleted` fact with target `{secret_id}`.
+It permanently denies every version of that identity, including concurrent and
+unseen versions, independently of commit vectors and local snapshot caches.
+`secret delete --id` requires human reauthentication; recreate under a different
+ID. See [the deletion ledger, backup and session agreement contract](whole-secret-deletion.md).
+This is separate from provider-side revocation and M2 authenticated snapshots.
+
 ## 8. Local grants and roles
 
 Owners/admins edit connections/secrets and invite/manage non-owner members. Only the owner transfers ownership; the owner cannot be removed. A member can remove its own non-owner device. Every member can create/revoke local caller grants, authorize local risky requests and view sanitized environment/history. Only admins receive incident summaries.

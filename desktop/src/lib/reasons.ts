@@ -59,7 +59,8 @@ export function sshProgramError(reason: string): { field: CopyKey } | { form: Co
  *  team's key is replaced (`team_rekey_pending`; rust/src/team/membership.rs `author_commit`).
  *  The line goes under the environment; null for anything else. */
 export function teamWriteErrorKey(reason: string): CopyKey | null {
-  if (reason === 'not_admin' || reason === 'member_removed') return 'team.err.adminOnly';
+  if (reason === 'not_admin' || reason === 'member_removed' || reason === 'team_fact_not_authorized' || reason === 'team_admin_required') return 'team.err.adminOnly';
+  if (reason === 'secret_deleted') return 'vault.delete.warn';
   if (reason === 'team_rekey_pending') return 'imp.err.rekey';
   return null;
 }

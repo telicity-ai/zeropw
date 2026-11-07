@@ -168,6 +168,17 @@ meaningful failure-boundary tests, isolated Linux/macOS verification and an actu
 Opus review of its exact head. Keep this milestone open while either platform or
 review evidence is missing.
 
+### M1 integration status, 2026-11-07
+
+The cumulative M1 implementation from `8258a8d` is now ported onto coordinator
+`44e898d` and its current Personal Vault UI. The local integration begins at
+`d93e994`; follow-up fixes and exact-source validation are recorded in the
+separate `m1-personal-vault-integration-20261107` evidence. The
+[deletion contract](whole-secret-deletion.md) describes the stable-ID action,
+local durability and pending other devices. The original native pairing failures
+remain preserved. This source integration is not platform acceptance or an Opus
+review. M1 acceptance and all M2/M2a gates remain open.
+
 ## M2: Authenticated snapshot onboarding after compaction
 
 The separate [M2a schema decision](decisions/m2a-schema-2026-11-07/decision.md)

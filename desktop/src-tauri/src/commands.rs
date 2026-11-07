@@ -223,6 +223,13 @@ pub async fn secret_reveal(shell: State<'_, Shell>, request: Request<'_>) -> Out
 }
 
 #[tauri::command(rename_all = "snake_case")]
+pub async fn secret_delete(shell: State<'_, Shell>, request: Request<'_>) -> Out<Value> {
+    let input: SecretDeleteIn = input(&request)?;
+    let core = core(&shell);
+    blocking(move || core.secret_delete(input)).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
 pub async fn secret_retire(shell: State<'_, Shell>, request: Request<'_>) -> Out<Value> {
     let input: SecretVersionIn = input(&request)?;
     let core = core(&shell);
@@ -799,6 +806,7 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         secret_versions,
         secret_put,
         secret_reveal,
+        secret_delete,
         secret_retire,
         secret_revoke,
         connection_list,

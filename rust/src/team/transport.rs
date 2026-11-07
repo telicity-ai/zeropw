@@ -1376,6 +1376,69 @@ mod unix_channel_tests {
         }
     }
 
+    #[test]
+    fn m1_pending_requires_receiving_the_authenticated_frame_before_send_failure() {
+        use hmac::{Hmac, Mac};
+        fn proof(hash: &[u8]) -> Vec<u8> {
+            let mut mac = Hmac::<Sha256>::new_from_slice(b"synthetic-invitation-proof").unwrap();
+            mac.update(hash);
+            mac.finalize().into_bytes().to_vec()
+        }
+        for delay_until_closed in [false, true] {
+            let (left, right) = UnixStream::pair().unwrap();
+            let membership: MembershipCheck = Arc::new(|_, _| None);
+            let check: InviteCheck = Arc::new(|_, _, hash, candidate| {
+                if candidate == proof(hash) {
+                    InviteDecision::Pending
+                } else {
+                    InviteDecision::Reject
+                }
+            });
+            let responder_membership = membership.clone();
+            let responder = thread::spawn(move || {
+                respond(
+                    socket_channel(right).unwrap(),
+                    &DeviceKey::generate(),
+                    &responder_membership,
+                    Some(&check),
+                )
+                .err()
+                .expect("approval is still required")
+                .reason
+            });
+            let make_proof: InviteProof = Arc::new(proof);
+            let env_id =
+                super::super::commit::new_env_id(&DeviceKey::generate().fingerprint().unwrap())
+                    .unwrap();
+            let session = initiate(
+                socket_channel(left).unwrap(),
+                &DeviceKey::generate(),
+                &env_id,
+                &membership,
+                Some(&make_proof),
+            )
+            .unwrap();
+            if delay_until_closed {
+                // Hold adoption/CAPS until the real responder finishes its
+                // bounded linger. The valid notification is queued, not read.
+                assert_eq!(responder.join().unwrap(), JOIN_PENDING_REASON);
+                let error = session
+                    .send(&json!({"type":"SYNC_CAPS","v":1,"features":[super::super::tombstone_gate::FEATURE]}))
+                    .expect_err("closed peer cannot accept CAPS");
+                assert_eq!(error.reason, "send_failed");
+                assert!(session.is_closed());
+                assert!(session.recv(Duration::from_secs(1)).is_err());
+            } else {
+                assert_eq!(
+                    session.recv(Duration::from_secs(1)).unwrap().unwrap()["type"],
+                    JOIN_PENDING_TYPE
+                );
+                session.close();
+                assert_eq!(responder.join().unwrap(), JOIN_PENDING_REASON);
+            }
+        }
+    }
+
     /// The link daemon's Unix stream gets the TCP channel's framing, frame
     /// limit and absolute deadlines (docs/remote-sync.md §3.1).
     #[test]

@@ -139,7 +139,9 @@ describe('a key or a connection in a team environment', () => {
   // refusal (not_admin) showed only the generic error
   it('says only an admin device can add there, for every refusal of the device standing in the team', async () => {
     expect(STANDING).toEqual(expect.arrayContaining(['not_admin', 'member_removed']));
-    for (const reason of STANDING) expect(teamWriteErrorKey(reason), reason).toBe('team.err.adminOnly');
+    for (const reason of STANDING.filter((r) => r !== 'secret_deleted')) expect(teamWriteErrorKey(reason), reason).toBe('team.err.adminOnly');
+    expect(teamWriteErrorKey('secret_deleted')).toBe('vault.delete.warn');
+    expect(teamWriteErrorKey('team_fact_not_authorized')).toBe('team.err.adminOnly');
     expect(COPY['team.err.adminOnly']).toContain('관리자 기기만');
     backend = createMockBackend({ latency: 0, initialized: true });
     useMockBackend(backend);
