@@ -11,10 +11,11 @@ a dated evidence record, not a change to the acceptance requirements. The
 | Pre-fix ZeroPW source compared | `1f60bc2a3f2b91fa691dfa9f79c81bfb131aabe1` on `feature/remote-sync-mlp`; comparison revision before this documentation update |
 | ZeroPW product source tested | `41d217f26a030042c9f0b1caac9417715470c0e1`; its Rust tree `f2c67647fcba83ae78dd6fd10418b6f42a58a6f8` is byte-identical to the compared revision's Rust tree |
 | New Rust fix awaiting full verification | `d77ce9ed7170f9e2689bc1ecf5244aa9602cc587`; Rust tree `181f99ddbffedb3b7f5c158d7484afca37be8a8a`, different from the earlier passing Linux tree |
-| Current link fixes and sidecar pin | `858ddc07007eedaa978bdbb9ecafeebb7f332668`; committed `desktop/zeropw-link.json` pins this commit. The earlier desktop checks and final-pin packaging checks are distinguished below |
+| Current link fixes and sidecar pin | ACL fix `f544478a48cea66be816efbed50967bafcacc8ac`; working `desktop/zeropw-link.json` now pins it. Native product regression and post-fix Opus acceptance are pending. Earlier packaging/E2E checks use `858ddc`, not this pin |
+| Link README follow-up | `ca01275c60037b2e008714e646c79a57aa6c1462` changes only the root README after `f544478` |
 | E2E fixture/evidence | Earlier fixture/evidence commit `28abd9a450d8328424db5334443f1dd4bbd5cc24`; final `858ddc` run evidence is committed under `docs/evidence/remote-sync-e2e-2026-11-07-858ddc/` at the compared revision. Both runs use CLI source `41d217f26a030042c9f0b1caac9417715470c0e1` |
 | Link publication | Private [telicity-ai/zeropw-link](https://github.com/telicity-ai/zeropw-link), [draft PR #1](https://github.com/telicity-ai/zeropw-link/pull/1); not merged or release accepted |
-| Link initial review input | `bcdaaecd569a71bf4df07c738869e1e0c7a577e1`; fix commits `cc733dcacf9f1c170dcb7469d7d258b368726ed7` and `858ddc07007eedaa978bdbb9ecafeebb7f332668` are outside that review |
+| Link initial review input | `bcdaaecd569a71bf4df07c738869e1e0c7a577e1`; later fix commits `cc733dc`, `858ddc` and `f544478` are outside that review |
 | Earlier implementation workers | Actual `claude-opus-5-5`; these were not Sol executions |
 | Current local coordinator and fix work | Actual `gpt-6.1-sol`; session-based coordination, not an always-on cloud service |
 | Current real-network E2E worker | Actual `gpt-6.1-sol` |
@@ -45,12 +46,15 @@ it does not establish working native macOS delivery or a deployed service.
 | Earlier deployment lab | Isolated Ubuntu 24.04 arm64 VM and systemd-nspawn test containers; `deploy/` logs; source-specific reports in `zeropw-link/docs/operations.md` | Historical installation/coturn evidence only; neither an OCI deployment nor validation of the committed review fixes |
 | Link review-fix tests | Isolated Linux job, fixes committed as `cc733dc`; `zl-review-fixes-10.log`, coordinator recorded process exit 0 | PASS: `go vet`, full Go suite, server/daemon race tests and shell lint (18 scripts). Historical full-run failures remain recorded below |
 | Revoked-orphan follow-up | Link `858ddc`, isolated Linux; `zl-review-orphan-revoked-retry.log` | PASS: `go vet`, full Go suite and server/daemon race tests, including `TestRevokedOrphanRotatesKeyAfterRestart`. Initial `zl-review-orphan-revoked.log` failed from disk exhaustion; retained |
+| Link state-ACL fix Linux verification | `f544478`, isolated Linux; `zl-acl-fix-linux-private-tmp.log`, exit 0 | PASS: vet, full Go suite, server/daemon race tests and `CGO_ENABLED=0` Darwin arm64 test cross-compilation. This is not native product acceptance |
+| macOS ACL platform API probe | `macos/acl-chmod-fd-api-probe.log`, OS-only experiment | Mode 0700/0600 directory/file remained readable by `nobody` before ACL removal; checked-descriptor `/bin/chmod -N` returned 0 for both and access was denied afterward. Not a native product regression pass |
 | Deployment unit suite | Root job inside isolated Linux VM; `zl-review-deploy-unit.log` | PASS: 106 passed, 0 failed |
 | Fixed coturn build | Isolated Linux VM; `zl-review-coturn-build.log`, process exit 0 | PASS: pinned coturn 4.18.0 source build under a unique build UID and non-root probes. Installed only at `/opt/zeropw-coturn-review-cc733dc`; not deployed to OCI |
 | Darwin cross-build | Linux; `zl-review-darwin-crossbuild.log`, process exit 0, link `cc733dc`; latest retry `zl-review-darwin-858ddc-crossbuild.log` | PASS for both `cc733dc` and final `858ddc`: arm64 and amd64 Mach-O binaries produced. No native macOS runtime test |
 | Desktop packaging tooling | Linux with fixtures, `desktop/package-cc733dc.log`; latest retry `desktop/package-858ddc.log` | PASS for both `cc733dc` and final `858ddc` pin: 61 Python tests per run. Not real macOS packaging or a signed/released app |
+| ACL-fix sidecar pin packaging | Isolated Linux, `desktop/package-f544478.log` | PASS: 61 tests for the `f544478` pin; still fixture-based tooling, not native app packaging |
 | Frozen-source native macOS Rust verification | Isolated Tart macOS 26.6.2 arm64 VM, synthetic-only, no host-directory mounts; Rust 1.98.1; frozen `1f60bc2`, `macos/rust-verify-1f60bc2.log` | IN PROGRESS WITH FAILURES: fmt and strict Clippy passed; library 662 passed, 2 failed, 4 ignored. Full matrix continues; no overall PASS |
-| New Rust fix verification | `d77ce9e`, tree `181f99ddbffedb3b7f5c158d7484afca37be8a8a` | Linux strict all-target Clippy PASS; focused team tests in progress. New complete Linux/macOS verification pending; earlier source results do not cover this tree |
+| New Rust fix verification | `d77ce9e`, tree `181f99ddbffedb3b7f5c158d7484afca37be8a8a` | Linux strict all-target Clippy and 244 focused team tests PASS. After strengthening one assertion, full Linux matrix `integ/rust-verify-d77ce9e-linux.log` is IN PROGRESS; no overall PASS. New complete macOS verification pending; earlier source results do not cover this tree |
 | Native Go verification | Same isolated Tart VM, Go 1.27.3, unchanged link `858ddc`; delegated to `real_sync_e2e` | IN PROGRESS; no final result recorded. VM execution is not two physical Macs |
 | Two physical Macs | Two-device test environment unavailable | NOTRUN |
 | 200-device/24-hour capacity, reconnect target and combined 1 GB VM budget | No completed current-source measurements | NOTRUN; no 100-user capacity claim |
@@ -107,8 +111,9 @@ and safe `rustix` `net`/`DONTWAIT` reads for replies and frames, preserving
 deadlines, size limits and cancellation. It adds raw buffered reply/frame, EOF
 and truncation assertions for a closed peer. It enables the `net` feature on
 existing `rustix`, without adding a new dependency. The fix is implemented;
-Linux strict all-target Clippy passed, focused team tests are in progress, and
-new full Linux/macOS verification remains pending. Neither the earlier Linux
+Linux strict all-target Clippy and 244 focused team tests passed. After one
+assertion was strengthened, the full Linux matrix started and remains in progress;
+new full macOS verification is pending. Neither the earlier Linux
 PASS nor the E2E run using the earlier Rust binary is acceptance of the new tree.
 
 ## Product gaps and unverified boundaries
@@ -144,7 +149,7 @@ confirm the original findings; they are not post-fix acceptance.
 | ZPLINK-OPUS-03 | low | Lost enrollment response leaves an orphan device and a stuck local identity | FIX IMPLEMENTED/TESTED at `858ddc`, including revoked-orphan recovery after restart; post-fix Opus acceptance pending |
 | ZPL-SEC-01 | low | Socket client sends invite/link tokens without checking server peer UID | FIX IMPLEMENTED/TESTED at `cc733dc`; post-fix Opus acceptance pending |
 | ZPL-SEC-02 | low | Service-CA ownership/path checks and separate stat/read permit trust substitution | FIX IMPLEMENTED/TESTED at `cc733dc`; post-fix Opus acceptance pending |
-| ZPL-SEC-03 | low | macOS inherited ACLs can bypass mode-only state privacy checks | OPEN: native macOS fix/test evidence unavailable |
+| ZPL-SEC-03 | low | macOS inherited ACLs can bypass mode-only state privacy checks | OPEN: fix committed at `f544478`, Linux checks and OS-only API probe passed; native product regression and Opus acceptance pending |
 | ZPL-SEC-04 | low | Root executes coturn build output writable by shared `nobody` UID | FIX IMPLEMENTED/TESTED at `cc733dc`; post-fix Opus acceptance pending |
 | DOS-1 | high (partial output) | No pre-HTTP global/per-client connection cap at `internal/server/server.go:343` | Cap implemented/tested at `cc733dc`; original full review and post-fix acceptance remain INCOMPLETE |
 | Deployment/operations scope | No verdict returned | Reviewer did not finish | INCOMPLETE |
@@ -167,6 +172,28 @@ it at startup so the next enrollment rotates the key after restart.
 passed with the full Go suite and race tests in
 `zl-review-orphan-revoked-retry.log`. The initial disk-full attempt is retained.
 These implementation/test claims do not replace post-fix Opus review.
+
+The state-ACL fix at `f544478a48cea66be816efbed50967bafcacc8ac` clears the
+checked private state directory's ACL before creating an identity, and clears
+file ACLs before reads/writes. It uses the fixed `/bin/chmod` path, a sanitized
+non-secret environment, only the checked descriptor as fd 3, a two-second
+deadline and fail-closed errors. It does not modify a custom CA or ancestor
+directories. Protection against ACLs on custom-CA files/ancestors remains
+**NOT VERIFIED**; this is a coordinator self-assessment, not a new external
+Opus finding. ZPL-SEC-03 remains open until native product regression and Opus
+acceptance, regardless of the successful OS-only API probe.
+
+The first Linux ACL-fix attempt (`zl-acl-fix-linux.log`) failed CA ancestry checks
+because the wrapper's `TMPDIR` had mode 0775. The isolated test environment was
+corrected to 0700; the checks were not weakened. The subsequent
+`zl-acl-fix-linux-private-tmp.log` completed with exit 0. Both logs are retained.
+
+To avoid another Linux VM disk-full interruption, only the inactive MLP build
+cache `rust-pairing-verify/target` was reclaimed. Its five normal product binaries
+were first moved to `preserved-product-bins` and their SHA values recorded;
+sources, logs and prior E2E inputs were preserved. Evidence is
+`linux-cache-reclaim-20261107.log`; about 11 GB was free afterward. This cleanup
+is environment maintenance, not test success or a change to acceptance criteria.
 
 The network review's raw `StructuredOutput` input ends mid-sentence; the archive
 preserves that input without reconstructing the missing text. Its mixed-model log
@@ -222,13 +249,31 @@ HTTPS/TURN reachability and complete cloud/host firewall acceptance remain
 incomplete. DNS, NSG attachment and a certificate are infrastructure evidence,
 not evidence that the named host is a working ZeroPW endpoint.
 
+## Latest verification still running
+
+`integ/rust-verify-d77ce9e-linux.log` is the full Linux matrix for the changed
+Rust reader tree. `integ/admin-build-d77ce9e.log` records a successful locked
+build of its real admin binary. `e2e/run-11-d77-f544.log` is a new real-network
+run combining that binary with link `f544478`; it is still in progress and is
+not included in the earlier 66/66 PASS claims. Native verification is likewise
+in progress. Completion must be reconciled from final exit markers and logs.
+
+To make room for new verification, inactive MLP jobs `integ-dverify`,
+`integ-desktop` and `desktop-core` had their normal product executables moved to
+each job's `preserved-product-bins` with SHA-256 records before their remaining
+compiled target caches were removed. Sources, logs, prior E2E inputs and the
+active verification target were preserved. This separate reclamation is logged
+in `linux-cache-reclaim-m1-capacity-20261107.log`; the VM then had about 18 GiB
+free. It is not a product test or resource-capacity result.
+
 ## Remaining acceptance work
 
-Earlier Linux Rust verification, final-link real-network E2E, cross-build and
+Earlier Linux Rust verification, `858ddc` real-network E2E, cross-build and
 packaging tooling checks retain their source-specific evidence above. Finish
 the failed frozen native matrix and complete new Linux/macOS verification for
-`d77ce9e`, plus affected real-network checks of the new Rust binary. Obtain post-fix
-Opus acceptance at the committed link head
+`d77ce9e`, plus affected real-network checks of the new Rust binary. Run affected
+packaging/E2E checks for the new link pin `f544478`, and obtain post-fix Opus
+acceptance at the committed link head
 without changing the original severities; complete the network and operations
 review scopes; implement/verify initial snapshots and whole-secret deletion;
 obtain isolated macOS and two-Mac evidence, including ACL protection; then validate

@@ -1,7 +1,7 @@
 {
   "module": "github.com/telicity-ai/zeropw-link",
-  "commit": "858ddc07007eedaa978bdbb9ecafeebb7f332668",
+  "commit": "f544478a48cea66be816efbed50967bafcacc8ac",
   "go": "go1.27.3",
   "macos_minimum": "13.0",
-  "note": "The zeropw-link daemon the app bundles (desktop/scripts/build-link-sidecar.py). This pins the 2026-11-07 initial review fixes; post-fix Opus review and native macOS verification remain pending. Go 1.27 builds for macOS 13 or later."
+  "note": "The zeropw-link daemon the app bundles (desktop/scripts/build-link-sidecar.py). This pins the 2026-11-07 enrollment, transport-boundary and macOS state ACL fixes. Native verification and post-fix Opus review remain pending. Go 1.27 builds for macOS 13 or later."
 }
