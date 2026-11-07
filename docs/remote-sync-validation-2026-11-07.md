@@ -4,6 +4,15 @@ Status: **incomplete; no release acceptance and no aggregate Opus PASS**. This i
 a dated evidence record, not a change to the acceptance requirements. The
 [TURN checklist](remote-sync-turn-checklist.md) keeps its completion gates open.
 
+The new actual Opus5.5 review of frozen link3eb9727 was interrupted by provider
+safeguards after static reading and169-file integrity verification. The offered
+automatic4.8 switch was declined under the existing model instructions. Only an
+unfinished report exists, with no report.json or normal completion; its partial
+REVISE heading is **not an accepted new verdict**.
+[Unchanged partial output and interruption record](evidence/2026-11-07-link-3eb-review-interrupted/README.md).
+The last completed ca01275 REVISE, original findings and severities remain.
+No safeguard retry, substitute review, release or product deployment is claimed.
+
 Bounded M2a source `7bcecfda8571ae40047fae406915f73d2e25bde0` is now
 collected as three implementation commits through coordinator `74bb09a`, with
 the same Rust tree `24fceecbec4b559aa8d1e31331ef5be0033ca2fa`. This adds
