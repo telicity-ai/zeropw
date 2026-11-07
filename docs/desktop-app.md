@@ -278,6 +278,8 @@ SSH 연결을 만들거나 "ssh 경로 넣기"에서 경로를 넣을 때 코어
 9. 같은 macOS 계정에서 도는 프로그램은 개발용 KMS 키 파일을 읽을 수 있다. 이 사실을 금고 만들기 화면과 에이전트 실행 위치 선택에서 알린다. 실제 격리(신뢰 프로세스를 별도 계정의 데몬으로 실행)는 후속 이슈 [#21](https://github.com/telicity-ai/zeropw/issues/21)에서 다룬다.
 10. 창은 파일을 끌어다 놓을 수 있다(`dragDropEnabled`). 놓인 경로는 셸이 코어로 넘기고, 코어는 일반 파일 하나만 막히지 않게 열어 읽는다(FIFO·장치 파일은 거절). 파일 내용은 웹뷰로 가지 않고, 앱 코드는 경로도 받지 않는다. 다만 Tauri가 자체 끌기 이벤트(`tauri://drag-*`)에 경로를 담아 그 이벤트를 듣는 페이지 리스너에 보내므로, 페이지에서 도는 스크립트가 리스너를 달면 경로를 알 수 있다(`core:default`가 이벤트 듣기를 허락한다). 앱 소스에는 그런 리스너가 없다(`scripts/check-static.mjs`가 막는다). Tauri가 놓인 경로에 넓히는 범위는 `protocol-asset` 기능이 꺼져 있어 아무것도 허락하지 않는다(`scripts/check-tauri.mjs`가 `cargo metadata`로 tauri에 실제로 켜진 기능을 본다).
 
+11. 창은 투명하고(`transparent: true`) macOS에서 사이드바 비브런시(`windowEffects: sidebar`, 늘 활성 상태)를 쓴다(2026-11-07 디자인 요청). Tauri 2.12.1에서 투명 창은 `macos-private-api` 기능 없이도 켜지며(그 기능은 2.12.1부터 아무 일도 하지 않는다), wry가 WKWebView의 비공개 키 `drawsBackground`를 끈다. tauri 의존성의 기능 목록은 그대로 비어 있고 `protocol-asset` 검사도 그대로다. 비브런시가 없는 곳(Linux, 개발용 브라우저)에서는 페이지가 불투명한 회색 바탕을 그린다. 창 내용 보호 요청(§8.8)은 이와 상관없이 같다.
+
 ## 9. 빌드·시험·CI
 
 - 배치: `desktop/`에 별도 Cargo 워크스페이스(`core`, `src-tauri`)와 `package.json`. 루트 워크스페이스는 만들지 않으며 `rust/`의 빌드와 `rust/verify.sh`는 그대로다.
