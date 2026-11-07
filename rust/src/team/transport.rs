@@ -4,6 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs};
+use std::os::fd::AsFd;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
@@ -394,11 +395,10 @@ fn queue_pair() -> (Arc<dyn ByteChannel>, Arc<dyn ByteChannel>) {
 /// or the Unix stream the zeropw-link daemon passes the peer's bytes over.
 /// Both get the same frame limit, absolute read deadlines, write timeout and
 /// wire capture.
-pub(crate) trait StreamSocket: Read + Write + Send + Sync + Sized + 'static {
+pub(crate) trait StreamSocket: AsFd + Read + Write + Send + Sync + Sized + 'static {
     /// [`Session::transport_kind`] of the sessions this socket carries.
     const KIND: &'static str;
     fn duplicate(&self) -> std::io::Result<Self>;
-    fn set_read_limit(&self, timeout: Option<Duration>) -> std::io::Result<()>;
     fn set_write_limit(&self, timeout: Option<Duration>) -> std::io::Result<()>;
     fn shut_down(&self);
     /// Socket options set once when the channel is made.
@@ -408,9 +408,6 @@ impl StreamSocket for TcpStream {
     const KIND: &'static str = TCP_TRANSPORT_KIND;
     fn duplicate(&self) -> std::io::Result<Self> {
         self.try_clone()
-    }
-    fn set_read_limit(&self, timeout: Option<Duration>) -> std::io::Result<()> {
-        self.set_read_timeout(timeout)
     }
     fn set_write_limit(&self, timeout: Option<Duration>) -> std::io::Result<()> {
         self.set_write_timeout(timeout)
@@ -428,9 +425,6 @@ impl StreamSocket for UnixStream {
     const KIND: &'static str = LINK_TRANSPORT_KIND;
     fn duplicate(&self) -> std::io::Result<Self> {
         self.try_clone()
-    }
-    fn set_read_limit(&self, timeout: Option<Duration>) -> std::io::Result<()> {
-        self.set_read_timeout(timeout)
     }
     fn set_write_limit(&self, timeout: Option<Duration>) -> std::io::Result<()> {
         self.set_write_timeout(timeout)
@@ -472,6 +466,8 @@ enum SocketReadError {
 
 /// Enforce one absolute deadline for an entire frame segment. `read_exact`
 /// with SO_RCVTIMEO would restart the timeout after every slow-dripped byte.
+/// Poll plus nonblocking recv also drains buffered Unix-stream data after
+/// a Darwin peer closes, when changing SO_RCVTIMEO returns EINVAL.
 fn read_exact_until<S: StreamSocket>(
     stream: &mut S,
     mut target: &mut [u8],
@@ -482,23 +478,23 @@ fn read_exact_until<S: StreamSocket>(
             .checked_duration_since(Instant::now())
             .filter(|d| !d.is_zero())
             .ok_or(SocketReadError::Timeout)?;
-        stream
-            .set_read_limit(Some(
-                remaining.min(Duration::from_secs(SOCKET_OP_TIMEOUT_SECONDS)),
-            ))
-            .map_err(|_| SocketReadError::Failed)?;
-        match stream.read(target) {
-            Ok(0) => return Err(SocketReadError::PeerClosed),
-            Ok(n) => target = &mut target[n..],
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-                ) =>
-            {
-                return Err(SocketReadError::Timeout);
-            }
+        let timeout = rustix::event::Timespec::try_from(
+            remaining.min(Duration::from_secs(SOCKET_OP_TIMEOUT_SECONDS)),
+        )
+        .map_err(|_| SocketReadError::Failed)?;
+        let mut ready = [rustix::event::PollFd::new(
+            &*stream,
+            rustix::event::PollFlags::IN,
+        )];
+        match rustix::event::poll(&mut ready, Some(&timeout)) {
+            Ok(0) | Err(rustix::io::Errno::INTR) => continue,
+            Ok(_) => {}
+            Err(_) => return Err(SocketReadError::Failed),
+        }
+        match rustix::net::recv(&*stream, &mut *target, rustix::net::RecvFlags::DONTWAIT) {
+            Ok((0, _)) => return Err(SocketReadError::PeerClosed),
+            Ok((n, _)) => target = &mut target[n..],
+            Err(rustix::io::Errno::INTR | rustix::io::Errno::AGAIN) => {}
             Err(_) => return Err(SocketReadError::Failed),
         }
     }
@@ -1258,6 +1254,36 @@ mod deadline_tests {
 #[cfg(test)]
 mod unix_channel_tests {
     use super::*;
+
+    #[test]
+    fn a_buffered_frame_survives_peer_close_and_truncation_still_fails() {
+        for payload in [b"synthetic-frame".as_slice(), b"".as_slice()] {
+            let (mut raw, reader) = UnixStream::pair().unwrap();
+            raw.write_all(&(payload.len() as u32).to_be_bytes())
+                .unwrap();
+            raw.write_all(payload).unwrap();
+            drop(raw);
+            let channel = socket_channel(reader).unwrap();
+            assert_eq!(
+                channel.recv(Duration::from_secs(1)),
+                Ok(Some(payload.into()))
+            );
+            assert_eq!(
+                channel.recv(Duration::from_secs(1)),
+                Err(SessionClosed("peer_closed"))
+            );
+        }
+        for bytes in [b"\x00\x00".as_slice(), b"\x00\x00\x00\x04abc".as_slice()] {
+            let (mut raw, reader) = UnixStream::pair().unwrap();
+            raw.write_all(bytes).unwrap();
+            drop(raw);
+            let channel = socket_channel(reader).unwrap();
+            assert_eq!(
+                channel.recv(Duration::from_secs(1)),
+                Err(SessionClosed("peer_closed"))
+            );
+        }
+    }
 
     /// The link daemon's Unix stream gets the TCP channel's framing, frame
     /// limit and absolute deadlines (docs/remote-sync.md §3.1).

@@ -42,7 +42,7 @@ punycode = "=0.4.1"
 nix = { version = "0.30.1", features = ["process", "user"] }
 openssl = "0.10"
 close_fds = "=0.3.2"
-rustix = { version = "1", features = ["process", "fs", "termios", "system", "event"] }
+rustix = { version = "1", features = ["process", "fs", "termios", "system", "event", "net"] }
 tempfile = "3"
 regex = "1"
 percent-encoding = "2"

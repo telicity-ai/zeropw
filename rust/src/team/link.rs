@@ -22,7 +22,7 @@
 //! returned.
 
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -224,11 +224,27 @@ fn read_reply_line(
         {
             return Err(SessionClosed(LINK_UNAVAILABLE));
         }
-        stream
-            .set_read_timeout(Some(slice))
+        // Darwin refuses SO_RCVTIMEO on a Unix stream after the peer has
+        // closed, even while a complete reply remains buffered. Poll the
+        // descriptor instead, then use a nonblocking recv so spurious
+        // readiness cannot extend the deadline. This leaves the socket's
+        // blocking mode and timeout unchanged for the encrypted stream.
+        let timeout = rustix::event::Timespec::try_from(slice)
             .map_err(|_| SessionClosed(LINK_UNAVAILABLE))?;
+        let mut ready = [rustix::event::PollFd::new(
+            &*stream,
+            rustix::event::PollFlags::IN,
+        )];
+        match rustix::event::poll(&mut ready, Some(&timeout)) {
+            Ok(0) | Err(rustix::io::Errno::INTR) => continue,
+            Ok(_) => {}
+            Err(_) => return Err(SessionClosed(LINK_UNAVAILABLE)),
+        }
         let mut byte = [0u8; 1];
-        match stream.read(&mut byte) {
+        let received = rustix::net::recv(&*stream, &mut byte, rustix::net::RecvFlags::DONTWAIT)
+            .map(|(count, _)| count)
+            .map_err(std::io::Error::from);
+        match received {
             Ok(0) if line.is_empty() => return Err(SessionClosed(LINK_UNAVAILABLE)),
             Ok(0) => return Err(SessionClosed(LINK_PROTOCOL_ERROR)),
             Ok(_) if byte[0] == b'\n' => return Ok(line),
@@ -601,6 +617,7 @@ impl Transport for LinkTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
     use std::os::unix::net::UnixListener;
 
     const ID: &str = "abcdefghijklmnopqrstuvwxyz";
@@ -738,19 +755,24 @@ mod tests {
 
     #[test]
     fn a_reply_line_leaves_the_stream_bytes_after_it() {
-        let (mut client, mut daemon) = UnixStream::pair().unwrap();
-        daemon
-            .write_all(b"{\"ok\":true,\"path\":\"direct\"}\n\x00\x00\x00\x03abc")
+        for close in [false, true] {
+            let (mut client, mut daemon) = UnixStream::pair().unwrap();
+            daemon
+                .write_all(b"{\"ok\":true,\"path\":\"direct\"}\n\x00\x00\x00\x03abc")
+                .unwrap();
+            if close {
+                drop(daemon);
+            }
+            let line = read_reply_line(
+                &mut client,
+                ReplyWait::Until(Instant::now() + Duration::from_secs(2)),
+            )
             .unwrap();
-        let line = read_reply_line(
-            &mut client,
-            ReplyWait::Until(Instant::now() + Duration::from_secs(2)),
-        )
-        .unwrap();
-        assert_eq!(line, b"{\"ok\":true,\"path\":\"direct\"}");
-        let mut rest = [0u8; 7];
-        client.read_exact(&mut rest).unwrap();
-        assert_eq!(&rest, b"\x00\x00\x00\x03abc");
+            assert_eq!(line, b"{\"ok\":true,\"path\":\"direct\"}");
+            let mut rest = [0u8; 7];
+            client.read_exact(&mut rest).unwrap();
+            assert_eq!(&rest, b"\x00\x00\x00\x03abc");
+        }
     }
 
     #[test]
