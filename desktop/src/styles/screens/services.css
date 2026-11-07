@@ -1,0 +1,35 @@
+/* Service connections: list/detail, the scope facts and the create form's method chips. */
+
+.svc-pad { padding: 12px; }
+.svc-detail { gap: 24px; }
+.svc-head { display: flex; align-items: flex-start; gap: 12px; padding-bottom: 4px; }
+.svc-head-glyph { display: inline-flex; align-items: center; height: 28px; color: var(--text-2); flex: none; }
+.svc-detail .detail-title { font-size: var(--text-2xl); }
+.svc-detail .card { background: none; border-radius: 0; }
+.svc-detail .card-pad { padding: 0; }
+.svc-hostkey { white-space: pre-wrap; word-break: break-all; font-size: var(--text-xs); color: var(--text-2); }
+.svc-pick { color: var(--text-3); font-size: var(--text-md); padding: 32px; }
+.svc-note { max-width: 65ch; font-size: var(--text-sm); color: var(--text-2); line-height: var(--leading-body); }
+.svc-note.is-warn { color: var(--warn); }
+.svc-methods-text { font-family: var(--font-mono); font-size: var(--text-sm); }
+.svc-warn-text { color: var(--warn); }
+
+/* Method labels in the create form. */
+.svc-method-tag { font-family: var(--font-sans); font-size: var(--text-2xs); font-weight: var(--weight-semibold); opacity: 0.9; }
+
+/* the create form */
+.svc-tgt.is-ok { color: var(--ok); }
+.svc-tgt.is-warn { color: var(--warn); }
+.svc-tgt.is-err { color: var(--danger); }
+
+.svc-methods { display: flex; flex-wrap: wrap; gap: 6px; }
+.svc-method {
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border-2); background: var(--bg-raised); color: var(--text-2); font-size: var(--text-sm);
+  transition: background var(--dur-fast), border-color var(--dur-fast), color var(--dur-fast);
+}
+.svc-method:hover { border-color: var(--border-3); color: var(--text-1); }
+.svc-method-off { width: 12px; height: 12px; border-radius: 3px; border: 1.5px solid var(--border-3); }
+.svc-method[data-state='allow'] { background: var(--btn-primary-bg); border-color: var(--btn-primary-bg); color: var(--btn-primary-fg); }
+.svc-method[data-state='confirm'] { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 45%, transparent); color: var(--warn); }
+.svc-method .svc-method-tag { padding: 1px 5px; border-radius: 4px; background: color-mix(in srgb, var(--warn) 16%, transparent); }

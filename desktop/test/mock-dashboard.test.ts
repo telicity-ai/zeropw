@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { COPY, t, tLines } from '../src/copy';
-import { ListenError, listenErrorLines, readSettings, relayLeftOff, resetSettings, restartRelay, turnOffListen, turnOnListen } from '../src/dashboard/relay';
+import { ListenError, listenErrorLines, readSettings, relayLeftOff, resetSettings, restartRelay, turnOffListen, turnOnListen } from '../src/lib/relay';
 import { call, IpcError, outputChannel, toIpcError, useMockBackend } from '../src/ipc/client';
 import { createMockBackend, type MockBackend, type MockSeed } from '../src/ipc/mock';
 import { holdSecureView, secureViewHolders } from '../src/ui/secure';
@@ -8,7 +8,7 @@ import {
   declarableScopes, declareOutcome, grantState, liveGrants, olderVersionCount, openIncident, openIncidentScope, pendingApprovals, runtimeStopsAll, SSH_PROGRAM,
   teamEnvPairs, teamEnvsUnread,
 } from '../src/lib/dash';
-import { watchRecords } from '../src/dashboard/watch';
+import { watchRecords } from '../src/lib/watch';
 import type { Control } from '../src/ipc/contract';
 import { isTeamListenReason, listenFailureLines, offersListenOff, relayError, restoreErrorKey, sshProgramError } from '../src/lib/reasons';
 
@@ -767,7 +767,7 @@ describe('other-device access and the relay', () => {
     // the core names the gateway port: the relay port is named, the address is not
     expect(listenErrorLines(e).map((l) => l.key)).toEqual(['listen.err.port', 'listen.err.relayOff']);
     const text = tLines(listenErrorLines(e));
-    expect(text).toContain('중계기 포트');
+    expect(text).toContain('로컬 서비스 포트');
     expect(text).not.toContain('100.64.1.7');
     // the relay's own reason is reported next to the relay status, with no offer to turn access off
     const down = toIpcError(relayLeftOff(e));
@@ -806,7 +806,6 @@ describe('other-device access and the relay', () => {
     const problem = relayError(e.reason, e.detail);
     expect(problem.key).toBe('relay.err.team');
     expect(COPY['relay.err.team']).toContain('다른 기기 접속');
-    expect(t('relay.team.hint', { address: '100.64.1.7:47420' })).toContain('100.64.1.7:47420');
     // only now (a failed start named the team address) is turning access off offered
     const team = (await call('settings_get')).team_listen;
     expect(offersListenOff({ running: false, busy: false, teamListen: team, problem })).toBe(true);

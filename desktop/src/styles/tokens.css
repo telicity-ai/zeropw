@@ -1,29 +1,263 @@
-/* Design tokens (DESIGN.md §2). Black, grey and white with one azure to iris signal; no new colours. */
+/* Hallmark · genre: modern-minimal · macrostructure: sidebar-master-detail
+   design-system: DESIGN.md · designed-as-app
+   Pre-emit self-critique (not an external review): P4 H4 E4 S4 R4 V4.
+   Personal Vault: system type, a translucent macOS sidebar, one opaque detail surface,
+   grouped lists, glass only for floating menus and dialogs, blue for the primary action,
+   focus and selection. Every colour a component uses comes from a semantic token below; light and dark
+   each define the full palette. Raw hex values never appear outside this file. */
+
 :root {
-  color-scheme: dark;
-  --void: #040406;
-  --line: rgba(255, 255, 255, .07);
-  --line-strong: rgba(255, 255, 255, .13);
-  --fg: #f2f2f7;
-  --fg-2: #bfbfcc;
-  --fg-3: #8e8e9d;
-  --fg-4: #575768;    /* non-text marks only */
-  --azure: #5b8cff;
-  --azure-soft: #8fb0ff;
-  --iris: #9a6bff;
-  --iris-soft: #c4a8ff;
-  --grad: linear-gradient(120deg, #5b8cff 0%, #7a7cff 48%, #9a6bff 100%);
-  --grad-btn: linear-gradient(120deg, #2868ff 0%, #5b5eff 48%, #854cff 100%);
-  --glow-azure: rgba(91, 140, 255, .35);
-  --glow-iris: rgba(154, 107, 255, .35);
-  --warn: #f3c36f;
-  --danger: #ff7a93;
-  --font: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Segoe UI", sans-serif;
-  --mono: "JetBrains Mono", "Pretendard Variable", Pretendard, ui-monospace, SFMono-Regular, Menlo, monospace;
-  --fs-sm: 12px; --fs-md: 13.5px; --fs-base: 14px; --fs-lg: 15px; --fs-h2: 24px; --fs-h1: 38px;
-  --radius-xs: 6px; --radius-sm: 10px; --radius-md: 14px; --radius-lg: 20px;
-  --ease-out: cubic-bezier(.16, 1, .3, 1);
-  --ease-in-out: cubic-bezier(.65, 0, .35, 1);
+  color-scheme: light dark;
+
+  /* ---- type ------------------------------------------------------------------------------ */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Apple SD Gothic Neo', 'Pretendard Variable', Pretendard, system-ui, sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Apple SD Gothic Neo', 'Pretendard Variable', Pretendard, system-ui, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+
+  /* macOS steps: caption 11, footnote 12, body 13, callout 15, title3 17, title2 22, title1 26 */
+  --text-2xs: 12px;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 13px;
+  --text-lg: 15px;
+  --text-xl: 17px;
+  --text-2xl: 22px;
+  --text-3xl: 26px;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  --leading-tight: 1.2;
+  --leading-snug: 1.35;
+  --leading-body: 1.47;
+
+  --tracking-title: -0.022em;
+  --tracking-body: -0.006em;
+  --tracking-caps: 0.02em;
+
+  /* ---- space and shape -------------------------------------------------------------------- */
+  --s-1: 2px;
+  --s0: 4px;
+  --s1: 6px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 20px;
+  --s6: 24px;
+  --s7: 32px;
+  --s8: 40px;
+  --s9: 56px;
+
+  --radius-xs: 5px;
+  --radius-sm: 7px;
+  --radius-md: 9px;
+  --radius-lg: 13px;
+  --radius-xl: 18px;
+  --radius-full: 999px;
+
+  --control-h: 30px;
+  --control-h-sm: 26px;
+  --control-h-lg: 36px;
+  --row-h: 50px;
+
+  --sidebar-w: 236px;
+  --list-w: 320px;
   --titlebar-h: 44px;
-  --sidebar-w: 220px;
+  --panel-inset: 6px;
+
+  /* ---- motion ----------------------------------------------------------------------------- */
+  --ease-out: cubic-bezier(0.22, 0.9, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.55, 0, 0.3, 1);
+  --dur-fast: 120ms;
+  --dur-med: 200ms;
+  --dur-slow: 300ms;
+
+  /* ---- light palette ---------------------------------------------------------------------- */
+  --gray-0: #ffffff;
+  --gray-1: #fbfbfd;
+  --gray-2: #f5f5f7;
+  --gray-3: #ececf0;
+  --gray-ink-1: #1d1d1f;
+  --gray-ink-2: #48484c;
+  --gray-ink-3: #65656b;
+  --gray-ink-4: #68686e;
+  --blue-1: #0066d6;
+  --blue-2: #0062cc;
+  --blue-text: #0066d6;
+  --green-1: #1e7a35;
+  --orange-1: #9a4500;
+  --red-1: #d70015;
+  --red-2: #b8000f;
+  --teal-1: #0071a4;
+
+  /* ---- semantic tokens -------------------------------------------------------------------- */
+  /* the window: transparent under macOS vibrancy (html.has-vibrancy), a solid grey elsewhere */
+  --bg-frame: var(--gray-3);
+  --bg-sidebar-tint: transparent;
+  --bg-sidebar-selected: rgba(255, 255, 255, 0.62);
+  --bg-sidebar-hover: rgba(255, 255, 255, 0.32);
+  --bg-list: var(--gray-1);
+  --bg-pane: var(--gray-0);
+  --bg-canvas: var(--gray-0);
+  --bg-group: var(--gray-2);
+  --bg-field: var(--gray-0);
+  --bg-raised: var(--gray-0);
+  --bg-hover: rgba(0, 0, 0, 0.04);
+  --bg-press: rgba(0, 0, 0, 0.07);
+  --bg-selected: rgba(0, 0, 0, 0.06);
+  --bg-selected-quiet: rgba(0, 0, 0, 0.05);
+  --bg-scrim: rgba(0, 0, 0, 0.18);
+  --bg-inverse: rgba(29, 29, 31, 0.92);
+  --bg-seg-on: var(--gray-0);
+
+  --glass-bg: rgba(255, 255, 255, 0.74);
+  --glass-strong: rgba(255, 255, 255, 0.86);
+  --glass-border: rgba(0, 0, 0, 0.08);
+  --glass-blur: blur(24px) saturate(180%);
+
+  --text-1: var(--gray-ink-1);
+  --text-2: var(--gray-ink-2);
+  --text-3: var(--gray-ink-3);
+  --text-4: var(--gray-ink-4);
+  --text-inverse: #f5f5f7;
+  --text-on-accent: #ffffff;
+
+  --border-1: rgba(0, 0, 0, 0.07);
+  --border-2: rgba(0, 0, 0, 0.11);
+  --border-3: rgba(0, 0, 0, 0.2);
+
+  /* the macOS default button: the system accent */
+  --btn-primary-bg: var(--blue-1);
+  --btn-primary-hover: var(--blue-2);
+  --btn-primary-fg: #ffffff;
+
+  --accent: var(--blue-1);
+  --accent-hover: var(--blue-2);
+  --accent-soft: rgba(0, 122, 255, 0.09);
+  --accent-line: rgba(0, 122, 255, 0.32);
+  --accent-text: var(--blue-text);
+
+  --ok: var(--green-1);
+  --ok-soft: rgba(52, 199, 89, 0.12);
+  --warn: var(--orange-1);
+  --warn-soft: rgba(255, 159, 10, 0.13);
+  --danger: var(--red-1);
+  --danger-hover: var(--red-2);
+  --danger-soft: rgba(255, 59, 48, 0.1);
+  --info: var(--teal-1);
+  --info-soft: rgba(0, 122, 255, 0.08);
+  --neutral: var(--gray-ink-3);
+  --neutral-soft: rgba(0, 0, 0, 0.045);
+
+  --focus-ring: 0 0 0 3px rgba(0, 122, 255, 0.32);
+  --shadow-card: 0 0 0 0.5px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px -6px rgba(0, 0, 0, 0.08);
+  --shadow-pop: 0 0 0 0.5px rgba(0, 0, 0, 0.08), 0 10px 40px -8px rgba(0, 0, 0, 0.22), 0 2px 8px rgba(0, 0, 0, 0.06);
+  --shadow-row: 0 0.5px 1.5px rgba(0, 0, 0, 0.1);
+  --shadow-panel: 0 0 0 0.5px rgba(0, 0, 0, 0.08), 0 1px 3px rgba(0, 0, 0, 0.05);
+
+  /* kind tiles: soft system tints */
+  --kind-password-bg: rgba(255, 149, 0, 0.13);
+  --kind-password-fg: #b45309;
+  --kind-api-bg: rgba(0, 122, 255, 0.11);
+  --kind-api-fg: #0062cc;
+  --kind-env-bg: rgba(175, 82, 222, 0.12);
+  --kind-env-fg: #8e44b8;
+  --kind-ssh-bg: rgba(48, 176, 199, 0.13);
+  --kind-ssh-fg: #0e7c8f;
+
+  --term-bg: #1d1d1f;
+  --term-fg: #e8e8ed;
+  /* the in-app terminal is dark in both modes */
+  --term-line: #3a3a3c;
+  --term-dim: #98989d;
+  --term-accent: #64d2ff;
+  --term-on-accent: #0b2533;
+  --term-warn: #ffb340;
+
+  --on-danger: #ffffff;
+  --switch-thumb: #ffffff;
+  --toast-info: #98989d;
+  --toast-ok: #30d158;
+  --toast-warn: #ff9f0a;
 }
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --gray-0: #1c1c1e;
+    --gray-1: #19191b;
+    --gray-2: #232325;
+    --gray-3: #262628;
+    --gray-ink-1: #f5f5f7;
+    --gray-ink-2: #c7c7cc;
+    --gray-ink-3: #a1a1a6;
+    --gray-ink-4: #98989d;
+    --blue-1: #006bd6;
+    --blue-2: #409cff;
+    --blue-text: #5aa9ff;
+    --green-1: #30d158;
+    --orange-1: #ff9f0a;
+    --red-1: #ff453a;
+    --red-2: #ff6961;
+    --teal-1: #64d2ff;
+
+    --bg-sidebar-tint: transparent;
+    --bg-sidebar-selected: rgba(255, 255, 255, 0.13);
+    --bg-sidebar-hover: rgba(255, 255, 255, 0.07);
+    --bg-raised: #2c2c2e;
+    --bg-group: #2c2c2e;
+    --bg-field: #2c2c2e;
+    --bg-hover: rgba(255, 255, 255, 0.05);
+    --bg-press: rgba(255, 255, 255, 0.09);
+    --bg-selected: rgba(255, 255, 255, 0.09);
+    --bg-selected-quiet: rgba(255, 255, 255, 0.07);
+    --bg-scrim: rgba(0, 0, 0, 0.42);
+    --bg-inverse: rgba(245, 245, 247, 0.94);
+    --bg-seg-on: #48484a;
+
+    --glass-bg: rgba(44, 44, 46, 0.72);
+    --glass-strong: rgba(44, 44, 46, 0.88);
+    --glass-border: rgba(255, 255, 255, 0.09);
+
+    --text-inverse: #1d1d1f;
+    --text-on-accent: #ffffff;
+    --border-1: rgba(255, 255, 255, 0.07);
+    --border-2: rgba(255, 255, 255, 0.12);
+    --border-3: rgba(255, 255, 255, 0.22);
+
+    --btn-primary-bg: var(--blue-1);
+    --btn-primary-hover: var(--blue-2);
+    --btn-primary-fg: #ffffff;
+
+    --accent-soft: rgba(10, 132, 255, 0.18);
+    --accent-line: rgba(10, 132, 255, 0.45);
+    --ok-soft: rgba(48, 209, 88, 0.16);
+    --warn-soft: rgba(255, 159, 10, 0.16);
+    --danger-soft: rgba(255, 69, 58, 0.16);
+    --info-soft: rgba(100, 210, 255, 0.14);
+    --neutral-soft: rgba(255, 255, 255, 0.06);
+
+    --focus-ring: 0 0 0 3px rgba(10, 132, 255, 0.45);
+    --shadow-card: 0 0 0 0.5px rgba(255, 255, 255, 0.08), 0 8px 24px -6px rgba(0, 0, 0, 0.5);
+    --shadow-pop: 0 0 0 0.5px rgba(255, 255, 255, 0.1), 0 16px 48px -8px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.3);
+    --shadow-row: 0 0.5px 1.5px rgba(0, 0, 0, 0.4);
+    --shadow-panel: 0 0 0 0.5px rgba(255, 255, 255, 0.08), 0 1px 3px rgba(0, 0, 0, 0.3);
+
+    --kind-password-bg: rgba(255, 159, 10, 0.18);
+    --kind-password-fg: #ffb340;
+    --kind-api-bg: rgba(10, 132, 255, 0.2);
+    --kind-api-fg: #64a8ff;
+    --kind-env-bg: rgba(191, 90, 242, 0.2);
+    --kind-env-fg: #d48cff;
+    --kind-ssh-bg: rgba(100, 210, 255, 0.16);
+    --kind-ssh-fg: #64d2ff;
+
+    --term-bg: #141416;
+    --term-fg: #e8e8ed;
+  }
+}
+
+/* macOS vibrancy (tauri.conf.json windowEffects): the page is transparent where the sidebar
+   should show the translucent material */
+html.has-vibrancy { --bg-frame: transparent; }

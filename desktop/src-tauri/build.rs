@@ -22,6 +22,7 @@ const COMMANDS: &[&str] = &[
     "control_get",
     "stop_all",
     "resume",
+    "vault_unlock",
     "project_list",
     "project_create",
     "secret_list",

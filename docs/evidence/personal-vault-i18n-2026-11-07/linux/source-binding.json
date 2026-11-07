@@ -1,0 +1,12 @@
+{
+  "commit": "6427d6fa73e2501e391e3289580193f3ca01d95b",
+  "desktop_git_tree": "663ca13c14ad10f6e27c4db0ea78b5eb33e221ee",
+  "rust_git_tree": "f147723da8e8b5b6e42ae678819f20d57ffc36bb",
+  "full_run_archive_sha256": "c6db92ab6f844664d052d35be6ee67a255ad7d981baffb40ddf3dcf9027e5150",
+  "final_archive_sha256": "ae46fcfc9c45445294834d565b498f6ec72ba548fe5e633ea6d7cf8757d65d2b",
+  "rust_desktop_native_files": 296,
+  "rust_desktop_native_tree_sha256": "1e126a75eaf9d7dc30a77b51fd6b49ccb9ed2fbc2d743bfe26480825b4cf3fd5",
+  "changed_relevant_paths": [],
+  "byte_identical": true,
+  "node_dependency_files_byte_identical": true
+}

@@ -64,6 +64,8 @@ fn require_admin_goes_with_exactly_the_reauth_commands() {
     core.settings_set(Settings {
         gateway_port: health_server(),
         team_listen: None,
+        link_service: None,
+        language: None,
     })
     .unwrap();
     let ssh = fx.synthetic_ssh();
@@ -419,6 +421,8 @@ fn core_with_shell(fx: &Fixture, script: &str, ring_bytes: usize) -> Core {
     core.settings_set(Settings {
         gateway_port: health_server(),
         team_listen: None,
+        link_service: None,
+        language: None,
     })
     .unwrap();
     core.serve_start().unwrap();

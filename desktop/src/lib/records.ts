@@ -1,4 +1,4 @@
-// Usage records and alerts as the record lists show them (DESIGN.md §6.2: plain Korean, no
+// Usage records and alerts as the record lists show them (DESIGN.md §7.2: plain Korean, no
 // internal names). The event, alert, result and reason codes the CLI writes map to short copy:
 // every event in rust/src/audit.rs `EVENTS`, every alert `maybe_alert` writes, every result, and
 // the reasons the relay and its policy, the SSH signer and an agent's commands and runs record

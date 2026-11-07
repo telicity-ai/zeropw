@@ -70,7 +70,7 @@ rust/target/debug/zeropw-demo
 
 ## 데스크톱 앱 (미리 보기)
 
-`desktop/`에는 관리 기능을 화면으로 옮긴 Tauri 데스크톱 앱의 미리 보기 버전이 있다. 금고 만들기, 키, 연결, 에이전트와 권한, 기록, 전체 정지, 사고 처리, 백업과 복구, 팀 초대 링크를 다룬다. 금고 코드를 링크하지 않고 함께 묶은 `zeropw-admin`을 명령마다 자식 프로세스로 실행한다. v0.2.0 릴리스에는 이 앱이 Apple Silicon Mac용 ad-hoc 서명 미리 보기 디스크 이미지 `zeropw-desktop-v0.2.0-aarch64-apple-darwin.dmg`로 들어 있고, `.dmg.sha256` 파일이 함께 있다. 이 이미지는 macOS 26.5인 Mac 한 대에서 빌드했고 그 Mac에서만 실행해 봤다. 내려받은 파일에 붙는 격리 속성이 없는 상태였다. 다른 macOS 버전은 검증하지 않았고, 아래 Gatekeeper 절차는 시험하지 않았다. 자세한 내용은 [데스크톱 앱 명세](docs/desktop-app.md)와 [디자인 규칙](DESIGN.md)에 있다.
+`desktop/`에는 Tauri 데스크톱 앱의 미리 보기 버전이 있다. 2026-11-07에 "나만의 금고(Personal Vault)"로 화면을 새로 만들었다. 금고의 항목(비밀번호, API 키, 환경변수, SSH 키)이 먼저 나오고, 내 Mac 연결과 동기화 상태, HTTP 중계와 SSH 서명을 위한 서비스 연결, 개발자 기능(에이전트와 권한, 앱 안 터미널, 승인 요청, 다른 사람과 공유), 활동 기록과 사고 처리, 백업과 복구를 담은 설정이 뒤따른다. 금고 코드를 링크하지 않고 함께 묶은 `zeropw-admin`을 명령마다 자식 프로세스로 실행한다. v0.2.0 릴리스에는 이 앱이 Apple Silicon Mac용 ad-hoc 서명 미리 보기 디스크 이미지 `zeropw-desktop-v0.2.0-aarch64-apple-darwin.dmg`로 들어 있고, `.dmg.sha256` 파일이 함께 있다. 이 이미지는 macOS 26.5인 Mac 한 대에서 빌드했고 그 Mac에서만 실행해 봤다. 내려받은 파일에 붙는 격리 속성이 없는 상태였다. 다른 macOS 버전은 검증하지 않았고, 아래 Gatekeeper 절차는 시험하지 않았다. 자세한 내용은 [데스크톱 앱 명세](docs/desktop-app.md)와 [디자인 규칙](DESIGN.md)에 있다.
 
 설치 방법:
 

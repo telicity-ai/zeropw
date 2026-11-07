@@ -399,8 +399,20 @@ impl Core {
         Ok(out)
     }
 
+    /// The service a new enrolment uses when the user names none: the `link_service` setting,
+    /// else the built-in [`DEFAULT_SERVICE_URL`]. Unreadable settings fall back to the built-in
+    /// default, which never resolves, so a damaged file cannot point enrolment anywhere.
+    fn default_link_service(&self) -> String {
+        self.settings_get()
+            .ok()
+            .and_then(|s| s.link_service)
+            .and_then(|s| check_service_url(&s).ok())
+            .unwrap_or_else(|| DEFAULT_SERVICE_URL.to_owned())
+    }
+
     fn link_view(&self) -> LinkStatusOut {
         let process = self.link.process();
+        let default_service = self.default_link_service();
         let mut out = LinkStatusOut {
             available: process.available,
             running: false,
@@ -408,9 +420,9 @@ impl Core {
             revoked: false,
             device_id: None,
             online: false,
-            service: DEFAULT_SERVICE_URL.to_owned(),
-            service_host: service_host(DEFAULT_SERVICE_URL),
-            default_service: DEFAULT_SERVICE_URL.to_owned(),
+            service_host: service_host(&default_service),
+            service: default_service.clone(),
+            default_service,
             device_name: default_device_name(),
             peers: Vec::new(),
             problem: None,
@@ -477,13 +489,10 @@ impl Core {
         if !is_invite_code(input.invite_code.expose()) {
             return Err(AppError::invalid_input("link_invite_malformed"));
         }
-        let service = check_service_url(
-            input
-                .service
-                .as_deref()
-                .filter(|s| !s.trim().is_empty())
-                .unwrap_or(DEFAULT_SERVICE_URL),
-        )?;
+        let service = match input.service.as_deref().filter(|s| !s.trim().is_empty()) {
+            Some(service) => check_service_url(service)?,
+            None => self.default_link_service(),
+        };
         let name = match input.name.as_deref().filter(|n| !n.trim().is_empty()) {
             Some(name) => check_display_name(name)?,
             None => default_device_name(),

@@ -17,6 +17,7 @@
     "allow-control-get",
     "allow-stop-all",
     "allow-resume",
+    "allow-vault-unlock",
     "allow-project-list",
     "allow-project-create",
     "allow-secret-list",

@@ -3,18 +3,21 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { t } from '../copy';
 import { call, outputChannel } from '../ipc/client';
-import { useApp } from './context';
+import { useApp } from './app';
+import { Icon } from './icons';
 import { fontReady } from './fonts';
 import { TerminalInput } from './terminalInput';
 import { TerminalSize } from './terminalSize';
 
+// warm-dark terminal palette matching the app's tokens (the terminal stays dark in both modes)
 const THEME = {
-  background: '#05050a', foreground: '#bfbfcc', cursor: '#8fb0ff', cursorAccent: '#05050a',
-  selectionBackground: 'rgba(122, 124, 255, 0.35)',
-  black: '#2b2b33', brightBlack: '#575768', red: '#ff7a93', brightRed: '#ff9aae', green: '#9fd8b0', brightGreen: '#b8e6c5',
-  yellow: '#f3c36f', brightYellow: '#f7d493', blue: '#5b8cff', brightBlue: '#8fb0ff', magenta: '#9a6bff', brightMagenta: '#c4a8ff',
-  cyan: '#7fb8ff', brightCyan: '#a9cfff', white: '#bfbfcc', brightWhite: '#f2f2f7',
+  background: '#1c1a17', foreground: '#e6e0d6', cursor: '#7cc2a8', cursorAccent: '#1c1a17',
+  selectionBackground: 'rgba(124, 194, 168, 0.28)',
+  black: '#2c2925', brightBlack: '#6b655c', red: '#ec8a78', brightRed: '#f3a191', green: '#8cc596', brightGreen: '#a9d6b0',
+  yellow: '#e2a65a', brightYellow: '#ecc185', blue: '#8fb2dc', brightBlue: '#adc8e8', magenta: '#dba7c4', brightMagenta: '#e8c2d7',
+  cyan: '#7cc2a8', brightCyan: '#95d1ba', white: '#e6e0d6', brightWhite: '#f5f1ea',
 };
+const reducedMotion = (): boolean => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
 // strip CSI/OSC sequences before looking for the list-connections answer
 const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)|\x1b[@-_]/g;
 const VERIFIED = /"connections"\s*:/;
@@ -41,7 +44,8 @@ export function AppTerminal({ domId, name, source, onOpened, onVerified, onFaile
   domId: string; name: string; source: TerminalSource;
   onOpened?(terminalId: string): void; onVerified?(): void; onFailed?(): void; onClosed?(): void;
 }) {
-  const { motionOn, toast, announce } = useApp();
+  const { toast, announce } = useApp();
+  const motionOn = !reducedMotion();
   const host = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
   const [suggestions, setSuggestions] = useState<string[]>([]);
@@ -171,7 +175,6 @@ export function AppTerminal({ domId, name, source, onOpened, onVerified, onFaile
     // the terminal lives as long as this component; props are read once on open
   }, []);
 
-  useEffect(() => { if (termRef.current) termRef.current.options.cursorBlink = motionOn; }, [motionOn]);
 
   const typeSuggestion = (i: number) => {
     const cmd = suggestions[i];
@@ -186,7 +189,7 @@ export function AppTerminal({ domId, name, source, onOpened, onVerified, onFaile
     if (!tokenRef || tokenGone) return;
     try {
       const r = await call('onetime_copy', { ref: tokenRef });
-      if (r.copied) { toast(t('toast.copy.token')); setTokenGone(true); }
+      if (r.copied) { toast(t('term.toast.copied'), 'ok'); setTokenGone(true); }
     } catch {
       setTokenGone(true);
       toast(t('error.generic'), 'warn');
@@ -196,32 +199,32 @@ export function AppTerminal({ domId, name, source, onOpened, onVerified, onFaile
   return (
     <div className="term" id={domId}>
       <div className="term-bar">
-        <i /><i /><i />
-        <span className="tt">{t('term.title', { name })}</span>
+        <Icon name="terminal" size={14} />
+        <span className="term-title">{t('term.title', { name })}</span>
         {tokenRef && (
-          <button className="icon-btn" type="button" aria-expanded={altOpen} aria-controls={`${domId}-alt`} onClick={() => setAltOpen(!altOpen)}>{t('term.other')}</button>
+          <button className="term-bar-btn" type="button" aria-expanded={altOpen} aria-controls={`${domId}-alt`} onClick={() => setAltOpen(!altOpen)}>{t('term.other')}</button>
         )}
       </div>
       <div className="term-cmt"># {t('term.comment')}</div>
       <div className="term-body" ref={host} role="group" aria-label={t('term.aria')} />
       {closed && <div className="term-note" role="status">{t('term.closed')}</div>}
-      {!closed && dropped && <div className="term-note warn">{t('term.busy')}</div>}
-      {!closed && tooLarge && <div className="term-note warn">{t('term.tooLarge')}</div>}
+      {!closed && dropped && <div className="term-note is-warn">{t('term.busy')}</div>}
+      {!closed && tooLarge && <div className="term-note is-warn">{t('term.tooLarge')}</div>}
       {suggestions.length > 0 && (
         <div className="term-suggest" role="group" aria-labelledby={`${domId}-suggest`}>
-          <span className="lbl" id={`${domId}-suggest`}>{t('term.suggest')}</span>
+          <span className="term-suggest-label" id={`${domId}-suggest`}>{t('term.suggest')}</span>
           {suggestions.map((cmd, i) => (
-            <button key={cmd} className={'chip' + (used.has(i) ? ' used' : '') + (i === pending ? ' pending' : '')} type="button" title={cmd}
+            <button key={cmd} className={'term-cmd' + (used.has(i) ? ' is-used' : '') + (i === pending ? ' is-pending' : '')} type="button" title={cmd}
               aria-label={t('term.chip.aria', { cmd })} onClick={() => typeSuggestion(i)}>
-              <span className="cmd">{cmd}</span>
-              {i === pending && <span className="kbd" aria-hidden="true">{t('term.run')} ↵</span>}
+              <span className="term-cmd-text mono">{cmd}</span>
+              {i === pending && <span className="term-cmd-run" aria-hidden="true">{t('term.run')} ↵</span>}
             </button>
           ))}
         </div>
       )}
       {tokenRef && (
         <div className="term-alt" id={`${domId}-alt`} hidden={!altOpen}>
-          <button className="btn btn-text btn-sm" type="button" aria-disabled={tokenGone} onClick={() => void copyToken()}>{t('term.copy')}</button>
+          <button className="term-bar-btn" type="button" aria-disabled={tokenGone || undefined} onClick={() => void copyToken()}>{t('term.copy')}</button>
         </div>
       )}
     </div>

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PendingInviteOwner } from '../src/dashboard/pendingInvite';
+import { PendingInviteOwner } from '../src/lib/pendingInvite';
 
 describe('dashboard pending invite ownership', () => {
   it('discards only a different replaced queued reference, including final disposal', () => {

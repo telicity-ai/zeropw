@@ -1,0 +1,6 @@
+
+> zeropw-desktop@0.2.0 check
+> node scripts/check-static.mjs && node scripts/check-tauri.mjs
+
+check-static: ok (98 files)
+check-tauri: ok (79 commands, 190 files scanned)

@@ -1,0 +1,8 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.31s
+     Running tests/terminal_close_leak.rs (target/debug/deps/terminal_close_leak-999a4772089697d1)
+
+running 1 test
+test closing_a_terminal_with_a_stuck_paste_leaves_no_thread_or_descriptor_behind ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+

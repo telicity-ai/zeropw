@@ -1,0 +1,35 @@
+   Compiling zeropw-desktop-core v0.2.0 (/Users/admin/zeropw/desktop/core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.87s
+     Running tests/link_supervisor.rs (target/debug/deps/link_supervisor-13ac0808a25b84a5)
+
+running 4 tests
+test a_second_supervisor_adopts_a_running_daemon_and_ignores_a_foreign_pid ... FAILED
+test a_daemon_that_exits_is_restarted_after_a_growing_backoff ... FAILED
+test a_daemon_whose_socket_never_answers_times_out_and_a_missing_one_is_reported ... ok
+test start_runs_the_daemon_privately_and_waits_for_its_socket ... ok
+
+failures:
+
+---- a_second_supervisor_adopts_a_running_daemon_and_ignores_a_foreign_pid stdout ----
+
+thread 'a_second_supervisor_adopts_a_running_daemon_and_ignores_a_foreign_pid' (69009) panicked at core/tests/link_supervisor.rs:185:5:
+assertion `left == right` failed
+  left: 0
+ right: 1
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- a_daemon_that_exits_is_restarted_after_a_growing_backoff stdout ----
+
+thread 'a_daemon_that_exits_is_restarted_after_a_growing_backoff' (69007) panicked at core/tests/link_supervisor.rs:148:5:
+assertion `left == right` failed: restarted before its backoff
+  left: 0
+ right: 1
+
+
+failures:
+    a_daemon_that_exits_is_restarted_after_a_growing_backoff
+    a_second_supervisor_adopts_a_running_daemon_and_ignores_a_foreign_pid
+
+test result: FAILED. 2 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.32s
+
+error: test failed, to rerun pass `-p zeropw-desktop-core --test link_supervisor`

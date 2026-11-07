@@ -1,0 +1,180 @@
+{
+  "code_commit": "6427d6fa73e2501e391e3289580193f3ca01d95b",
+  "base_commit": "d01a33b8101be8761a38ab9b7ed8295e9aed1c40",
+  "models": {
+    "inherited_uncommitted_work": "claude-opus-5-5",
+    "completion_and_tests": "gpt-6.1-sol",
+    "product_review": "gpt-6-astra on fe5d3fe only",
+    "new_opus_adversarial_review": "NOTRUN; known rate limit before 2026-11-07 17:50 KST"
+  },
+  "macos": {
+    "vm": "zeropw-ui-redesign",
+    "os": "macOS 26.6.2 arm64",
+    "source_files_compared": 438,
+    "source_mismatches": [],
+    "frontend": {
+      "exit": 0,
+      "test_files": 26,
+      "tests_passed": 334,
+      "log": "macos-final-ui.log",
+      "native_debug_build_exit": 0
+    },
+    "rust": {
+      "steps": 100,
+      "failed_steps": [
+        {
+          "step": "test:gateway_tls_parity",
+          "exit": 101
+        }
+      ],
+      "cargo_result_totals": {
+        "passed": 1625,
+        "failed": 1,
+        "ordinary_ignored": 4
+      },
+      "signer_probe_step_passed": true,
+      "log": "macos-rust-verify.log"
+    },
+    "desktop": {
+      "steps": 8,
+      "failed_steps": [
+        {
+          "step": "core-tests",
+          "exit": 101
+        }
+      ],
+      "cargo_result_totals": {
+        "passed": 149,
+        "failed": 2,
+        "ordinary_ignored": 0
+      },
+      "signer_probe_step_passed": false,
+      "log": "macos-desktop-verify.log"
+    },
+    "additional_core": {
+      "remote_sync": {
+        "passed": 18,
+        "exit": 0
+      },
+      "serve_supervisor": {
+        "passed": 11,
+        "exit": 0
+      },
+      "terminal_close_leak": {
+        "passed": 1,
+        "exit": 0
+      },
+      "terminal_pty": {
+        "passed": 9,
+        "exit": 0
+      },
+      "link_supervisor": {
+        "passed": 2,
+        "failed": 2,
+        "exit": 101,
+        "same_two_failed_on_base": true
+      }
+    },
+    "tls_failure_reproduced_on_base": true,
+    "binaries_sha256": {
+      "zeropw-desktop": "8a06a04ce01d4ca157e617a396c0a4aab49c64dd1029507484e72b0a9c1d3c8c",
+      "guibin/zeropw-admin": "e297973e476ae6602a9624b3de145f29207f8fc5bbd33f44efac06fc6de2d661",
+      "guibin/zeropw-link": "5503959b4a22bd01fa0fddc34187a946406760689e24bd17e08b4020b81a77a2"
+    },
+    "cold_start": {
+      "code_commit": "6427d6fa73e2501e391e3289580193f3ca01d95b",
+      "preview_port_open": false,
+      "observed_locked_heading": true,
+      "saved_language": "ko",
+      "binary_sha256": "8a06a04ce01d4ca157e617a396c0a4aab49c64dd1029507484e72b0a9c1d3c8c"
+    }
+  },
+  "linux_summary": "linux/verification-summary.json",
+  "fixture_runs": {
+    "original_matrix": 64,
+    "layout_followup": 16,
+    "connection_failure_recheck": 1,
+    "singular_and_dialog_probe": 6,
+    "grid_fix_recheck": 2,
+    "original_dialog_clipping": "preserved before grid fix",
+    "transient_network_errors": "11 in one followup case; retry clean except favicon; cause unconfirmed"
+  },
+  "detector_final": {
+    "light": [
+      {
+        "rule": "nested-cards",
+        "selector": "div.select"
+      }
+    ],
+    "dark": [
+      {
+        "rule": "nested-cards",
+        "selector": "div.select"
+      }
+    ],
+    "remaining_finding_classification": "input chrome, not nested cards; raw finding retained; no rule suppression"
+  },
+  "limitations": [
+    "macOS overall verification FAILED on known backend tests",
+    "two physical Macs NOTRUN",
+    "new Opus adversarial review NOTRUN",
+    "signed/notarized distribution and Gatekeeper NOTRUN",
+    "old toast text may retain previous language for up to 4.2 seconds",
+    "initial authenticated snapshot transport and whole-secret tombstones remain unsupported in this branch"
+  ],
+  "evidence_sha256": {
+    "astra-product-review-fe5d3fe.json": "f722998b3a3507f1461910e757038d89635f8c36efbc25d34cc56d0267d52832",
+    "changed-files.txt": "714eeb4c66faae0bbc8190f38b46155a0ef7b79a270f08bfe71897e53671023f",
+    "code-source.json": "303564177c6904ae55549617d838d4121386b630b8b345c203297bc631173591",
+    "cold-start.json": "687c517d17f0136c0155cbf0a9d5cb400eed628b4a3af3616dcf2b99002cbb9e",
+    "dialog-overflow-before-grid.json": "63f0b902cfc6c2ecfac83fed01233208224ba78f480224eb82e80f31c5ea04af",
+    "fixture-en-add-before-grid.png": "45015af97fb1b99d8d3a1489e622d363882b98e9d6a2b801d4526a185bf5e5ef",
+    "fixture-en-add-dark-grid.png": "74b58fecc6f9cd1c96b0813da125df76c186a04e5328e22f4f0f10a7a90ee41c",
+    "fixture-en-add-light-grid.png": "ea022e8db12cc1e21376e901ab03aaf69e4cb6ae6da8cf3bf1366af02f066cf0",
+    "fixtures-64.json": "69cc893058f7d6af8f0ae7f474b3f6e3801fac8324e99626653045154d89ef0c",
+    "fixtures-final-16.json": "3d01be62a2718c22ff2226d1ed7a68e58e8ba713bed0bc51eb3588a7aa573ab6",
+    "fixtures-head-before-grid.json": "266dc2e24e031654d7c70620a5de123611f0237cd55152f17c9f0f0248558b94",
+    "fixtures-head-grid.json": "7da5e62cee9acf9b5616b83f7ff07cbae20ae1169f2263d6af20b9db460de22c",
+    "fixtures-recheck.json": "1bd81853a43bd4996a041475e50c51e7e00b864344e287883509778670756333",
+    "fixtures-source.json": "310078e8a7aeeb096557ad05cf4437ad810ea753a015e578570a9f790b544956",
+    "impeccable-dark-final.json": "7838bc2da409336b24a0b050f8c4938e11a248a92f54538b2f351076114aceb4",
+    "impeccable-head.json": "cf02c80e4193586f2c441ce9e48bf43ea7f6986818e881dd609b24ee6e585b18",
+    "impeccable-i18n-1.json": "750271fc610dd9584900bd4f240ae408817c2cf66aff9ffb1c321bba7e66bec1",
+    "impeccable-i18n-2.json": "7838bc2da409336b24a0b050f8c4938e11a248a92f54538b2f351076114aceb4",
+    "impeccable-light-final.json": "7838bc2da409336b24a0b050f8c4938e11a248a92f54538b2f351076114aceb4",
+    "linux/final-frontend-logs/frontend-build.log": "4ebe6458a7d2e9933c4820c2959e2975bd297ee55eb84c3e9d10efe2cefbafa1",
+    "linux/final-frontend-logs/frontend-check.log": "92bf85139b7c73c0f6cbbac8e3640b7550ba12a9a6cbcb9d2d7b8d2463406fd3",
+    "linux/final-frontend-logs/frontend-result.txt": "5c17ccaba31e20abd7bac043c622517e39d65e625e9cd8a0b565fee95ef77ee6",
+    "linux/final-frontend-logs/frontend-tests.log": "25f967c0e5f3324d1d364f9ab0766c2ba57d580b117fdff89f6f7e1474c51c54",
+    "linux/full-run-logs/desktop-result.txt": "f98f89ba89ed60fadef95286c228d979be4313b1e31b94833d22672e5ce83a31",
+    "linux/full-run-logs/desktop-verify.log": "4449866af845b96c00024ee64115e0f3917b0779a567c68648bfc4f70a6bc802",
+    "linux/full-run-logs/full-run-summary.json": "22c3acbddea0ea3f5f4d83aadf78c8213414788aef8cbd1b12bcb89372d36b14",
+    "linux/full-run-logs/isolation-metadata.txt": "3b80e71f13b2086e4f862fe25516b9c316f83b7ba07641c8950c4664affdae1e",
+    "linux/full-run-logs/rust-result.txt": "c66db591494a3f0e78aa653307540a55eff2a5718baf7a75759b03a1fa657c03",
+    "linux/full-run-logs/rust-verify.log": "1d1e720f234b583682ea1c288c8d9d14b886242eebed8a5e4df4df182c30deb0",
+    "linux/initial-snapshot.json": "725d4c333f81f68c204892a903f8a0b08d0fc4968d5ebe2b13e0afd9f50ed014",
+    "linux/source-binding.json": "a4efbb53058d8a7350705da9e72130c108c47493069a16b7319b72367a987aae",
+    "linux/verification-summary.json": "86d25a97ab25ac540f4b60af99d010a31c6adb27302e660da479ffa15c0d72a1",
+    "macos-core-remote_sync.log": "c7eb64237c3e92355f74ed59a9e48c34d9ee739853341b2b7cde233261c582bf",
+    "macos-core-serve_supervisor.log": "2ad0a2e913b0393849a99b3f8adc1e3b8977cfe36daec4ecf355681b143e0228",
+    "macos-core-terminal_close_leak.log": "e2f8bbc7e2bb46efb492ce16c7c4eeaa3e6b7736270fb54af33685d331198bfa",
+    "macos-core-terminal_pty.log": "e5f9db8202159496e48ad63e084180b069eee0e05d1c7df0ed302d35ad9fd6c3",
+    "macos-desktop-verify.log": "43c208db086f61895098ae04c20848478df840ffe931618b4845c9229210698f",
+    "macos-final-ui.log": "9c1ef8fe233aa13bcad5bae14ce924d0cc86bba93182611ab4d4829365429b3b",
+    "macos-link-supervisor-baseline.log": "237a42897b976764b899b1105197255c31ab27e45388e3047491327ccc08538a",
+    "macos-link-supervisor.log": "e034b8cf370224ab782357f231ece55c479f2b557a714ca2f7746dbf3fcdfdf7",
+    "macos-rust-verify.log": "8f2995e35ed159b23d11cabf5e2d7e8abb1886abe4ac6aa3b4c545fc671e102b",
+    "macos-tls-baseline.log": "5e4125388891e00c82308a5b5201ff847b11cbe8f3dd3110fb63797c0f2bfbfd",
+    "macos-ui-source-transfer-race.log": "84ea75eb1419cebd0f344dece27938e3cd0cc10179384bdbfbb645b2fa8c11e4",
+    "native-cold-start-without-vite.png": "e2115689250eabfc192346bc81762d344d4517ba90a23ff1939f2ba97139f24e",
+    "native-en-add-small-dark.png": "37744baf7e9d7e1ed488016bf07a695786063bcf2838c6bd5a1e40a5a5f30caf",
+    "native-en-language-settings.png": "d96baaff0bb2cc2f5e874f879c4ce9b89c7edb712a328fcc1fd56a78a691bd50",
+    "native-en-vault-dark.png": "aed9a5039510e1844a37c43f2b90268fcdf31f99dbb7baa24296c4d8868fd29d",
+    "native-en-vault-light.png": "071085ffde182fb8e5d304d575ecdd9ff5c9bd7a075b3e7ba794923d387bdaa1",
+    "native-ko-locked-dark.png": "641e7b95ea85dfea1baa9ef40629f530c06914f9ac0194e4b5323cafc8129b76",
+    "native-ko-vault-light.png": "2f0df3dd37487d05c867c609f5825cf299ad75be00a780870c6195968b808c93",
+    "production-guard.json": "72680499b1f5790df3e3cda785f7b16991a8f476f307cbc1356b1ad2f85c3c3f",
+    "screens.html": "1adec4053cd8be5ae1bf38fa93b80e03ce6753faeccaff3d80a488922636f531",
+    "source-head-grid.json": "ad366c9445ac30957b8dc8f7ce3910ce466064c778d1a1a1d856504da9cee28a"
+  }
+}

@@ -350,6 +350,8 @@ fn watched_core(fx: &Fixture, events: std::sync::Arc<Events>, port: u16) -> Core
     core.settings_set(Settings {
         gateway_port: port,
         team_listen: None,
+        link_service: None,
+        language: None,
     })
     .unwrap();
     core

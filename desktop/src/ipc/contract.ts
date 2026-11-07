@@ -22,7 +22,9 @@ export type SecretKind = 'api_key' | 'password' | 'env_var' | 'ssh_private_key';
  *  accepted too). The version commands take it back unchanged; do not convert it. */
 export type VersionId = string | number;
 export interface SecretVersion { version: VersionId; status: string; created_at: string; public?: { public_key: string; fingerprint: string; algorithm: string } | null }
-export interface SecretView { id: string; project: string; environment: string; kind: SecretKind; active_version: VersionId | null; versions: SecretVersion[] }
+/** `deleted` is set by a CLI with whole-secret tombstones (docs/remote-sync-next-milestones.md M1);
+ *  the current CLI never prints it. */
+export interface SecretView { id: string; project: string; environment: string; kind: SecretKind; active_version: VersionId | null; versions: SecretVersion[]; deleted?: boolean }
 /** Where a new secret value comes from. `typed` crosses IPC once; `file_token` refers to a file picked natively in Rust. */
 export type SecretSource = { typed: string } | { file_token: string } | { generate_ed25519: true };
 
@@ -52,7 +54,10 @@ export interface IncidentDeclared extends Incident { existing?: boolean; widened
 export interface InvitePreview { env_id: string; inviter: string; addresses: string[]; role: 'user' | 'admin'; name: string; expires_at: string; expired: boolean; invite_id: string }
 export interface InviteListItem { invite_id: string; role: string; name: string; link: boolean; created_at: string | null; expires_at: string; status: 'pending' | 'used' | 'expired' | 'revoked'; used_at: string | null; used_by: string | null; revoked_at: string | null }
 export interface Member { fingerprint: string; name: string; role: string; status: string; owner: boolean }
-export interface Settings { gateway_port: number; team_listen: string | null }
+/** `link_service`: the link service a not yet enrolled Mac enrols with by default (null: the
+ *  built-in default, which never resolves). Left out of the file while unset. */
+/** `language`: the window's language (`ko`, `en`), or null to follow the system. */
+export interface Settings { gateway_port: number; team_listen: string | null; link_service?: string | null; language?: 'ko' | 'en' | null }
 
 /** A `.env` file the core read for an import (picked or dropped). Its content stays in the core
  *  behind `import_ref` for 10 minutes; only the file's base name comes here. */
@@ -151,6 +156,10 @@ export interface Commands {
   control_get: [void, Control];
   stop_all: [void, Control];
   resume: [{ admin_passphrase: string }, Control];
+  /** The window's lock screen: checks the administrator passphrase (`status` with
+   *  `--require-admin`; a wrong one is recorded as `auth_failed`) and changes nothing. The lock
+   *  hides the window's lists only; the relay and agents keep running. */
+  vault_unlock: [{ admin_passphrase: string }, Control];
 
   /** When the team mapping (team/envs.json) cannot be read, the projects still come, with
    *  `team_environments_error` (`state_corrupt`) in place of `team_environments`. */
