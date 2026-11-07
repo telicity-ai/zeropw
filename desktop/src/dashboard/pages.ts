@@ -1,6 +1,6 @@
 import type { CopyKey } from '../copy';
 
-export type PageId = 'home' | 'keys' | 'connections' | 'agents' | 'logs' | 'team' | 'settings';
+export type PageId = 'home' | 'keys' | 'connections' | 'agents' | 'logs' | 'team' | 'devices' | 'settings';
 
 export interface PageMeta { id: PageId; label: CopyKey; sub: CopyKey }
 
@@ -12,6 +12,7 @@ export const PAGES: readonly PageMeta[] = [
   { id: 'agents', label: 'nav.agents', sub: 'page.agents.sub' },
   { id: 'logs', label: 'nav.logs', sub: 'page.logs.sub' },
   { id: 'team', label: 'nav.team', sub: 'page.team.sub' },
+  { id: 'devices', label: 'nav.devices', sub: 'page.devices.sub' },
   { id: 'settings', label: 'nav.settings', sub: 'page.settings.sub' },
 ];
 

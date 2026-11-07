@@ -141,6 +141,19 @@ class DesktopLicenseTests(unittest.TestCase):
                                                  '# Licenses of bundled dependencies\nSynthetic bundled dependency notice\n')
         self.sidecars = self.root / 'sidecars/THIRD_PARTY_LICENSES.md'
         self.collect_sidecars()
+        # The zeropw-link daemon's notices, in the form desktop/scripts/build-link-sidecar.py writes.
+        self.commit = 'c0ffee' + '0' * 34
+        (self.desktop / 'zeropw-link.json').write_text(json.dumps(
+            {'module': 'github.com/telicity-ai/zeropw-link', 'commit': self.commit, 'go': 'go1.27.3', 'macos_minimum': '13.0'}))
+        self.link = self.root / 'zeropw-link/THIRD_PARTY_LICENSES.md'
+        self.link.parent.mkdir()
+        self.link.write_text(
+            f'# zeropw-link daemon {self.commit[:12]}\n\nTarget: {TARGET}.\nzeropw-link commit: {self.commit}.\n'
+            'Go toolchain: go1.27.3.\n\n'
+            f'## github.com/telicity-ai/zeropw-link {self.commit[:12]}\n\nNotice files: LICENSE\n\nLICENSE:\n\n    Synthetic zeropw-link MIT\n\n'
+            '## Go standard library go1.27.3\n\nDeclared license: BSD-3-Clause\nNotice files: LICENSE\n\nLICENSE:\n\n    Synthetic Go notice\n\n'
+            '## github.com/example/mplmod v1.0.0\n\nDeclared license: MPL-2.0 (from its license file)\nNotice files: LICENSE\n\n'
+            'LICENSE:\n\n    Synthetic MPL module notice\n')
         self.output = self.root / 'out/THIRD_PARTY_LICENSES.md'
 
     def write_supplement(self):
@@ -158,7 +171,7 @@ class DesktopLicenseTests(unittest.TestCase):
 
     def run_tool(self):
         return subprocess.run([sys.executable, str(SCRIPT), '--target', TARGET, '--sidecar-notices', str(self.sidecars),
-                               '--output', str(self.output), '--desktop-dir', str(self.desktop)],
+                               '--link-notices', str(self.link), '--output', str(self.output), '--desktop-dir', str(self.desktop)],
                               env=self.environment, capture_output=True, text=True)
 
     def run_ok(self):
@@ -187,7 +200,10 @@ class DesktopLicenseTests(unittest.TestCase):
                          '### OpenSSL 3.5.9 (statically linked release SDK)', 'Synthetic OpenSSL notice',
                          '# 3. Rust standard library', '### Rust standard library (rustc 1.90.0,',
                          'Copyright (c) Synthetic hashbrown authors',
-                         '# 4. Web interface: npm packages', '## pretendard 1.3.9', 'Declared license: OFL-1.1',
+                         '# 4. Bundled zeropw-link daemon: Go modules and the Go standard library',
+                         '### Go standard library go1.27.3', 'Synthetic Go notice', 'Synthetic zeropw-link MIT',
+                         '- github.com/example/mplmod v1.0.0: https://pkg.go.dev/github.com/example/mplmod@v1.0.0',
+                         '# 5. Web interface: npm packages', '## pretendard 1.3.9', 'Declared license: OFL-1.1',
                          '### dist/LICENSE.txt', 'Synthetic React MIT notice', '3 npm packages', 'code from 2 build tools',
                          '- option-ext 0.2.0: https://crates.io/crates/option-ext/0.2.0',
                          '### objc2 0.6.5', '    Copyright (c) Synthetic Original Author\n    \n    Synthetic standard MIT text'):
@@ -231,7 +247,7 @@ class DesktopLicenseTests(unittest.TestCase):
 
     def test_build_tool_code_emitted_into_the_bundle_is_covered(self):
         text = self.run_ok()
-        tools = text[text.index('## Build tools whose own code is emitted'):text.index('# 5. Source code')]
+        tools = text[text.index('## Build tools whose own code is emitted'):text.index('# 6. Source code')]
         for fragment in ('## rolldown 1.2.0', 'Emitted code: Synthetic runtime helper.', 'Synthetic Rolldown MIT notice',
                          '### THIRD-PARTY-LICENSE', 'Synthetic esbuild and Rollup notices',
                          '### Upstream notice (polyfill-origin.txt)', 'Copyright (C) Synthetic polyfill origin', '## vite 8.0.0',
@@ -290,6 +306,19 @@ class DesktopLicenseTests(unittest.TestCase):
         self.assert_refused(self.run_tool(), 'sidecar notices: collected with a different Rust toolchain')
         self.sidecars.write_text(text[:text.index('## Rust standard library')] + text[text.index('## OpenSSL 3.5.9'):])
         self.assert_refused(self.run_tool(), 'sidecar notices: no Rust standard library notice')
+
+    def test_link_daemon_notices_must_be_for_the_target_and_the_pinned_commit(self):
+        text = self.link.read_text()
+        self.link.write_text(text.replace('Target: ' + TARGET, 'Target: x86_64-apple-darwin'))
+        self.assert_refused(self.run_tool(), 'zeropw-link notices: not collected for ' + TARGET)
+        self.link.write_text(text)
+        (self.desktop / 'zeropw-link.json').write_text(json.dumps({'commit': 'd' * 40}))
+        self.assert_refused(self.run_tool(), 'zeropw-link notices: not collected for the commit desktop/zeropw-link.json records')
+        (self.desktop / 'zeropw-link.json').write_text(json.dumps({'commit': self.commit}))
+        self.link.write_text(text.replace('## Go standard library go1.27.3', '## Something else'))
+        self.assert_refused(self.run_tool(), 'zeropw-link notices: no Go standard library notice')
+        self.link.unlink()
+        self.assert_refused(self.run_tool(), 'zeropw-link notices: THIRD_PARTY_LICENSES.md is missing')
 
     def test_rust_crate_without_notice_is_refused(self):
         (self.root / 'registry/option-ext-0.2.0/LICENSE.md').unlink()

@@ -63,6 +63,7 @@ fn real_serve_starts_attaches_and_stops() {
         .start(&ServeConfig {
             port,
             team_listen: None,
+            link_socket: None,
         })
         .unwrap();
     assert!(status.running);
@@ -118,6 +119,7 @@ fn real_serve_says_which_address_it_could_not_open() {
         .start(&ServeConfig {
             port,
             team_listen: None,
+            link_socket: None,
         })
         .unwrap_err();
     assert_eq!(
@@ -132,6 +134,7 @@ fn real_serve_says_which_address_it_could_not_open() {
         .start(&ServeConfig {
             port: free_port(),
             team_listen: Some(team_listen.clone()),
+            link_socket: None,
         })
         .unwrap_err();
     assert_eq!(

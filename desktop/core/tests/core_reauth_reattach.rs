@@ -28,7 +28,7 @@ fn pass() -> SecretString {
 }
 
 /// The fake CLI's keys for the commands that must carry `--require-admin`.
-const REQUIRE_ADMIN_KEYS: [&str; 9] = [
+const REQUIRE_ADMIN_KEYS: [&str; 11] = [
     "resume",
     "connection_create-http",
     "connection_create-ssh",
@@ -37,6 +37,8 @@ const REQUIRE_ADMIN_KEYS: [&str; 9] = [
     "approvals_approve",
     "team_invite",
     "team_remove",
+    "team_approve-join",
+    "team_deny-join",
     "restore",
 ];
 
@@ -260,6 +262,26 @@ fn require_admin_goes_with_exactly_the_reauth_commands() {
         environment: None,
     })
     .unwrap();
+    // remote sync (docs/remote-sync.md §3.2): approve and deny re-authenticate, listing does not
+    core.join_requests(EnvsIn {
+        envs: vec!["demo/dev".into()],
+    })
+    .unwrap();
+    for decide in [Core::approve_join, Core::deny_join] {
+        decide(
+            &core,
+            JoinDecisionIn {
+                envs: vec!["demo/dev".into()],
+                fingerprint: "fbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+                admin_passphrase: pass(),
+            },
+        )
+        .unwrap();
+    }
+    core.team_sync_status(EnvIn {
+        env: "demo/dev".into(),
+    })
+    .unwrap();
     core.serve_stop();
 
     let mut seen = BTreeSet::new();
@@ -295,6 +317,8 @@ fn require_admin_goes_with_exactly_the_reauth_commands() {
         "team_share",
         "team_join",
         "team_invite-info",
+        "team_join-requests",
+        "team_sync-status",
         "recover",
         "backup",
     ] {
@@ -333,6 +357,22 @@ fn reauth_commands_still_refuse_an_empty_passphrase_before_running() {
                 admin_passphrase: empty(),
             },
         )),
+        err(core.approve_join(JoinDecisionIn {
+            envs: vec!["demo/dev".into()],
+            fingerprint: "fbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+            admin_passphrase: empty(),
+        })),
+        err(core.deny_join(JoinDecisionIn {
+            envs: vec!["demo/dev".into()],
+            fingerprint: "fbbbbbbbbbbbbbbbbbbbbbbbbb".into(),
+            admin_passphrase: empty(),
+        })),
+        err(core.pairing_create(PairingCreateIn {
+            envs: None,
+            name: None,
+            device_name: "new mac".into(),
+            admin_passphrase: empty(),
+        })),
     ];
     for e in reasons {
         assert_eq!(e.reason, "passphrase_missing");

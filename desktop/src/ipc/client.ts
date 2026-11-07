@@ -58,6 +58,8 @@ function seedFromLocation(): MockSeed {
   return {
     initialized: ready, latency: 1, activity: ready || q.has('activity'), sshWithoutCli: q.has('ssh-without-cli'),
     settingsCorrupt: q.has('settings-corrupt'),
+    // remote sync review: `?state=ready&link` (enrolled) and `&paired` (one paired Mac)
+    linkEnrolled: q.has('link') || q.has('paired'), pairedDevice: q.has('paired'), linkMissing: q.has('no-link'),
   };
 }
 

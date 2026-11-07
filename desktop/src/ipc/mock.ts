@@ -11,9 +11,11 @@
 // the synthetic recovery code is `ABCD-EFGH-IJKL-MNOP-QRST-UVWX`.
 
 import type {
-  Alert, AppError, AuditRecord, CommandName, Commands, ConnectionView, Control, Events, Grant, ImportEntry, ImportReport, ImportState, ImportWhy,
-  Incident, InviteListItem, InvitePreview, Member, Principal, Project, SecretKind, SecretView, ServeStatus, Settings, TeamEnvironment,
+  Alert, AppError, AuditRecord, CommandName, Commands, ConnectionView, Control, DeviceEnvView, Events, Grant, ImportEntry, ImportReport, ImportState, ImportWhy,
+  Incident, InviteListItem, InvitePreview, JoinRequest, LinkDevice, LinkPeer, LinkStatus, Member, PairedDevice, PairingJoinEnv, Principal, Project, SecretKind,
+  SecretView, ServeStatus, Settings, SyncStatus, TeamEnvironment,
 } from './contract';
+import { decodePairingCode, encodePairingCode, type PairingCodeData } from '../lib/pairing';
 import { fnv1a, mulberry32 } from '../lib/rng';
 import { containsAdmin, INVITE_LINK_MAX, isInviteLink, isValidName, MIN_PASSPHRASE_CHARS, parseTarget, sameAsAdmin } from '../lib/validators';
 import { CONNECTION_KEY_KINDS, countOf, declarableScopes, grantState, isHostKey, isSshHost, isSshUser, parseListen, splitEnv } from '../lib/dash';
@@ -54,10 +56,24 @@ export interface MockSeed {
   /** The settings file is damaged (desktop/core/src/settings.rs): reading it, and so starting the
    *  relay, fails with `settings_corrupt` until `settings_set` writes over it. */
   settingsCorrupt?: boolean;
+  /** Remote sync: this Mac is enrolled with the link service already. */
+  linkEnrolled?: boolean;
+  /** Remote sync: the app was built without the zeropw-link daemon. */
+  linkMissing?: boolean;
+  /** With `initialized` and `linkEnrolled`: one paired Mac ("studio"), up to date. */
+  pairedDevice?: boolean;
+  /** How long after a pairing code is made the pretend other Mac asks to join (default 4 s). */
+  pairRequestDelayMs?: number;
+  /** How many `pairing_join` polls stay pending before the pretend other Mac approves (default 2). */
+  pairApproveAfterPolls?: number;
+  /** Unacknowledged overridden changes per paired environment (`team sync-status` conflicts). */
+  syncConflicts?: number;
 }
 export interface MockInspect {
   initialized: boolean; onetime: number; terminals: number; projects: string[]; principals: string[]; stopped: boolean;
   secureView: boolean; secrets: string[]; connections: string[];
+  /** Remote sync: enrolled, paired Macs (fingerprints), and every socket request body the core would send (synthetic). */
+  linkEnrolled: boolean; paired: string[]; linkRequests: string[];
 }
 export interface MockBackend {
   call<K extends CommandName>(name: K, input: Commands[K][0]): Promise<Commands[K][1]>;
@@ -141,7 +157,7 @@ const MAX_WRITE_BYTES = 64 * 1024;
 const MAX_QUEUED_INPUT = 256 * 1024;
 const utf8Bytes = (s: string): number => new TextEncoder().encode(s).length;
 
-interface OneTime { kind: 'recovery' | 'token' | 'invite' | 'link' | 'secret' | 'env'; text: string; preview?: InvitePreview; principal?: string; expires: number }
+interface OneTime { kind: 'recovery' | 'token' | 'invite' | 'link' | 'secret' | 'env' | 'pairing' | 'pairtext'; text: string; preview?: InvitePreview; principal?: string; expires: number }
 interface MockVersion { version: number; status: 'staged' | 'active' | 'retired' | 'revoked'; created_at: string; value: string; public: { public_key: string; fingerprint: string; algorithm: string } | null }
 interface MockSecret { id: string; project: string; environment: string; kind: SecretKind; versions: MockVersion[] }
 interface MockInvite extends InviteListItem { secret: string }
@@ -297,7 +313,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
   // ---- one-time store: kinds, lifetimes and the core's reason codes
   const putOnce = (item: Omit<OneTime, 'expires'>): string => {
     const ref = newRef();
-    const life = item.kind === 'secret' ? SECRET_TTL_MS : item.kind === 'invite' ? inviteTtl : ttl;
+    const life = item.kind === 'secret' ? SECRET_TTL_MS : item.kind === 'invite' || item.kind === 'pairtext' ? inviteTtl : ttl;
     onetime.set(ref, { ...item, expires: Date.now() + life });
     return ref;
   };
@@ -313,7 +329,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
   /** Kinds `onetime_show`/`onetime_copy` hand to the webview (desktop/core/src/onetime.rs
    *  `showable`): not a pasted invite, which only `team_join` reads, and not a recovery code,
    *  whose groups `recovery_generate` returned once and which only `vault_init` reads again. */
-  const SHOWABLE: readonly OneTime['kind'][] = ['token', 'link', 'secret'];
+  const SHOWABLE: readonly OneTime['kind'][] = ['token', 'link', 'secret', 'pairing'];
   const grantLive = (g: MockGrant) => grantState(grantOut(g), Date.now()) === 'live';
   const record = (rec: AuditRecord) => { audit.push(rec); if (audit.length > 500) audit.shift(); emit('audit://records', { records: [rec] }); };
   const setControl = (c: Control) => { control = c; emit('control://changed', control); };
@@ -598,7 +614,70 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     return out;
   };
 
+  // ---- remote sync (docs/remote-sync.md §4): the link daemon, a pretend other Mac and paired Macs
+  const MOCK_SERVICE = 'https://link.zeropw.invalid';
+  let linkEnrolled = seed.linkEnrolled ?? false;
+  let linkId: string | null = linkEnrolled ? randFrom(26, B32) : null;
+  let linkService = MOCK_SERVICE;
+  const linkRequests: string[] = [];
+  const linkDevices: LinkDevice[] = [];
+  const linkPeers: LinkPeer[] = [];
+  const paired: PairedDevice[] = [];
+  /** When each paired Mac's environments started syncing (they read as up to date 4 s later). */
+  const syncSince = new Map<string, number>();
+  interface MockPairingA { envs: string[]; deviceName: string; requester: string; requesterLink: string; requestAt: number; approved: Set<string>; denied: boolean; invites: Map<string, string> }
+  const pairingsA: MockPairingA[] = [];
+  const pairingsB = new Map<string, { polls: number; joined: Map<number, PairingJoinEnv> }>();
+  const pairRequestDelay = seed.pairRequestDelayMs ?? 4000;
+  const pairApproveAfter = seed.pairApproveAfterPolls ?? 2;
+  const lowFp = (seedText: string) => { const r = mulberry32(fnv1a(seedText)); return Array.from({ length: 26 }, () => B32[Math.floor(r() * 32)]).join(''); };
+  const linkStatus = (): LinkStatus => seed.linkMissing
+    ? { available: false, running: false, enrolled: false, revoked: false, device_id: null, online: false, service: MOCK_SERVICE, service_host: 'link.zeropw.invalid',
+        default_service: MOCK_SERVICE, device_name: 'this-mac', peers: [], problem: 'link_binary_missing' }
+    : { available: true, running: true, enrolled: linkEnrolled, revoked: false, device_id: linkId, online: linkEnrolled, service: linkService,
+        service_host: linkService.replace(/^https?:\/\//, ''), default_service: MOCK_SERVICE, device_name: 'this-mac', peers: linkPeers.map((p) => ({ ...p })), problem: null };
+  const linkRequest = (body: Record<string, unknown>) => { linkRequests.push(JSON.stringify(body)); };
+  const needLink = () => { if (seed.linkMissing) throw fail('Unavailable', 'link_binary_missing'); };
+  const upsertPaired = (fp: string, link: string | null, name: string, envs: string[]) => {
+    let d = paired.find((x) => x.fingerprint === fp);
+    if (!d) { d = { fingerprint: fp, link_device_id: link, name, envs: [], added_at: Math.floor(Date.now() / 1000) }; paired.push(d); }
+    if (link) d.link_device_id = link;
+    if (name) d.name = name;
+    d.envs = [...new Set([...d.envs, ...envs])].sort();
+  };
+  const addLinkPeer = (id: string, name: string) => {
+    if (!linkDevices.some((d) => d.device_id === id)) linkDevices.push({ device_id: id, name, created_at: Math.floor(Date.now() / 1000), last_seen_at: null, online: true, revoked_at: null });
+    if (!linkPeers.some((p) => p.device_id === id)) linkPeers.push({ device_id: id, name, online: true, revoked: false, path: 'direct', rtt_ms: 12, last_error: null });
+  };
+  const syncOf = (key: string, t: MockTeamEnv): SyncStatus => ({
+    env_id: t.env_id, self: fingerprint(), serve_updated_at: serve.running ? iso() : null, conflicts: seed.syncConflicts ?? 0,
+    peers: t.members.filter((m) => m.fingerprint !== fingerprint() && m.status === 'active').map((m) => {
+      const since = syncSince.get(`${key}|${m.fingerprint}`);
+      const up = serve.running && since !== undefined;
+      return {
+        fingerprint: m.fingerprint, name: m.name, state: !up ? 'offline' : Date.now() - since < 4000 ? 'syncing' : 'up_to_date',
+        session: up, transport: up ? 'link' : null, last_contact_at: up ? iso() : null, next_attempt_at: null, last_error: null,
+      };
+    }),
+  });
+  function seedPaired() {
+    const studio = lowFp('studio-mac'), studioLink = randFrom(26, B32);
+    const p = projects[0];
+    if (!p) return;
+    const envs = p.environments.map((e) => `${p.name}/${e}`);
+    for (const key of envs) {
+      const [project, environment] = key.split('/') as [string, string];
+      const team: MockTeamEnv = teams.get(key) ?? { env_id: randFrom(26, B32), project, environment, members: [{ fingerprint: fingerprint(), name: 'this-mac', role: 'admin', status: 'active', owner: true }], invites: [] };
+      if (!team.members.some((m) => m.fingerprint === studio)) team.members.push({ fingerprint: studio, name: 'studio', role: 'admin', status: 'active', owner: false });
+      teams.set(key, team);
+      syncSince.set(`${key}|${studio}`, Date.now() - 60_000);
+    }
+    addLinkPeer(studioLink, 'studio');
+    upsertPaired(studio, studioLink, 'studio', envs);
+  }
+
   if (seed.initialized) seedReady();
+  if (seed.initialized && seed.pairedDevice && linkEnrolled) seedPaired();
   if (seed.activity && typeof window !== 'undefined') {
     activity = setInterval(() => {
       if (!initialized || !serve.running || control.stopped) return;
@@ -1197,6 +1276,212 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       return { env_id: item.preview.env_id, self_fingerprint: fingerprint(), inviter_fingerprint: item.preview.inviter, project: p, environment: e };
     },
 
+    // ---- remote sync
+    link_status: () => linkStatus(),
+    link_enroll: async ({ invite_code, service, name }) => {
+      needLink();
+      const compact = typeof invite_code === 'string' ? invite_code.replace(/[\s-]/g, '').toUpperCase() : '';
+      if (!/^ZPL[A-Z2-7]{26}$/.test(compact) || invite_code.trim().length > 64) throw fail('InvalidInput', 'link_invite_malformed');
+      const url = (service ?? '').trim().replace(/\/$/, '') || MOCK_SERVICE;
+      if (!/^https:\/\/[a-z0-9.-]+(:\d{1,5})?$/i.test(url)) throw fail('InvalidInput', 'link_service_invalid');
+      if (linkEnrolled) throw fail('StateError', 'link_already_enrolled');
+      await wait(600);
+      linkRequest({ op: 'enroll', service: url.toLowerCase(), name: name ?? 'this-mac', invite_code: invite_code.trim() });
+      if (compact.endsWith('AAAAAA')) throw fail('PolicyDenied', 'link_invite_invalid');
+      linkEnrolled = true; linkId = randFrom(26, B32); linkService = url.toLowerCase();
+      return linkStatus();
+    },
+    pairing_create: async ({ envs, name, device_name, admin_passphrase }) => {
+      needInit(); needLink(); await wait(500);
+      checkAdmin(admin_passphrase);
+      if (typeof device_name !== 'string' || !device_name.trim() || device_name.length > 64 || /[\x00-\x1f\x7f]/.test(device_name)) throw fail('InvalidInput', 'invalid_name', 'name');
+      if (!linkEnrolled || !linkId) throw fail('StateError', 'link_not_enrolled');
+      if (!serve.running) startServe();
+      const chosen = envs ?? projects.flatMap((p) => p.environments.map((e) => `${p.name}/${e}`));
+      if (!chosen.length) throw fail('InvalidInput', 'pairing_no_environments');
+      if (chosen.length > 16 || new Set(chosen).size !== chosen.length || chosen.some((e) => !splitEnv(e))) throw fail('InvalidInput', 'invalid_argument', 'envs');
+      const out = [] as { env: string; invite_id: string; shared_now: boolean }[];
+      const invites: PairingCodeData['invites'] = [];
+      const ids = new Map<string, string>();
+      for (const key of chosen) {
+        const pair = splitEnv(key) as { project: string; environment: string };
+        let team = teams.get(key);
+        const sharedNow = !team;
+        if (!team) {
+          requireEnv(pair.project, pair.environment);
+          team = { env_id: randFrom(26, B32), project: pair.project, environment: pair.environment, members: [{ fingerprint: fingerprint(), name: name ?? 'this-mac', role: 'admin', status: 'active', owner: true }], invites: [] };
+          teams.set(key, team);
+          record({ ts: iso(), event: 'team_share', project: pair.project, environment: pair.environment });
+        }
+        const secret = randFrom(200, B32), now = Date.now();
+        const inv: MockInvite = { invite_id: randFrom(32, HEX), role: 'admin', name: device_name, link: true, created_at: iso(now), expires_at: iso(now + 24 * HOUR), status: 'pending', used_at: null, used_by: null, revoked_at: null, secret };
+        team.invites.push(inv);
+        record({ ts: iso(), event: 'team_invite_create', invite_id: inv.invite_id, role: 'admin' });
+        ids.set(key, inv.invite_id);
+        invites.push({ env: key, invite: secret });
+        out.push({ env: key, invite_id: inv.invite_id, shared_now: sharedNow });
+      }
+      linkRequest({ op: 'link_token' });
+      const code = encodePairingCode({ v: 1, service: linkService, link_token: 'zplt_mock_' + randFrom(24, B32), peer: linkId, name: name ?? 'this-mac', invites });
+      const ref = putOnce({ kind: 'pairing', text: code });
+      pairingsA.push({ envs: chosen, deviceName: device_name, requester: lowFp(code), requesterLink: randFrom(26, B32), requestAt: Date.now() + pairRequestDelay, approved: new Set(), denied: false, invites: ids });
+      return { ref, expires_at: iso(Date.now() + DEFAULT_TTL_MS), peer: linkId, fingerprint: fingerprint(), environments: out };
+    },
+    join_requests: ({ envs }) => {
+      needInit();
+      if (!Array.isArray(envs) || !envs.length) throw fail('InvalidInput', 'invalid_argument', 'envs');
+      const now = Date.now();
+      const requests: JoinRequest[] = [];
+      for (const p of pairingsA) {
+        if (p.denied || now < p.requestAt) continue;
+        for (const env of p.envs) {
+          if (!envs.includes(env) || p.approved.has(env)) continue;
+          requests.push({ env, request_id: 'req_' + fnv1a(p.requester + env).toString(16), invite_id: p.invites.get(env) ?? '', fingerprint: p.requester,
+            first_seen_at: iso(p.requestAt), last_seen_at: iso(now), attempts: 1 + Math.floor((now - p.requestAt) / 3000) });
+        }
+      }
+      return { requests, errors: [] };
+    },
+    approve_join: async ({ envs, fingerprint: fp, admin_passphrase }) => {
+      needInit(); await wait(300);
+      checkAdmin(admin_passphrase);
+      if (!/^[a-z2-7]{26}$/.test(fp)) throw fail('InvalidInput', 'invalid_argument', 'fingerprint');
+      const results = envs.map((env) => {
+        const p = pairingsA.find((x) => x.requester === fp && x.envs.includes(env) && !x.denied);
+        if (!p) return { env, ok: true, invites: [] as string[] };
+        p.approved.add(env);
+        const team = teams.get(env);
+        if (team && !team.members.some((m) => m.fingerprint === fp)) team.members.push({ fingerprint: fp, name: p.deviceName, role: 'admin', status: 'active', owner: false });
+        const inv = team?.invites.find((i) => i.invite_id === p.invites.get(env));
+        if (inv) { inv.status = 'used'; inv.used_at = iso(); inv.used_by = fp; inv.secret = ''; }
+        syncSince.set(`${env}|${fp}`, Date.now());
+        addLinkPeer(p.requesterLink, p.deviceName);
+        upsertPaired(fp, p.requesterLink, p.deviceName, [env]);
+        record({ ts: iso(), event: 'team_join_approve', device: fp });
+        return { env, ok: true, invites: [p.invites.get(env) ?? ''] };
+      });
+      return { fingerprint: fp, envs: results };
+    },
+    deny_join: async ({ envs, fingerprint: fp, admin_passphrase }) => {
+      needInit(); await wait(300);
+      checkAdmin(admin_passphrase);
+      const results = envs.map((env) => {
+        const p = pairingsA.find((x) => x.requester === fp && x.envs.includes(env));
+        if (!p) return { env, ok: true, invites: [] as string[] };
+        p.denied = true;
+        const inv = teams.get(env)?.invites.find((i) => i.invite_id === p.invites.get(env));
+        if (inv && inv.status === 'pending') { inv.status = 'revoked'; inv.revoked_at = iso(); inv.secret = ''; }
+        return { env, ok: true, invites: inv ? [inv.invite_id] : [] };
+      });
+      return { fingerprint: fp, envs: results };
+    },
+    pairing_preview: async ({ text }) => {
+      const v = typeof text === 'string' ? text.trim() : '';
+      if (!v) throw fail('InvalidInput', 'pairing_code_missing');
+      const code = decodePairingCode(v);
+      if (!code) throw fail('InvalidInput', 'pairing_code_malformed');
+      if (code.link_token.startsWith('zplt_expired')) throw fail('InvalidInput', 'pairing_expired');
+      await wait(250);
+      const ref = putOnce({ kind: 'pairtext', text: v });
+      return {
+        ref, preview: {
+          name: code.name, peer: code.peer, fingerprint: lowFp(code.peer), service: code.service, service_host: code.service.replace(/^https?:\/\//, ''),
+          environments: code.invites.map((i) => ({ env: i.env, env_id: lowFp(i.invite), role: 'admin' })), expires_at: iso(Date.now() + DEFAULT_TTL_MS),
+        },
+      };
+    },
+    pairing_join: async ({ ref }) => {
+      needInit(); needLink();
+      const item = peekOnce(ref, ['pairtext']);
+      const code = decodePairingCode(item.text);
+      if (!code) throw fail('InvalidInput', 'pairing_code_malformed');
+      await wait(700);
+      if (!linkEnrolled) {
+        linkRequest({ op: 'enroll', service: code.service, name: 'this-mac', link_token: code.link_token });
+        linkEnrolled = true; linkId = randFrom(26, B32); linkService = code.service;
+        addLinkPeer(code.peer, code.name);
+      } else if (!linkDevices.some((d) => d.device_id === code.peer)) {
+        throw fail('StateError', 'link_other_account');
+      }
+      const state = pairingsB.get(ref) ?? { polls: 0, joined: new Map<number, PairingJoinEnv>() };
+      pairingsB.set(ref, state);
+      state.polls += 1;
+      const inviter = lowFp(code.peer), self = fingerprint();
+      const environments = code.invites.map((inv, i): PairingJoinEnv => {
+        const done = state.joined.get(i);
+        if (done) return done;
+        // a local environment of the same name is never joined into unless it already is this
+        // team environment (the core's pairing_env_exists)
+        const localEnv = projects.some((p) => p.environments.some((e) => `${p.name}/${e}` === inv.env)) || teams.has(inv.env);
+        if (localEnv && teams.get(inv.env)?.env_id !== lowFp(inv.invite)) return { env: inv.env, state: 'failed', reason: 'pairing_env_exists' };
+        if (state.polls <= pairApproveAfter) return { env: inv.env, state: 'pending', self_fingerprint: self, inviter_fingerprint: inviter };
+        const [project, environment] = inv.env.split('/') as [string, string];
+        teams.set(inv.env, {
+          env_id: lowFp(inv.invite), project, environment, invites: [],
+          members: [
+            { fingerprint: inviter, name: code.name, role: 'admin', status: 'active', owner: true },
+            { fingerprint: self, name: 'this-mac', role: 'admin', status: 'active', owner: false },
+          ],
+        });
+        syncSince.set(`${inv.env}|${inviter}`, Date.now());
+        upsertPaired(inviter, code.peer, code.name, [inv.env]);
+        record({ ts: iso(), event: 'team_join', project });
+        const joined: PairingJoinEnv = { env: inv.env, state: 'joined', self_fingerprint: self, inviter_fingerprint: inviter, project, environment };
+        state.joined.set(i, joined);
+        return joined;
+      });
+      const done = environments.every((e) => e.state === 'joined');
+      if (done) { onetime.delete(ref); pairingsB.delete(ref); }
+      return { done, peer: code.peer, environments };
+    },
+    team_sync_status: ({ env }) => {
+      needInit();
+      const t = teamOf(env);
+      return syncOf(String(env), t);
+    },
+    devices_overview: () => {
+      needInit();
+      const envNames = [...new Set(paired.flatMap((d) => d.envs))].sort();
+      const envs: DeviceEnvView[] = envNames.map((env) => {
+        const t = teams.get(env);
+        if (!t) return { env, members: null, sync: null, members_error: 'team_env_not_found', sync_error: 'team_env_not_found' };
+        return { env, members: { env_id: t.env_id, members: t.members.map((m) => ({ ...m })) }, sync: syncOf(env, t) };
+      });
+      return {
+        self_fingerprint: fingerprint(), link: linkStatus(), link_devices: linkDevices.map((d) => ({ ...d })),
+        devices: paired.map((d) => ({ ...d, envs: d.envs.slice() })), envs,
+      };
+    },
+    device_remove: async ({ fingerprint: fp, link_device_id, admin_passphrase }) => {
+      needInit(); await wait(500);
+      if (fp && fp === fingerprint()) throw fail('InvalidInput', 'cannot_remove_self');
+      if (link_device_id && link_device_id === linkId) throw fail('InvalidInput', 'cannot_remove_self');
+      const rec = paired.find((d) => (fp && d.fingerprint === fp) || (link_device_id && d.link_device_id === link_device_id));
+      const envs = rec?.envs ?? [];
+      if (envs.length) checkAdmin(admin_passphrase);
+      const removed: string[] = [], failed: { env: string; reason: string }[] = [];
+      for (const env of envs) {
+        const m = teams.get(env)?.members.find((x) => x.fingerprint === rec?.fingerprint);
+        if (m?.owner) { failed.push({ env, reason: 'cannot_remove_owner' }); continue; }
+        if (m) m.status = 'removed';
+        removed.push(env);
+        record({ ts: iso(), event: 'team_member_remove', device: rec?.fingerprint ?? '' });
+      }
+      const link = link_device_id ?? rec?.link_device_id ?? null;
+      let linkRevoked = false;
+      if (link && !failed.length) {
+        linkRequest({ op: 'revoke', device_id: link });
+        const i = linkDevices.findIndex((d) => d.device_id === link); if (i >= 0) linkDevices.splice(i, 1);
+        const j = linkPeers.findIndex((d) => d.device_id === link); if (j >= 0) linkPeers.splice(j, 1);
+        linkRevoked = true;
+      }
+      if (rec) {
+        if (!failed.length) paired.splice(paired.indexOf(rec), 1);
+        else rec.envs = rec.envs.filter((e) => !removed.includes(e));
+      }
+      return { removed, failed, link_revoked: linkRevoked, ...(link && failed.length ? { link_error: 'link_kept' } : {}) };
+    },
+
     // ---- one-time values
     onetime_show: ({ ref }) => {
       const item = peekOnce(ref, SHOWABLE);
@@ -1270,6 +1555,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     inspect: () => ({
       initialized, onetime: (prune(), onetime.size), terminals: terminals.size, projects: projects.map((p) => p.name), principals: principals.map((p) => p.id),
       stopped: control.stopped, secureView, secrets: [...secrets.keys()], connections: [...connections.keys()],
+      linkEnrolled, paired: paired.map((d) => d.fingerprint), linkRequests: linkRequests.slice(),
     }),
     dispose() {
       if (activity) clearInterval(activity);

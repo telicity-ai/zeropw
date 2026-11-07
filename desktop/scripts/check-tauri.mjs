@@ -5,7 +5,7 @@
 //   no CSP or IPC loosening, the main window as specified (drag and drop on, for .env import),
 //   deep links for `zeropw` only, and a minimal bundle section: sidecars, resources and macOS
 //   settings are release-only. The tauri dependency has no features (no protocol-asset).
-// - tauri.bundle.conf.json (the release config, §9): exactly the three sidecars, LICENSE and
+// - tauri.bundle.conf.json (the release config, §9): exactly the four sidecars, LICENSE and
 //   THIRD_PARTY_LICENSES.md as resources, and bundle.macOS with minimum macOS 11.0, the
 //   Info.release.plist that holds only the Local Network usage description, and an ad-hoc
 //   signing identity ("-") or none. No credential, certificate, notarization, entitlement,
@@ -55,7 +55,7 @@ const ALLOWED_RUST_PLUGINS = [
   'tauri-plugin-dialog',
   'tauri-plugin-single-instance',
 ];
-const SIDECARS = ['binaries/zeropw-admin', 'binaries/zeropw_session', 'binaries/zeropw-agent'];
+const SIDECARS = ['binaries/zeropw-admin', 'binaries/zeropw_session', 'binaries/zeropw-agent', 'binaries/zeropw-link'];
 const BASE_KEYS = ['$schema', 'productName', 'version', 'identifier', 'build', 'app', 'bundle', 'plugins'];
 const BASE_BUNDLE_KEYS = ['active', 'targets', 'category', 'shortDescription', 'icon'];
 const RELEASE_RESOURCES = { '../../LICENSE': 'LICENSE', 'notices/THIRD_PARTY_LICENSES.md': 'THIRD_PARTY_LICENSES.md' };

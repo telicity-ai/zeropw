@@ -7,8 +7,10 @@ import { ri, useApp } from '../ui/context';
 import { BackButton, StepFrame, type FrameState } from './StepFrame';
 
 /** Step 4: first project and its environments (fixed once created). */
-export function ProjectStep({ frame, sectionRef, created, onBack, onNext }: {
+export function ProjectStep({ frame, sectionRef, created, onBack, onNext, onPair }: {
   frame: FrameState; sectionRef: Ref<HTMLElement>; created: Project | null; onBack(): void; onNext(p: Project): void;
+  /** The vault exists: bring another Mac's environments instead of making a project here. */
+  onPair?(): void;
 }) {
   const { field } = useApp();
   const [name, setName] = useState('demo');
@@ -47,7 +49,10 @@ export function ProjectStep({ frame, sectionRef, created, onBack, onNext }: {
     <StepFrame name="project" frame={frame} sectionRef={sectionRef} title={t('proj.title')}
       nav={<>
         <BackButton onClick={onBack} label={t('common.back')} />
-        <button className="btn btn-primary" type="button" aria-busy={busy} onClick={() => void submit()}>{t('proj.next')}</button>
+        <span className="nav-pair">
+          {onPair && <button className="btn btn-ghost" type="button" onClick={() => { if (!busy) onPair(); }}>{t('proj.pair')}</button>}
+          <button className="btn btn-primary" type="button" aria-busy={busy} onClick={() => void submit()}>{t('proj.next')}</button>
+        </span>
       </>}>
       <div className="field r" style={ri(1)}>
         <div className="label"><label htmlFor="ob-proj-name">{t('proj.name')}</label></div>
