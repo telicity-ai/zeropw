@@ -1,0 +1,32 @@
+{
+  "controller_model": "gpt-6.1-sol",
+  "reasoning_effort": "ultra",
+  "main_base": "9bf3e9071139302d96222d0f471ae6756992e658",
+  "tested_worker_head": "63d2e4d8d1f0d6f2b834401767026da8fddb1b9c",
+  "source_integration_commit": "1d69cca2429d7e60a846993851e6a7f656a5f27a",
+  "source_integration_tree": "ecce458c22891ea7039c46f3412b5cc17854950e",
+  "source_integration_parents": [
+    "9bf3e9071139302d96222d0f471ae6756992e658",
+    "63d2e4d8d1f0d6f2b834401767026da8fddb1b9c"
+  ],
+  "rust_tree": "4b628201f8dc089c0579ebbe75ee768ae9861f6c",
+  "desktop_tree": "2413844c89265a3e239be2372d34b1e6e1b2d4bb",
+  "product_trees_equal_tested_worker": true,
+  "whole_integration_head_runtime_rerun": false,
+  "evidence_catalog_verified_entries": 201,
+  "worker_source_files_verified": 931,
+  "selected_file_sha256": {
+    "REPORT.md": "c539ee235e8bee4f4440d5f9a8b8a86fcf7eec1fcc307e74c15404bd6b367315",
+    "verification-summary.json": "bb289d13d71ae6275455f52f6b038e709158e6c20b3be27ccdf20a3d910f4835",
+    "final-source-bindings.json": "52c27ef4cc3e68c33731bacb6afff1bdf1aaf9d6473e2f870343204f8b11bf65",
+    "combined-commit-binding.json": "03df9b688cf8aa3a4b4bfc5197d11ffeea62d375c867d200e1522721aae0a2b7",
+    "combined-protected-boundaries.json": "31d1eaf9c10e15fdbe2de9264a7618bb504d17421c38f0055eee2632ca614a70",
+    "combined-commits.txt": "7847be7c50c99c0d830f317c6914ce9c7496a072ffcb35b408a5035b243801f2",
+    "combined-changed-files.txt": "9e2bb5e87c505957dfba22d388f8a54bdb7df92c89f975b52d92e3fe2985e722",
+    "EXTERNAL-SHA256SUMS": "9386ded5f2816ddc3e5c990cfb122835b3e2b77cf2936b620763e1bf2da42815",
+    "STATIC-COLLECTION.md": "0762a07f1c6b26bbce7d7e535481350dc50443232171fa0b69b3db99f9438b6c"
+  },
+  "raw_evidence_directory": "/Users/ys/Code/zeropw-mlp-evidence/m1-personal-vault-integration-20261107",
+  "acceptance": "OPEN: actual Opus/Astra acceptance, real-daemon deletion E2E, physical two-Mac/sleep-wake, packaging and full M2 gates remain open",
+  "deployment": "NOT DEPLOYED"
+}

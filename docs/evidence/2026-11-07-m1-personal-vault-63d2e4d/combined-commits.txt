@@ -1,0 +1,7 @@
+d93e9946104caf224a646105fcd70d13df58b970 Integrate M1 permanent deletion into Personal Vault
+143cf1b015a2c2d3395226d3e8f7ea4c4b02a885 Keep failed adoption explicit and fix native pairing fixture stream mode
+290061380026f9b72b3a67362dd450083fbb441c Reconcile Personal Vault feature table with permanent deletion
+50f53af16b4960b5b0be375ad149aefd214d6475 feat: add feature-neutral strict checkpoint parser feasibility gates
+67c11dad1f3b13a21f4facca36ec27a2157d9570 feat: implement bounded checkpoint attestation integrity and inert candidates
+5ae386b6300c193b02db698ee4ea06662f40ab61 fix: refuse metadata containers before checkpoint projection
+63d2e4d8d1f0d6f2b834401767026da8fddb1b9c Observe fixture daemon startup before restart assertions and type delete stubs

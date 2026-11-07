@@ -1,0 +1,10 @@
+{
+  "head": "63d2e4d8d1f0d6f2b834401767026da8fddb1b9c",
+  "tree": "489d517b1cf0f75a3610b6c789a38257bae09f88",
+  "files": 931,
+  "matches_committed_bytes": true,
+  "different": [],
+  "rust_tree": "4b628201f8dc089c0579ebbe75ee768ae9861f6c",
+  "desktop_tree": "2413844c89265a3e239be2372d34b1e6e1b2d4bb",
+  "worktree_clean": true
+}
