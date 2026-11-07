@@ -38,6 +38,7 @@ pub fn path(env_id: &str) -> String {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PeerState {
     pub session: bool,
+    pub tombstone_agreement: Option<Value>,
     /// When the current session was accepted.
     pub since: Option<f64>,
     /// The last VECTOR this peer sent, and when it arrived.
@@ -65,20 +66,21 @@ fn time(ts: Option<f64>) -> Value {
 pub fn peers_value(peers: &BTreeMap<String, PeerState>) -> Value {
     let mut out = Map::new();
     for (fp, peer) in peers {
-        out.insert(
-            fp.clone(),
-            json!({
-                "session": peer.session,
-                "since": if peer.session { time(peer.since) } else { Value::Null },
-                "peer_vector": peer.peer_vector.as_ref().map_or(Value::Null, |v| json!(v)),
-                "vector_received_at": time(peer.vector_received_at),
-                "transport": if peer.session { peer.transport.map_or(Value::Null, |t| json!(t)) } else { Value::Null },
-                "dial_failures": peer.dial_failures,
-                "next_attempt_at": if peer.dial_failures > 0 { time(peer.next_attempt_at) } else { Value::Null },
-                "last_error": peer.last_error.as_ref().map_or(Value::Null, |e| json!(e)),
-                "last_contact_at": time(peer.last_contact_at),
-            }),
-        );
+        let mut value = json!({
+            "session": peer.session,
+            "since": if peer.session { time(peer.since) } else { Value::Null },
+            "peer_vector": peer.peer_vector.as_ref().map_or(Value::Null, |v| json!(v)),
+            "vector_received_at": time(peer.vector_received_at),
+            "transport": if peer.session { peer.transport.map_or(Value::Null, |t| json!(t)) } else { Value::Null },
+            "dial_failures": peer.dial_failures,
+            "next_attempt_at": if peer.dial_failures > 0 { time(peer.next_attempt_at) } else { Value::Null },
+            "last_error": peer.last_error.as_ref().map_or(Value::Null, |e| json!(e)),
+            "last_contact_at": time(peer.last_contact_at),
+        });
+        if let Some(agreement) = &peer.tombstone_agreement {
+            value["tombstone_agreement"] = agreement.clone();
+        }
+        out.insert(fp.clone(), value);
     }
     Value::Object(out)
 }
@@ -144,6 +146,7 @@ struct FilePeer {
     /// The vector arrived while this serve ran (a vector reloaded from
     /// `peer_vectors.json` after a restart has no receive time).
     vector_received: bool,
+    tombstone_agreement: Option<Value>,
 }
 
 fn file_peer(value: &Value, env_id: &str) -> Result<FilePeer> {
@@ -192,6 +195,7 @@ fn file_peer(value: &Value, env_id: &str) -> Result<FilePeer> {
         dial_failures,
         peer_vector,
         vector_received,
+        tombstone_agreement: peer.get("tombstone_agreement").cloned(),
     })
 }
 
@@ -202,6 +206,10 @@ fn nonzero(vector: &BTreeMap<String, PyInt>) -> BTreeMap<&str, &PyInt> {
         .filter(|(_, seq)| seq.0.sign() != num_bigint::Sign::NoSign)
         .map(|(author, seq)| (author.as_str(), seq))
         .collect()
+}
+
+pub(crate) fn vectors_equal(a: &BTreeMap<String, PyInt>, b: &BTreeMap<String, PyInt>) -> bool {
+    nonzero(a) == nonzero(b)
 }
 
 /// The state of one peer (docs/remote-sync.md §3.3): with a session,
@@ -217,9 +225,7 @@ fn derive_state(peer: Option<&FilePeer>, local: &BTreeMap<String, PyInt>) -> &'s
     };
     if peer.session {
         return match &peer.peer_vector {
-            Some(vector) if peer.vector_received && nonzero(vector) == nonzero(local) => {
-                "up_to_date"
-            }
+            Some(vector) if peer.vector_received && vectors_equal(vector, local) => "up_to_date",
             _ => "syncing",
         };
     }
@@ -256,9 +262,13 @@ fn conflicts(ctx: &Context, env_id: &str) -> Result<usize> {
 /// `sync_state.json` every one is `never_connected` and `serve_updated_at`
 /// is null.
 pub fn status(ctx: &Context, env_id: &str) -> Result<Value> {
+    let _lock = ctx.state.lock()?;
     let mine = DeviceKey::load(ctx.state, ctx.kms)?.fingerprint()?;
     let document = super::membership::load_environment(ctx, env_id)?.document;
     let local = CommitStore::new(ctx.state, env_id).vector()?;
+    let (facts, _, _) = super::sync::load_facts(ctx, env_id)?;
+    let digest = super::tombstone_gate::digest(&facts.tombstone_facts)?;
+    let required = crate::tombstone::support_required(ctx.state, env_id)?;
     let file = ctx.state.read_json(&path(env_id), Value::Null)?;
     let corrupt = || corrupt(env_id);
     let (serve_updated_at, file_peers) = if file.is_null() {
@@ -296,10 +306,24 @@ pub fn status(ctx: &Context, env_id: &str) -> Result<Value> {
             let field =
                 |pick: fn(&FilePeer) -> &Value| peer.map_or(Value::Null, |p| pick(p).clone());
             let session = peer.is_some_and(|p| p.session);
+            let agreement = peer.and_then(|p| p.tombstone_agreement.as_ref());
+            let fresh = super::membership::parse_stored_time(&serve_updated_at)
+                .is_some_and(|at| (0.0..=6.0).contains(&((ctx.clock)() - at)));
+            let gate_ready = if required || agreement.is_some() {
+                fresh && agreement.is_some_and(|a| a["ready"] == true && a["digest"] == digest)
+            } else {
+                true
+            };
+            let state = derive_state(peer, &local);
+            let state = if state == "up_to_date" && !gate_ready {
+                "syncing"
+            } else {
+                state
+            };
             json!({
                 "fingerprint": fp,
                 "name": member["name"].as_str().map_or(Value::Null, |n| json!(n)),
-                "state": derive_state(peer, &local),
+                "state": state,
                 "session": session,
                 "transport": if session { field(|p| &p.transport) } else { Value::Null },
                 "last_contact_at": field(|p| &p.last_contact_at),

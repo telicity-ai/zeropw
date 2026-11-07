@@ -204,7 +204,7 @@ pub fn load_environment(ctx: &Context, env_id: &str) -> Result<FoldResult> {
         Some(ctx.audit),
     )
 }
-fn refold_and_derive(ctx: &Context, env_id: &str) -> Result<FoldResult> {
+pub(crate) fn refold_and_derive(ctx: &Context, env_id: &str) -> Result<FoldResult> {
     let result = load_environment(ctx, env_id)?;
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
     let (project, environment) = sync::env_project_environment(ctx.state, env_id)?;
@@ -250,6 +250,17 @@ fn require_editing_standing(
 ) -> Result<fold::Facts> {
     let (facts, _, _) = sync::load_facts(ctx, env_id)?;
     let commits = CommitStore::new(ctx.state, env_id).all_commits()?;
+    for op in ops {
+        if op["op"]
+            .as_str()
+            .is_some_and(|name| name.starts_with("secret."))
+            && op["secret_id"]
+                .as_str()
+                .is_some_and(|id| facts.deleted_secrets.contains(id))
+        {
+            return Err(Error::policy_denied("secret_deleted"));
+        }
+    }
     let self_removal = ops
         .iter()
         .all(|op| op["op"] == "member.remove" && op["fingerprint"] == author);
@@ -1490,12 +1501,23 @@ pub fn share_environment(
         envelope::wrap_dek(&dek, &env_id, &generation, &device.record()?)?,
     );
     let init = json!({"op":"env.init","owner_device":device.record()?.to_dict(),"owner_name":owner_name,"generation_id":generation,"wraps":wraps});
+    let ledger = crate::tombstone::load(ctx.state)?;
+    let deleted_ids: Vec<String> = ledger["local"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(_, m)| m["project"] == project && m["environment"] == environment)
+        .map(|(id, _)| id.clone())
+        .collect();
     let mut shareable = Map::new();
     for (sid, entry) in &secrets_doc {
         if entry["project"] != project
             || entry["environment"] != environment
             || !entry["shared_env"].is_null()
         {
+            continue;
+        }
+        if deleted_ids.contains(sid) {
             continue;
         }
         if entry["versions"].as_object().is_some_and(|m| {
@@ -1614,9 +1636,9 @@ pub fn share_environment(
     }
     // The pure computation above precedes all retag and commit writes.
     let _lock = ctx.state.lock()?;
-    if !shareable.is_empty() {
+    if !shareable.is_empty() || !deleted_ids.is_empty() {
         let mut doc = ctx.state.read_json(crate::vault::VAULT_DOC, json!({}))?;
-        for sid in shareable.keys() {
+        for sid in shareable.keys().chain(deleted_ids.iter()) {
             doc["secrets"][sid]["shared_env"] = json!(env_id);
         }
         ctx.state.write_json(crate::vault::VAULT_DOC, &doc)?;
@@ -1666,6 +1688,15 @@ pub fn share_environment(
         team.register_env(&env_id)?;
     }
     author_commit(ctx, team, &env_id, vec![init])?;
+    for id in &deleted_ids {
+        author_fact(
+            ctx,
+            team,
+            &env_id,
+            "secret_deleted",
+            json!({"secret_id":id}),
+        )?;
+    }
     for op in secret_ops {
         author_commit(ctx, team, &env_id, vec![op])?;
     }

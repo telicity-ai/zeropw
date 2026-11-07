@@ -6826,3 +6826,12 @@ fn server_stop_does_not_wait_for_idle_keep_alive_clients() {
     s.server.stop();
     assert!(started.elapsed() < Duration::from_secs(3));
 }
+
+#[test]
+fn m1_deleted_identity_refuses_next_http_request_with_existing_handle() {
+    let t = GatewayTest::new();
+    assert_eq!(t.relay("GET", "/repos").status, 200);
+    let auth = t.ctx.admin.verify(ADMIN, None).unwrap();
+    t.ctx.vault.delete_secret("gh-token", &auth).unwrap();
+    assert_denied(&t, "secret_deleted", None);
+}

@@ -415,7 +415,7 @@ fn connection_create(id: &str) -> Value {
     json!({"op":"connection.create","id":id,"project":"demo","environment":"dev","service":"synthetic","kind":"http","secret_id":"key","secret_version":null,"description":"","http_target":{"scheme":"http","host":"127.0.0.1","port":8080},"http_auth":{"mode":"bearer"},"http_scope":{"methods":["GET"],"path_prefixes":["/repos"]}})
 }
 
-fn two_node_convergence(tcp: bool) {
+fn two_node_convergence(tcp: bool, deletion: bool) {
     let root = TempDir::new().unwrap();
     let config = Config {
         team_sync_interval_seconds: Some(0.1),
@@ -472,16 +472,24 @@ fn two_node_convergence(tcp: bool) {
     };
     let sa = TeamSync::new(a.clone(), transport_a, ka.clone());
     let sb = TeamSync::new(b.clone(), transport_b, kb.clone());
-    let addr_a = if tcp {
-        "127.0.0.1:0"
-    } else {
-        "native-convergence-a"
-    };
-    let addr_b = if tcp {
-        "127.0.0.1:0"
-    } else {
-        "native-convergence-b"
-    };
+    // The original and M1 scenarios run in parallel in the same process.
+    // Scope their in-process registry entries to their actual device IDs.
+    let inprocess_a = format!("native-convergence-{fa}");
+    let inprocess_b = format!("native-convergence-{fb}");
+    let addr_a = if tcp { "127.0.0.1:0" } else { &inprocess_a };
+    let addr_b = if tcp { "127.0.0.1:0" } else { &inprocess_b };
+    if deletion {
+        sa.register_env(&env).unwrap();
+        sb.register_env(&env).unwrap();
+        sa.publish_fact(&env, "secret_deleted", json!({"secret_id":"key"}))
+            .unwrap();
+        sb.publish_fact(
+            &env,
+            "secret_deleted",
+            json!({"secret_id":"offline-identity"}),
+        )
+        .unwrap();
+    }
     sa.start(Some(addr_a)).unwrap();
     sb.start(Some(addr_b)).unwrap();
     struct Stop(Arc<TeamSync>, Arc<TeamSync>);
@@ -558,6 +566,23 @@ fn two_node_convergence(tcp: bool) {
             .iter()
             .all(|id| sb.document(&env).unwrap()["connections"].get(id).is_some())
     });
+    if deletion {
+        wait(&|| {
+            zeropw::team::sync::load_facts(&a, &env)
+                .unwrap()
+                .0
+                .tombstone_facts
+                .len()
+                == 2
+                && zeropw::team::sync::load_facts(&b, &env)
+                    .unwrap()
+                    .0
+                    .tombstone_facts
+                    .len()
+                    == 2
+        });
+        wait(&|| sa.synced_at(&env).is_some() && sb.synced_at(&env).is_some());
+    }
     let doc_a = sa.document(&env).unwrap();
     let doc_b = sb.document(&env).unwrap();
     assert_eq!(doc_a, doc_b);
@@ -566,16 +591,73 @@ fn two_node_convergence(tcp: bool) {
     }
     wait(&|| !sa.status(&env).unwrap()["synced_at"].is_null());
     wait(&|| !sb.status(&env).unwrap()["synced_at"].is_null());
+    if deletion {
+        for ctx in [&a, &b] {
+            let (facts, _, _) = zeropw::team::sync::load_facts(ctx, &env).unwrap();
+            assert_eq!(facts.tombstone_facts.len(), 2);
+            assert_eq!(
+                ctx.vault
+                    .secret_for_trusted_use("key", Some(1.into()))
+                    .err()
+                    .unwrap()
+                    .reason,
+                "secret_deleted"
+            );
+        }
+        let vid = "abababababababab";
+        let ct =
+            envelope::encrypt_secret(&dek, &env, "key", vid, b"synthetic-offline-late-version")
+                .unwrap();
+        let seq = CommitStore::new(b.state, &env).last_seq(&fb).unwrap();
+        let late=commit::sign_commit(&kb,&env,&seq+1,&format!("{}-0000",commit::now_ms()),&BTreeMap::new(),vec![json!({"op":"secret.put_version","secret_id":"key","kind":"api_key","generation_id":generation,"version_id":vid,"ciphertext":ct,"public":{}}),json!({"op":"secret.activate","secret_id":"key","version_id":vid})]).unwrap();
+        assert_eq!(sb.submit_commit(&env, &late).unwrap(), "accepted");
+        wait(&|| CommitStore::new(a.state, &env).last_seq(&fb).unwrap() == &seq + 1);
+        wait(&|| {
+            [&sa, &sb].iter().all(|team| {
+                team.document(&env).unwrap()["secrets"]["key"]["versions"][vid]["status"]
+                    == "revoked"
+            })
+        });
+        for team in [&sa, &sb] {
+            let doc = team.document(&env).unwrap();
+            assert!(doc["secrets"]["key"]["active_version"].is_null());
+            assert_eq!(doc["secrets"]["key"]["versions"][vid]["status"], "revoked");
+        }
+        wait(&|| sa.synced_at(&env).is_some() && sb.synced_at(&env).is_some());
+        for team in [&sa, &sb] {
+            assert!(team.compact(&env).unwrap()["removed"].as_u64().unwrap() > 0);
+        }
+        for ctx in [&a, &b] {
+            let folded = membership::load_environment(ctx, &env).unwrap();
+            assert!(folded.document["secrets"]["key"]["active_version"].is_null());
+            assert_eq!(
+                zeropw::team::sync::load_facts(ctx, &env)
+                    .unwrap()
+                    .0
+                    .tombstone_facts
+                    .len(),
+                2
+            );
+            assert_eq!(
+                ctx.vault
+                    .secret_for_trusted_use("key", Some(1.into()))
+                    .err()
+                    .unwrap()
+                    .reason,
+                "secret_deleted"
+            );
+        }
+    }
 }
 
 #[test]
 fn original_two_node_convergence_inprocess() {
-    two_node_convergence(false);
+    two_node_convergence(false, false);
 }
 
 #[test]
 fn original_two_node_convergence_tcp() {
-    two_node_convergence(true);
+    two_node_convergence(true, false);
 }
 
 #[test]
@@ -2063,4 +2145,13 @@ fn removed_offline_peer_gets_no_fact_replay_or_authenticated_session() {
     );
     sb.stop();
     tb.shutdown();
+}
+
+#[test]
+fn m1_two_node_offline_deletes_and_late_put_converge_inprocess() {
+    two_node_convergence(false, true);
+}
+#[test]
+fn m1_two_node_offline_deletes_and_late_put_converge_tcp() {
+    two_node_convergence(true, true);
 }

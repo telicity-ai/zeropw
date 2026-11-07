@@ -217,12 +217,28 @@ fn native_cli_reproduces_the_recorded_command_line_contract() {
     let mut failures = Vec::new();
     for case in &cases {
         let actual = one(case, &masker);
-        if actual != case["expected"] {
+        let mut expected = case["expected"].clone();
+        // Keep the recorded Python fixture frozen. M1 deliberately adds one
+        // administrator command; check its exact help entry together with
+        // every existing byte, exit code and error in the original contract.
+        if case["kind"] == "admin"
+            && case["argv"] == serde_json::json!(["--state-dir", "{state}", "secret", "-h"])
+        {
+            const REVOKE: &str =
+                "    revoke    revoke a version (connections using it fail closed)\n";
+            const DELETE: &str =
+                "    delete    permanently delete every version of this ID (admin re-auth)\n";
+            let help = expected["stdout"].as_str().unwrap();
+            assert_eq!(help.matches(REVOKE).count(), 1);
+            expected["stdout"] =
+                Value::String(help.replacen(REVOKE, &format!("{REVOKE}{DELETE}"), 1));
+        }
+        if actual != expected {
             failures.push(format!(
                 "DIFF {} {}\n--- expected\n{}\n--- native\n{}",
                 case["kind"],
                 case["argv"],
-                serde_json::to_string_pretty(&case["expected"]).unwrap(),
+                serde_json::to_string_pretty(&expected).unwrap(),
                 serde_json::to_string_pretty(&actual).unwrap()
             ));
         }

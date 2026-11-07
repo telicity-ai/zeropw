@@ -1381,3 +1381,35 @@ fn recover_rotates_kms_and_revokes_grants() {
     assert!(has(&events, "recover"));
     assert!(has(&events, "auth_failed"));
 }
+
+#[test]
+fn m1_delete_command_requires_fresh_admin_is_idempotent_and_rejects_reuse() {
+    let (_tmp, admin) = setup();
+    seed_project(&admin);
+    admin.cmd(&words(PUT_DEV)).stdin(SYNTHETIC.as_bytes()).ok();
+    let wrong = admin
+        .cmd(&words("secret delete --id gh-token"))
+        .env(ADMIN_ENV, "wrong-passphrase")
+        .fail(1);
+    assert_eq!(reason(&wrong), "admin_reauth_failed");
+    let deleted = admin.ok(&words("secret delete --id gh-token"));
+    assert_eq!(deleted["status"], "deleted");
+    assert_eq!(deleted["permanent_id"], true);
+    assert_eq!(
+        admin.ok(&words("secret delete --id gh-token"))["status"],
+        "deleted"
+    );
+    assert_eq!(
+        reason(
+            &admin
+                .cmd(&words(PUT_DEV))
+                .stdin(SYNTHETIC_V2.as_bytes())
+                .fail(1)
+        ),
+        "secret_deleted"
+    );
+    assert_eq!(
+        admin.ok(&words("secret versions --id gh-token"))["active_version"],
+        Value::Null
+    );
+}

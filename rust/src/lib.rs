@@ -55,3 +55,5 @@ pub(crate) mod mac_proxies;
 pub mod team;
 
 pub use errors::{Error, ErrorClass, Result};
+
+pub mod tombstone;
