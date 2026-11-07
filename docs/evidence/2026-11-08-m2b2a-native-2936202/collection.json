@@ -1,0 +1,74 @@
+{
+  "source_head": "29362020ed7a57451d0984eefb6eeb4e6c110b0c",
+  "rust_tree": "4536b42fb5206b446d4c6760c37c80281bcd3cbe",
+  "frozen_driver_sha256": "bbfc67b219fcaa1089776b087b08458fee4ecf971b49dd4b27278441016053a7",
+  "prestaged_manifest_sha256": "611ea64e6adc9e36544b350e26057a805ab9284f7e647fdcd212e922cc270d06",
+  "external_evidence_directory": "/Users/ys/Code/zeropw-mlp-evidence/m2b2a-native-frozen-driver-20261108/t3-134681c5",
+  "external_files": {
+    "REPORT.md": {
+      "sha256": "850189ef3a7a02851fbd68b5ad61194d9b8641f3025e437e9a6576867a6bf12f",
+      "bytes": 8908
+    },
+    "checksum-catalogue.json": {
+      "sha256": "9de94417b32fcc99c6ef99e0bfc93613c0288c69e212c6ccfa323778f39c3503",
+      "bytes": 14836
+    },
+    "phase-counts.json": {
+      "sha256": "8a66d758b191b95da4f58688c32c97439e096a3cc45870dc3d1610f6660a788b",
+      "bytes": 80334
+    },
+    "postcollection-checks.json": {
+      "sha256": "91827665b4a61268ccd47ca009597b88bd8bea459489ee4b5e9e04aa68368931",
+      "bytes": 4057
+    },
+    "collection-manifest.json": {
+      "sha256": "d64b1acb04b914ee2f170b17504ac18aca5c98a1fac30df315b5638f5fc7bae4",
+      "bytes": 12021
+    },
+    "resource-release.json": {
+      "sha256": "13ea3de38100206ac7c24af3a2bcaaaf4635b721de9afda108e70a557a9fca05",
+      "bytes": 1132
+    },
+    "collector-errors.json": {
+      "sha256": "c67ed35b856cf6bf49868a26cc640875eae142488977fe0826acfc87259085da",
+      "bytes": 998
+    },
+    "raw/full-verify.log": {
+      "sha256": "144f6bdd94d4a13817ec64716f4048cfa2e4503fadf3f2e6eee3655614467d72",
+      "bytes": 182583
+    },
+    "raw/phases.json": {
+      "sha256": "96a3903d971807e5dc52db7172a4e625a2c6d3cf6910c5c1822d5bb14aef400a",
+      "bytes": 27354
+    },
+    "raw/driver-result.json": {
+      "sha256": "f462ba30d0a0f49bbf5d043cce0cd641453ae045c83a4f4e4570d86b3db0d992",
+      "bytes": 508
+    },
+    "raw/driver-release.json": {
+      "sha256": "25281f4d77eaffb275bd41200d4104912199641f81927bd7c7828968f1c3a6a5",
+      "bytes": 416
+    },
+    "raw/source-manifest-before.json": {
+      "sha256": "ef0c51ab71230f396545ae04f5726924ad980be7e0e13b99795c1d27b81395a4",
+      "bytes": 366572
+    },
+    "raw/source-manifest-after.json": {
+      "sha256": "ef0c51ab71230f396545ae04f5726924ad980be7e0e13b99795c1d27b81395a4",
+      "bytes": 366572
+    },
+    "raw/registry-own-before.json": {
+      "sha256": "f887874b0091e269e4dc1bceb2e007e092648b04b395cd805153d83818e6a8a9",
+      "bytes": 103324
+    },
+    "raw/registry-own-after.json": {
+      "sha256": "f887874b0091e269e4dc1bceb2e007e092648b04b395cd805153d83818e6a8a9",
+      "bytes": 103324
+    }
+  },
+  "static_collection_sha256": "22b60a29881cd34af1c20aa3a30c52c4616c880cf373765a3c9d35dcbfb01a80",
+  "execution_model": "gpt-6.1-sol",
+  "reasoning_effort": "ultra",
+  "collector_model": "gpt-6.1-sol",
+  "review_or_acceptance": false
+}

@@ -1,0 +1,27 @@
+{
+  "VM_stopped_or_resized": false,
+  "address": "admin@192.168.64.2",
+  "all_own_SSH_transports_ended": true,
+  "all_own_native_build_test_drivers_ended": true,
+  "all_own_synchronous_product_commands_returned": true,
+  "basis": [
+    "Frozen driver result and driver-release records",
+    "Main SSH Popen.wait returned",
+    "Every prelaunch/progress/collection SSH subprocess.run returned"
+  ],
+  "collection_transport_end": "2026-11-07T18:03:03.316480+00:00",
+  "driver_end": "2026-11-07T18:01:16.883798+00:00",
+  "driver_first_failure": null,
+  "driver_run_invocations": 1,
+  "driver_status": "REQUESTED_PHASES_PASSED",
+  "further_native_execution_planned": false,
+  "independent_machine_idle_or_process_family_scan_claim": false,
+  "main_transport_end": "2026-11-07T18:01:17.256045+00:00",
+  "other_jobs_or_processes_queried_or_modified": false,
+  "remaining_work": "Host standard-library DATA parsing, report and checksum catalogue only; no further SSH or product execution",
+  "runner": "zeropw-mlp-macos",
+  "status": "RELEASED",
+  "time": "2026-11-07T18:03:28.343444+00:00",
+  "uid": 501,
+  "worktree_id": "t3-134681c5"
+}
