@@ -1,0 +1,332 @@
+[
+  {
+    "name": "shared-environment",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "approval-required",
+    "result": "PASS",
+    "detail": "join_pending_approval"
+  },
+  {
+    "name": "pending-device-not-member",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "fingerprint-confirmation",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "approved-device-joined",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "initial-signed-history",
+    "result": "PASS",
+    "detail": "8 durably stored commits"
+  },
+  {
+    "name": "initial-value-login",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "initial-value-password",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "initial-value-api",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "initial-direct-path",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "initial-owned-process-a",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "initial-owned-process-b",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "initial-daemon-memory-environment-argv",
+    "result": "PASS",
+    "detail": "172048384 writable mapped bytes sampled"
+  },
+  {
+    "name": "version-update-login",
+    "result": "PASS",
+    "detail": "10 durably stored commits"
+  },
+  {
+    "name": "decrypted-update-login",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "version-update-password",
+    "result": "PASS",
+    "detail": "12 durably stored commits"
+  },
+  {
+    "name": "decrypted-update-password",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "version-update-api",
+    "result": "PASS",
+    "detail": "14 durably stored commits"
+  },
+  {
+    "name": "decrypted-update-api",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "offline-edit-stays-local",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "offline-reconnect",
+    "result": "PASS",
+    "detail": "16 durably stored commits"
+  },
+  {
+    "name": "offline-value-arrived",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "concurrent-edits-converge",
+    "result": "PASS",
+    "detail": "20 durably stored commits"
+  },
+  {
+    "name": "concurrent-version-count",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "concurrent-versions-match",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "both-concurrent-values-retained",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "concurrent-active-value-converged",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "conflict-alert-visible",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "revocation-to-stale-peer",
+    "result": "PASS",
+    "detail": "20 durably stored commits"
+  },
+  {
+    "name": "revoked-version-did-not-resurrect",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "relay-udp-version-sync",
+    "result": "PASS",
+    "detail": "22 durably stored commits"
+  },
+  {
+    "name": "relay-udp-selected-path",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "relay-udp-decrypted-value",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "relay-udp-owned-process-a",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "relay-udp-owned-process-b",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "relay-udp-daemon-memory-environment-argv",
+    "result": "PASS",
+    "detail": "162611200 writable mapped bytes sampled"
+  },
+  {
+    "name": "relay-tls-version-sync",
+    "result": "PASS",
+    "detail": "24 durably stored commits"
+  },
+  {
+    "name": "relay-tls-selected-path",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "relay-tls-decrypted-value",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "relay-tls-owned-process-a",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "relay-tls-owned-process-b",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "relay-tls-daemon-memory-environment-argv",
+    "result": "PASS",
+    "detail": "161144832 writable mapped bytes sampled"
+  },
+  {
+    "name": "pause-resume-over-tls",
+    "result": "PASS",
+    "detail": "26 durably stored commits"
+  },
+  {
+    "name": "pause-resume-decrypted",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "coturn-restart-owned-process",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "coturn-restart-reconnect-over-tls",
+    "result": "PASS",
+    "detail": "28 durably stored commits"
+  },
+  {
+    "name": "coturn-restart-decrypted",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "server-invite_code-reuse-refused",
+    "result": "PASS",
+    "detail": "invite_invalid"
+  },
+  {
+    "name": "server-link_token-reuse-refused",
+    "result": "PASS",
+    "detail": "link_token_invalid"
+  },
+  {
+    "name": "server-invite-real-expiry",
+    "result": "PASS",
+    "detail": "invite_invalid"
+  },
+  {
+    "name": "service-enrollment-not-vault-membership",
+    "result": "PASS",
+    "detail": "team_join_timeout"
+  },
+  {
+    "name": "unauthorized-device-has-no-secrets",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "malformed-invalid-json-refused",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "malformed-invalid-json-not-reflected",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "malformed-duplicate-key-refused",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "malformed-duplicate-key-not-reflected",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "malformed-unknown-field-refused",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "malformed-unknown-field-not-reflected",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "application-daemon-restart",
+    "result": "PASS",
+    "detail": "28 durably stored commits"
+  },
+  {
+    "name": "restart-no-duplicate-commits",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "vault-device-removed",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "removed-device-no-new-value",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "service-revocation-distinct",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "revoked-device-rejoin-refused",
+    "result": "PASS",
+    "detail": "team_join_failed"
+  },
+  {
+    "name": "wire-capture-present",
+    "result": "PASS",
+    "detail": ""
+  },
+  {
+    "name": "no-vault-values-in-runtime-logs-and-wire",
+    "result": "PASS",
+    "detail": "17 files; plaintext/base64/hex"
+  }
+]
