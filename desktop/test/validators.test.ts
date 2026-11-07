@@ -4,7 +4,7 @@ import {
   isValidName, meterCellsOn, meterLevel, parseLocalName, parseTarget, pickVerifySlots, RECOVERY_REF_TTL_MS, recoveryOwnRules, recoveryRefStale,
   runtimeFor, verifyRecoveryGroups, verifyStates,
 } from '../src/lib/validators';
-import { counted, FULL, JOIN_FLOW, neighbour, progressOf } from '../src/onboarding/flow';
+import { canGoBack, COUNTED, doneActions, FLOW, neighbour, progressOf } from '../src/screens/onboarding/flow';
 
 describe('names (^[a-z0-9][a-z0-9._-]{0,63}$)', () => {
   it.each(['demo', 'a', '0', 'my-app.v2_x', 'a'.repeat(64)])('accepts %s', (v) => expect(isValidName(v)).toBe(true));
@@ -128,19 +128,28 @@ describe('agents', () => {
   });
 });
 
-describe('onboarding flow (v0.5)', () => {
-  it('has no service connection step', () => {
-    expect(FULL).toEqual(['admin', 'recovery', 'create', 'project']);
-    expect(JOIN_FLOW).toEqual(['admin', 'recovery', 'create']);
-    expect(counted(false)).not.toContain('connect');
+describe('first-run flow', () => {
+  it('has the same three counted steps on both paths and no service connection step', () => {
+    expect(COUNTED).toEqual(['admin', 'recovery', 'create']);
+    expect(FLOW).toEqual(['welcome', 'admin', 'recovery', 'create', 'done']);
   });
-  it('steps back and forward inside the flow', () => {
-    expect(neighbour('admin', false, -1)).toBe('welcome');
-    expect(neighbour('project', false, -1)).toBe('create');
-    expect(neighbour('project', false, 1)).toBe('done');
-    expect(neighbour('create', true, 1)).toBe('done');
-    expect(progressOf('recovery', false)).toEqual({ index: 1, total: 4 });
-    expect(progressOf('create', true)).toEqual({ index: 2, total: 3 });
-    expect(progressOf('done', false)).toBeNull();
+  it('steps back and forward inside the flow, and not back once the vault exists', () => {
+    expect(neighbour('admin', -1)).toBe('welcome');
+    expect(neighbour('create', -1)).toBe('recovery');
+    expect(neighbour('create', 1)).toBe('done');
+    expect(progressOf('recovery')).toEqual({ index: 1, total: 3 });
+    expect(progressOf('done')).toBeNull();
+    expect(canGoBack('create', false)).toBe(true);
+    expect(canGoBack('create', true)).toBe(false);
+    expect(canGoBack('welcome', false)).toBe(false);
+  });
+  it('offers joining first on the connect path and the first item first otherwise', () => {
+    expect(doneActions('connect', false).map((a) => a.route)).toEqual([
+      { page: 'devices', intent: 'pair-join' }, { page: 'vault', view: 'all', intent: 'add' }, { page: 'vault', view: 'all' },
+    ]);
+    expect(doneActions('new', true).map((a) => a.route)).toEqual([
+      { page: 'vault', view: 'all', intent: 'add' }, { page: 'devices', intent: 'pair-add' },
+      { page: 'developer', view: 'sharing', intent: 'join' }, { page: 'vault', view: 'all' },
+    ]);
   });
 });

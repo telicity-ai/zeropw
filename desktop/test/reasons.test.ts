@@ -50,8 +50,11 @@ describe('invite reason codes', () => {
       vi.useRealTimers();
     }
     expect(INVITE_TTL_MS).toBe(60 * 60_000);
-    for (const k of ['toast.join.later', 'join.err.reopen', 'done.join.reopen'] as const) expect(COPY[k], k).toContain('1시간');
-    expect(Object.values(COPY).join('\n')).not.toContain('10분');
+    for (const k of ['join.err.reopen', 'done.join.reopen'] as const) expect(COPY[k], k).toContain('1시간');
+    // a received invite is kept for an hour; no invite copy may say ten minutes (pairing codes,
+    // which do last ten minutes, are a different thing)
+    const inviteCopy = Object.entries(COPY).filter(([k]) => /^(join|done\.join|inv|share)\./.test(k)).map(([, v]) => v).join('\n');
+    expect(inviteCopy).not.toContain('10분');
   });
 });
 
@@ -78,7 +81,7 @@ describe('relay start failures', () => {
       expect(relayError(r).key, r).toBe('relay.err.team');       // an older core without the detail
     }
     expect(relayError('serve_exited', undefined).key).toBe('relay.err.exited');
-    expect(COPY['relay.err.portBusy']).toContain('중계기 포트');
+    expect(COPY['relay.err.portBusy']).toContain('로컬 서비스 포트');
     expect(COPY['relay.err.portBusy']).not.toContain('다른 기기 접속');
   });
 
@@ -101,7 +104,7 @@ describe('relay start failures', () => {
     const base = { address: '100.64.1.7:47420', restored: true, relayBack: false };
     expect(listenFailureLines({ ...base, reason: 'listen_failed', detail: 'gateway_port' }).map((l) => l.key)).toEqual(['listen.err.port', 'listen.err.relayOff']);
     expect(listenFailureLines({ ...base, reason: 'listen_failed', detail: 'gateway_port' })[0]?.vars).toBeUndefined();
-    expect(COPY['listen.err.port']).toContain('중계기 포트');
+    expect(COPY['listen.err.port']).toContain('로컬 서비스 포트');
     expect(COPY['listen.err.port']).not.toContain('{address}');
     expect(listenFailureLines({ ...base, reason: 'invalid_listen', detail: 'team_listen' })[0]?.key).toBe('set.listen.port.err');
     expect(listenFailureLines({ ...base, reason: 'team_invalid_listen_address', detail: 'team_listen' })[0]).toEqual({ key: 'listen.err.open', vars: { address: base.address } });

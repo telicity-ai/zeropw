@@ -1,0 +1,62 @@
+/* 내 Mac: list of Macs, this Mac's server registration, a paired Mac's sync by place, the
+   one-time code and the side-by-side confirmation codes. */
+
+.mac-page .pane-detail { flex: 1; }
+
+.mac-card-title { font-size: var(--text-lg); font-weight: var(--weight-semibold); letter-spacing: var(--tracking-title); }
+.mac-enroll:focus-visible { box-shadow: var(--focus-ring); }
+
+.mac-disclosure { border: 1px solid var(--border-1); border-radius: var(--radius-md); background: var(--bg-raised); }
+.mac-disclosure > summary {
+  display: flex; align-items: center; gap: 8px; padding: 9px 12px; font-size: var(--text-sm); color: var(--text-2);
+  font-weight: var(--weight-medium); list-style: none; border-radius: var(--radius-md); min-width: 0;
+}
+.mac-disclosure > summary::-webkit-details-marker { display: none; }
+.mac-disclosure > summary::before {
+  content: ''; width: 6px; height: 6px; flex: none; border-right: 1.5px solid var(--text-3); border-bottom: 1.5px solid var(--text-3);
+  transform: rotate(-45deg); transition: transform var(--dur-fast) var(--ease-out); margin-right: 2px;
+}
+.mac-disclosure[open] > summary::before { transform: rotate(45deg); }
+.mac-disclosure > summary:hover { color: var(--text-1); background: var(--bg-hover); }
+.mac-disclosure > summary .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.mac-disclosure > :not(summary) { padding: 4px 14px 12px; }
+.mac-enroll .mac-disclosure { background: transparent; }
+
+.mac-fp-card { display: flex; flex-direction: column; gap: 6px; }
+.mac-fp-card .fingerprint { font-size: 14px; }
+
+/* the add dialog's code box */
+.mac-code { display: flex; flex-direction: column; gap: 8px; }
+.mac-code-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.mac-code-left { display: inline-flex; align-items: center; gap: 5px; font-size: var(--text-xs); color: var(--text-3); }
+.mac-code-left.is-expired { color: var(--warn); }
+.mac-code-self { display: flex; align-items: baseline; gap: 10px; font-size: var(--text-sm); color: var(--text-3); flex-wrap: wrap; }
+
+.mac-request { display: flex; flex-direction: column; gap: 10px; padding: 14px; }
+.mac-request-fp { display: flex; flex-direction: column; gap: 4px; }
+.mac-request-fp .fingerprint { font-size: 15px; font-weight: var(--weight-medium); }
+.mac-request-actions { justify-content: flex-end; }
+
+.mac-decided { display: flex; flex-direction: column; gap: 4px; font-size: var(--text-sm); }
+.mac-decided li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 10px; border-radius: var(--radius-sm); background: var(--neutral-soft); }
+.mac-decided .is-ok { color: var(--ok); }
+.mac-decided .is-denied { color: var(--warn); }
+
+/* the joining Mac: both confirmation codes side by side, so they read like a pair */
+.mac-preview { display: flex; flex-direction: column; gap: 10px; }
+.mac-compare { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.mac-compare-side {
+  display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: var(--radius-lg);
+  background: var(--bg-raised); border: 1px solid var(--border-1); min-width: 0;
+}
+.mac-compare-side.is-self { border-color: var(--accent-line); background: var(--accent-soft); }
+.mac-compare-side .fingerprint { font-size: 14px; font-weight: var(--weight-medium); }
+.mac-compare-label { font-size: var(--text-2xs); font-weight: var(--weight-semibold); color: var(--text-3); text-transform: uppercase; letter-spacing: var(--tracking-caps); }
+.mac-compare-side.is-self .mac-compare-label { color: var(--accent-text); }
+@media (max-width: 640px) { .mac-compare { grid-template-columns: 1fr; } }
+
+.mac-envs { display: flex; flex-direction: column; border: 1px solid var(--border-1); border-radius: var(--radius-md); overflow: hidden; }
+.mac-envs li { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; font-size: var(--text-sm); }
+.mac-envs li + li { border-top: 1px solid var(--border-1); }
+
+.mac-remove-fp { display: flex; flex-direction: column; gap: 4px; }

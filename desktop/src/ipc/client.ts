@@ -1,13 +1,14 @@
-// Typed IPC client. Inside Tauri every call goes to the core with `invoke`; in a normal browser
-// (`npm run dev`) the same calls go to the in-memory mock backend so the UI can be reviewed
-// without the core. Arguments are passed as the top-level invoke payload with the snake_case keys
+// Typed IPC client. Inside Tauri every call goes to the core with `invoke`. Only in a Vite dev
+// server or the unit tests (`import.meta.env.DEV`) do calls outside Tauri go to the in-memory
+// mock backend, so the UI can be reviewed without the core; a production build contains no mock
+// and fails every call outside Tauri with `not_in_desktop`. Arguments are passed as the top-level invoke payload with the snake_case keys
 // of contract.ts (the Rust commands use `rename_all = "snake_case"`). Errors always arrive as
 // AppError {error, reason, detail?} and never echo the inputs.
 
 import { Channel, invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import type { AppError, CommandName, Commands, Events } from './contract';
-import { createMockBackend, type MockBackend, type MockChannel, type MockSeed } from './mock';
+import type { MockBackend, MockChannel, MockSeed } from './mock';
 
 export type CommandInput<K extends CommandName> = Commands[K][0];
 export type CommandOutput<K extends CommandName> = Commands[K][1];
@@ -63,9 +64,13 @@ function seedFromLocation(): MockSeed {
   };
 }
 
-/** The mock backend in use outside Tauri (created on first use). */
-export function mockBackend(): MockBackend {
-  if (!backend) backend = createMockBackend(seedFromLocation());
+/** The mock backend in use outside Tauri in a dev build (created on first use). A production
+ *  build drops the dynamic import with the dead branch. */
+async function mockBackend(): Promise<MockBackend> {
+  if (backend) return backend;
+  if (!import.meta.env.DEV) throw new IpcError({ error: 'Unavailable', reason: 'not_in_desktop' });
+  const { createMockBackend } = await import('./mock');
+  backend ??= createMockBackend(seedFromLocation());
   return backend;
 }
 
@@ -96,7 +101,7 @@ export async function call<K extends CommandName>(name: K, ...args: CallArgs<K>)
       const payload = withChannel(name, (input ?? {}) as Record<string, unknown>);
       return await invoke<CommandOutput<K>>(name, payload);
     }
-    return await mockBackend().call(name, input);
+    return await (await mockBackend()).call(name, input);
   } catch (e) {
     throw toIpcError(e);
   }
@@ -133,5 +138,5 @@ export async function on<E extends keyof Events>(name: E, handler: (payload: Eve
     const un = await listen<Events[E]>(name, (ev) => handler(ev.payload));
     return un;
   }
-  return mockBackend().on(name, handler);
+  return (await mockBackend()).on(name, handler);
 }

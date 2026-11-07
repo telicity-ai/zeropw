@@ -631,11 +631,12 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
   const pairRequestDelay = seed.pairRequestDelayMs ?? 4000;
   const pairApproveAfter = seed.pairApproveAfterPolls ?? 2;
   const lowFp = (seedText: string) => { const r = mulberry32(fnv1a(seedText)); return Array.from({ length: 26 }, () => B32[Math.floor(r() * 32)]).join(''); };
+  const defaultService = (): string => settings.link_service ?? MOCK_SERVICE;
   const linkStatus = (): LinkStatus => seed.linkMissing
     ? { available: false, running: false, enrolled: false, revoked: false, device_id: null, online: false, service: MOCK_SERVICE, service_host: 'link.zeropw.invalid',
-        default_service: MOCK_SERVICE, device_name: 'this-mac', peers: [], problem: 'link_binary_missing' }
-    : { available: true, running: true, enrolled: linkEnrolled, revoked: false, device_id: linkId, online: linkEnrolled, service: linkService,
-        service_host: linkService.replace(/^https?:\/\//, ''), default_service: MOCK_SERVICE, device_name: 'this-mac', peers: linkPeers.map((p) => ({ ...p })), problem: null };
+        default_service: defaultService(), device_name: 'this-mac', peers: [], problem: 'link_binary_missing' }
+    : { available: true, running: true, enrolled: linkEnrolled, revoked: false, device_id: linkId, online: linkEnrolled, service: linkEnrolled ? linkService : defaultService(),
+        service_host: (linkEnrolled ? linkService : defaultService()).replace(/^https?:\/\//, ''), default_service: defaultService(), device_name: 'this-mac', peers: linkPeers.map((p) => ({ ...p })), problem: null };
   const linkRequest = (body: Record<string, unknown>) => { linkRequests.push(JSON.stringify(body)); };
   const needLink = () => { if (seed.linkMissing) throw fail('Unavailable', 'link_binary_missing'); };
   const upsertPaired = (fp: string, link: string | null, name: string, envs: string[]) => {
@@ -733,6 +734,16 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
     stop_all: async () => {
       needInit(); await wait(250);
       setControl({ ...control, stopped: true }); record({ ts: iso(), event: 'stop_all' }); return control;
+    },
+    // desktop/core `vault_unlock`: `status` with `--require-admin`; a wrong passphrase is audited
+    vault_unlock: async ({ admin_passphrase }) => {
+      needInit(); await wait(300);
+      if (typeof admin_passphrase !== 'string' || !admin_passphrase) throw fail('InvalidInput', 'passphrase_missing');
+      if (!adminPass || admin_passphrase !== adminPass) {
+        record({ ts: iso(), event: 'auth_failed', caller: 'admin', state: 'require_admin' });
+        throw fail('AuthFailed', 'admin_reauth_failed');
+      }
+      return control;
     },
     resume: async ({ admin_passphrase }) => {
       needInit(); await wait(350);
@@ -1282,7 +1293,7 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
       needLink();
       const compact = typeof invite_code === 'string' ? invite_code.replace(/[\s-]/g, '').toUpperCase() : '';
       if (!/^ZPL[A-Z2-7]{26}$/.test(compact) || invite_code.trim().length > 64) throw fail('InvalidInput', 'link_invite_malformed');
-      const url = (service ?? '').trim().replace(/\/$/, '') || MOCK_SERVICE;
+      const url = (service ?? '').trim().replace(/\/$/, '') || defaultService();
       if (!/^https:\/\/[a-z0-9.-]+(:\d{1,5})?$/i.test(url)) throw fail('InvalidInput', 'link_service_invalid');
       if (linkEnrolled) throw fail('StateError', 'link_already_enrolled');
       await wait(600);
@@ -1519,8 +1530,10 @@ export function createMockBackend(seed: MockSeed = {}): MockBackend {
         const l = parseListen(next.team_listen);
         if (!l || l.ip === '0.0.0.0' || l.ip === '255.255.255.255' || l.port === 0) throw fail('InvalidInput', 'invalid_listen', 'team_listen');
       }
-      // written over the old file without reading it
-      settings = { gateway_port: next.gateway_port, team_listen: next.team_listen };
+      const service = next.link_service ?? null;
+      if (service !== null && !/^https?:\/\/[a-z0-9.-]+(:\d{1,5})?\/?$/i.test(service)) throw fail('InvalidInput', 'link_service_invalid', 'link_service');
+      // written over the old file without reading it; `link_service` is left out while unset
+      settings = { gateway_port: next.gateway_port, team_listen: next.team_listen, ...(service !== null ? { link_service: service.replace(/\/$/, '') } : {}) };
       settingsCorrupt = false;
       return { ...settings };
     },

@@ -1,29 +1,230 @@
-/* Design tokens (DESIGN.md §2). Black, grey and white with one azure to iris signal; no new colours. */
+/* Personal Vault design tokens (DESIGN.md). Warm neutrals, crisp ink, one restrained accent.
+   Every colour a component uses comes from a semantic token below; light and dark each define
+   the full set. Raw hex values never appear outside this file. */
+
 :root {
-  color-scheme: dark;
-  --void: #040406;
-  --line: rgba(255, 255, 255, .07);
-  --line-strong: rgba(255, 255, 255, .13);
-  --fg: #f2f2f7;
-  --fg-2: #bfbfcc;
-  --fg-3: #8e8e9d;
-  --fg-4: #575768;    /* non-text marks only */
-  --azure: #5b8cff;
-  --azure-soft: #8fb0ff;
-  --iris: #9a6bff;
-  --iris-soft: #c4a8ff;
-  --grad: linear-gradient(120deg, #5b8cff 0%, #7a7cff 48%, #9a6bff 100%);
-  --grad-btn: linear-gradient(120deg, #2868ff 0%, #5b5eff 48%, #854cff 100%);
-  --glow-azure: rgba(91, 140, 255, .35);
-  --glow-iris: rgba(154, 107, 255, .35);
-  --warn: #f3c36f;
-  --danger: #ff7a93;
-  --font: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Segoe UI", sans-serif;
-  --mono: "JetBrains Mono", "Pretendard Variable", Pretendard, ui-monospace, SFMono-Regular, Menlo, monospace;
-  --fs-sm: 12px; --fs-md: 13.5px; --fs-base: 14px; --fs-lg: 15px; --fs-h2: 24px; --fs-h1: 38px;
-  --radius-xs: 6px; --radius-sm: 10px; --radius-md: 14px; --radius-lg: 20px;
-  --ease-out: cubic-bezier(.16, 1, .3, 1);
-  --ease-in-out: cubic-bezier(.65, 0, .35, 1);
-  --titlebar-h: 44px;
-  --sidebar-w: 220px;
+  color-scheme: light dark;
+
+  /* ---- type ------------------------------------------------------------------------------ */
+  --font-sans: 'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --text-2xs: 10.5px;  /* key caps, counters */
+  --text-xs: 11.5px;   /* captions, meta */
+  --text-sm: 12.5px;   /* secondary rows, help */
+  --text-md: 13.5px;   /* body, controls */
+  --text-lg: 15px;     /* list titles, section heads */
+  --text-xl: 19px;     /* pane titles */
+  --text-2xl: 24px;    /* item title, first-run headings */
+  --text-3xl: 30px;    /* lock screen */
+
+  --weight-regular: 420;
+  --weight-medium: 520;
+  --weight-semibold: 620;
+  --weight-bold: 700;
+
+  --leading-tight: 1.22;
+  --leading-snug: 1.36;
+  --leading-body: 1.5;
+
+  --tracking-title: -0.018em;
+  --tracking-body: -0.004em;
+  --tracking-caps: 0.06em;
+
+  /* ---- space and shape -------------------------------------------------------------------- */
+  --s-1: 2px;
+  --s0: 4px;
+  --s1: 6px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 20px;
+  --s6: 24px;
+  --s7: 32px;
+  --s8: 40px;
+  --s9: 56px;
+
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 999px;
+
+  --control-h: 30px;
+  --control-h-sm: 26px;
+  --control-h-lg: 36px;
+  --row-h: 52px;
+
+  --sidebar-w: 236px;
+  --list-w: 336px;
+  --titlebar-h: 40px;
+
+  /* ---- motion ----------------------------------------------------------------------------- */
+  --ease-out: cubic-bezier(0.22, 0.9, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.55, 0, 0.3, 1);
+  --dur-fast: 110ms;
+  --dur-med: 180ms;
+  --dur-slow: 260ms;
+
+  /* ---- light palette ---------------------------------------------------------------------- */
+  --paper-0: #ece8e0;   /* window frame, sidebar */
+  --paper-1: #f5f2ec;   /* list pane */
+  --paper-2: #fbfaf7;   /* detail pane, sheets */
+  --paper-3: #ffffff;   /* inputs, raised rows */
+
+  --ink-1: #1d1a15;
+  --ink-2: #4f4942;
+  --ink-3: #847c71;
+  --ink-4: #aaa297;
+
+  --line-1: #e4dfd5;
+  --line-2: #d6cfc3;
+  --line-3: #bdb4a6;
+
+  --pine-1: #275f4f;
+  --pine-2: #1f4e41;
+  --pine-3: #e1ece6;
+  --pine-4: #c8ddd2;
+
+  --amber-1: #9b5a0f;
+  --amber-3: #f6ead6;
+  --red-1: #a83a2a;
+  --red-2: #8f2f22;
+  --red-3: #f6e2dc;
+  --blue-1: #3a5f8c;
+  --blue-3: #e3eaf3;
+  --green-1: #3d7347;
+  --green-3: #e2eee1;
+
+  /* ---- semantic tokens -------------------------------------------------------------------- */
+  --bg-frame: var(--paper-0);
+  --bg-list: var(--paper-1);
+  --bg-pane: var(--paper-2);
+  --bg-field: var(--paper-3);
+  --bg-raised: var(--paper-3);
+  --bg-hover: rgba(60, 48, 30, 0.055);
+  --bg-press: rgba(60, 48, 30, 0.1);
+  --bg-selected: var(--pine-3);
+  --bg-selected-quiet: rgba(60, 48, 30, 0.08);
+  --bg-scrim: rgba(28, 24, 18, 0.32);
+  --bg-inverse: #22201c;
+  --bg-seg-on: #ffffff;
+
+  --text-1: var(--ink-1);
+  --text-2: var(--ink-2);
+  --text-3: var(--ink-3);
+  --text-4: var(--ink-4);
+  --text-inverse: #f5f2ec;
+  --text-on-accent: #ffffff;
+
+  --border-1: var(--line-1);
+  --border-2: var(--line-2);
+  --border-3: var(--line-3);
+
+  --accent: var(--pine-1);
+  --accent-hover: var(--pine-2);
+  --accent-soft: var(--pine-3);
+  --accent-line: var(--pine-4);
+  --accent-text: var(--pine-1);
+
+  --ok: var(--green-1);
+  --ok-soft: var(--green-3);
+  --warn: var(--amber-1);
+  --warn-soft: var(--amber-3);
+  --danger: var(--red-1);
+  --danger-hover: var(--red-2);
+  --danger-soft: var(--red-3);
+  --info: var(--blue-1);
+  --info-soft: var(--blue-3);
+  --neutral: var(--ink-3);
+  --neutral-soft: rgba(60, 48, 30, 0.07);
+
+  --focus-ring: 0 0 0 2px var(--bg-pane), 0 0 0 4px color-mix(in srgb, var(--accent) 70%, transparent);
+  --shadow-pop: 0 1px 0 rgba(255, 255, 255, 0.6) inset, 0 12px 32px -8px rgba(40, 30, 15, 0.22), 0 2px 6px rgba(40, 30, 15, 0.08);
+  --shadow-row: 0 1px 2px rgba(40, 30, 15, 0.06);
+
+  /* kind tiles: quiet tints that tell item types apart without loud colour */
+  --kind-password-bg: #efe6d8;
+  --kind-password-fg: #7a5420;
+  --kind-api-bg: #e0ebe5;
+  --kind-api-fg: #275f4f;
+  --kind-env-bg: #e5e8ef;
+  --kind-env-fg: #3f5274;
+  --kind-ssh-bg: #ece3e8;
+  --kind-ssh-fg: #6b3f58;
+
+  --term-bg: #1c1a17;
+  --term-fg: #e6e0d6;
+
+  /* the in-app terminal is dark in both modes */
+  --term-line: #34302b;
+  --term-dim: #8e877c;
+  --term-accent: #7cc2a8;
+  --term-on-accent: #10261f;
+  --term-warn: #e2a65a;
+
+  --on-danger: #ffffff;
+  --switch-thumb: #ffffff;
+  --toast-info: #c8ddd2;
+  --toast-ok: #6fbf8f;
+  --toast-warn: #e2a65a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper-0: #141311;
+    --paper-1: #1a1916;
+    --paper-2: #201e1b;
+    --paper-3: #282622;
+
+    --ink-1: #f0ebe3;
+    --ink-2: #c0b8ad;
+    --ink-3: #8e877c;
+    --ink-4: #6b655c;
+
+    --line-1: #2c2925;
+    --line-2: #39352f;
+    --line-3: #4f4a42;
+
+    --pine-1: #7cc2a8;
+    --pine-2: #95d1ba;
+    --pine-3: #1f3a31;
+    --pine-4: #2c5144;
+
+    --amber-1: #e2a65a;
+    --amber-3: #3a2c19;
+    --red-1: #ec8a78;
+    --red-2: #f3a191;
+    --red-3: #3e231d;
+    --blue-1: #8fb2dc;
+    --blue-3: #1f2b3a;
+    --green-1: #8cc596;
+    --green-3: #1f3222;
+
+    --bg-hover: rgba(255, 248, 235, 0.05);
+    --bg-press: rgba(255, 248, 235, 0.09);
+    --bg-selected-quiet: rgba(255, 248, 235, 0.07);
+    --bg-scrim: rgba(0, 0, 0, 0.5);
+    --bg-inverse: #ece7de;
+    --bg-seg-on: #3a3732;
+    --text-inverse: #1d1a15;
+    --text-on-accent: #10261f;
+    --neutral-soft: rgba(255, 248, 235, 0.06);
+
+    --shadow-pop: 0 0 0 1px rgba(255, 248, 235, 0.06) inset, 0 16px 40px -8px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.35);
+    --shadow-row: 0 1px 2px rgba(0, 0, 0, 0.3);
+
+    --kind-password-bg: #3a2e1e;
+    --kind-password-fg: #e3b977;
+    --kind-api-bg: #1f3a31;
+    --kind-api-fg: #8fd0b7;
+    --kind-env-bg: #232b3b;
+    --kind-env-fg: #a5b8dc;
+    --kind-ssh-bg: #36242f;
+    --kind-ssh-fg: #dba7c4;
+
+    --term-bg: #12110f;
+    --term-fg: #e6e0d6;
+  }
 }

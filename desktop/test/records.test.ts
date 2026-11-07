@@ -171,7 +171,7 @@ describe('records and alerts in plain words', () => {
     const denied = recordView({ ts: 't', event: 'auth_failed', caller: 'admin', connection: null, reason: 'admin_reauth_failed', result: 'denied', policy_version: null }, 'audit');
     expect(denied).toEqual({ ts: 't', title: '인증 실패', meta: ['관리자', '거절', '관리 비밀번호 틀림'], raw: [] });
     const reveal = recordView({ ts: 't', alert: 'secret_reveal', caller: 'admin', connection: null, event: 'secret_reveal', reason: null, detail: 'administrator revealed a single secret version' }, 'alert');
-    expect(reveal).toEqual({ ts: 't', title: '관리자가 키를 봤어요', meta: ['관리자'], raw: [] });
+    expect(reveal).toEqual({ ts: 't', title: '관리자가 항목 값을 봤어요', meta: ['관리자'], raw: [] });
   });
 
   // pr69-frontend-records-a11y-1: an agent may be named `admin`, and its relay requests, signings

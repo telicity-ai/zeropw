@@ -1,0 +1,6 @@
+/* settings: section list and the chosen section */
+.settings-content { gap: 22px; max-width: 720px; }
+.settings-content .card p { line-height: var(--leading-body); }
+.settings-listen { display: grid; grid-template-columns: minmax(0, 1fr) 110px; gap: 12px; align-items: start; }
+.settings-port { max-width: 220px; }
+@media (max-width: 640px) { .settings-listen { grid-template-columns: 1fr; } }

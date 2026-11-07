@@ -99,7 +99,8 @@ checkReleaseConfig();
 
 const windows = conf.app?.windows ?? [];
 const main = windows[0] ?? {};
-const want = { label: 'main', width: 1180, height: 780, minWidth: 1100, minHeight: 740, titleBarStyle: 'Overlay', hiddenTitle: true };
+// the Personal Vault layout collapses to one column and an icon rail, so small windows are allowed
+const want = { label: 'main', width: 1180, height: 780, minWidth: 720, minHeight: 520, titleBarStyle: 'Overlay', hiddenTitle: true };
 if (windows.length !== 1) fail('tauri.conf.json: exactly one window (main)');
 for (const [k, v] of Object.entries(want)) if (main[k] !== v) fail(`tauri.conf.json: window ${k} must be ${JSON.stringify(v)}`);
 // Drops reach the core (src-tauri/src/shell.rs), which reads a dropped .env file and tells the

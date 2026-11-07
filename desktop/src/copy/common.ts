@@ -1,0 +1,134 @@
+// App-wide strings: the shell, navigation, shared actions, states and errors. Plain Korean,
+// 해요체, as short as the meaning allows (DESIGN.md §6).
+
+export const COMMON = {
+  'app.name': 'ZeroPW',
+  'app.vault': '내 금고',
+
+  // navigation
+  'nav.aria': '탐색',
+  'nav.vault': '금고',
+  'nav.all': '모든 항목',
+  'nav.kind.password': '비밀번호',
+  'nav.kind.api_key': 'API 키',
+  'nav.kind.env_var': '환경변수',
+  'nav.kind.ssh_private_key': 'SSH 키',
+  'nav.places': '위치',
+  'nav.devices': '내 Mac',
+  'nav.services': '서비스 연결',
+  'nav.developer': '개발자',
+  'nav.activity': '활동',
+  'nav.settings': '설정',
+  'nav.collapse': '사이드바 접기',
+  'nav.expand': '사이드바 펼치기',
+  'nav.back': '목록으로',
+
+  // shared actions
+  'act.cancel': '취소',
+  'act.close': '닫기',
+  'act.done': '완료',
+  'act.save': '저장',
+  'act.retry': '다시 시도',
+  'act.reload': '다시 불러오기',
+  'act.continue': '계속',
+  'act.back': '이전',
+  'act.next': '다음',
+  'act.copy': '복사',
+  'act.show': '보기',
+  'act.hide': '숨기기',
+  'act.more': '더 보기',
+  'act.add': '추가',
+  'act.remove': '제거',
+  'act.open': '열기',
+  'act.confirm': '확인',
+  'act.lock': '잠그기',
+  'act.search': '검색',
+  'act.clear': '지우기',
+  'act.details': '자세히',
+  'act.goSettings': '설정 열기',
+
+  // states
+  'state.loading': '불러오는 중…',
+  'state.working': '처리하는 중…',
+  'state.saving': '저장하는 중…',
+  'state.on': '켜짐',
+  'state.off': '꺼짐',
+  'state.none': '없음',
+  'state.unknown': '알 수 없음',
+  'state.unsupported': '이 버전에서는 아직 지원하지 않아요',
+
+  // errors
+  'error.generic': '하지 못했어요. 잠시 뒤 다시 해 주세요',
+  'error.load': '불러오지 못했어요',
+  'error.auth': '관리 비밀번호가 맞지 않아요',
+  'error.desktopOnly': '데스크톱 앱에서만 할 수 있어요',
+  'error.reason': '이유 코드: {reason}',
+
+  // passphrase prompt (re-authentication)
+  'pass.label': '관리 비밀번호',
+  'pass.help': '값을 보거나 권한을 넓힐 때마다 다시 확인해요',
+  'pass.err.empty': '관리 비밀번호를 입력해 주세요',
+  'pass.show': '비밀번호 보이기',
+  'pass.hide': '비밀번호 가리기',
+
+  // one-time values (revealed values, tokens, links, codes)
+  'onetime.copied': '복사했어요. {s}초 뒤 클립보드를 비워요',
+  'onetime.copiedMask': '클립보드에 복사했어요',
+  'onetime.hiddenMask': '화면에서 지웠어요',
+  'onetime.shown': '값을 보여 주고 있어요',
+  'onetime.hidden': '값을 화면에서 지웠어요',
+  'onetime.left': '{s}초 뒤 가려요',
+  'onetime.gone': '시간이 지나 값을 다시 꺼낼 수 없어요. 처음부터 다시 해 주세요',
+  'onetime.once': '한 번만 보거나 복사할 수 있어요',
+
+  // boot
+  'boot.loading': '금고를 여는 중…',
+  'boot.failed': '금고 상태를 읽지 못했어요',
+  'boot.failed.kms': '이 Mac의 기기 키 파일이 없어 금고를 열 수 없어요. 복구 코드는 남아 있는 기기 키를 바꿀 때만 쓸 수 있어요',
+
+  // lock
+  'lock.title': '금고가 잠겨 있어요',
+  'lock.sub': '관리 비밀번호로 열어 주세요',
+  'lock.open': '금고 열기',
+  'lock.err': '관리 비밀번호가 맞지 않아요',
+  'lock.note': '잠겨 있어도 이미 연결한 에이전트와 동기화는 계속돼요. 모두 멈추려면 금고를 연 뒤 모든 사용 멈추기를 누르세요',
+  'lock.idle': '{min}분 동안 쓰지 않으면 잠가요',
+  'lock.shortcut': '잠그기 ⌘L',
+  'toast.locked': '금고를 잠갔어요',
+
+  // local service (zeropw-admin serve: gateway, SSH signer, sync)
+  'svc.name': '로컬 서비스',
+  'svc.on': '로컬 서비스 켜짐',
+  'svc.off': '로컬 서비스 꺼짐',
+  'svc.stopped': '모든 사용 멈춤',
+  'svc.held': '복원 확인 필요',
+  'svc.start': '켜기',
+  'svc.starting': '켜는 중…',
+  'svc.what': '다른 Mac 동기화, 에이전트의 API·SSH 사용이 이 서비스를 거쳐요. 꺼져 있어도 금고의 항목은 볼 수 있어요',
+  'svc.stopAll': '모든 사용 멈추기',
+  'svc.resume': '다시 허용',
+  'svc.ack': '복원 확인하기',
+  'svc.listenOff': '다른 기기 접속 끄기',
+  'toast.svc.on': '로컬 서비스를 켰어요',
+  'toast.svc.stopped': '모든 사용을 멈췄어요',
+  'toast.svc.resumed': '다시 허용했어요',
+  'toast.listen.off': '다른 기기 접속을 껐어요',
+  'stop.title': '모든 사용을 멈출까요?',
+  'stop.sub': '에이전트의 API 요청과 SSH 서명을 모두 거절해요. 금고의 항목은 그대로예요',
+  'stop.confirm': '멈추기',
+  'stop.session': '이미 열린 SSH 세션이나 끝난 외부 작업은 되돌리지 않아요',
+  'resume.title': '다시 허용할까요?',
+  'resume.sub': '멈추기 전에 준 권한대로 다시 쓸 수 있어요',
+  'resume.confirm': '다시 허용',
+  'resume.err.incident': '열린 사고가 있어 다시 허용할 수 없어요. 활동에서 사고를 먼저 닫아 주세요',
+  'listenOff.title': '다른 기기 접속을 끌까요?',
+  'listenOff.sub': '같은 네트워크의 다른 기기에서 이 Mac으로 들어오는 동기화가 멈춰요',
+  'listenOff.note': '나중에 설정에서 다시 켤 수 있어요',
+
+  // drag and drop of .env files
+  'drop.title': '.env 파일 가져오기',
+  'drop.sub': '값은 이 Mac의 금고에만 저장돼요',
+
+  // dev build
+  'dev.mock': '미리 보기 데이터',
+} as const;

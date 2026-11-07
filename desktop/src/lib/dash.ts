@@ -47,7 +47,7 @@ export const teamEnvsUnread = (listing: { team_environments_error?: unknown }): 
 
 /** The option a list picker shows for `value`, and so the one in use: `value` when it is among
  *  `options`, the first option otherwise, as a <select> shows a value it has no option for
- *  (DESIGN.md §5.4). '' when there are none. */
+ *  (DESIGN.md §4). '' when there are none. */
 export const shownChoice = (value: string, options: readonly string[]): string => (options.includes(value) ? value : options[0] ?? '');
 
 export function splitEnv(key: string): { project: string; environment: string } | null {
@@ -128,7 +128,7 @@ export function defaultMethodStates(): MethodStates {
   return { GET: 'allow', HEAD: 'allow', POST: 'off', PUT: 'off', PATCH: 'off', DELETE: 'off', OPTIONS: 'off' };
 }
 
-/** A write chip turned on asks for approval first; one more press allows it outright (DESIGN.md §5.4). */
+/** A write chip turned on asks for approval first; one more press allows it outright (DESIGN.md §4). */
 export function nextMethodState(m: Method, s: MethodState): MethodState {
   if (WRITE_METHODS.has(m)) return s === 'off' ? 'confirm' : s === 'confirm' ? 'allow' : 'off';
   return s === 'off' ? 'allow' : 'off';
@@ -469,7 +469,7 @@ export function relayState(serve: Pick<ServeStatus, 'running'>, control: Control
   return serve.running ? 'live' : 'off';
 }
 
-/** Every request is refused (the sphere stops turning, DESIGN.md §3.2). */
+/** Every request is refused (the sidebar says so, DESIGN.md §5). */
 export const relayBlocked = (control: Control | null | undefined): boolean => !!(control?.stopped || control?.restore_pending);
 
 /** The title bar's status pill for a relay state. */
