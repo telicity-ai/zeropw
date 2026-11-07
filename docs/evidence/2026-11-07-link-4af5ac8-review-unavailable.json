@@ -1,0 +1,19 @@
+{
+  "state": "FAILED_NO_REVIEW_EXECUTED",
+  "source": "4af5ac81b8e8e48ebc8e20f1ab382b12f8b685a2",
+  "task_id": "node:delegated-task:command%3Amcp%3Af793b726-5e01-4d9d-acac-669f97529274%3Adelegate-task%3Adb41d782-c48b-43a8-82d0-cc187e227142",
+  "thread_id": "thread:delegated-task:command%3Amcp%3Af793b726-5e01-4d9d-acac-669f97529274%3Adelegate-task%3Adb41d782-c48b-43a8-82d0-cc187e227142",
+  "link": "<t3-thread://v2/5a536fd4-bd15-4f8f-be43-ce624c09b509/thread:delegated-task:command%3Amcp%3Af793b726-5e01-4d9d-acac-669f97529274%3Adelegate-task%3Adb41d782-c48b-43a8-82d0-cc187e227142>",
+  "requested_model": "claude-opus-5-5",
+  "requested_settings": {
+    "effort": "medium",
+    "fastMode": false
+  },
+  "error": "Claude API rate limit reached. Try again later.",
+  "requested_at": "2026-11-07T06:17:45.310Z",
+  "failed_at": "2026-11-07T06:17:47.528Z",
+  "provider_reported_reset": "2026-11-07T17:50:00+09:00",
+  "reset_epoch": 1794041400,
+  "prior_verdict_unchanged": "ca01275 REVISE; original findings/severities preserved",
+  "retry_rule": "No retry before reset; next review/recheck must be new delegate_task, never thread_send. No model substitution."
+}

@@ -1,0 +1,31 @@
+/* activity: the usage log and alerts as a compact table, and incidents */
+.activity { gap: 14px; max-width: none; }
+.activity-tools { display: flex; align-items: center; gap: 12px; }
+.activity-tools .search { flex: 1; max-width: 360px; }
+
+.log { display: flex; flex-direction: column; font-size: var(--text-md); min-width: 0; }
+.log-head, .log-row { display: grid; grid-template-columns: 124px minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1.2fr); column-gap: 14px; align-items: center; padding: 0 10px; }
+.log-head { height: 28px; font-size: var(--text-xs); font-weight: var(--weight-semibold); color: var(--text-3); border-bottom: 0.5px solid var(--border-2); }
+.log-row { min-height: 30px; border-bottom: 0.5px solid var(--border-1); }
+.log-row:hover { background: var(--bg-hover); }
+.log-row.is-open { background: var(--bg-selected-quiet); }
+.log-time { font-size: var(--text-xs); color: var(--text-3); white-space: nowrap; }
+.log-event { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.log-title { color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.log-row.is-failed .log-title { color: var(--danger); }
+.log-flag { flex: none; font-size: var(--text-2xs); font-weight: var(--weight-semibold); color: var(--danger); }
+.log-actor, .log-target { color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.log-target { display: flex; align-items: center; gap: 6px; }
+.log-target .truncate { flex: 1; }
+.log-more { flex: none; display: grid; place-items: center; width: 22px; height: 22px; border: 0; border-radius: var(--radius-xs); background: none; color: var(--text-3); }
+.log-more:hover { color: var(--text-1); background: var(--bg-press); }
+.log-more svg { transition: transform var(--dur-fast) var(--ease-out); }
+.log-more[aria-expanded='true'] svg { transform: rotate(180deg); }
+.log-detail { grid-column: 2 / -1; display: flex; flex-direction: column; gap: 3px; padding: 2px 0 8px; font-size: var(--text-sm); color: var(--text-2); overflow-wrap: anywhere; }
+.log-detail .mono { font-size: var(--text-xs); color: var(--text-3); word-break: break-all; user-select: text; -webkit-user-select: text; }
+.log-foot { padding: 10px 10px 0; font-size: var(--text-xs); color: var(--text-3); }
+
+@media (max-width: 760px) {
+  .log-head, .log-row { grid-template-columns: 116px minmax(0, 1fr) minmax(0, 0.8fr); }
+  .log-head > :nth-child(3), .log-row > .log-actor { display: none; }
+}

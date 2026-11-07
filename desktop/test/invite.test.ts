@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { call } from '../src/ipc/client';
-import { shareAndInvite } from '../src/dashboard/invite';
+import { shareAndInvite } from '../src/lib/invite';
 
 vi.mock('../src/ipc/client', () => ({ call: vi.fn() }));
 const ipc = vi.mocked(call);

@@ -1,0 +1,34 @@
+{
+  "width": 760,
+  "scrollWidth": 444,
+  "clientWidth": 394,
+  "overflowX": "auto",
+  "left": 185.9550018310547,
+  "right": 574.0449676513672,
+  "options": [
+    {
+      "text": "Password",
+      "left": 187.9250030517578,
+      "right": 281.515380859375,
+      "fullyVisible": true
+    },
+    {
+      "text": "API Key",
+      "left": 283.48541259765625,
+      "right": 367.02569580078125,
+      "fullyVisible": true
+    },
+    {
+      "text": "Environment Variable",
+      "left": 368.9957275390625,
+      "right": 532.4749145507812,
+      "fullyVisible": true
+    },
+    {
+      "text": "SSH Key",
+      "left": 534.4449462890625,
+      "right": 621.2942504882812,
+      "fullyVisible": false
+    }
+  ]
+}

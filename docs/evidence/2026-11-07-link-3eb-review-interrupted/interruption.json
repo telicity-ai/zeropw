@@ -1,0 +1,33 @@
+{
+  "status": "INCOMPLETE_PROVIDER_INTERRUPTED",
+  "reviewed_source": "3eb972745ced7d8d60806254e8703c04b475099f",
+  "task_id": "node:delegated-task:command%3Amcp%3Af793b726-5e01-4d9d-acac-669f97529274%3Adelegate-task%3A63d181e9-3b2e-4df3-a459-1b9f330ba089",
+  "thread_link": "<t3-thread://v2/5a536fd4-bd15-4f8f-be43-ce624c09b509/thread:delegated-task:command%3Amcp%3Af793b726-5e01-4d9d-acac-669f97529274%3Adelegate-task%3A63d181e9-3b2e-4df3-a459-1b9f330ba089>",
+  "provider_model": "claude-opus-5-5",
+  "requested_settings": {
+    "effort": "medium",
+    "fastMode": false
+  },
+  "partial_report_model_observation": "Claude Opus5.5; harness showed reasoning-effort10, no other sampling settings exposed",
+  "run_started_at": "2026-11-07T09:32:20.242Z",
+  "provider_interrupted_at": "2026-11-07T09:48:15.919Z",
+  "reason": "Provider safeguards flagged/stopped the session. No classifier rationale beyond that notice was provided.",
+  "model_switch_offered": "Automatic Opus4.8 now and for future flagged messages",
+  "coordinator_answer": "Stay on Opus 5.5",
+  "answer_basis": "Existing explicit model and no-substitution instructions; no fallback/retry authorized",
+  "partial_report_sha256": "7997fa68e23b478272ba7a5f7acacaca3a4d7ca3b95c37297fc47a72b5f24d00",
+  "partial_report_bytes": 6010,
+  "partial_report_lines": 80,
+  "report_json_produced": false,
+  "source_manifest_sha256": "b82fb9191a0e992fa4eab21f08c578d8c359fe6b7ebf5778b7325459f4f92737",
+  "source_files_still_match": 169,
+  "accepted_new_verdict": null,
+  "last_completed_review": "ca01275 REVISE; original findings and severities unchanged",
+  "notes": [
+    "Some static review occurred and169-file integrity was verified; this is not a before-source quota failure.",
+    "Raw partial report ends in the first finding. Its aggregate text is not an admissible completed verdict.",
+    "No report.json, final hashes or normal completion; no release/deployment authorization.",
+    "No Opus4.8 switch, replacement delegate or safeguard retry.",
+    "M1 integration and AstraM2b design continue independently."
+  ]
+}

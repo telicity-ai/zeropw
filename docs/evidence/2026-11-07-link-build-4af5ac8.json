@@ -1,0 +1,70 @@
+{
+  "source_sha": "4af5ac81b8e8e48ebc8e20f1ab382b12f8b685a2",
+  "state": "passed",
+  "build_invocations": 1,
+  "build_seconds": 136.382,
+  "build_exit": 0,
+  "driver_assertions_pass": 27,
+  "driver_assertions_total": 27,
+  "extra_assertions": [
+    {
+      "name": "architecture_feature_pin:darwin-arm64/zeropw-link",
+      "pass": true,
+      "actual": "v8.0",
+      "expected": "v8.0"
+    },
+    {
+      "name": "architecture_feature_pin:linux-amd64/zeropw-linkd",
+      "pass": true,
+      "actual": "v1",
+      "expected": "v1"
+    },
+    {
+      "name": "architecture_feature_pin:linux-amd64/zeropw-link",
+      "pass": true,
+      "actual": "v1",
+      "expected": "v1"
+    },
+    {
+      "name": "architecture_feature_pin:linux-arm64/zeropw-linkd",
+      "pass": true,
+      "actual": "v8.0",
+      "expected": "v8.0"
+    },
+    {
+      "name": "architecture_feature_pin:linux-arm64/zeropw-link",
+      "pass": true,
+      "actual": "v8.0",
+      "expected": "v8.0"
+    },
+    {
+      "name": "darwin_purego_checksum_matches_pinned_go_sum",
+      "pass": true,
+      "module_version": "v0.11.3",
+      "module_sum": "h1:OB+JLpdm7ioymhyA+6s5kbb/uOuYycAgL8NNTFc5MLg="
+    }
+  ],
+  "host_dist_archive_validated_files": [
+    "BUILDINFO",
+    "SHA256SUMS",
+    "darwin-arm64/LICENSE",
+    "darwin-arm64/licenses/purego-Apache-2.0.txt",
+    "darwin-arm64/licenses/purego-Go-BSD-3-Clause.txt",
+    "darwin-arm64/zeropw-link",
+    "linux-amd64/zeropw-link",
+    "linux-amd64/zeropw-linkd",
+    "linux-arm64/zeropw-link",
+    "linux-arm64/zeropw-linkd"
+  ],
+  "dist_tar_sha256": "27e3574a25f41e87d144cbaa5d2fbd8d3bc1704cafcfdf1b930d63af31599ab6",
+  "dist_tar_bytes": 55808000,
+  "build_log_sha256": "12506549682be551f2bbb728dc989ee6d1a96fb5488208cf8cb9f8bfbcf76cc5",
+  "status_sha256": "b28acc2cf4b75a8aa09fde969cd608053e7dc8a93d7a1a711ea32a528654d57f",
+  "source_before_after_match": true,
+  "actual_model": "gpt-6.1-sol",
+  "scope_limits": [
+    "one build invocation; independent byte-for-byte rebuild not performed",
+    "cross-compilation only; no native macOS execution or binary runtime tests",
+    "no source edits, publication, deployment or adversarial review"
+  ]
+}

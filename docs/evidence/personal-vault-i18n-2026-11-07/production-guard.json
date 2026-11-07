@@ -1,0 +1,8 @@
+{
+  "markers_absent": {
+    "mock-admin-pass": true,
+    "seedFromLocation": true,
+    "createMockBackend": true
+  },
+  "not_in_desktop_present": true
+}

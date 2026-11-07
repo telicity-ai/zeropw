@@ -1,0 +1,18 @@
+{
+  "head": "8258a8d2eac7541e229f414151271bb3faa215f8",
+  "entries": 630,
+  "native_before_after_expected_equal": true,
+  "native_before_sha256": "0dad1f1ddfef2f895b045a34228ab068ed9e39327419f8bfcc362599bbaa5080",
+  "native_after_sha256": "0dad1f1ddfef2f895b045a34228ab068ed9e39327419f8bfcc362599bbaa5080",
+  "archive_sha256": "f2a6f4f790d1886b4c7d3e71f2d35ae0f2a10ada33f417762c454ac7ff7db4ba",
+  "expected_sha256": "1be8271ce5a8bd77bf07efa8dfba05ade711c78086ff77a498ba5e9f38e11181",
+  "linux_match": {
+    "head": "8258a8d2eac7541e229f414151271bb3faa215f8",
+    "entries": 630,
+    "content_and_executable_bits_equal": true,
+    "different": [],
+    "permission_note": "Non-executable archive metadata differs; staged source bytes and Git executable bits match."
+  },
+  "linux_before_sha256": "605d43245a6e16827f4f8f3d94d106e51d5afb99a3446b48d9b58f5b76830441",
+  "linux_after_sha256": "605d43245a6e16827f4f8f3d94d106e51d5afb99a3446b48d9b58f5b76830441"
+}

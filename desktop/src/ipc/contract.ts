@@ -22,7 +22,9 @@ export type SecretKind = 'api_key' | 'password' | 'env_var' | 'ssh_private_key';
  *  accepted too). The version commands take it back unchanged; do not convert it. */
 export type VersionId = string | number;
 export interface SecretVersion { version: VersionId; status: string; created_at: string; public?: { public_key: string; fingerprint: string; algorithm: string } | null }
-export interface SecretView { id: string; project: string; environment: string; kind: SecretKind; active_version: VersionId | null; versions: SecretVersion[] }
+/** `deleted` is set by a CLI with whole-secret tombstones (docs/remote-sync-next-milestones.md M1);
+ *  the current CLI never prints it. */
+export interface SecretView { id: string; project: string; environment: string; kind: SecretKind; active_version: VersionId | null; versions: SecretVersion[]; deleted?: boolean }
 /** Where a new secret value comes from. `typed` crosses IPC once; `file_token` refers to a file picked natively in Rust. */
 export type SecretSource = { typed: string } | { file_token: string } | { generate_ed25519: true };
 
@@ -52,7 +54,10 @@ export interface IncidentDeclared extends Incident { existing?: boolean; widened
 export interface InvitePreview { env_id: string; inviter: string; addresses: string[]; role: 'user' | 'admin'; name: string; expires_at: string; expired: boolean; invite_id: string }
 export interface InviteListItem { invite_id: string; role: string; name: string; link: boolean; created_at: string | null; expires_at: string; status: 'pending' | 'used' | 'expired' | 'revoked'; used_at: string | null; used_by: string | null; revoked_at: string | null }
 export interface Member { fingerprint: string; name: string; role: string; status: string; owner: boolean }
-export interface Settings { gateway_port: number; team_listen: string | null }
+/** `link_service`: the link service a not yet enrolled Mac enrols with by default (null: the
+ *  built-in default, which never resolves). Left out of the file while unset. */
+/** `language`: the window's language (`ko`, `en`), or null to follow the system. */
+export interface Settings { gateway_port: number; team_listen: string | null; link_service?: string | null; language?: 'ko' | 'en' | null }
 
 /** A `.env` file the core read for an import (picked or dropped). Its content stays in the core
  *  behind `import_ref` for 10 minutes; only the file's base name comes here. */
@@ -78,6 +83,62 @@ export interface ImportEntry {
 export interface ImportReport { project: string; environment: string; shared: boolean; dry_run: boolean; entries: ImportEntry[]; empty_lines: number[] }
 export interface NetInterface { name: string; ip: string; kind: 'vpn' | 'lan' | 'other' }
 
+// ---- remote sync between this user's Macs (docs/remote-sync.md §4) ---------------------------
+/** How the link daemon reaches a peer: straight, or relayed by the link service's relay. */
+export type LinkPath = 'direct' | 'relay-udp' | 'relay-tcp' | 'relay-tls';
+/** A peer as the link daemon sees it. `last_error` is a daemon code, shown only in the connection details. */
+export interface LinkPeer { device_id: string; name: string; online: boolean; revoked: boolean; path: LinkPath | null; rtt_ms: number | null; last_error: string | null }
+/** `link_status`: the daemon (`running`: its socket answers) and this Mac's enrolment. `service` is
+ *  the enrolled service or the default (`default_service`, defined once in desktop/core/src/link.rs);
+ *  `problem` is why the daemon does not answer (`link_binary_missing`, `link_unavailable`, …). */
+export interface LinkStatus {
+  /** `revoked`: this Mac was removed at the link service and reaches no other Mac through it. */
+  available: boolean; running: boolean; enrolled: boolean; revoked: boolean; device_id: string | null; online: boolean;
+  service: string; service_host: string; default_service: string; device_name: string; peers: LinkPeer[]; problem: string | null;
+}
+export interface PairingEnv { env: string; invite_id: string; shared_now: boolean }
+/** A pairing code made on this Mac. The code itself stays in the core behind `ref` (kind
+ *  pairing_code, 10 minutes) until it is copied or shown once. */
+export interface PairingCreated { ref: string; expires_at: string; peer: string; fingerprint: string; environments: PairingEnv[] }
+/** What a pasted code says, read offline. `name` and `env` come from the other Mac (untrusted
+ *  text); `fingerprint` is the inviting Mac's, read from the invitations themselves. */
+export interface PairingPreview {
+  name: string; peer: string; fingerprint: string; environments: { env: string; env_id: string; role: string }[];
+  service: string; service_host: string; expires_at: string;
+}
+export type PairingJoinState = 'joined' | 'pending' | 'failed';
+/** `reason` for a failed environment; `detail` is the CLI's code for why no address answered
+ *  (`link_peer_offline`, …) when it gave one. */
+export interface PairingJoinEnv {
+  env: string; state: PairingJoinState; reason?: string; detail?: string; self_fingerprint?: string; inviter_fingerprint?: string; project?: string; environment?: string;
+}
+/** `done`: every environment joined and the core forgot the code. */
+export interface PairingJoinResult { done: boolean; peer: string; environments: PairingJoinEnv[] }
+export interface JoinRequest {
+  env: string; request_id: string; invite_id: string; fingerprint: string;
+  first_seen_at: string | number | null; last_seen_at: string | number | null; attempts: number;
+}
+export interface EnvError { env: string; reason: string }
+export interface JoinDecision { fingerprint: string; envs: { env: string; ok: boolean; reason?: string; invites: string[] }[] }
+export type SyncState = 'up_to_date' | 'syncing' | 'retrying' | 'offline' | 'never_connected';
+export interface SyncPeer {
+  fingerprint: string; name: string; state: SyncState; session: boolean; transport: 'link' | 'tcp' | null;
+  last_contact_at: string | null; next_attempt_at: string | null; last_error: string | null;
+}
+/** `team sync-status`: `conflicts` counts unacknowledged overridden changes of the environment. */
+export interface SyncStatus { env_id: string; self: string; serve_updated_at: string | null; conflicts: number; peers: SyncPeer[] }
+export interface LinkDevice { device_id: string; name: string; created_at: unknown; last_seen_at: unknown; online: boolean; revoked_at: unknown }
+/** A paired Mac as the core recorded it (devices.json): team fingerprint, link device ID, environments. */
+export interface PairedDevice { fingerprint: string; link_device_id: string | null; name: string; envs: string[]; added_at: number }
+export interface DeviceEnvView {
+  env: string; members: { env_id: string; members: Member[] } | null; sync: SyncStatus | null; members_error?: string; sync_error?: string;
+}
+export interface DevicesOverview {
+  self_fingerprint: string | null; link: LinkStatus; link_devices: LinkDevice[]; link_devices_error?: string;
+  devices: PairedDevice[]; devices_error?: string; envs: DeviceEnvView[];
+}
+export interface DeviceRemoved { removed: string[]; failed: EnvError[]; link_revoked: boolean; link_error?: string }
+
 /** Command name → [input, output]. */
 export interface Commands {
   app_status: [void, AppStatus];
@@ -95,6 +156,10 @@ export interface Commands {
   control_get: [void, Control];
   stop_all: [void, Control];
   resume: [{ admin_passphrase: string }, Control];
+  /** The window's lock screen: checks the administrator passphrase (`status` with
+   *  `--require-admin`; a wrong one is recorded as `auth_failed`) and changes nothing. The lock
+   *  hides the window's lists only; the relay and agents keep running. */
+  vault_unlock: [{ admin_passphrase: string }, Control];
 
   /** When the team mapping (team/envs.json) cannot be read, the projects still come, with
    *  `team_environments_error` (`state_corrupt`) in place of `team_environments`. */
@@ -166,6 +231,33 @@ export interface Commands {
    *  oldest dropped first) and forgets it once a join succeeds. */
   team_invite_preview: [{ text: string }, { ref: string; preview: InvitePreview }];
   team_join: [{ ref: string; project?: string; environment?: string }, { env_id: string; self_fingerprint: string; inviter_fingerprint: string; project: string; environment: string }];
+
+  /** The link daemon and this Mac's enrolment. Restarts a running relay without the link socket
+   *  once the daemon answers. */
+  link_status: [void, LinkStatus];
+  /** Enrols this Mac with the link service using a server invite code (typed once, sent only in
+   *  the daemon's socket request). `service` defaults to `default_service`. */
+  link_enroll: [{ invite_code: string; service?: string; name?: string }, LinkStatus];
+  /** Shares each environment if needed and makes one approval-required invitation per
+   *  environment for this Mac's link device (re-authenticated), plus a one-time link token.
+   *  `envs` defaults to every environment of the local projects; `name` is this Mac's name for
+   *  the other Mac, `device_name` the member name the new Mac gets. */
+  pairing_create: [{ envs?: string[]; name?: string; device_name: string; admin_passphrase: string }, PairingCreated];
+  /** Reads a pasted `zeropw://pair#…` code offline; the core keeps it 60 minutes for pairing_join. */
+  pairing_preview: [{ text: string }, { ref: string; preview: PairingPreview }];
+  /** Enrols with the code's link token, then joins each environment not joined yet. Call again
+   *  every few seconds while some environment is `pending` (the other Mac has to approve). */
+  pairing_join: [{ ref: string }, PairingJoinResult];
+  join_requests: [{ envs: string[] }, { requests: JoinRequest[]; errors: EnvError[] }];
+  /** Approves exactly `fingerprint` for these environments (re-authenticated). */
+  approve_join: [{ envs: string[]; fingerprint: string; admin_passphrase: string }, JoinDecision];
+  /** Refuses `fingerprint`: the matching invitations are revoked (re-authenticated). */
+  deny_join: [{ envs: string[]; fingerprint: string; admin_passphrase: string }, JoinDecision];
+  team_sync_status: [{ env: string }, SyncStatus];
+  devices_overview: [void, DevicesOverview];
+  /** Leaves every paired environment (`team remove`, re-authenticated), then revokes the link
+   *  device. A device known only to the link service needs no passphrase. */
+  device_remove: [{ fingerprint?: string; link_device_id?: string; admin_passphrase?: string }, DeviceRemoved];
 
   onetime_show: [{ ref: string }, { text: string }];
   onetime_copy: [{ ref: string }, { copied: boolean; clears_in_s: number }];

@@ -1,0 +1,9 @@
+{
+  "head": "8258a8d2eac7541e229f414151271bb3faa215f8",
+  "manifest_lock_changes": [],
+  "m1_introduces_raw_value_feature": false,
+  "m1_uses_RawValue_API": false,
+  "root_serde_features": "arbitrary_precision,preserve_order,unbounded_depth (unchanged)",
+  "new_parser": "ordinary root-map Visitor; original loads unchanged",
+  "m2_probe_or_parser_revision_work_performed": false
+}

@@ -5,7 +5,7 @@
 //   no CSP or IPC loosening, the main window as specified (drag and drop on, for .env import),
 //   deep links for `zeropw` only, and a minimal bundle section: sidecars, resources and macOS
 //   settings are release-only. The tauri dependency has no features (no protocol-asset).
-// - tauri.bundle.conf.json (the release config, §9): exactly the three sidecars, LICENSE and
+// - tauri.bundle.conf.json (the release config, §9): exactly the four sidecars, LICENSE and
 //   THIRD_PARTY_LICENSES.md as resources, and bundle.macOS with minimum macOS 11.0, the
 //   Info.release.plist that holds only the Local Network usage description, and an ad-hoc
 //   signing identity ("-") or none. No credential, certificate, notarization, entitlement,
@@ -55,7 +55,7 @@ const ALLOWED_RUST_PLUGINS = [
   'tauri-plugin-dialog',
   'tauri-plugin-single-instance',
 ];
-const SIDECARS = ['binaries/zeropw-admin', 'binaries/zeropw_session', 'binaries/zeropw-agent'];
+const SIDECARS = ['binaries/zeropw-admin', 'binaries/zeropw_session', 'binaries/zeropw-agent', 'binaries/zeropw-link'];
 const BASE_KEYS = ['$schema', 'productName', 'version', 'identifier', 'build', 'app', 'bundle', 'plugins'];
 const BASE_BUNDLE_KEYS = ['active', 'targets', 'category', 'shortDescription', 'icon'];
 const RELEASE_RESOURCES = { '../../LICENSE': 'LICENSE', 'notices/THIRD_PARTY_LICENSES.md': 'THIRD_PARTY_LICENSES.md' };
@@ -99,7 +99,8 @@ checkReleaseConfig();
 
 const windows = conf.app?.windows ?? [];
 const main = windows[0] ?? {};
-const want = { label: 'main', width: 1180, height: 780, minWidth: 1100, minHeight: 740, titleBarStyle: 'Overlay', hiddenTitle: true };
+// the Personal Vault layout collapses to one column and an icon rail, so small windows are allowed
+const want = { label: 'main', width: 1180, height: 780, minWidth: 720, minHeight: 520, titleBarStyle: 'Overlay', hiddenTitle: true };
 if (windows.length !== 1) fail('tauri.conf.json: exactly one window (main)');
 for (const [k, v] of Object.entries(want)) if (main[k] !== v) fail(`tauri.conf.json: window ${k} must be ${JSON.stringify(v)}`);
 // Drops reach the core (src-tauri/src/shell.rs), which reads a dropped .env file and tells the

@@ -1,0 +1,179 @@
+[
+  {
+    "id": "en-light-1180x780-vault",
+    "surface": "vault",
+    "locale": "en",
+    "theme": "light",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=vault",
+    "errors": [],
+    "logs": [
+      "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    ],
+    "failedRequests": [],
+    "badResponses": [
+      {
+        "url": "http://localhost:1420/favicon.ico",
+        "status": 404
+      }
+    ],
+    "navPlural": "API Keys",
+    "detailType": "API Key · demo · dev · Shared",
+    "lang": "en",
+    "title": "All Items 3",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "ZeroPW\nVault\nAll Items\n3\nPasswords\n1\nAPI Keys\n1\nEnvironment Variables\n1\nSSH Keys\nPlaces\ndemo · dev\n1\ndemo · staging\n1\ndemo · prod\n1\nMy Macs\nService Connections\nDeveloper\nActivity\nLocal service on\nBlock All\nSettings\nAll Items 3\ndb-password\nPassword\nde"
+  },
+  {
+    "id": "en-light-760x560-vault",
+    "surface": "vault",
+    "locale": "en",
+    "theme": "light",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=vault",
+    "errors": [],
+    "logs": [],
+    "failedRequests": [],
+    "badResponses": [],
+    "navPlural": "API Keys",
+    "detailType": "API Key · demo · dev · Shared",
+    "lang": "en",
+    "title": "All Items 3",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "example-api\n\nAPI Key ·\ndemo · dev\n· Shared\n\nCurrent Value\n••••••••••••\nCopy\nVersion History\nVersion 2\nActive\nNov 7, 06:43\nVersion 1\nRetired\nNov 7, 06:43\n\nLast changed Nov 7, 06:43 · This place syncs with approved devices, including new values and rev"
+  },
+  {
+    "id": "en-light-760x560-vault-add-item",
+    "surface": "add-item-dialog",
+    "locale": "en",
+    "theme": "light",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=vault",
+    "errors": [],
+    "logs": [],
+    "failedRequests": [],
+    "badResponses": [],
+    "lang": "en",
+    "typeLabels": [
+      "Password",
+      "API Key",
+      "Environment Variable",
+      "SSH Key"
+    ],
+    "selectedType": "API Key",
+    "clipped": [],
+    "wrapped": [],
+    "dialogWidth": 438,
+    "dialogScroll": 438,
+    "rootWidth": 760,
+    "rootScroll": 760
+  },
+  {
+    "id": "en-dark-1180x780-vault",
+    "surface": "vault",
+    "locale": "en",
+    "theme": "dark",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=vault",
+    "errors": [],
+    "logs": [],
+    "failedRequests": [],
+    "badResponses": [],
+    "navPlural": "API Keys",
+    "detailType": "API Key · demo · dev · Shared",
+    "lang": "en",
+    "title": "All Items 3",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "ZeroPW\nVault\nAll Items\n3\nPasswords\n1\nAPI Keys\n1\nEnvironment Variables\n1\nSSH Keys\nPlaces\ndemo · dev\n1\ndemo · staging\n1\ndemo · prod\n1\nMy Macs\nService Connections\nDeveloper\nActivity\nLocal service on\nBlock All\nSettings\nAll Items 3\ndb-password\nPassword\nde"
+  },
+  {
+    "id": "en-dark-760x560-vault",
+    "surface": "vault",
+    "locale": "en",
+    "theme": "dark",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=vault",
+    "errors": [],
+    "logs": [],
+    "failedRequests": [],
+    "badResponses": [],
+    "navPlural": "API Keys",
+    "detailType": "API Key · demo · dev · Shared",
+    "lang": "en",
+    "title": "All Items 3",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "example-api\n\nAPI Key ·\ndemo · dev\n· Shared\n\nCurrent Value\n••••••••••••\nCopy\nVersion History\nVersion 2\nActive\nNov 7, 06:44\nVersion 1\nRetired\nNov 7, 06:44\n\nLast changed Nov 7, 06:44 · This place syncs with approved devices, including new values and rev"
+  },
+  {
+    "id": "en-dark-760x560-vault-add-item",
+    "surface": "add-item-dialog",
+    "locale": "en",
+    "theme": "dark",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=vault",
+    "errors": [],
+    "logs": [],
+    "failedRequests": [],
+    "badResponses": [],
+    "lang": "en",
+    "typeLabels": [
+      "Password",
+      "API Key",
+      "Environment Variable",
+      "SSH Key"
+    ],
+    "selectedType": "API Key",
+    "clipped": [],
+    "wrapped": [],
+    "dialogWidth": 438,
+    "dialogScroll": 438,
+    "rootWidth": 760,
+    "rootScroll": 760
+  }
+]

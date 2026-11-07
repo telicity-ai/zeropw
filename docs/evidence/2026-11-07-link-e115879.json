@@ -1,0 +1,27 @@
+{
+  "record_type": "isolated_integrated_link_verification",
+  "actual_model": "gpt-6.1-sol",
+  "source": "e115879f6a73d8f95e359a116da38ebb334d5ced",
+  "source_files": 162,
+  "source_before_after_git_blobs_modes_sets_match": true,
+  "environment": "Lima zeropw-parity Ubuntu24.04.4 arm64; Go1.27.3; own job zl-state-integrated; private TMPDIR0700; CGO_ENABLED=0 for Darwin outputs",
+  "commands": [
+    "go vet ./...",
+    "go test -count=1 -timeout=240s ./...",
+    "go test -race -count=1 -timeout=240s ./internal/server ./internal/daemon",
+    "GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -o /tmp/zpl-state-darwin ./cmd/zeropw-link",
+    "GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go test -c -o /tmp/zpl-state-daemon-darwin.test ./internal/daemon"
+  ],
+  "exit_code": 0,
+  "log": "zl-state-integrated-linux.log",
+  "log_sha256": "a8a5f43bfcb8a49e5ccadc423490599f60a0e87733074b530754a17fd01b97c3",
+  "start_utc": "2026-11-07T06:04:37Z",
+  "end_utc": "2026-11-07T06:07:36Z",
+  "limitations": [
+    "Darwin binaries were cross-compiled, not executed",
+    "Native ACL/API/root-alias/other-UID retained-FD validation NOTRUN",
+    "No external review acceptance, production install or target-shape capacity proof",
+    "No physical two-Mac validation",
+    "Later4af5ac8 changes only build notices and their documentation; its build verification is separate"
+  ]
+}

@@ -1,0 +1,319 @@
+{
+  "record_type": "partial_review_evidence_archive",
+  "date": "2026-11-07",
+  "repository": "telicity-ai/zeropw-link",
+  "reviewed_head": "bcdaaecd569a71bf4df07c738869e1e0c7a577e1",
+  "aggregate_status": "INCOMPLETE_NO_PASS",
+  "recorder_model": "gpt-6-astra",
+  "source": {
+    "journal_path": "/Users/ys/.claude/projects/-Users-ys--t3-worktrees-zeropw-t3-e26a33fa/fd2d45ea-9bb8-4f40-8f01-1d916316a0f6/subagents/workflows/wf_875b215b-d32/journal.jsonl",
+    "sha256": "489a5ffd18e4a376129cbd22ccaeeaecb6edc7ed580b5b06fb2ab7d5e12db3ab",
+    "note": "Original findings and rebuttal-verification results copied without edits. This archive is not an aggregate review verdict or a substitute for Opus."
+  },
+  "completed_scopes": [
+    {
+      "scope": "review:secrets-logs",
+      "agent_id": "ad3cae78488a36269",
+      "actual_models": [
+        "claude-opus-5-5"
+      ],
+      "journal_line": 7,
+      "findings": [
+        {
+          "original_finding": {
+            "id": "ZPL-SEC-01",
+            "severity": "low",
+            "file": "internal/daemon/client.go",
+            "line": 32,
+            "title": "Socket client sends invite codes and link tokens without checking the peer UID or socket ownership",
+            "failure_scenario": "The user runs `zeropw-link enroll --state DIR` or `--socket PATH` against a location another local user can influence. Examples: a state dir under a parent that user can write, a `--socket` path in a shared directory, or a daemon that refused to start because the dir is owned by someone else. The other user listens on DIR/link.sock (or swaps the `state` entry in a parent they own for a symlink to their own dir with their own socket). `zeropw-link enroll` then writes `{\"op\":\"enroll\",\"invite_code\":...}` or the link token to that listener. The listener gets the invite code or link token and can enrol its own device in the user's account. A fake daemon can also answer `link-token` with a token of its choosing.",
+            "evidence": "client.go:32-39 `connect` only calls `d.DialContext(ctx, \"unix\", c.Socket)` and returns the conn. It never checks the listener's credentials. cmd/zeropw-link/main.go:223-233 builds the path from --state or --socket with no ownership or mode check. main.go:304-317 forwards invite_code/link_token from stdin over that conn. The daemon side checks the peer (socket.go:37 `peerUID(c) ... uid != os.Geteuid()`), but the client, which holds the secret, does not. On the daemon side, prepareStateDir (state.go:73-95) checks only the last path component, so a parent owned by another user can still swap the directory after the check.",
+            "fix": "In Client.connect, call peerUID(conn) right after dialling and refuse unless it equals os.Geteuid() (SO_PEERCRED and LOCAL_PEERCRED both return the listener's credentials on the client side). For --state, also Lstat the directory and require owner == euid and mode 0700, as prepareStateDir does, before sending anything. Optionally have the daemon refuse a state dir whose parent is writable by another user."
+          },
+          "verification": {
+            "agent_id": "a8bb7f059c4879d33",
+            "actual_models": [
+              "claude-opus-5-5"
+            ],
+            "journal_line": 16,
+            "original_result": {
+              "real": true,
+              "severity": "low",
+              "reasoning": "I could not refute the code facts at bcdaaec. The impact is limited, and the bug is only reachable when the user points the client at a path another local user can influence.\n\nWhat the code does:\n- internal/daemon/client.go:32-39: `Client.connect` only calls `net.Dialer.DialContext(\"unix\", c.Socket)`. Nothing in the client path calls `peerUID`, `Lstat` or an owner check. A repo-wide grep finds `peerUID` only in socket.go:37 (daemon side). The only `Geteuid` checks are in state.go (daemon side) and in main.go's `openLogFile`.\n- cmd/zeropw-link/main.go:223-233: `socketFlags.path()` returns `--socket` as given, or `filepath.Join(--state, \"link.sock\")`, with no checks.\n- main.go:304-317: the enroll command copies `invite_code`/`link_token` from stdin into the request and sends it with `Client.Call`.\n- No other guard exists. Both CLI call sites (main.go:269, 317) and test/sockxfer use the same unchecked `Client`.\n\nIs it reachable? There is no default path. `--state`/`--socket` are always chosen by the caller, and in the normal deployment (desktop sidecar, test scripts using root-owned or 0700 dirs) the state dir is private. So the attack needs a user mistake or a shared-location setup:\n- (a) The state dir is in a shared place like /tmp and another user created it first. The daemon refuses to start (`checkOwner`). A script that ignores that failure and then runs `enroll --state` connects to the other user's socket.\n- (b) A parent directory is writable by another user. `prepareStateDir` only Lstats the last component, and the client follows path components (including symlinks) at connect time, so the directory can be swapped after the check.\n- (c) `--socket` points into a shared directory.\n\nThe project's stated boundary is the OS user (daemon.md §3, §6), and it already defends against other local users elsewhere: the daemon checks the peer UID, the state dir must be 0700 and owned by the user, and the log file is opened with O_NOFOLLOW and an owner check. The client is the side that holds the secret, so this check is missing where it matters most. The suggested fix works: SO_PEERCRED and LOCAL_PEERCRED on the client side return the listener's credentials.\n\nWhy the severity stays low:\n- An attacker who gets a link token can join the link account. That gives server usage, the device list, ciphertext-only streams, and the ability to revoke devices (denial of service).\n- A stolen invite code can be used up by the attacker before the user enrols.\n- A fake daemon can hand out a token of its choosing.\n- None of this reaches vault data: ZeroPW pairing still needs explicit fingerprint approval, and the end-to-end team handshake still applies (remote-sync.md §3.2, daemon.md §6).\n\nDefence-in-depth gap, requires misconfiguration or a shared path, not reachable in the documented default setup."
+            }
+          },
+          "resolution_status": "fix_implemented_tested_post_fix_opus_acceptance_pending"
+        },
+        {
+          "original_finding": {
+            "id": "ZPL-SEC-02",
+            "severity": "low",
+            "file": "internal/daemon/daemon.go",
+            "line": 259,
+            "title": "--service-ca check ignores the file owner and parent directory, and has a stat/read race",
+            "failure_scenario": "On a shared Mac, user A puts the self-hosted CA at /Users/Shared/zeropw/ca.pem (owner A, mode 0644, dir 0755 owned by A). User B starts the daemon with `--service-ca /Users/Shared/zeropw/ca.pem`. The check passes because no group or other write bit is set, and the path is saved in B's config.json and reused on every start. Later A adds her own CA to the file, or swaps it via the directory or a symlink between Stat and ReadFile. B's daemon now trusts A's certificate for the service HTTPS and TURN TLS. A can then intercept B's enrol request (invite code or link token), bearer session tokens and minted link tokens, and serve a forged device list. That gives A the operator's power over B's link account (no vault access).",
+            "evidence": "daemon.go:259-282: `st, err := os.Stat(path)` (follows symlinks), `if st.Mode().Perm()&0o022 != 0` is the only access check, and then a separate `os.ReadFile(path)`. Neither owner nor parent directory is checked, even though the comment at 256-258 and daemon.md §1 say the reason is 'whoever can change it can impersonate the service and the TURN relay'. The file owner can always change it. Start() (daemon.go:168-180) reloads this path from config.json on every start.",
+            "fix": "Open the file once (O_RDONLY|O_NOFOLLOW, or resolve symlinks and check each one), fstat the open descriptor, require owner == euid or root and no group/other write bit, require the parent directory (and ideally its ancestors) to be owned by euid or root and not writable by group/other (or sticky), then read from the same descriptor."
+          },
+          "verification": {
+            "agent_id": "acecead3fc0e75077",
+            "actual_models": [
+              "claude-opus-5-5"
+            ],
+            "journal_line": 14,
+            "original_result": {
+              "real": true,
+              "severity": "low",
+              "reasoning": "The code facts are correct at bcdaaec. loadCA (internal/daemon/daemon.go:259-282) runs os.Stat, which follows symlinks. Its only access check is `st.Mode().Perm()&0o022 != 0`, and it then reads with a separate os.ReadFile. It never checks the file owner or the parent directory. Start() (daemon.go:168-180) loads cfg.ServiceCA from config.json whenever the flag is absent, and the resulting roots are used for both the service HTTPS client (daemon.go:408, socket.go:276-284) and TURN TLS (daemon.go:399).\n\nThe gap is real because it falls short of the code's own stated reason. The comment and docs/daemon.md §1 say \"whoever can change it can impersonate the service and the relay\". A file owned by another user, or a 0644 file of your own inside a group-writable non-sticky directory, can be changed by others, and both pass the check. The same package handles other files more strictly: state files require owner == euid plus O_NOFOLLOW/Lstat (state.go:81-112), and openLogFile refuses symlinks and files owned by other users (cmd/zeropw-link/main.go:190). The CA file is the only trust-bearing file without an owner check.\n\nWhy it stays low and narrower than the finding says:\n1. The main scenario needs the victim to choose a CA file owned by another user, which is close to deciding to trust that user's CA. The more convincing case is a file the victim owns sitting in a group-writable directory. Typical macOS homes and the sticky /Users/Shared do not allow that, so it needs an unusual setup.\n2. The attacker also needs a network man-in-the-middle position against the victim's TLS connections, such as a controlled router or DNS. The finding does not mention this. A non-admin local user cannot intercept another user's outbound TLS. An admin could simply read the victim's 0700 state directory, which makes this trick unnecessary.\n3. The impact is limited to operator-level power over the victim's link account. Per docs/service.md §8 the operator already cannot read or join a vault: enrolling devices still needs the ZeroPW pairing secret and fingerprint approval, and forged device lists cannot substitute keys for existing IDs.\n4. The stat/read race adds no separate exploit. Anyone who can swap the path between the two calls already controls a path component and could just place a well-permissioned file. Its only extra effect is getting around the 1 MiB size check, which is trivial.\n5. The pool is loaded once at start, so changes take effect only on a restart.\n\nThis is a legitimate but minor hardening gap. The suggested fix is sound: open once with O_NOFOLLOW, fstat the descriptor, require owner == euid or root, and check the parent directory."
+            }
+          },
+          "resolution_status": "fix_implemented_tested_post_fix_opus_acceptance_pending"
+        },
+        {
+          "original_finding": {
+            "id": "ZPL-SEC-03",
+            "severity": "low",
+            "file": "internal/daemon/state.go",
+            "line": 91,
+            "title": "State privacy checks use mode bits only; inherited macOS ACLs can expose device.json",
+            "failure_scenario": "On macOS (the desktop sidecar target), the state dir is created under a directory with an inheritable allow ACE, e.g. `chmod +a \"group:staff allow list,search,read,file_inherit,directory_inherit\" ~/sync` followed by `zeropw-link daemon --state ~/sync/zpl`. os.Mkdir(0700) and OpenFile(0600) inherit the ACE, and f.Chmod(0o600) does not remove it. stat still shows 0700/0600, so prepareStateDir and readPrivateFile accept the state on every start. Other staff users can read device.json (the Ed25519 link device seed) and impersonate the device to the service and its peers until it is revoked. macOS home directories are group-staff traversable (0750), so the path is reachable. Linux POSIX ACLs are masked by the 0700/0600 group bits, so this is macOS-only.",
+            "evidence": "state.go:91 `if perm := st.Mode().Perm(); perm != 0o700` and state.go:130 `if perm := st.Mode().Perm(); perm&0o077 != 0` look only at the permission bits. writePrivateFile (state.go:153-165) creates the file with mode 0600 and calls f.Chmod(0o600), which keeps ACL entries. No code reads or clears extended ACLs. daemon.md §2 promises anything not private is 'refused at start (state is not private to this user)'. daemon.md §8.5 says macOS was not tested.",
+            "fix": "On darwin, detect extended ACLs on the state directory and each state file (getattrlist ATTR_CMN_EXTENDED_SECURITY or acl_get_fd_np) and refuse them. When creating the directory and files, set an empty ACL (acl_set_fd with an empty ACL, or the fchmodx/`chmod -N` equivalent) before writing the seed. Add a darwin test with an inherited ACE."
+          },
+          "verification": {
+            "agent_id": "aec0c0ef3fae0c76d",
+            "actual_models": [
+              "claude-opus-5-5"
+            ],
+            "journal_line": 19,
+            "original_result": {
+              "real": true,
+              "severity": "low",
+              "reasoning": "I tried to refute this finding and could not. The code at commit bcdaaec does what the finding says. I did not run any experiment, so the macOS ACL behaviour below comes from known XNU and APFS semantics, not a test.\n\nWhat the code does:\n- `prepareStateDir` (state.go:73-95) checks only three things: Lstat says the path is a directory, the owner matches (`checkOwner`), and `st.Mode().Perm() == 0o700`.\n- `readPrivateFile` (state.go:111-141) checks only that the file is regular, the owner matches, and `perm&0o077 == 0`.\n- `writePrivateFile` (state.go:146-185) creates a temp file with `O_CREAT|O_EXCL` and mode 0600, calls `f.Chmod(0o600)`, then renames it over the real file.\n- Nothing in the repository reads, clears or mentions ACLs. A grep for acl, xattr and extended in the Go files finds nothing.\n- `daemon.Start` (daemon.go:143-160) calls `prepareStateDir`, then `loadOrCreateDevice` and `loadConfig`. There is no other privacy check, and parent directories are not checked.\n\nWhy the bypass works on macOS:\n- A new directory or file inherits ACEs that carry `file_inherit` or `directory_inherit` from its parent at creation time, whatever mode was requested. That covers both `mkdir(0700)` and `open(O_CREAT, 0600)`.\n- `chmod`/`fchmod` with a mode does not remove ACL entries (`chmod -N` would). Rename keeps the inode, so the ACL stays on `device.json`.\n- XNU checks ACL entries before the mode bits, so an allow entry grants read even when the mode is 0600.\n- `stat` does not report ACLs, so Go's `Mode().Perm()` still shows 0700/0600 and both checks pass on every start.\n\nThe path is reachable:\n- `ls -led /Users/ys` on this Mac shows `drwxr-x---+ ys staff` with only a non-inheritable `group:everyone deny delete` entry. Other local users, who are in the staff group, can traverse the home directory, so they can reach `~/sync/zpl/device.json` through the inherited allow entry.\n- `--state` is required and supplied by the caller (main.go:139-153). The desktop integration has not chosen a path yet, so where the state lives is up to the caller.\n- daemon.md §7 names darwin-arm64 `zeropw-link` as the desktop sidecar. §8.5 says macOS was not tested.\n\nArguments against it, and why I still rate it real:\n1. It needs an inheritable allow entry on a parent directory, which the user (or an admin) must set up. That is uncommon, but it happens in normal use: adding a user in Finder's Get Info with \"Apply to enclosed items\", File Sharing permissions, or a parent folder owned by another user that has its own inheritable entry.\n2. The default location the app will probably use, `~/Library/Application Support`, has no inheritable entries.\n3. Per daemon.md §6, a stolen key only lets someone act as this device (rendezvous and TURN) until the device is revoked. It gives no access to vault data.\n\nHowever, daemon.md §2 promises that anything not private is \"refused at start (state is not private to this user)\". The mode check exists to catch exactly this kind of misplaced or shared state, and an ACL gets around it without any warning. So the gap is real: the check is incomplete compared with what the documentation promises. Points 1-3 keep it at low severity.\n\nThe finding's other details also hold. Linux is not affected, because new files with group bits 0 get an ACL mask of `---` and `Perm()` reports that mask. `link.sock` is not exposed, because connecting needs write permission (the inherited entry grants only read) and there is a peer UID check."
+            }
+          },
+          "resolution_status": "open_macos_acl_fix_and_native_test_pending"
+        },
+        {
+          "original_finding": {
+            "id": "ZPL-SEC-04",
+            "severity": "low",
+            "file": "deploy/coturn/build-coturn.sh",
+            "line": 158,
+            "title": "Root runs ldd and --version on a coturn binary from a build tree that `nobody` can write",
+            "failure_scenario": "install.sh builds coturn on the server (no bundle). The build tree under /tmp/coturn-build.XXXXXX is 0755, so its path can be found, and src/ and build/ are chowned to nobody:nogroup. Any other process running as `nobody` during the multi-minute compile can replace build/bin/turnserver with an ELF that has a crafted PT_INTERP, or that prints 4.18.0 for --version. Root then runs `ldd` (check_links) and `turnserver --version` on it, which executes attacker code as root. The script also installs that binary as /opt/coturn/current/bin/turnserver, which later receives the TURN secret and the TLS key. Building as nobody was meant to keep the build away from root, but running the output as root undoes that.",
+            "evidence": "build-coturn.sh:109-111 `work=$(mktemp -d /tmp/coturn-build.XXXXXX)`, `chmod 0755 \"$work\"`. Line 124 `chown -R nobody:nogroup \"$work/src\" \"$work/build\"`. Line 158 `linked=$(check_links \"$built/turnserver\")`, and check_links (59-66) runs `ldd \"$bin\"` as root. Line 159 `ver=$(\"$built/turnserver\" --version ...)` runs as root. Line 168 `install -m 0755 -o root ... \"$built/$b\" \"$tmpdest/bin/$b\"` installs the binary from the writable tree.",
+            "fix": "Build under a dedicated throwaway UID (e.g. systemd-run with DynamicUser=yes) instead of the shared `nobody`, and keep $work at 0700. Copy the outputs into a root-owned directory right after the build and run all checks on that copy only. Check linked libraries with `readelf -d`/`objdump -p` instead of ldd, and run `--version` with the as_nobody/setpriv wrapper rather than as root."
+          },
+          "verification": {
+            "agent_id": "a3c9613e417c3616a",
+            "actual_models": [
+              "claude-opus-5-5"
+            ],
+            "journal_line": 18,
+            "original_result": {
+              "real": true,
+              "severity": "low",
+              "reasoning": "The mechanism is real, but it only matters if an attacker already runs code as `nobody`, and the intended deployment has no such process. Checked in /Users/ys/Code/zeropw-link at bcdaaec.\n\nWhat the code does:\n- The source build is the default path. `deploy/install.sh:205` runs `build-coturn.sh --root \"$COTURN_ROOT\"` whenever `--coturn-bundle` is not given.\n- The build tree can be found and written by `nobody`. `$work` is `mktemp -d /tmp/coturn-build.XXXXXX` and then `chmod 0755` (lines 109-111), and /tmp can be listed by anyone. Line 124 does `chown -R nobody:nogroup \"$work/src\" \"$work/build\"`. The tree stays owned by `nobody` until the EXIT trap removes it.\n- Root then works with files from that tree:\n  - line 158 runs `check_links`, which calls `ldd` as root;\n  - line 159 runs `\"$built/turnserver\" --version` directly as root, which runs that binary's code;\n  - line 168 installs all four binaries from the tree.\n- No digest ties the installed binary to what was compiled. `binary_sha256` (line 182) is taken from the copy after it is installed. The `turnutils_*` binaries are never checked at all.\n- The header comment at lines 15-16 is wrong. It says \"only the final copy into the install root runs as root\", but root also runs the built binary. So building as `nobody` does not keep root away from build output.\n\nThe attack does not depend on a tight timing window. `src/` is owned by `nobody` from line 124 onward, so a `nobody` process could edit a .c file before or during the compile. The compiled turnserver would then carry the payload into the root `--version` call and into the running service, which gets the TURN secret and the TLS group.\n\nWhy the risk is low:\n1. It needs an existing foothold as uid `nobody`. Nothing in this repo runs as `nobody` except the build's own cmake/gcc. coturn runs as `turnserver`, and linkd and turnsweep run as `zeropw-linkd`. The documented target is a dedicated Ubuntu 24.04 VM (OCI E2.1.Micro), and a default 24.04 server runs no daemon as `nobody`. So this is a defense-in-depth gap: the shared `nobody` account is a known anti-pattern, and it opens a path from `nobody` to root. It is not something an outsider can reach as the system ships.\n2. The `ldd`/PT_INTERP part is probably overstated. As far as I recall, recent glibc `ldd` (Ubuntu 24.04 ships 2.39) runs the system loader with `LD_TRACE_LOADED_OBJECTS` rather than the file's own interpreter. I could not run anything to confirm this. Either way, the direct `--version` call at line 159 is enough on its own.\n3. The source tarball is pinned by digest, so the build code itself is as trusted as coturn. The separation only matters against a hostile co-tenant running as `nobody`, or a host where `--bundle-out` is built that has other `nobody` processes. In that last case, a tampered bundle would reach the server.\n\nThe suggested fix is sound, with one correction. `$work` cannot simply be 0700 root while the build still runs as `nobody`, because the build would lose access to its own tree. A dedicated or dynamic build UID that owns its own 0700 tree solves that. After that, copy the outputs to a root-owned location, check that copy, and use `readelf`/`objdump` instead of `ldd` and `--version` run as root."
+            }
+          },
+          "resolution_status": "fix_implemented_tested_post_fix_opus_acceptance_pending"
+        }
+      ]
+    },
+    {
+      "scope": "review:crypto-auth",
+      "agent_id": "a79b7a66a7c735635",
+      "actual_models": [
+        "claude-opus-5-5"
+      ],
+      "journal_line": 12,
+      "findings": [
+        {
+          "original_finding": {
+            "id": "ZPLINK-OPUS-01",
+            "severity": "medium",
+            "file": "internal/server/challenge.go",
+            "line": 42,
+            "title": "Enrolment and session challenges share one global table of 10,000 slots, so an unauthenticated client can fill it and block session renewal for every account",
+            "failure_scenario": "An unauthenticated attacker controls about 625 client networks (IPv4 addresses, or IPv6 /64s on an IPv6-enabled self-host, where one /48 is enough). From each network it sends 16 `POST /v1/challenge {\"purpose\":\"session\",\"device_pub\":<random 32 bytes>}` requests per 60 s. That is under the per-network limits (16 outstanding; burst 20 at 1/s). The 10,000 challenges stay live and are never redeemed. Every other client's challenge request then gets `429 rate_limited`, and that includes the daemons' session renewals. serviceclient renews 2 minutes before expiry. Within one session TTL (1 h) every device in every account loses its bearer session. After that: no device lists, no TURN credentials, no signals, no new enrolments, and no `DELETE /v1/devices/{id}` from users (only the operator CLI can still revoke). Because the daemons' PeerDirectory now returns only transient errors, the link layer also keeps established QUIC connections to peers the operator revokes in the meantime (types.go contract; node.go revalidate only closes on ErrPeerRevoked/ErrPeerUnknown). While the table is full, each issue() call also scans all 10k entries under the global mutex.",
+            "evidence": "challenge.go:42-46: `if c.perOwner[owner] >= c.maxOwner || len(c.m) >= c.maxTotal { c.sweepLocked(now); if ... { return ..., errTooManyChallenges } }`. This is one table for both purposes, sized by ratelimit.go:52-53 (`ChallengeOutstandingPerIP: 16, ChallengeOutstandingTotal: 10000`). handlers.go:38-46 issues a challenge for any well-formed 32-byte key and either purpose, without checking that a session-purpose key belongs to an enrolled device: `pub, ok := decodeFixed(...); ... id, nonce, exp, err := s.ch.issue(req.Purpose, pub, ri.key, now); if errors.Is(err, errTooManyChallenges) { writeError(... 429 ...) }`. serviceclient/client.go:272 (`Session` -> `Challenge`) is the only way to renew a session. Entries live for ChallengeTTL = 60 s. service.md §8 describes a similar trade-off only for the enrolment failure budget, not for session renewal.",
+            "fix": "Separate session challenges from the unauthenticated pool. For purpose=session, look the key up first (devices.pub is UNIQUE; it must be active and not in revoked_keys), and bound outstanding session challenges per device (for example 2) in a separate pool, so unenrolled keys cannot consume it. Better still, make challenges stateless: challenge_id = expiry || random || HMAC(server key, purpose||pub||nonce||expiry), plus a bounded set of consumed IDs, so no outstanding table can be exhausted. Replace the O(n) sweep with an expiry-ordered heap."
+          },
+          "verification": {
+            "agent_id": "a080e8bbe439043b7",
+            "actual_models": [
+              "claude-opus-5-5"
+            ],
+            "journal_line": 22,
+            "original_result": {
+              "real": true,
+              "severity": "medium",
+              "reasoning": "I checked the finding against the cited code read-only at /Users/ys/Code/zeropw-link (bcdaaec). The core claim holds.\n\nConfirmed:\n- internal/server/challenge.go:42-46: there is one in-memory table for both challenge purposes. It is bounded by `perOwner` (16 per client network) and `maxTotal` (10,000; ratelimit.go:52-53). When the table is full, `issue()` returns errTooManyChallenges, whatever the purpose or caller.\n- internal/server/handlers.go:26-52 (handleChallenge): it checks only the per-network challenge rate limiter, a 32-byte key and a valid purpose. For purpose=session it does not check that the key belongs to an enrolled, active device. The enrollment check comes later, in handleSession and store.CreateSession. So unenrolled keys can fill the same pool that renewals need.\n- serviceclient/client.go:268-283 (`Session`) and `DeviceSession.current` (around line 397): every session renewal must first get a session challenge. If that fails, the error goes to the caller, and every authenticated call through `DeviceSession.with` fails too. SessionTTL is 1 h (server.go), so devices whose renewal keeps failing lose their bearer session within an hour. Device lists, TURN credentials, signals, link tokens and self-service revocation all depend on that session.\n- Expiry and sweep are as described. Entries live 60 s, the sweep is a full O(n) scan under the global mutex, and it runs only when a cap is hit or on the 5 s maintenance tick.\n- The per-network limits (16 outstanding, 1/s refill, burst 20) do not stop a pool of distinct client networks large enough to cover 10,000 slots.\n\nMitigating factors, which bound the severity but do not refute the finding:\n- The documented deployment is IPv4-only (docs/operations.md:113 and the self-host guide; the nftables template has no IPv6 service rules). The IPv6 /48 variant applies only to a self-host that adds IPv6, which the docs do not cover. On the documented setup, exhaustion needs many distinct IPv4 addresses.\n- This is an availability problem only. No secrets or authentication material leak, and the operator CLI still works.\n- docs/service.md §8 accepts a similar global-exhaustion trade-off, but only for the enrolment failure budget (\"delay legitimate enrolments for up to an hour\"). It says nothing about session renewal for already-enrolled devices, which has a larger impact.\n\nPartly verified: the follow-on claim about the link layer. In internal/daemon/service.go, `directory.refresh` wraps service errors with wrapService, not as ErrPeerRevoked or ErrPeerUnknown. link/node.go:1114 and :1370 act only on those two errors. That fits the claim that established connections stay open while the directory is unreachable. I did not trace the whole revalidate path, so treat that part as plausible rather than fully confirmed.\n\nVerdict: real. The global challenge pool can be exhausted by unauthenticated clients, and that blocks session renewal for all accounts. Medium fits because it is availability-only, needs many distinct networks on the documented IPv4 deployment, and has an operator fallback. The suggested direction holds up: a separate, smaller session-challenge pool keyed to enrolled devices, or stateless HMAC challenges."
+            }
+          },
+          "resolution_status": "fix_implemented_tested_post_fix_opus_acceptance_pending"
+        },
+        {
+          "original_finding": {
+            "id": "ZPLINK-OPUS-02",
+            "severity": "low",
+            "file": "internal/server/handlers.go",
+            "line": 78,
+            "title": "Enrolment failure budgets are checked and charged separately, so concurrent bad attempts are not all counted",
+            "failure_scenario": "The per-network failure bucket holds exactly 1 token. One client network sends 10 concurrent `POST /v1/enroll` requests (allowed by the enroll burst of 10), each with a fresh challenge, a valid signature and a wrong invite code. All 10 pass `available()`, and all 10 reach the invite lookup (`EnrollWithInvite`: BEGIN IMMEDIATE, keyFree, the UPDATE on code_hmac). Only the first `spend()` takes a token; the other nine `AllowN` calls fail silently and record no debt. The global budget behaves the same way: an attacker with K networks that fires at each 7.2 s global refill gets about K lookups per refill instead of 1. The documented 500/h global and 20/h per-network bounds ('429 before the challenge, the invite or the token is looked up') therefore scale with attacker concurrency. Code entropy (130/256 bits) still prevents practical guessing, so this only weakens a defence-in-depth control.",
+            "evidence": "handlers.go:78-91: `if ok, retry := s.rlEnrollFail.available(ri.key, now); !ok {...}` and `if ok, retry := s.enrollFailGlobal.available(now); !ok {...}` come first. The charge happens only later, inside `fail := func(...) { s.rlEnrollFail.spend(ri.key, now); s.enrollFailGlobal.spend(now) ... }`, after takeChallenge, Verify and the store call. ratelimit.go:162 `available` only reads `l.TokensAt(now) >= 1`. ratelimit.go:169-175 `spend` calls `l.AllowN(now, 1)` and ignores the false result, so the bucket never goes negative.",
+            "fix": "Reserve the failure token atomically at entry: `AllowN` under the limiter mutex before any challenge or invite work, then return the token on success (rate.Limiter.ReserveN plus Cancel, or an explicit refund). Alternatively, count in-flight enrolments per key and globally against the budget, so that N concurrent requests need N tokens."
+          },
+          "verification": {
+            "agent_id": "a73f624f5def07c63",
+            "actual_models": [
+              "claude-opus-5-5"
+            ],
+            "journal_line": 20,
+            "original_result": {
+              "real": true,
+              "severity": "low",
+              "reasoning": "I tried to refute this finding and could not. It is real, and low severity fits.\n\n**The cited code** (commit bcdaaec)\n- `handleEnroll` (internal/server/handlers.go:78-91) first calls `rlEnrollFail.available` and `enrollFailGlobal.available`.\n- Both checks only read `TokensAt(now) >= 1` under the limiter mutex (ratelimit.go:149-166 and 207-214). Neither takes a token.\n- A token is charged only later, in the `fail` closure, which calls `spend` (ratelimit.go:169-175 and 216-220). `spend` calls `AllowN(now, 1)` and ignores the result, so a bucket that is already empty records no debt.\n- Between the check and the charge the request body is read, the challenge is consumed, the signature is verified and the store is queried (`EnrollWithInvite` runs `keyFree` and the `UPDATE invites ... WHERE code_hmac = ?`). So N requests that all pass the check while the bucket holds one token produce N lookups but only one charge.\n\n**Guards I looked for and did not find**\n- No per-network or global in-flight counter, semaphore or enrolment mutex exists in server.go or handlers.go.\n- The only other per-request limits are `rlReq` (burst 200) and `rlEnroll` (burst 10, one per 6 s). Both take tokens atomically but do not count failures.\n- The existing tests (`TestEnrollFailureBudgetPerIP` and `TestEnrollFailureBudgetGlobal` in limits_test.go) send requests one at a time, so they cannot catch this.\n\n**The attack is easy to reach**\nThe budget check runs before `decodeJSON` reads the body. Go's net/http calls the handler once the headers arrive, and the server allows up to 15 s for the body (`ReadTimeout`). So an attacker can:\n1. Send headers for about 10-12 enrolment requests from one network while the bucket holds at least one token.\n2. Let every handler pass `available()` and wait for its body.\n3. Fetch fresh challenges (up to 16 outstanding per network) and send the bodies, each with a valid signature from the attacker's own device key and a wrong invite code.\n\nEvery request reaches the invite lookup, and only one token is charged. No tight timing is needed. The global budget behaves the same way across K networks.\n\n**Impact**\nThis breaks the documented promise that an empty budget returns 429 \"before the challenge, the invite or the token is looked up\" (docs/service.md:106-108, docs/protocol.md:87-88). In practice the 20/h per-network and 500/h global bounds grow by roughly 10-12 times per network. Invite codes are 130-bit and link tokens 256-bit, so this weakens a defence-in-depth control rather than enabling practical guessing. That supports low severity."
+            }
+          },
+          "resolution_status": "fix_implemented_tested_post_fix_opus_acceptance_pending"
+        },
+        {
+          "original_finding": {
+            "id": "ZPLINK-OPUS-03",
+            "severity": "low",
+            "file": "internal/daemon/socket.go",
+            "line": 329,
+            "title": "A lost enrolment response leaves the daemon permanently unable to enrol, while an invite use is consumed and an active orphan device remains",
+            "failure_scenario": "The daemon sends `POST /v1/enroll`. The server commits EnrollWithInvite (or EnrollWithLinkToken): the invite use is consumed and the device is active in the account. The HTTP answer is then lost, for example because the client's 20 s request timeout fires on a slow 1/8-OCPU host, or the laptop sleeps or changes network. The daemon stays `phaseUnenrolled` with the same device.json. Every later `enroll` with any invite or link token reaches keyFree -> ErrAlreadyEnrolled -> `already_enrolled`. If the operator revokes the orphan to clean up, every later attempt gets `device_revoked` instead, because the daemon rotates its key only when its own phase is phaseRevoked, which this path never sets. Recovery needs a manual deletion of device.json. Until the operator revokes it, the orphan device counts toward max_devices.",
+            "evidence": "socket.go:327-332: `if err != nil { code := mapServiceError(err); d.log.Info(\"enroll_failed\", ...); return nil, code }`. Neither phase nor key changes on `already_enrolled` (mapped at :385) or `device_revoked` (:387). Key rotation happens only at socket.go:293 `if d.phase == phaseRevoked { id, err := link.NewIdentity() ... }`. The store checks keyFree before the invite or token (records.go:197, :232), so a retry with the same key cannot succeed.",
+            "fix": "When the service answers `already_enrolled` for this daemon's own key, open a session with the key (POST /v1/session accepts an enrolled key), read account_id from GET /v1/devices, and adopt that enrolment (write config.json, start online). When it answers `device_revoked` during enrolment, set phaseRevoked and RevokedAt (or rotate the key immediately) so the next enrol attempt uses a fresh key."
+          },
+          "verification": {
+            "agent_id": "ae601bae01ed6ecb8",
+            "actual_models": [
+              "claude-opus-5-5"
+            ],
+            "journal_line": 21,
+            "original_result": {
+              "real": true,
+              "severity": "low",
+              "reasoning": "I could not refute this at bcdaaec. Every link in the scenario holds.\n\n1. Server commits before the response is delivered. In internal/server/handlers.go, the enroll handler runs st.EnrollWithInvite or EnrollWithLinkToken. Each one finishes with tx.Commit() (records.go:217 and :264). The handler writes the JSON EnrollResponse only after that. Nothing makes enrolment idempotent: no replay of a pending enrolment, and no lookup that returns the existing session for the same key. On the client, serviceclient/client.go:260 applies DefaultRequestTimeout = 20 s to POST /v1/enroll. One partial mitigation: if the client gives up before the commit, the server's r.Context() is cancelled and database/sql rolls the transaction back. The window that remains is between commit and the client reading the response: network change, sleep, or a timeout that fires just after commit. The server's WriteTimeout is 45 s and there is no reverse proxy, so the server itself does not drop the response. The window is narrow but real.\n\n2. A second trigger in the same function makes it stronger. At socket.go:339, if the daemon starts shutting down after a successful response, it returns CodeShuttingDown before writeConfig. The server has committed but config.json is never written. Shutdown here means SIGTERM during enrolment, for example the desktop app quitting. Separately, d.ctx is cancelled on close, which aborts an in-flight request after the server may already have committed.\n\n3. The daemon cannot recover. On any error, opEnroll (socket.go:328-331) only logs and returns the code. It leaves d.phase, d.id and config.json untouched. Key rotation happens only at socket.go:293, when d.phase == phaseRevoked. phaseRevoked is set only at daemon.go:204 (startup with config RevokedAt) and in loseEnrolment (daemon.go:468), which needs an online instance. An unenrolled daemon never has one. Restarting does not help: loadOrCreateDevice reloads the same device.json, config.json is absent, so the phase is unenrolled again.\n\n4. Every retry is refused. keyFree (records.go:140-160) runs before the invite or token is checked (records.go:197, :232). With the orphan device row active, any invite or link token returns ErrAlreadyEnrolled, which becomes 409 already_enrolled and then the daemon's CodeAlreadyEnrolled. If the orphan is revoked (possible from a sibling device after link-token enrolment), keyFree returns ErrKeyRevoked, which becomes device_revoked. opEnroll still does not set phaseRevoked, so it keeps the same key and fails forever.\n\n5. Side effects:\n   - The invite use is consumed (uses = uses + 1 in the committed transaction).\n   - Invite path: an orphan account is created.\n   - Link-token path: the orphan counts toward the account's max_devices (count of devices with revoked_at IS NULL).\n   - docs/daemon.md describes already_enrolled only as \"enroll on an enrolled daemon\" and gives no recovery procedure. The only way out is deleting device.json by hand.\n\nSeverity is low. It needs a rare transport failure or a shutdown landing just after commit. It is not a security problem, and there is a manual workaround, but the daemon stays stuck until someone deletes device.json and its error code points the wrong way. The proposed fix is sound: on already_enrolled, adopt the enrolment via POST /v1/session plus GET /v1/devices; on device_revoked during enroll, mark the daemon revoked or rotate the key."
+            }
+          },
+          "resolution_status": "fix_implemented_tested_at_858ddc_post_fix_opus_acceptance_pending"
+        }
+      ]
+    }
+  ],
+  "incomplete_scopes": [
+    {
+      "scope": "review:network-dos",
+      "agent_id": "a5b5da771f0cb0bf7",
+      "actual_models": [
+        "claude-opus-4-8",
+        "claude-opus-5-5"
+      ],
+      "status": "malformed_truncated_result_not_accepted",
+      "source_path": "/Users/ys/.claude/projects/-Users-ys--t3-worktrees-zeropw-t3-e26a33fa/fd2d45ea-9bb8-4f40-8f01-1d916316a0f6/subagents/workflows/wf_875b215b-d32/agent-a5b5da771f0cb0bf7.jsonl",
+      "source_sha256": "300c1016d2cd52e4a0c569fa242dd9987e52a200c6ca692193697c33132da3d1",
+      "partial_finding_summary": {
+        "id": "DOS-1",
+        "severity": "high",
+        "file": "internal/server/server.go",
+        "line": 343,
+        "issue": "No pre-HTTP global/per-client connection cap; partial result only, no complete review or verification verdict."
+      },
+      "raw_partial_outputs": [
+        {
+          "source_line": 233,
+          "message_model": "claude-opus-5-5",
+          "original_input": {
+            "__unparsedToolInput": {
+              "raw": "{\"findings\": [{\"id\":\"DOS-1\",\"severity\":\"high\",\"file\":\"internal/server/server.go\",\"line\":343,\"title\":\"zeropw-linkd has no cap on concurrent connections, total or per client. Idle HTTP/2 connections are held for 90 s without a single request, so one IP can exhaust FDs or memory and take the whole service down\",\"failure_scenario\":\"An attacker on one IPv4 address opens about 100 TCP+TLS connections per second to :443. Each one negotiates ALPN h2, sends the client preface, SETTINGS and SETTINGS-ACK, then goes quiet. Go's h2 server keeps each connection until IdleTimeout (90 s). Because no HTTP request is ever made, the per-IP request limiter (rlReq, handled inside Handler) never runs. Over HTTP/1.1, one request per connection works too: a 429 still leaves the connection in keep-alive for 90 s. After about 90 s the attacker holds roughly 8192 connections. That reaches the unit's LimitNOFILE=8192, and probably the 256M MemoryMax first at tens of KB per idle TLS/h2 connection. Two outcomes follow. (a) Accept() returns EMFILE, so every enrolment, session renewal, long-poll, device list and TURN request from every account fails. Revocations that arrive over clients' existing connections also fail with 500, because Journal.Append opens the journal file for every revocation (journal.go:92). (b) Or the cgroup OOM-kills the process. Restart=on-}",
+              "len": 1353
+            }
+          }
+        },
+        {
+          "source_line": 288,
+          "message_model": null,
+          "original_input": {
+            "__unparsedToolInput": {
+              "raw": "{\"findings\": [{\"id\":\"DOS-1\",\"severity\":\"high\",\"file\":\"internal/server/server.go\",\"line\":343,\"title\":\"zeropw-linkd has no cap on concurrent connections, total or per client. Idle HTTP/2 connections are held for 90 s without a single request, so one IP can exhaust FDs or memory and take the whole service down\",\"failure_scenario\":\"An attacker on one IPv4 address opens about 100 TCP+TLS connections per second to :443. Each one negotiates ALPN h2, sends the client preface, SETTINGS and SETTINGS-ACK, then goes quiet. Go's h2 server keeps each connection until IdleTimeout (90 s). Because no HTTP request is ever made, the per-IP request limiter (rlReq, handled inside Handler) never runs. Over HTTP/1.1, one request per connection works too: a 429 still leaves the connection in keep-alive for 90 s. After about 90 s the attacker holds roughly 8192 connections. That reaches the unit's LimitNOFILE=8192, and probably the 256M MemoryMax first at tens of KB per idle TLS/h2 connection. Two outcomes follow. (a) Accept() returns EMFILE, so every enrolment, session renewal, long-poll, device list and TURN request from every account fails. Revocations that arrive over clients' existing connections also fail with 500, because Journal.Append opens the journal file for every revocation (journal.go:92). (b) Or the cgroup OOM-kills the process. Restart=on-}",
+              "len": 1353
+            }
+          }
+        }
+      ]
+    },
+    {
+      "scope": "review:deploy-ops",
+      "agent_id": "aa9cce217968e63b0",
+      "actual_models": [
+        "claude-opus-5-5"
+      ],
+      "status": "no_result_returned"
+    }
+  ],
+  "rate_limit": {
+    "known_reset": "2026-11-07T12:50:00+09:00",
+    "retried": false
+  },
+  "limitations": [
+    "Seven completed-scope findings have real:true verification; no severity has been changed.",
+    "Fixes being developed after the reviewed head are not covered by this review.",
+    "Network and deployment review scopes remain incomplete.",
+    "No aggregate PASS exists."
+  ],
+  "fix_progress": {
+    "source_head": "cc733dcacf9f1c170dcb7469d7d258b368726ed7",
+    "repository_visibility": "private",
+    "draft_pr": "https://github.com/telicity-ai/zeropw-link/pull/1",
+    "post_fix_review": "NOTRUN",
+    "passing_linux_evidence": [
+      "zl-review-fixes-10.log: go vet, full Go suite, server/daemon race tests, shell lint; exit 0",
+      "zl-review-deploy-unit.log: 106 passed, 0 failed",
+      "zl-review-coturn-build.log: coturn 4.18.0 build under unique build UID and non-root probes; exit 0",
+      "zl-review-darwin-crossbuild.log: Darwin arm64/amd64 Mach-O cross-build only; exit 0"
+    ],
+    "prior_failure_preserved": [
+      "zl-review-fixes-5.log",
+      "zl-review-fixes-8.log"
+    ],
+    "prior_failure_explanation": "TestAcceptAndDialBounds assumed a cached QUIC stream cannot open before the shutdown packet arrives. The committed test retains offline/timeout error checks and requires a provisional stream to close with zero bytes within 3 seconds; a read timeout fails. A subsequent full suite passed. Retries alone are not resolution evidence.",
+    "dos_1": "Pre-HTTP connection cap implemented/tested; original full review and post-fix acceptance remain incomplete.",
+    "pending_followup": {
+      "id": "ZPLINK-OPUS-03",
+      "issue": "Recovery after the operator revokes an orphan identity was not covered by cc733dc.",
+      "status": "Implemented in 858ddc: persistent revoked state/startup recognition and TestRevokedOrphanRotatesKeyAfterRestart. go vet, full Go suite and server/daemon race tests passed in zl-review-orphan-revoked-retry.log. Initial zl-review-orphan-revoked.log failed due to disk exhaustion and is retained. Post-fix Opus acceptance remains pending."
+    },
+    "latest_source_head": "858ddc07007eedaa978bdbb9ecafeebb7f332668",
+    "real_network_evidence": {
+      "tested_link_head": "cc733dcacf9f1c170dcb7469d7d258b368726ed7",
+      "zeropw_product_source": "41d217f26a030042c9f0b1caac9417715470c0e1",
+      "evidence_commit": "28abd9a450d8328424db5334443f1dd4bbd5cc24",
+      "result": "PASS 66/66 scenario assertions plus separate 7 synthetic service secret scan",
+      "manifest": "docs/evidence/remote-sync-e2e-2026-11-07/manifest.json",
+      "latest_head_rerun": {
+        "tested_link_head": "858ddc07007eedaa978bdbb9ecafeebb7f332668",
+        "result": "PASS: 66 scenario assertions, 0 failures, separate log scan for 7 synthetic service secrets",
+        "manifest": "docs/evidence/remote-sync-e2e-2026-11-07-858ddc/manifest.json",
+        "raw_log": "e2e/run-10-858ddc.log",
+        "raw_log_sha256": "a69edb050f8ef736c1e4da12b56256ee8a8f211fb4092c455d2ac09cd602d6d8",
+        "note": "No Opus review ID closed by E2E."
+      }
+    },
+    "final_pin_checks": {
+      "darwin_crossbuild": "PASS on Linux; zl-review-darwin-858ddc-crossbuild.log; not native runtime",
+      "desktop_packaging_tooling": "PASS: 61 fixture tests on Linux; desktop/package-858ddc.log; not native packaging"
+    },
+    "native_macos_status": {
+      "environment": "Isolated Tart macOS 26.6.2 arm64; synthetic-only, no host directory mounts; Rust 1.98.1 and Go 1.27.3 installed",
+      "tests": "IN PROGRESS: native full Rust and Go tests delegated to real_sync_e2e; no final result yet",
+      "physical_macs": 0,
+      "ZPL_SEC_03": "OPEN"
+    }
+  }
+}

@@ -1,0 +1,537 @@
+{
+  "status_state": "finished",
+  "status_updated_at": "2026-11-07T03:57:48Z",
+  "go_source": "f544478a48cea66be816efbed50967bafcacc8ac",
+  "rust_source": "d94226364eae32a67a739312a8cd393cc64f3909",
+  "phase_log_hash_mismatches": [],
+  "phases": [
+    {
+      "name": "rust-d942-targeted-link",
+      "state": "passed",
+      "started_at": "2026-11-07T03:08:10Z",
+      "source": "d94226364eae32a67a739312a8cd393cc64f3909",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "/Volumes/ZeroPWBuild/zeropw-fixture-fix/rust/Cargo.toml",
+        "--lib",
+        "team::link::tests"
+      ],
+      "log": "/Volumes/ZeroPWBuild/verification-20261107-v2/rust-d942-targeted-link.log",
+      "timeout_seconds": 600,
+      "source_before": {
+        "sha": "d94226364eae32a67a739312a8cd393cc64f3909",
+        "files": 626,
+        "manifest_sha256": "2a3b8d4a30f2b95f4b05c84fc3abe3ebae6fe3d266d35e76381580f47b01a9f3"
+      },
+      "pid": 8101,
+      "heartbeat_at": "2026-11-07T03:08:56Z",
+      "last_log_bytes": 165,
+      "exit_code": 0,
+      "source_after": {
+        "sha": "d94226364eae32a67a739312a8cd393cc64f3909",
+        "files": 626,
+        "manifest_sha256": "2a3b8d4a30f2b95f4b05c84fc3abe3ebae6fe3d266d35e76381580f47b01a9f3"
+      },
+      "rust_test_totals": {
+        "passed": 8,
+        "failed": 0,
+        "ignored": 0
+      },
+      "go_test_totals_including_subtests": {
+        "pass": 0,
+        "fail": 0,
+        "skip": 0
+      },
+      "go_failed_tests": [],
+      "finished_at": "2026-11-07T03:08:58Z",
+      "log_sha256": "0e5cc5b86168531f0be75cba7f01582fb40876fcf55c6b6f384c86852e9c7a66"
+    },
+    {
+      "name": "rust-d942-targeted-unix-frames",
+      "state": "passed",
+      "started_at": "2026-11-07T03:08:58Z",
+      "source": "d94226364eae32a67a739312a8cd393cc64f3909",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "/Volumes/ZeroPWBuild/zeropw-fixture-fix/rust/Cargo.toml",
+        "--lib",
+        "team::transport::unix_channel_tests"
+      ],
+      "log": "/Volumes/ZeroPWBuild/verification-20261107-v2/rust-d942-targeted-unix-frames.log",
+      "timeout_seconds": 600,
+      "source_before": {
+        "sha": "d94226364eae32a67a739312a8cd393cc64f3909",
+        "files": 626,
+        "manifest_sha256": "2a3b8d4a30f2b95f4b05c84fc3abe3ebae6fe3d266d35e76381580f47b01a9f3"
+      },
+      "pid": 8146,
+      "exit_code": 0,
+      "source_after": {
+        "sha": "d94226364eae32a67a739312a8cd393cc64f3909",
+        "files": 626,
+        "manifest_sha256": "2a3b8d4a30f2b95f4b05c84fc3abe3ebae6fe3d266d35e76381580f47b01a9f3"
+      },
+      "rust_test_totals": {
+        "passed": 2,
+        "failed": 0,
+        "ignored": 0
+      },
+      "go_test_totals_including_subtests": {
+        "pass": 0,
+        "fail": 0,
+        "skip": 0
+      },
+      "go_failed_tests": [],
+      "finished_at": "2026-11-07T03:08:59Z",
+      "log_sha256": "ea6b3249d341b63e04ecbd63ccda9c412e2b878e1e17ccb597eefb7ef8a1af2c"
+    },
+    {
+      "name": "rust-d942-targeted-link-integration",
+      "state": "failed",
+      "started_at": "2026-11-07T03:08:59Z",
+      "source": "d94226364eae32a67a739312a8cd393cc64f3909",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "/Volumes/ZeroPWBuild/zeropw-fixture-fix/rust/Cargo.toml",
+        "--test",
+        "team_link_transport"
+      ],
+      "log": "/Volumes/ZeroPWBuild/verification-20261107-v2/rust-d942-targeted-link-integration.log",
+      "timeout_seconds": 600,
+      "source_before": {
+        "sha": "d94226364eae32a67a739312a8cd393cc64f3909",
+        "files": 626,
+        "manifest_sha256": "2a3b8d4a30f2b95f4b05c84fc3abe3ebae6fe3d266d35e76381580f47b01a9f3"
+      },
+      "pid": 8150,
+      "heartbeat_at": "2026-11-07T03:10:29Z",
+      "last_log_bytes": 1046,
+      "exit_code": 101,
+      "source_after": {
+        "sha": "d94226364eae32a67a739312a8cd393cc64f3909",
+        "files": 626,
+        "manifest_sha256": "2a3b8d4a30f2b95f4b05c84fc3abe3ebae6fe3d266d35e76381580f47b01a9f3"
+      },
+      "rust_test_totals": {
+        "passed": 11,
+        "failed": 1,
+        "ignored": 0
+      },
+      "go_test_totals_including_subtests": {
+        "pass": 0,
+        "fail": 0,
+        "skip": 0
+      },
+      "go_failed_tests": [],
+      "finished_at": "2026-11-07T03:10:38Z",
+      "log_sha256": "c07a16d24d28dfc0ef6d1ddbdf6e1a69864fbc8e36d812887db5972cb8807795"
+    },
+    {
+      "name": "rust-d942-full",
+      "state": "failed",
+      "started_at": "2026-11-07T03:10:38Z",
+      "source": "d94226364eae32a67a739312a8cd393cc64f3909",
+      "command": [
+        "bash",
+        "rust/verify.sh"
+      ],
+      "log": "/Volumes/ZeroPWBuild/verification-20261107-v2/rust-d942-full.log",
+      "timeout_seconds": 7200,
+      "source_before": {
+        "sha": "d94226364eae32a67a739312a8cd393cc64f3909",
+        "files": 626,
+        "manifest_sha256": "2a3b8d4a30f2b95f4b05c84fc3abe3ebae6fe3d266d35e76381580f47b01a9f3"
+      },
+      "pid": 8255,
+      "heartbeat_at": "2026-11-07T03:52:55Z",
+      "last_log_bytes": 160348,
+      "exit_code": 1,
+      "source_after": {
+        "sha": "d94226364eae32a67a739312a8cd393cc64f3909",
+        "files": 626,
+        "manifest_sha256": "2a3b8d4a30f2b95f4b05c84fc3abe3ebae6fe3d266d35e76381580f47b01a9f3"
+      },
+      "rust_test_totals": {
+        "passed": 1621,
+        "failed": 4,
+        "ignored": 4
+      },
+      "go_test_totals_including_subtests": {
+        "pass": 0,
+        "fail": 0,
+        "skip": 0
+      },
+      "go_failed_tests": [],
+      "finished_at": "2026-11-07T03:53:00Z",
+      "log_sha256": "aa1bf6b07a71539572f2e835d5eec4a5449b30a08417e2c72cec477f72a67e03"
+    },
+    {
+      "name": "go-f544-vet",
+      "state": "passed",
+      "started_at": "2026-11-07T03:53:00Z",
+      "source": "f544478a48cea66be816efbed50967bafcacc8ac",
+      "command": [
+        "go",
+        "vet",
+        "./..."
+      ],
+      "log": "/Volumes/ZeroPWBuild/verification-20261107-v2/go-f544-vet.log",
+      "timeout_seconds": 1800,
+      "source_before": {
+        "sha": "f544478a48cea66be816efbed50967bafcacc8ac",
+        "files": 145,
+        "manifest_sha256": "77227d5421dc8c6694a172d2b2e41e19c91221ad8f5089d9d5c2f620d9f8090b"
+      },
+      "pid": 13001,
+      "heartbeat_at": "2026-11-07T03:53:30Z",
+      "last_log_bytes": 79,
+      "exit_code": 0,
+      "source_after": {
+        "sha": "f544478a48cea66be816efbed50967bafcacc8ac",
+        "files": 145,
+        "manifest_sha256": "77227d5421dc8c6694a172d2b2e41e19c91221ad8f5089d9d5c2f620d9f8090b"
+      },
+      "rust_test_totals": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      "go_test_totals_including_subtests": {
+        "pass": 0,
+        "fail": 0,
+        "skip": 0
+      },
+      "go_failed_tests": [],
+      "finished_at": "2026-11-07T03:53:40Z",
+      "log_sha256": "08108cc934992f5522393b3b610606dac652a2ff5ab268d482f0c64c542e49ca"
+    },
+    {
+      "name": "go-f544-tests",
+      "state": "failed",
+      "started_at": "2026-11-07T03:53:40Z",
+      "source": "f544478a48cea66be816efbed50967bafcacc8ac",
+      "command": [
+        "go",
+        "test",
+        "-count=1",
+        "-json",
+        "./..."
+      ],
+      "log": "/Volumes/ZeroPWBuild/verification-20261107-v2/go-f544-tests.log",
+      "timeout_seconds": 1800,
+      "source_before": {
+        "sha": "f544478a48cea66be816efbed50967bafcacc8ac",
+        "files": 145,
+        "manifest_sha256": "77227d5421dc8c6694a172d2b2e41e19c91221ad8f5089d9d5c2f620d9f8090b"
+      },
+      "pid": 13858,
+      "heartbeat_at": "2026-11-07T03:54:11Z",
+      "last_log_bytes": 209965,
+      "exit_code": 1,
+      "source_after": {
+        "sha": "f544478a48cea66be816efbed50967bafcacc8ac",
+        "files": 145,
+        "manifest_sha256": "77227d5421dc8c6694a172d2b2e41e19c91221ad8f5089d9d5c2f620d9f8090b"
+      },
+      "rust_test_totals": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      "go_test_totals_including_subtests": {
+        "pass": 265,
+        "fail": 1,
+        "skip": 0
+      },
+      "go_failed_tests": [
+        {
+          "package": "github.com/telicity-ai/zeropw-link/internal/server",
+          "test": "TestIdleSocketsAreLimitedBeforeHTTPAndCapacityReturns"
+        }
+      ],
+      "finished_at": "2026-11-07T03:54:15Z",
+      "log_sha256": "2d795c504d11fd0ff6a2c50dfa45839a06e974ca944bf6575ad8f0452644a2bb"
+    },
+    {
+      "name": "go-f544-race",
+      "state": "failed",
+      "started_at": "2026-11-07T03:54:15Z",
+      "source": "f544478a48cea66be816efbed50967bafcacc8ac",
+      "command": [
+        "go",
+        "test",
+        "-race",
+        "-count=1",
+        "-json",
+        "./internal/server",
+        "./internal/daemon"
+      ],
+      "log": "/Volumes/ZeroPWBuild/verification-20261107-v2/go-f544-race.log",
+      "timeout_seconds": 1800,
+      "source_before": {
+        "sha": "f544478a48cea66be816efbed50967bafcacc8ac",
+        "files": 145,
+        "manifest_sha256": "77227d5421dc8c6694a172d2b2e41e19c91221ad8f5089d9d5c2f620d9f8090b"
+      },
+      "pid": 14492,
+      "heartbeat_at": "2026-11-07T03:55:15Z",
+      "last_log_bytes": 64003,
+      "exit_code": 1,
+      "source_after": {
+        "sha": "f544478a48cea66be816efbed50967bafcacc8ac",
+        "files": 145,
+        "manifest_sha256": "77227d5421dc8c6694a172d2b2e41e19c91221ad8f5089d9d5c2f620d9f8090b"
+      },
+      "rust_test_totals": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      "go_test_totals_including_subtests": {
+        "pass": 76,
+        "fail": 1,
+        "skip": 0
+      },
+      "go_failed_tests": [
+        {
+          "package": "github.com/telicity-ai/zeropw-link/internal/server",
+          "test": "TestIdleSocketsAreLimitedBeforeHTTPAndCapacityReturns"
+        }
+      ],
+      "finished_at": "2026-11-07T03:55:17Z",
+      "log_sha256": "bb21df7d7fa7fc9164bd43a5376600b9406bca175b0f36545e3d4db86e33b21b"
+    },
+    {
+      "name": "desktop-d942-fmt",
+      "state": "failed",
+      "started_at": "2026-11-07T03:55:17Z",
+      "source": "d94226364eae32a67a739312a8cd393cc64f3909",
+      "command": [
+        "cargo",
+        "fmt",
+        "--manifest-path",
+        "/Volumes/ZeroPWBuild/zeropw-fixture-fix/desktop/Cargo.toml",
+        "--",
+        "--check"
+      ],
+      "log": "/Volumes/ZeroPWBuild/verification-20261107-v2/desktop-d942-fmt.log",
+      "timeout_seconds": 600,
+      "source_before": {
+        "sha": "d94226364eae32a67a739312a8cd393cc64f3909",
+        "files": 626,
+        "manifest_sha256": "2a3b8d4a30f2b95f4b05c84fc3abe3ebae6fe3d266d35e76381580f47b01a9f3"
+      },
+      "pid": 15471,
+      "exit_code": 1,
+      "source_after": {
+        "sha": "d94226364eae32a67a739312a8cd393cc64f3909",
+        "files": 626,
+        "manifest_sha256": "2a3b8d4a30f2b95f4b05c84fc3abe3ebae6fe3d266d35e76381580f47b01a9f3"
+      },
+      "rust_test_totals": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      "go_test_totals_including_subtests": {
+        "pass": 0,
+        "fail": 0,
+        "skip": 0
+      },
+      "go_failed_tests": [],
+      "finished_at": "2026-11-07T03:55:17Z",
+      "log_sha256": "caf6ea24aa40496f4847b77bd220f154db50d1ef6d26410933d7c4245b75e4db"
+    },
+    {
+      "name": "desktop-d942-clippy",
+      "state": "passed",
+      "started_at": "2026-11-07T03:55:17Z",
+      "source": "d94226364eae32a67a739312a8cd393cc64f3909",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--manifest-path",
+        "/Volumes/ZeroPWBuild/zeropw-fixture-fix/desktop/Cargo.toml",
+        "-p",
+        "zeropw-desktop-core",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "log": "/Volumes/ZeroPWBuild/verification-20261107-v2/desktop-d942-clippy.log",
+      "timeout_seconds": 1800,
+      "source_before": {
+        "sha": "d94226364eae32a67a739312a8cd393cc64f3909",
+        "files": 626,
+        "manifest_sha256": "2a3b8d4a30f2b95f4b05c84fc3abe3ebae6fe3d266d35e76381580f47b01a9f3"
+      },
+      "pid": 15473,
+      "heartbeat_at": "2026-11-07T03:56:02Z",
+      "last_log_bytes": 2902,
+      "exit_code": 0,
+      "source_after": {
+        "sha": "d94226364eae32a67a739312a8cd393cc64f3909",
+        "files": 626,
+        "manifest_sha256": "2a3b8d4a30f2b95f4b05c84fc3abe3ebae6fe3d266d35e76381580f47b01a9f3"
+      },
+      "rust_test_totals": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      "go_test_totals_including_subtests": {
+        "pass": 0,
+        "fail": 0,
+        "skip": 0
+      },
+      "go_failed_tests": [],
+      "finished_at": "2026-11-07T03:56:11Z",
+      "log_sha256": "b3f8bf4375688a6d58406cdcfe998ff69310fba895d5b291d75568e603a6ed07"
+    },
+    {
+      "name": "desktop-d942-bins",
+      "state": "passed",
+      "started_at": "2026-11-07T03:56:11Z",
+      "source": "d94226364eae32a67a739312a8cd393cc64f3909",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--manifest-path",
+        "/Volumes/ZeroPWBuild/zeropw-fixture-fix/rust/Cargo.toml",
+        "--bins"
+      ],
+      "log": "/Volumes/ZeroPWBuild/verification-20261107-v2/desktop-d942-bins.log",
+      "timeout_seconds": 1800,
+      "source_before": {
+        "sha": "d94226364eae32a67a739312a8cd393cc64f3909",
+        "files": 626,
+        "manifest_sha256": "2a3b8d4a30f2b95f4b05c84fc3abe3ebae6fe3d266d35e76381580f47b01a9f3"
+      },
+      "pid": 15660,
+      "exit_code": 0,
+      "source_after": {
+        "sha": "d94226364eae32a67a739312a8cd393cc64f3909",
+        "files": 626,
+        "manifest_sha256": "2a3b8d4a30f2b95f4b05c84fc3abe3ebae6fe3d266d35e76381580f47b01a9f3"
+      },
+      "rust_test_totals": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      "go_test_totals_including_subtests": {
+        "pass": 0,
+        "fail": 0,
+        "skip": 0
+      },
+      "go_failed_tests": [],
+      "finished_at": "2026-11-07T03:56:12Z",
+      "log_sha256": "a54477bcd1bb5cee92942dbb90e9f70652476aad96fe46ef818275b73f08f6c9"
+    },
+    {
+      "name": "desktop-d942-core-tests",
+      "state": "failed",
+      "started_at": "2026-11-07T03:56:12Z",
+      "source": "d94226364eae32a67a739312a8cd393cc64f3909",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "/Volumes/ZeroPWBuild/zeropw-fixture-fix/desktop/Cargo.toml",
+        "-p",
+        "zeropw-desktop-core",
+        "--",
+        "--include-ignored"
+      ],
+      "log": "/Volumes/ZeroPWBuild/verification-20261107-v2/desktop-d942-core-tests.log",
+      "timeout_seconds": 3600,
+      "source_before": {
+        "sha": "d94226364eae32a67a739312a8cd393cc64f3909",
+        "files": 626,
+        "manifest_sha256": "2a3b8d4a30f2b95f4b05c84fc3abe3ebae6fe3d266d35e76381580f47b01a9f3"
+      },
+      "pid": 15665,
+      "heartbeat_at": "2026-11-07T03:57:27Z",
+      "last_log_bytes": 11768,
+      "exit_code": 101,
+      "source_after": {
+        "sha": "d94226364eae32a67a739312a8cd393cc64f3909",
+        "files": 626,
+        "manifest_sha256": "2a3b8d4a30f2b95f4b05c84fc3abe3ebae6fe3d266d35e76381580f47b01a9f3"
+      },
+      "rust_test_totals": {
+        "passed": 137,
+        "failed": 2,
+        "ignored": 0
+      },
+      "go_test_totals_including_subtests": {
+        "pass": 0,
+        "fail": 0,
+        "skip": 0
+      },
+      "go_failed_tests": [],
+      "finished_at": "2026-11-07T03:57:33Z",
+      "log_sha256": "3aca2a89243ed3ea6e065d8d30851b1067d630222488c6bb11d301e84d92bc0f"
+    },
+    {
+      "name": "original-858ddc-acl-reproduction",
+      "state": "passed",
+      "started_at": "2026-11-07T03:57:33Z",
+      "source": "858ddc07007eedaa978bdbb9ecafeebb7f332668",
+      "command": [
+        "/opt/homebrew/bin/python3.12",
+        "/Volumes/ZeroPWBuild/verification-20261107-v2/native-macos-driver-20261107-v2.py",
+        "--acl-reproduction-only"
+      ],
+      "log": "/Volumes/ZeroPWBuild/verification-20261107-v2/original-858ddc-acl-reproduction.log",
+      "timeout_seconds": 700,
+      "source_before": {
+        "sha": "858ddc07007eedaa978bdbb9ecafeebb7f332668",
+        "files": 142,
+        "manifest_sha256": "162f452f622ba74e1157e31e8a6d0f163f8f8177b53ed489fa6ec824c8b6fde6"
+      },
+      "pid": 18047,
+      "exit_code": 0,
+      "source_after": {
+        "sha": "858ddc07007eedaa978bdbb9ecafeebb7f332668",
+        "files": 142,
+        "manifest_sha256": "162f452f622ba74e1157e31e8a6d0f163f8f8177b53ed489fa6ec824c8b6fde6"
+      },
+      "rust_test_totals": {
+        "passed": 0,
+        "failed": 0,
+        "ignored": 0
+      },
+      "go_test_totals_including_subtests": {
+        "pass": 0,
+        "fail": 0,
+        "skip": 0
+      },
+      "go_failed_tests": [],
+      "finished_at": "2026-11-07T03:57:48Z",
+      "log_sha256": "85ad2b9384534d7a975816bd2b2601d0c5bc9eb8aa12ed7341fd6b2bd43ece11"
+    }
+  ],
+  "limits": {
+    "sip": "disabled in upstream Tart guest",
+    "physical_macs_tested": 0,
+    "review": "no Opus review performed by this driver"
+  },
+  "collection": "One status read, completed artifact collection only; no reruns, waits, service changes, fixture-secret reads or product execution",
+  "record_type": "finished_native_v2_phase_evidence",
+  "actual_recorder_model": "gpt-6.1-sol",
+  "scope_limit": "Frozen d942/f544, all-required false; later f366 focused recovery evidence is separate. Not physicalMacs/productionisolation/deployment/review acceptance."
+}

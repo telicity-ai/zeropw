@@ -1,177 +1,96 @@
 import { describe, expect, it } from 'vitest';
-import { COPY, hasCopy, t } from '../src/copy';
+import { COPY, COPY_AREAS, COPY_AREAS_EN, COPY_EN, hasCopy, resolveLocale, setLocale, t, tLines, type CopyKey } from '../src/copy';
+import { kindLabel } from '../src/screens/vault/logic';
 
-const sources = import.meta.glob('../src/**/*.{ts,tsx}', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
-const mockup = Object.values(import.meta.glob('../mockup/onboarding.html', { query: '?raw', import: 'default', eager: true }) as Record<string, string>)[0] ?? '';
+// Every visible string lives in one area table; a key defined twice would silently take the
+// later area's text, so keys are unique across areas.
 
-const prefixes = [...new Set(Object.keys(COPY).map((k) => k.split('.')[0]))];
-const keyLiteral = new RegExp(`['"\`]((?:${prefixes.join('|')})\\.[A-Za-z0-9_.]*)['"\`]`, 'g');
-const appFiles = Object.entries(sources).filter(([path]) => !path.endsWith('/copy.ts'));
-
-describe('copy table', () => {
-  it('scans the app sources', () => {
-    expect(appFiles.length).toBeGreaterThan(20);
-  });
-
-  it('has every key referenced in src', () => {
-    const missing: string[] = [];
-    let seen = 0;
-    for (const [path, text] of appFiles) {
-      for (const m of text.matchAll(keyLiteral)) {
-        const key = m[1] ?? '';
-        seen++;
-        if (!hasCopy(key)) missing.push(`${path}: ${key}`);
+describe('copy tables', () => {
+  it('defines every key in exactly one area', () => {
+    const seen = new Map<string, string>();
+    const dupes: string[] = [];
+    for (const [area, table] of Object.entries(COPY_AREAS)) {
+      for (const key of Object.keys(table)) {
+        const before = seen.get(key);
+        if (before) dupes.push(`${key} (${before}, ${area})`);
+        seen.set(key, area);
       }
     }
-    expect(missing).toEqual([]);
-    expect(seen).toBeGreaterThan(100);
+    expect(dupes).toEqual([]);
+    expect(seen.size).toBe(Object.keys(COPY).length);
   });
 
-  it('keeps display text out of components (no Hangul outside copy.ts)', () => {
-    const offenders = appFiles.filter(([, text]) => /[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7A3]/.test(text)).map(([p]) => p);
-    expect(offenders).toEqual([]);
-  });
-
-  it('follows the writing rules: no sentence-final period, no dashes or emoji', () => {
-    const bad = Object.entries(COPY).filter(([, v]) => /\.$/.test(v) || /[\u2013\u2014]/.test(v) || /\p{Extended_Pictographic}/u.test(v));
-    expect(bad).toEqual([]);
-  });
-
-  it('keeps the approved mockup table (v0.5) except mockup-only notes', () => {
-    const block = mockup.slice(mockup.indexOf('/*COPY_START*/'), mockup.indexOf('/*COPY_END*/'));
-    const entries = [...block.matchAll(/^\s*'([^']+)':\s*'((?:[^'\\]|\\.)*)',?$/gm)].map((m) => [m[1] ?? '', m[2] ?? ''] as const);
-    expect(entries.length).toBeGreaterThan(200);
-    const dropped = new Set(['toast.dash', 'toast.file.mock', 'term.pw.mock']);
-    const changed = new Set(['join.local', 'toast.paste.mock', 'inv.blocked']);
-    for (const [k, v] of entries) {
-      if (dropped.has(k)) { expect(hasCopy(k)).toBe(false); continue; }
-      expect(hasCopy(k), k).toBe(true);
-      if (!changed.has(k) && hasCopy(k)) expect(COPY[k], k).toBe(v);
+  it('has no empty strings, no jargon the owner ruled out and no claim that the server operates', () => {
+    for (const [k, v] of Object.entries(COPY)) {
+      expect(v.trim(), k).not.toBe('');
+      expect(v, k).not.toContain('패스프레이즈');
+      expect(v, k).not.toContain('보관함');
+      expect(v, k).not.toMatch(/운영\s*중/);
+      // DESIGN.md §7: no dashes, curly quotes or emoji in screen copy
+      expect(v, k).not.toMatch(/[\u2013\u2014\u2018\u2019\u201c\u201d]|\p{Extended_Pictographic}/u);
     }
   });
 
-  it('keeps the glossary and the polite informal style (DESIGN.md §6)', () => {
-    const banned = /(\uC2B5\uB2C8\uB2E4|\uC2ED\uC2DC\uC624|\uAC8C\uC774\uD2B8\uC6E8\uC774|\uBCFC\uD2B8|\uD504\uB9B0\uC2DC\uD384|\uC790\uACA9 ?\uC99D\uBA85|\bTTL\b|vault|gateway|principal|passphrase|\bgrant\b)/i;
-    expect(Object.entries(COPY).filter(([, v]) => banned.test(v.replace(/\{\w+\}/g, '')))).toEqual([]);
+  it('fills placeholders and joins lines', () => {
+    expect(t('onetime.copied', { s: 60 })).toContain('60');
+    expect(t('onetime.copied')).toContain('{s}');
+    expect(tLines([{ key: 'act.retry' }, { key: 'act.cancel' }])).toBe(`${COPY['act.retry']}. ${COPY['act.cancel']}`);
+    expect(hasCopy('act.retry')).toBe(true);
+    expect(hasCopy('constructor')).toBe(false);
+  });
+});
+
+describe('the English table', () => {
+  const keys = Object.keys(COPY) as CopyKey[];
+  const holes = (v: string) => [...v.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort().join(',');
+
+  it('names one item in the singular while keeping navigation categories plural', () => {
+    try {
+      setLocale('en');
+      expect(kindLabel('api_key')).toBe('API Key');
+      expect(kindLabel('password')).toBe('Password');
+      expect(t('nav.kind.api_key')).toBe('API Keys');
+      expect(t('nav.kind.password')).toBe('Passwords');
+    } finally { setLocale('ko'); }
   });
 
-  it('has the placeholders the dashboard fills in', () => {
-    const need: Record<string, string[]> = {
-      'keys.version': ['n'], 'keys.older': ['n'], 'keys.reveal.left': ['s'], 'keys.value.loaded': ['name'], 'keys.reveal.aria': ['id'],
-      'grant.until': ['time'], 'grant.uses': ['n'], 'grant.usesOf': ['n', 'max'], 'grant.revoke.aria': ['agent', 'conn'], 'grant.for.aria': ['id'],
-      // desktop E2E F6: two agents can hold the same connection, and every terminal row has the same buttons
-      'term.attach.aria': ['name'], 'term.hide.aria': ['name'], 'keys.retire.aria': ['id', 'n'], 'keys.revoke.aria': ['id', 'n'],
-      'term.end.aria': ['id'], 'appr.approve.aria': ['req'], 'inv.revoke.aria': ['name'], 'team.remove.aria': ['name'], 'inc.close.aria': ['id'],
-      'conns.disable.aria': ['id'], 'agents.disable.aria': ['id'], 'agents.grants.aria': ['id'], 'keys.versions.aria': ['id'],
-      'relay.err.other': ['reason'], 'toast.recovered': ['n'], 'appr.body.size': ['n'], 'rec.verify.err': ['n'], 'rec.verify.need': ['n'],
-      'term.end.note.other': ['user'], 'relay.team.hint': ['address'], 'listen.err.open': ['address'], 'listen.err.start': ['address'],
-    };
-    for (const [k, vars] of Object.entries(need)) {
-      expect(hasCopy(k), k).toBe(true);
-      for (const v of vars) expect(COPY[k as keyof typeof COPY], k).toContain(`{${v}}`);
+  it('has every key, area by area, and nothing else', () => {
+    for (const [area, table] of Object.entries(COPY_AREAS)) {
+      expect(Object.keys((COPY_AREAS_EN as Record<string, object>)[area]!).sort(), area).toEqual(Object.keys(table).sort());
     }
+    expect(Object.keys(COPY_EN).sort()).toEqual(keys.slice().sort());
   });
 
-  it('claims only what the product does', () => {
-    const all = Object.values(COPY).join('\n');
-    // `recover` needs the existing device key file and only replaces it; a backup opens only with
-    // the device key that made it (rust/src/context.rs, rust/src/vault.rs)
-    expect(all).not.toMatch(/기기 키를 잃었을 때/);             // "기기 키를 잃었을 때"
-    expect(COPY['rec.warn']).toMatch(/열 수 없어요/);                         // losing the key file: the vault cannot be opened
-    expect(COPY['set.recover.warn']).toMatch(/회수/);                                     // the recover sheet says it revokes permissions
-    // `recover` wraps the same data key under a new key file: it is never offered for a leaked
-    // key file, the sheet says what a leak needs instead, and that earlier backups stop restoring
-    for (const k of ['rec.sub', 'set.recover', 'set.recover.sub', 'set.recover.confirm', 'toast.recovered', 'toast.recovered.any'] as const) {
-      expect(COPY[k], k).not.toMatch(/새었|유출/);
-    }
-    expect(COPY['set.recover.sub']).toContain('같은 데이터 키');
-    expect(COPY['set.recover.leak']).toMatch(/새었을 수 있다면/);
-    expect(COPY['set.recover.leak']).toMatch(/서비스에서 키를 모두 폐기/);
-    // the same data key stays: values stored in this vault later are readable with the old key
-    // file too, so the advice is a fresh vault, never new values inside this one (zeropw#22)
-    expect(COPY['set.recover.leak']).toContain('나중에 넣는 키도');
-    expect(COPY['set.recover.leak']).toMatch(/앱 데이터를 지운 뒤 보관함을 새로 만들어/);
-    expect(COPY['set.recover.leak']).not.toMatch(/새 값으로 바꾸/);
-    expect(COPY['set.recover.warn']).toContain('백업');
-    expect(COPY['set.backup.help']).toContain('바꾼 기기 키');
-    // ending a terminal cannot stop a program run as another account or detached from it; only
-    // disabling the agent stops its token (docs/desktop-app.md §4.4)
-    expect(COPY['term.end.sub']).not.toContain('에이전트');
-    for (const k of ['term.end.note', 'term.end.note.other'] as const) {
-      expect(COPY[k], k).toMatch(/setsid, tmux, screen/);
-      expect(COPY[k], k).toContain('에이전트 끄기');
-      expect(COPY[k], k).toContain('남을 수 있어요');
-    }
-    expect(COPY['term.end.note.other']).toContain('{user} 계정');
-    // a same-account terminal can start programs as another account with sudo (the suggested
-    // `sudo --preserve-env=… -u <user> -i`): ending it cannot stop those either (DESIGN.md §5.3)
-    expect(COPY['term.end.note']).toContain('sudo');
-    expect(COPY['term.end.note']).toContain('다른 계정');
-    expect(COPY['agents.disable.title']).toBe('에이전트 끄기');
-    // a joined device syncs only with other-device access on
-    for (const k of ['done.msg.join', 'toast.join.needListen', 'sync.need', 'team.joined.sub'] as const) expect(COPY[k]).toContain('다른 기기 접속');
-    // turning that access off stops team changes until it is on again, and says so
-    expect(COPY['listen.off.note']).toMatch(/다시 켤 때까지/);
-    expect(COPY['listen.off.note']).toContain('키 폐기');
-    expect(COPY['listen.off.note']).toContain('팀원 내보내기');
-    expect(COPY['toast.listen.off']).toMatch(/다시 켤 때까지 팀 변경을 받지 못해요/);
-    // stop and revocation block new requests only; open SSH sessions are named as a limit
-    for (const k of ['stop.sub', 'toast.stopped', 'grant.revoke.sub', 'keys.revoke.warn', 'inc.declare.sub', 'agents.disable.sub', 'conns.disable.sub'] as const) {
-      expect(COPY[k], k).toContain('새 ');
-    }
-    expect(COPY['session.note']).toContain('SSH');
-    // a declaration that met an open incident without widening it contained no one
-    // (rust/src/incident.rs `open_incident`), and turning the agent off is what blocks it
-    expect(COPY['inc.unchanged']).toMatch(/막지 않았어요/);
-    expect(COPY['inc.unchanged']).toContain('끄세요');
-    // a key revoked or replaced in the vault still works at the service
-    for (const k of ['inc.close.note', 'team.remove.warn', 'toast.team.removed', 'toast.key.revoked', 'toast.key.replaced', 'keys.provider.note'] as const) {
-      expect(COPY[k], k).toContain('서비스');
+  it('is translated: no Korean left except the native names of languages', () => {
+    const left = keys.filter((k) => !k.endsWith('.native') && /[\u3131-\uD79D]/.test(COPY_EN[k]));
+    expect(left).toEqual([]);
+  });
+
+  it('keeps the placeholders of the Korean text', () => {
+    const wrong = keys.filter((k) => holes(COPY[k]) !== holes(COPY_EN[k]));
+    expect(wrong).toEqual([]);
+  });
+
+  it('follows the same style rules', () => {
+    for (const k of keys) {
+      const v = COPY_EN[k];
+      expect(v.trim(), k).not.toBe('');
+      expect(v, k).not.toMatch(/[\u2013\u2014\u2018\u2019\u201c\u201d]|\p{Extended_Pictographic}/u);
+      expect(v, k).not.toMatch(/\bpassphrase\b/i);
+      expect(v, k).not.toMatch(/\b(is|are) (now )?(operational|operating|live)\b/i);
     }
   });
 
-  it('shows the open-session note on every sheet that blocks access (DESIGN.md §5.3)', () => {
-    // stop-all, grant revoke, agent disable, connection disable, key revoke, incident declare
-    const blocking = ['sheet-stop', 'sheet-grant-revoke', 'sheet-agent-disable', 'sheet-conn-disable', 'sheet-key-confirm', 'sheet-inc-declare'];
-    for (const id of blocking) {
-      const file = appFiles.find(([, text]) => text.includes(`id="${id}"`));
-      expect(file, id).toBeDefined();
-      const text = file?.[1] ?? '';
-      const from = text.indexOf(`id="${id}"`);
-      const next = text.indexOf('id="sheet-', from + 1);
-      expect(text.slice(from, next < 0 ? undefined : next), id).toContain(`t('session.note')`);
-    }
-    // the terminal end sheet names what it cannot stop, for both kinds of terminal
-    const agents = appFiles.find(([, text]) => text.includes('id="sheet-term-end"'))?.[1] ?? '';
-    const end = agents.slice(agents.indexOf('id="sheet-term-end"'), agents.indexOf('id="sheet-approve"'));
-    for (const k of ["t('term.end.note')", "t('term.end.note.other'", "t('agents.disable.title')"]) expect(end, k).toContain(k);
-  });
-
-  it('turns other-device access off only through the confirmation sheet, offered only after a team failure (DESIGN.md §5.3)', () => {
-    // the one place that turns access off is the dashboard, behind its confirmation sheet
-    const users = appFiles.filter(([p, text]) => !p.endsWith('/relay.ts') && /\bturnOffListen\b/.test(text)).map(([p]) => p);
-    expect(users).toEqual([expect.stringMatching(/\/Dashboard\.tsx$/)]);
-    const dash = users[0] ? sources[users[0]] ?? '' : '';
-    const sheet = dash.slice(dash.indexOf('id="sheet-listen-off"'));
-    expect(sheet).toContain(`t('listen.off.note')`);
-    expect(sheet.slice(0, sheet.indexOf('/>'))).toContain('listenOff()');
-    // every button that offers it opens the sheet, and Home and the sidebar show it only on offer
-    let offers = 0;
-    for (const [p, text] of appFiles) {
-      for (const m of text.matchAll(/\{t\('(?:relay\.team\.off|set\.listen\.off)'\)\}<\/button>/g)) {
-        offers++;
-        const end = m.index ?? 0;
-        expect(text.slice(text.lastIndexOf('<button', end), end), p).toContain('confirmListenOff');
-      }
-    }
-    expect(offers).toBe(3);                                      // sidebar, Home, Settings
-    const home = appFiles.find(([p]) => p.endsWith('/Home.tsx'))?.[1] ?? '';
-    expect(home).toContain('relay.offerListenOff &&');
-    expect(dash).toContain('{offerListenOff && (');
-  });
-
-  it('fills placeholders and leaves unknown ones visible', () => {
-    expect(t('rec.verify.slot', { n: 3 })).toBe('3번째');
-    expect(t('term.title')).toContain('{name}');
+  it('switches with the locale and follows the system when unset', () => {
+    expect(resolveLocale(null, ['ko-KR', 'en-US'])).toBe('ko');
+    expect(resolveLocale(null, ['en-GB'])).toBe('en');
+    expect(resolveLocale(null, ['fr-FR'])).toBe('en');
+    expect(resolveLocale('ko', ['en-US'])).toBe('ko');
+    try {
+      setLocale('en');
+      expect(t('nav.all')).toBe(COPY_EN['nav.all']);
+      setLocale('ko');
+      expect(t('nav.all')).toBe(COPY['nav.all']);
+    } finally { setLocale('ko'); }
   });
 });

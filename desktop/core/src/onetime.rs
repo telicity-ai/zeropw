@@ -34,6 +34,8 @@ pub const MAX_ENTRIES: usize = 256;
 pub const MAX_INVITE_TEXTS: usize = 16;
 /// `.env` files kept for `secret_import`; the oldest goes first.
 pub const MAX_ENV_IMPORTS: usize = 4;
+/// Pasted pairing codes kept for `pairing_join`; the oldest goes first.
+pub const MAX_PAIRING_TEXTS: usize = 4;
 
 /// What a stored value is, which fixes its lifetime and who may redeem it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -50,13 +52,18 @@ pub enum OneTimeKind {
     RevealedSecret,
     /// A `.env` file read for an import; read only by `secret_import_preview`/`secret_import`.
     EnvImport,
+    /// A `zeropw://pair#…` code made on this Mac (link token and approval invitations), shown
+    /// or copied once (docs/remote-sync.md §4).
+    PairingCode,
+    /// A pairing code pasted on the joining Mac; redeemed only by `pairing_join`.
+    PairingText,
 }
 
 impl OneTimeKind {
     pub fn ttl(self) -> Duration {
         match self {
             OneTimeKind::RevealedSecret => SECRET_TTL,
-            OneTimeKind::InviteText => INVITE_TEXT_TTL,
+            OneTimeKind::InviteText | OneTimeKind::PairingText => INVITE_TEXT_TTL,
             _ => DEFAULT_TTL,
         }
     }
@@ -68,7 +75,10 @@ impl OneTimeKind {
     pub fn showable(self) -> bool {
         !matches!(
             self,
-            OneTimeKind::InviteText | OneTimeKind::RecoveryCode | OneTimeKind::EnvImport
+            OneTimeKind::InviteText
+                | OneTimeKind::RecoveryCode
+                | OneTimeKind::EnvImport
+                | OneTimeKind::PairingText
         )
     }
 
@@ -78,6 +88,7 @@ impl OneTimeKind {
         match self {
             OneTimeKind::InviteText => Some(MAX_INVITE_TEXTS),
             OneTimeKind::EnvImport => Some(MAX_ENV_IMPORTS),
+            OneTimeKind::PairingText => Some(MAX_PAIRING_TEXTS),
             _ => None,
         }
     }
@@ -733,5 +744,54 @@ mod tests {
             .map(|_| store.reserve(OneTimeKind::CallerToken).unwrap())
             .collect();
         assert_eq!(held.len(), MAX_ENTRIES);
+    }
+    #[test]
+    fn pairing_codes_are_shown_once_and_pasted_ones_stay_in_rust() {
+        let (store, clock) = store_with_clock();
+        // made here: shown or copied once, 10 minutes
+        let made = store
+            .put(
+                OneTimeKind::PairingCode,
+                "zeropw://pair#synthetic-made".into(),
+            )
+            .unwrap();
+        assert!(store.peek_kind(&made, OneTimeKind::PairingText).is_err());
+        clock.store(DEFAULT_TTL.as_secs() - 1, Ordering::SeqCst);
+        let (kind, value) = store.take_showable(&made).unwrap();
+        assert_eq!(kind, OneTimeKind::PairingCode);
+        assert_eq!(value.expose(), "zeropw://pair#synthetic-made");
+        assert!(store.take_showable(&made).is_err());
+
+        // pasted on the joining Mac: never shown again, 60 minutes, a pool of its own
+        let pasted = store
+            .put(
+                OneTimeKind::PairingText,
+                "zeropw://pair#synthetic-pasted".into(),
+            )
+            .unwrap();
+        assert!(store.take_showable(&pasted).is_err());
+        assert!(store.peek_showable(&pasted).is_err());
+        assert!(store.peek_kind(&pasted, OneTimeKind::InviteText).is_err());
+        assert!(store.contains_kind(&pasted, OneTimeKind::PairingText));
+        for i in 0..MAX_PAIRING_TEXTS {
+            store
+                .put(
+                    OneTimeKind::PairingText,
+                    format!("zeropw://pair#synthetic-{i}").into(),
+                )
+                .unwrap();
+        }
+        assert!(!store.contains_kind(&pasted, OneTimeKind::PairingText));
+        let late = store
+            .put(
+                OneTimeKind::PairingText,
+                "zeropw://pair#synthetic-late".into(),
+            )
+            .unwrap();
+        let now = clock.load(Ordering::SeqCst);
+        clock.store(now + INVITE_TEXT_TTL.as_secs() - 1, Ordering::SeqCst);
+        assert!(store.contains_kind(&late, OneTimeKind::PairingText));
+        clock.store(now + INVITE_TEXT_TTL.as_secs(), Ordering::SeqCst);
+        assert!(!store.contains_kind(&late, OneTimeKind::PairingText));
     }
 }

@@ -70,6 +70,10 @@
 //!   fails, a connection arriving during the (at most 0.2s) wait for the
 //!   accept thread is queued and then reset rather than refused. No durable,
 //!   connectable "wakeup" alias for the socket exists (finding G-R3-1).
+//! * The 2026-11-07 Astra decision replaces the legacy 24-character directory
+//!   probe with the actual generated socket basename, retaining the 100-character
+//!   selection budget and separate bind guard. Only freshly created fallback
+//!   directories are owned, until orderly shutdown and final manager teardown.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -987,9 +991,18 @@ impl BindingServer {
         };
         let our_key = match self.public_key() {
             Ok(k) => k,
-            Err(_) => {
-                let _ =
-                    self.safe_audit("ssh_sign", "denied", Some("key_unavailable"), None, vec![]);
+            Err(error) => {
+                let _ = self.safe_audit(
+                    "ssh_sign",
+                    "denied",
+                    Some(if error.reason == "secret_deleted" {
+                        "secret_deleted"
+                    } else {
+                        "key_unavailable"
+                    }),
+                    None,
+                    vec![],
+                );
                 return Ok(sshwire::build_failure().to_vec());
             }
         };
@@ -1239,7 +1252,7 @@ impl ServerRegistry {
 /// binding. Port of `signer.SignerManager`.
 pub struct SignerManager {
     ctx: Arc<Context>,
-    socket_dir: PathBuf,
+    socket_dir: SocketDirectory,
     servers: Mutex<ServerRegistry>,
     max_agent_clients: Arc<AtomicUsize>,
 }
@@ -1257,7 +1270,7 @@ impl SignerManager {
     }
 
     pub fn socket_dir(&self) -> &Path {
-        &self.socket_dir
+        self.socket_dir.path()
     }
 
     /// Explicit seam replacing Python's mutable `MAX_AGENT_CLIENTS` module
@@ -1293,7 +1306,7 @@ impl SignerManager {
             Some(grant_id),
         )?;
         decision.require()?;
-        let name = format!("a{}.sock", short_hex_id());
+        let name = socket_basename(&random_socket_id());
         // `self.socket_dir` is already `choose_socket_dir`'s normalized
         // result (finding G-R6-2), and `name` has no `/`/`.` components of
         // its own, so this join cannot reintroduce anything a caller-supplied
@@ -1301,7 +1314,7 @@ impl SignerManager {
         // and the `ServerRegistry` key below (`path.to_string_lossy()`) both
         // already operate on the normalized string with no further work
         // needed here.
-        let path = self.socket_dir.join(&name);
+        let path = self.socket_dir().join(&name);
         // Measure *characters*, matching Python's `len(str(path))`: Python
         // `str` length counts Unicode code points, not encoded bytes.
         // `.to_string_lossy().len()` counts UTF-8 bytes instead, so a
@@ -1368,6 +1381,14 @@ impl SignerManager {
 
     pub fn shutdown(&self) {
         self.release_for_grant(None);
+    }
+}
+
+impl Drop for SignerManager {
+    fn drop(&mut self) {
+        // Keep the fallback guard alive until all resource teardown completes.
+        // shutdown itself retains the directory: a live manager may bind again.
+        self.shutdown();
     }
 }
 
@@ -1444,6 +1465,33 @@ pub fn socket_mode_ok(path: &Path) -> bool {
 
 // ---------------------------------------------------------------------------
 // Socket plumbing helpers
+
+/// Ownership comes only from a successful fresh fallback mkdir, never from a
+/// path's spelling or from creating a preferred directory on the caller's behalf.
+enum SocketDirectory {
+    Borrowed(PathBuf),
+    Fallback(OwnedSocketDirectory),
+}
+
+impl SocketDirectory {
+    fn path(&self) -> &Path {
+        match self {
+            Self::Borrowed(path) => path,
+            Self::Fallback(owned) => &owned.path,
+        }
+    }
+}
+
+struct OwnedSocketDirectory {
+    path: PathBuf,
+}
+
+impl Drop for OwnedSocketDirectory {
+    fn drop(&mut self) {
+        // Never recursively delete unexpected contents, caller paths or parents.
+        let _ = std::fs::remove_dir(&self.path);
+    }
+}
 // ---------------------------------------------------------------------------
 
 /// Normalizes a path string the way CPython's `pathlib` does the instant a
@@ -1527,10 +1575,21 @@ fn normalize_pathlib_path(path: &Path) -> PathBuf {
 /// `//`/`/./` counts (and is created) the same, shorter length in Rust that
 /// it already did in Python, instead of counting longer and silently falling
 /// back to a fresh private temp directory below the true boundary.
-fn choose_socket_dir(preferred: Option<PathBuf>) -> Result<PathBuf, Error> {
+fn choose_socket_dir(preferred: Option<PathBuf>) -> Result<SocketDirectory, Error> {
+    choose_socket_dir_with_permissions(preferred, |path| {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
+    })
+}
+
+// Explicit syscall seam for a deterministic post-mkdir failure test. Production
+// always uses the same 0700 chmod, after the atomic 0700 mkdir in either branch.
+fn choose_socket_dir_with_permissions(
+    preferred: Option<PathBuf>,
+    set_permissions: impl FnOnce(&Path) -> std::io::Result<()>,
+) -> Result<SocketDirectory, Error> {
     if let Some(candidate) = preferred {
         let candidate = normalize_pathlib_path(&candidate);
-        let probe = candidate.join("s".repeat(24));
+        let probe = candidate.join(socket_basename(&[0; SOCKET_ID_BYTES]));
         // Characters, not UTF-8 bytes -- matches Python's `len(str(path))`
         // (finding G-R2-3; see `SignerManager::bind`'s identical fix).
         if probe.to_string_lossy().chars().count() <= MAX_UNIX_PATH {
@@ -1542,15 +1601,13 @@ fn choose_socket_dir(preferred: Option<PathBuf>) -> Result<PathBuf, Error> {
             // `context.rs`'s `create_private_dir`; the `mkdir` syscall above
             // already requested 0700 directly, so this is redundant in the
             // common case, not the primary guarantee.
-            std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o700))
-                .map_err(|e| escaped_os_error(&e))?;
-            return Ok(candidate);
+            set_permissions(&candidate).map_err(|e| escaped_os_error(&e))?;
+            return Ok(SocketDirectory::Borrowed(candidate));
         }
     }
     let short = make_temp_dir("zpws-")?;
-    std::fs::set_permissions(&short, std::fs::Permissions::from_mode(0o700))
-        .map_err(|e| escaped_os_error(&e))?;
-    Ok(short)
+    set_permissions(&short.path).map_err(|e| escaped_os_error(&e))?;
+    Ok(SocketDirectory::Fallback(short))
 }
 
 /// Create `path` at mode 0700 atomically (`DirBuilder::mode`), treating an
@@ -1582,12 +1639,18 @@ fn mkdir_leaf_private_0700(path: &Path) -> std::io::Result<()> {
 /// from `[a-z0-9_]` (finding G-3 fixed the length; the alphabet now matches
 /// too), tried up to `os.TMP_MAX` times; the directory is created with
 /// `os.mkdir(path, 0o700)` and returned through `os.path.abspath`.
-fn make_temp_dir(prefix: &str) -> Result<PathBuf, Error> {
+fn make_temp_dir(prefix: &str) -> Result<OwnedSocketDirectory, Error> {
     let base = crate::pystr::gettempdir().map_err(|e| escaped_os_error(&e))?;
     for _ in 0..libc::TMP_MAX {
         let path = base.join(format!("{prefix}{}", crate::pystr::tempfile_random_name()));
         match std::fs::DirBuilder::new().mode(0o700).create(&path) {
-            Ok(()) => return crate::pystr::posix_abspath(&path).map_err(|e| escaped_os_error(&e)),
+            Ok(()) => {
+                // Arm cleanup before either abspath or the caller's chmod can fail.
+                let mut owned = OwnedSocketDirectory { path };
+                owned.path =
+                    crate::pystr::posix_abspath(&owned.path).map_err(|e| escaped_os_error(&e))?;
+                return Ok(owned);
+            }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(escaped_os_error(&e)),
         }
@@ -1601,11 +1664,17 @@ fn make_temp_dir(prefix: &str) -> Result<PathBuf, Error> {
     ))
 }
 
-fn short_hex_id() -> String {
-    let mut buf = [0u8; 6];
+const SOCKET_ID_BYTES: usize = 6;
+
+fn socket_basename(id: &[u8; SOCKET_ID_BYTES]) -> String {
+    format!("a{}.sock", hex::encode(id))
+}
+
+fn random_socket_id() -> [u8; SOCKET_ID_BYTES] {
+    let mut buf = [0u8; SOCKET_ID_BYTES];
     use rand::RngCore;
     rand::rngs::OsRng.fill_bytes(&mut buf);
-    hex::encode(buf)
+    buf
 }
 
 /// The `OSError` CPython raises for `error` inside `SignerManager` /
@@ -1988,6 +2057,294 @@ mod tests {
         }
     }
 
+    fn short_hex_id() -> String {
+        hex::encode(random_socket_id())
+    }
+
+    // Keep the boundary independent of TMPDIR (including the long native v2
+    // TMPDIR). Only these preferred-path probes use an explicitly short root.
+    fn socket_boundary_path(root: &Path, socket_chars: usize) -> PathBuf {
+        let basename = socket_basename(&[0; SOCKET_ID_BYTES]);
+        assert_eq!(basename, "a000000000000.sock");
+        let padding = socket_chars - root.to_string_lossy().chars().count() - 2 - basename.len();
+        let path = root.join("d".repeat(padding));
+        assert_eq!(
+            path.join(basename).to_string_lossy().chars().count(),
+            socket_chars
+        );
+        path
+    }
+
+    #[test]
+    fn socket_directory_actual_basename_budget_binds_through_exact_boundary() {
+        let root = TempDir::new_in("/tmp").unwrap();
+        let f = fixture();
+        // Every path rejected only by the old extra six probe characters.
+        for socket_chars in 95..=MAX_UNIX_PATH {
+            let preferred = socket_boundary_path(root.path(), socket_chars);
+            assert!(
+                preferred
+                    .join("s".repeat(24))
+                    .to_string_lossy()
+                    .chars()
+                    .count()
+                    > MAX_UNIX_PATH
+            );
+            let manager = install(Arc::clone(&f.ctx), Some(preferred.clone())).unwrap();
+            assert_eq!(manager.socket_dir(), preferred);
+            let binding = manager.bind("agent-1", "box", &f.grant.id).unwrap();
+            assert_eq!(binding.socket_path.parent().unwrap(), preferred);
+            assert_eq!(
+                binding.socket_path.to_string_lossy().chars().count(),
+                socket_chars
+            );
+            let name = binding.socket_path.file_name().unwrap().to_str().unwrap();
+            assert_eq!(name.len(), 18);
+            assert!(name.starts_with('a') && name.ends_with(".sock"));
+            assert!(
+                name[1..13]
+                    .bytes()
+                    .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+            );
+            assert!(socket_mode_ok(&binding.socket_path));
+            let mut client =
+                sshwire::AgentConnection::new(UnixStream::connect(&binding.socket_path).unwrap());
+            assert_eq!(
+                client
+                    .request(&[sshwire::SSH_AGENTC_REQUEST_IDENTITIES])
+                    .unwrap()[0],
+                sshwire::SSH_AGENT_IDENTITIES_ANSWER
+            );
+            manager.release(&binding);
+            assert!(!binding.socket_path.exists());
+            assert!(UnixStream::connect(&binding.socket_path).is_err());
+            drop(binding);
+            manager.shutdown();
+            drop(manager);
+            assert!(
+                preferred.is_dir(),
+                "a created preferred leaf remains borrowed"
+            );
+        }
+    }
+
+    #[test]
+    fn socket_directory_one_over_budget_falls_back_without_creating_preferred() {
+        let root = TempDir::new_in("/tmp").unwrap();
+        let preferred = socket_boundary_path(root.path(), MAX_UNIX_PATH + 1);
+        let selected = choose_socket_dir(Some(preferred.clone())).unwrap();
+        assert!(matches!(selected, SocketDirectory::Fallback(_)));
+        let fallback = selected.path().to_path_buf();
+        assert_ne!(fallback, preferred);
+        assert!(!preferred.exists());
+        assert_eq!(std::fs::metadata(&fallback).unwrap().mode() & 0o777, 0o700);
+        drop(selected);
+        assert!(!fallback.exists());
+        assert!(root.path().exists());
+    }
+
+    #[test]
+    fn socket_directory_multibyte_selection_keeps_character_count_and_os_refusal() {
+        let root = TempDir::new_in("/tmp").unwrap();
+        let ascii = socket_boundary_path(root.path(), MAX_UNIX_PATH);
+        let count = ascii.file_name().unwrap().to_str().unwrap().len();
+        let preferred = root.path().join("한".repeat(count));
+        assert_eq!(
+            preferred
+                .join(socket_basename(&[0; SOCKET_ID_BYTES]))
+                .to_string_lossy()
+                .chars()
+                .count(),
+            MAX_UNIX_PATH
+        );
+        assert!(
+            preferred.as_os_str().len() > 108,
+            "exceeds both Darwin and Linux sun_path byte limits"
+        );
+        let f = fixture();
+        let manager = install(Arc::clone(&f.ctx), Some(preferred.clone())).unwrap();
+        assert_eq!(manager.socket_dir(), preferred);
+        let error = manager.bind("agent-1", "box", &f.grant.id).err().unwrap();
+        assert!(crate::gateway::is_escaped_builtin(&error));
+        assert_eq!(error.reason, "io_error");
+        assert!(manager.active_bindings().is_empty());
+        assert_eq!(std::fs::read_dir(&preferred).unwrap().count(), 0);
+        manager.shutdown();
+        drop(manager);
+        assert!(preferred.is_dir());
+    }
+
+    #[test]
+    fn socket_directory_fallback_lives_through_shutdown_rebind_and_last_manager() {
+        let f = fixture();
+        let overlong = f._tmp.path().join("p".repeat(MAX_UNIX_PATH));
+        let first = install(Arc::clone(&f.ctx), Some(overlong.clone())).unwrap();
+        let second = install(Arc::clone(&f.ctx), Some(overlong)).unwrap();
+        let first_dir = first.socket_dir().to_path_buf();
+        let second_dir = second.socket_dir().to_path_buf();
+        assert_ne!(first_dir, second_dir);
+        let parent = first_dir.parent().unwrap().to_path_buf();
+        let sentinel = f._tmp.path().join("sentinel");
+        std::fs::write(&sentinel, b"caller data").unwrap();
+        let binding = first.bind("agent-1", "box", &f.grant.id).unwrap();
+        let other_binding = second.bind("agent-1", "box", &f.grant.id).unwrap();
+        let mut client = UnixStream::connect(&binding.socket_path).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        // Complete a request so this is an admitted client before teardown.
+        let mut protocol = sshwire::AgentConnection::new(&mut client);
+        assert_eq!(
+            protocol
+                .request(&[sshwire::SSH_AGENTC_REQUEST_IDENTITIES])
+                .unwrap()[0],
+            sshwire::SSH_AGENT_IDENTITIES_ANSWER
+        );
+        first.release(&binding);
+        assert!(!binding.socket_path.exists());
+        let read = client.read(&mut [0]);
+        assert!(
+            matches!(read, Ok(0))
+                || read.is_err_and(|e| e.kind() == std::io::ErrorKind::ConnectionReset)
+        );
+        drop(binding);
+        first.shutdown();
+        first.shutdown();
+        assert!(first_dir.is_dir());
+        let rebound = first.bind("agent-1", "box", &f.grant.id).unwrap();
+        assert!(socket_mode_ok(&rebound.socket_path));
+        first.shutdown();
+        assert!(!rebound.socket_path.exists());
+        drop(rebound);
+        let last = Arc::clone(&first);
+        let weak = Arc::downgrade(&first);
+        drop(first);
+        assert!(first_dir.is_dir());
+        drop(last);
+        assert!(weak.upgrade().is_none());
+        assert!(!first_dir.exists());
+        // The other manager is still serving, in its own untouched fallback.
+        let mut other =
+            sshwire::AgentConnection::new(UnixStream::connect(&other_binding.socket_path).unwrap());
+        assert_eq!(
+            other
+                .request(&[sshwire::SSH_AGENTC_REQUEST_IDENTITIES])
+                .unwrap()[0],
+            sshwire::SSH_AGENT_IDENTITIES_ANSWER
+        );
+        assert!(second_dir.is_dir());
+        second.shutdown();
+        assert!(!other_binding.socket_path.exists());
+        drop(other_binding);
+        let weak = Arc::downgrade(&second);
+        drop(second);
+        assert!(weak.upgrade().is_none());
+        assert!(!second_dir.exists());
+        assert!(parent.is_dir());
+        assert_eq!(std::fs::read(sentinel).unwrap(), b"caller data");
+    }
+
+    #[test]
+    fn socket_directory_preferred_prefix_and_created_leaf_remain_caller_owned() {
+        let root = TempDir::new_in("/tmp").unwrap();
+        let f = fixture();
+        for existing in [false, true] {
+            let preferred = root
+                .path()
+                .join(if existing { "zpws-caller" } else { "new-leaf" });
+            if existing {
+                std::fs::create_dir(&preferred).unwrap();
+            }
+            let manager = install(Arc::clone(&f.ctx), Some(preferred.clone())).unwrap();
+            let sentinel = preferred.join("sentinel");
+            std::fs::write(&sentinel, b"preserve").unwrap();
+            let binding = manager.bind("agent-1", "box", &f.grant.id).unwrap();
+            manager.shutdown();
+            drop(binding);
+            drop(manager);
+            assert!(preferred.is_dir());
+            assert_eq!(std::fs::read(sentinel).unwrap(), b"preserve");
+        }
+        assert!(root.path().is_dir());
+    }
+
+    #[test]
+    fn socket_directory_context_defaults_remain_owned_until_final_context_drop() {
+        let tmp = TempDir::new().unwrap();
+        let ctx = Arc::new(
+            Context::initialize(
+                tmp.path().join("state"),
+                ADMIN,
+                RECOVERY,
+                Config::default(),
+                crate::clock::fixed(1_700_000_000.0),
+            )
+            .unwrap(),
+        );
+        let configured = ctx.config.socket_dir.clone().unwrap();
+        let run_dir = ctx.config.run_dir.clone().unwrap();
+        let manager = install(Arc::clone(&ctx), None).unwrap();
+        assert_eq!(manager.socket_dir(), configured);
+        let weak = Arc::downgrade(&manager);
+        manager.shutdown();
+        drop(manager);
+        assert!(weak.upgrade().is_none());
+        assert!(configured.is_dir());
+        assert!(run_dir.is_dir());
+        drop(ctx);
+        assert!(!configured.exists());
+        assert!(!run_dir.exists());
+    }
+
+    #[test]
+    fn socket_directory_post_mkdir_failure_cleans_only_fresh_fallback() {
+        let mut created = None;
+        let error = choose_socket_dir_with_permissions(None, |path| {
+            assert_eq!(std::fs::metadata(path).unwrap().mode() & 0o777, 0o700);
+            created = Some(path.to_path_buf());
+            Err(std::io::Error::from_raw_os_error(libc::EPERM))
+        })
+        .err()
+        .unwrap();
+        assert_eq!(
+            error.to_dict(),
+            escaped_os_error(&std::io::Error::from_raw_os_error(libc::EPERM)).to_dict()
+        );
+        let created = created.unwrap();
+        assert!(!created.exists());
+        assert!(created.parent().unwrap().is_dir());
+
+        let root = TempDir::new_in("/tmp").unwrap();
+        let preferred = root.path().join("zpws-borrowed");
+        assert!(
+            choose_socket_dir_with_permissions(Some(preferred.clone()), |_| Err(
+                std::io::Error::from_raw_os_error(libc::EPERM)
+            ))
+            .is_err()
+        );
+        assert!(
+            preferred.is_dir(),
+            "even a newly created preferred leaf is borrowed"
+        );
+        let selected = choose_socket_dir(Some(preferred.clone())).unwrap();
+        drop(selected);
+        assert!(preferred.is_dir());
+    }
+
+    #[test]
+    fn socket_directory_fallback_cleanup_never_recursively_removes_contents() {
+        let selected = choose_socket_dir(None).unwrap();
+        let path = selected.path().to_path_buf();
+        let sentinel = path.join("unexpected-caller-data");
+        std::fs::write(&sentinel, b"preserve").unwrap();
+        drop(selected);
+        assert_eq!(std::fs::read(&sentinel).unwrap(), b"preserve");
+        assert!(path.parent().unwrap().is_dir());
+        // The guard deliberately leaves a nonempty leaf; clean only this test's data.
+        std::fs::remove_file(sentinel).unwrap();
+        std::fs::remove_dir(path).unwrap();
+    }
+
     // Port of test_socket_is_private
     #[test]
     fn socket_is_private() {
@@ -2021,8 +2378,8 @@ mod tests {
         let candidate = base.join("missing-parent").join("sockdir");
         assert!(!candidate.parent().unwrap().exists());
         let dir = choose_socket_dir(Some(candidate.clone())).unwrap();
-        assert_eq!(dir, candidate);
-        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(dir.path(), candidate);
+        let mode = std::fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777;
         assert_eq!(
             mode, 0o700,
             "leaf directory mode immediately after creation"
@@ -2039,8 +2396,8 @@ mod tests {
         let candidate = PathBuf::from("/tmp").join(format!("zpws-test-{}", short_hex_id()));
         choose_socket_dir(Some(candidate.clone())).unwrap();
         let dir = choose_socket_dir(Some(candidate.clone())).unwrap();
-        assert_eq!(dir, candidate);
-        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        assert_eq!(dir.path(), candidate);
+        let mode = std::fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700);
         std::fs::remove_dir_all(&candidate).unwrap();
     }
@@ -2125,12 +2482,12 @@ mod tests {
     #[test]
     fn make_temp_dir_suffix_matches_mkdtemp() {
         let dir = choose_socket_dir(None).unwrap();
-        let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+        let mode = std::fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777;
         assert_eq!(
             mode, 0o700,
             "fallback directory mode immediately after creation"
         );
-        let name = dir.file_name().unwrap().to_str().unwrap();
+        let name = dir.path().file_name().unwrap().to_str().unwrap();
         assert!(name.starts_with("zpws-"), "{name}");
         assert_eq!(name.len() - "zpws-".len(), 8, "{name}");
         assert!(
@@ -2140,10 +2497,12 @@ mod tests {
             "{name}: _RandomNameSequence alphabet"
         );
         assert_eq!(
-            dir.parent().unwrap().canonicalize().unwrap(),
+            dir.path().parent().unwrap().canonicalize().unwrap(),
             std::env::temp_dir().canonicalize().unwrap()
         );
-        std::fs::remove_dir(&dir).unwrap();
+        let path = dir.path().to_path_buf();
+        drop(dir);
+        assert!(!path.exists());
     }
 
     // Regression test for finding G-R6-2: `normalize_pathlib_string`
@@ -2192,9 +2551,9 @@ mod tests {
     #[test]
     fn choose_socket_dir_normalizes_like_python_pathlib_at_the_boundary() {
         let base = format!("/tmp/g-r6-2-{}", short_hex_id());
-        // probe = normalized_candidate + "/" + "s" * 24; want the
+        // probe = normalized_candidate + "/" + actual socket basename; want the
         // *normalized* probe length to land exactly at MAX_UNIX_PATH.
-        let suffix_len = 24 + 1; // "/" + 24 "s" characters
+        let suffix_len = socket_basename(&[0; SOCKET_ID_BYTES]).len() + 1;
         let clean_len = MAX_UNIX_PATH - suffix_len; // length of base + "/" + padding
         let padding_len = clean_len - base.chars().count() - 1;
         let padding = "d".repeat(padding_len);
@@ -2207,12 +2566,12 @@ mod tests {
         ] {
             let dir = choose_socket_dir(Some(PathBuf::from(&raw))).unwrap();
             assert_eq!(
-                dir,
+                dir.path(),
                 PathBuf::from(&normalized),
                 "rust should normalize {raw:?} to the configured directory, not \
                  fall back to a temp dir"
             );
-            let mode = std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777;
+            let mode = std::fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o700);
             std::fs::remove_dir_all(&normalized).unwrap();
         }
@@ -2600,6 +2959,26 @@ mod tests {
         f.ctx.policy.revoke_grant(&f.grant.id).unwrap();
         assert!(!f.binding.socket_path.exists());
         assert!(UnixStream::connect(&f.binding.socket_path).is_err());
+    }
+
+    #[test]
+    fn m1_deleted_identity_refuses_next_signature_on_already_bound_socket() {
+        let f = fixture();
+        let mut conn = f.connect();
+        conn.request(&f.bind_message()).unwrap();
+        let data = f.userauth();
+        assert_eq!(
+            f.sign_req(&mut conn, &data, 0, None)[0],
+            sshwire::SSH_AGENT_SIGN_RESPONSE
+        );
+        let auth = f.ctx.admin.verify(ADMIN, None).unwrap();
+        f.ctx.vault.delete_secret("box-key", &auth).unwrap();
+        assert_eq!(
+            f.sign_req(&mut conn, &data, 0, None),
+            sshwire::build_failure()
+        );
+        assert!(f.has_reason("secret_deleted"));
+        assert!(f.manager.bind("agent-1", "box", &f.grant.id).is_err());
     }
 
     // Port of test_usage_cap_enforced_per_signature

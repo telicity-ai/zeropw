@@ -1,0 +1,3660 @@
+[
+  {
+    "id": "ko-light-1180x780-vault",
+    "surface": "vault",
+    "locale": "ko",
+    "theme": "light",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=vault",
+    "errors": [],
+    "logs": [
+      "Failed to load resource: the server responded with a status of 404 (Not Found)"
+    ],
+    "lang": "ko",
+    "title": "모든 항목 3",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [
+      {
+        "text": "모든 항목\n3",
+        "className": "nav-item"
+      },
+      {
+        "text": "비밀번호\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "API 키\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "환경변수\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "SSH 키",
+        "className": "nav-item"
+      },
+      {
+        "text": "설정",
+        "className": "nav-item"
+      }
+    ],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "ZeroPW\n금고\n모든 항목\n3\n비밀번호\n1\nAPI 키\n1\n환경변수\n1\nSSH 키\n위치\ndemo · dev\n1\ndemo · staging\n1\ndemo · prod\n1\n내 Mac\n서비스 연결\n개발자\n활동\n로컬 서비스 켜짐\n모두 차단\n설정\n모든 항목 3\ndb-password\n비밀번호\ndemo · prod\nexample-api\nAPI 키\ndemo · dev\n연결 1개\nsentry-dsn\n환경변수\ndemo · staging\ndb-password\n\n비밀"
+  },
+  {
+    "id": "ko-light-1180x780-devices",
+    "surface": "devices",
+    "locale": "ko",
+    "theme": "light",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=devices",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "내 Mac",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [
+      {
+        "text": "모든 항목\n3",
+        "className": "nav-item"
+      },
+      {
+        "text": "비밀번호\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "API 키\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "환경변수\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "SSH 키",
+        "className": "nav-item"
+      },
+      {
+        "text": "설정",
+        "className": "nav-item"
+      }
+    ],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "ZeroPW\n금고\n모든 항목\n3\n비밀번호\n1\nAPI 키\n1\n환경변수\n1\nSSH 키\n위치\ndemo · dev\n1\ndemo · staging\n1\ndemo · prod\n1\n내 Mac\n서비스 연결\n개발자\n활동\n로컬 서비스 켜짐\n모두 차단\n설정\n내 Mac\nMac 연결\nthis-mac\n이 Mac\n서버에 닿음\n서버\nlink.zeropw.invalid\n확인 코드\nCWJR\nYZEM\nCEFH\nKRGC\n고급 진단\n연결한 Mac\nstudio\n위치 3곳\n최신 버전까지"
+  },
+  {
+    "id": "ko-light-1180x780-services",
+    "surface": "services",
+    "locale": "ko",
+    "theme": "light",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=services",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "서비스 연결",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [
+      {
+        "text": "모든 항목\n3",
+        "className": "nav-item"
+      },
+      {
+        "text": "비밀번호\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "API 키\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "환경변수\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "SSH 키",
+        "className": "nav-item"
+      },
+      {
+        "text": "설정",
+        "className": "nav-item"
+      }
+    ],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "ZeroPW\n금고\n모든 항목\n3\n비밀번호\n1\nAPI 키\n1\n환경변수\n1\nSSH 키\n위치\ndemo · dev\n1\ndemo · staging\n1\ndemo · prod\n1\n내 Mac\n서비스 연결\n개발자\n활동\n로컬 서비스 켜짐\n모두 차단\n설정\n서비스 연결\nexample-api\napi.example.com\ndemo · dev\nexample-api\n\n사용 중\n·\nHTTP API\n·\ndemo · dev\n\n연결 대상\n주소\nhttps://api.example."
+  },
+  {
+    "id": "ko-light-1180x780-developer",
+    "surface": "developer",
+    "locale": "ko",
+    "theme": "light",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=developer",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "개발자",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [
+      {
+        "text": "모든 항목\n3",
+        "className": "nav-item"
+      },
+      {
+        "text": "비밀번호\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "API 키\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "환경변수\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "SSH 키",
+        "className": "nav-item"
+      },
+      {
+        "text": "설정",
+        "className": "nav-item"
+      }
+    ],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "ZeroPW\n금고\n모든 항목\n3\n비밀번호\n1\nAPI 키\n1\n환경변수\n1\nSSH 키\n위치\ndemo · dev\n1\ndemo · staging\n1\ndemo · prod\n1\n내 Mac\n서비스 연결\n개발자\n활동\n로컬 서비스 켜짐\n모두 차단\n설정\n개발자\n개발자 화면\n에이전트\n승인 요청 2\n공유\n\n에이전트는 로컬 서비스를 거쳐 연결을 써요. 원본 값은 받지 않아요\n\n에이전트\n에이전트 추가\nagent-1\n다른 계정 · agent\n권한 주기\nexample-ap"
+  },
+  {
+    "id": "ko-light-1180x780-activity",
+    "surface": "activity",
+    "locale": "ko",
+    "theme": "light",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=activity",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "활동",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [
+      {
+        "text": "모든 항목\n3",
+        "className": "nav-item"
+      },
+      {
+        "text": "비밀번호\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "API 키\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "환경변수\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "SSH 키",
+        "className": "nav-item"
+      },
+      {
+        "text": "설정",
+        "className": "nav-item"
+      }
+    ],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "ZeroPW\n금고\n모든 항목\n3\n비밀번호\n1\nAPI 키\n1\n환경변수\n1\nSSH 키\n위치\ndemo · dev\n1\ndemo · staging\n1\ndemo · prod\n1\n내 Mac\n서비스 연결\n개발자\n활동\n로컬 서비스 켜짐\n모두 차단\n설정\n활동\n활동 종류\n사용 기록\n알림\n사고 대응\n시각\n한 일\n누가\n대상\n11월 7일 06:29\n승인 요청\nagent-1\nexample-api\n11월 7일 03:30\nAPI 중계\nagent-1\nexample-api\n11"
+  },
+  {
+    "id": "ko-light-1180x780-settings",
+    "surface": "settings",
+    "locale": "ko",
+    "theme": "light",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=settings",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "설정",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [
+      {
+        "text": "모든 항목\n3",
+        "className": "nav-item"
+      },
+      {
+        "text": "비밀번호\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "API 키\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "환경변수\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "SSH 키",
+        "className": "nav-item"
+      },
+      {
+        "text": "설정",
+        "className": "nav-item"
+      }
+    ],
+    "paneOverflow": [],
+    "selects": [
+      {
+        "html": "<div class=\"select\"><select id=\"_r_0_\"><option value=\"system\">시스템 설정</option><option value=\"ko\">한국어</option><option value=\"en\">English</option></select><svg width=\"14\" height=\"14\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\" focusable=\"false\"><path d=\"m3.5 6.25 4.5 4.5 4.5-4.5\"></path></svg></div>",
+        "ancestors": [
+          {
+            "tag": "DIV",
+            "cls": "select",
+            "role": null,
+            "background": "rgb(255, 255, 255)",
+            "border": "1px solid rgba(0, 0, 0, 0.11)",
+            "shadow": "rgba(0, 0, 0, 0.03) 0px 0.5px 1px 0px",
+            "padding": "0px",
+            "borderRadius": "9px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "field",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "language-choice",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "SECTION",
+            "cls": "section",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "pane-content settings-content",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "24px 32px 44px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "pane-body",
+            "role": null,
+            "background": "rgb(255, 255, 255)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "pane pane-detail",
+            "role": null,
+            "background": "rgb(255, 255, 255)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          }
+        ]
+      }
+    ],
+    "bodyText": "ZeroPW\n금고\n모든 항목\n3\n비밀번호\n1\nAPI 키\n1\n환경변수\n1\nSSH 키\n위치\ndemo · dev\n1\ndemo · staging\n1\ndemo · prod\n1\n내 Mac\n서비스 연결\n개발자\n활동\n로컬 서비스 켜짐\n모두 차단\n설정\n설정\n잠금과 보안\n잠금, 모든 사용 멈추기, 기기 키\n연결 서버\n다른 Mac을 찾아 연결할 때 쓰는 서버\n기기와 동기화\n같은 네트워크의 기기 접속\n개발자 기능\n로컬 서비스와 포트\n백업과 복원\n암호화한 백업 파일\n"
+  },
+  {
+    "id": "ko-light-1180x780-onboarding",
+    "surface": "onboarding",
+    "locale": "ko",
+    "theme": "light",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "나만의 금고",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [
+      {
+        "html": "<div class=\"select\"><select id=\"_r_0_\"><option value=\"system\">시스템 설정</option><option value=\"ko\">한국어</option><option value=\"en\">English</option></select><svg width=\"14\" height=\"14\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\" focusable=\"false\"><path d=\"m3.5 6.25 4.5 4.5 4.5-4.5\"></path></svg></div>",
+        "ancestors": [
+          {
+            "tag": "DIV",
+            "cls": "select",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "1px solid rgba(0, 0, 0, 0.11)",
+            "shadow": "rgba(0, 0, 0, 0.03) 0px 0.5px 1px 0px",
+            "padding": "0px",
+            "borderRadius": "9px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "field",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "language-choice is-compact",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "HEADER",
+            "cls": "setup-head",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "setup-card",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "26px 24px 28px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "setup",
+            "role": "main",
+            "background": "rgb(236, 236, 240)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "48px 20px 36px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          }
+        ]
+      }
+    ],
+    "bodyText": "언어\n시스템 설정\n한국어\nEnglish\n나만의 금고\n\n내 비밀을 내 Mac에 보관하고, 승인한 다른 Mac과 암호화된 채로 동기화해요\n\n시작하기\n다른 Mac의 금고와 연결\n미리 보기 데이터"
+  },
+  {
+    "id": "ko-light-1180x780-locked",
+    "surface": "locked",
+    "locale": "ko",
+    "theme": "light",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "금고가 잠겨 있어요",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [
+      {
+        "html": "<div class=\"select\"><select id=\"_r_1_\"><option value=\"system\">시스템 설정</option><option value=\"ko\">한국어</option><option value=\"en\">English</option></select><svg width=\"14\" height=\"14\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\" focusable=\"false\"><path d=\"m3.5 6.25 4.5 4.5 4.5-4.5\"></path></svg></div>",
+        "ancestors": [
+          {
+            "tag": "DIV",
+            "cls": "select",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "1px solid rgba(0, 0, 0, 0.11)",
+            "shadow": "rgba(0, 0, 0, 0.03) 0px 0.5px 1px 0px",
+            "padding": "0px",
+            "borderRadius": "9px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "field",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "language-choice is-compact",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "FORM",
+            "cls": "lock-card",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "lock",
+            "role": null,
+            "background": "rgb(236, 236, 240)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "40px 24px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "BODY",
+            "cls": "",
+            "role": null,
+            "background": "rgb(236, 236, 240)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          }
+        ]
+      }
+    ],
+    "bodyText": "금고가 잠겨 있어요\n\n관리 비밀번호로 열어 주세요\n\n관리 비밀번호\n금고 열기\n\n잠겨 있어도 에이전트 연결과 동기화는 계속돼요\n\n언어\n시스템 설정\n한국어\nEnglish\n미리 보기 데이터"
+  },
+  {
+    "id": "ko-light-760x560-vault",
+    "surface": "vault",
+    "locale": "ko",
+    "theme": "light",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=vault",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "모든 항목 3",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "모든 항목 3\ndb-password\n비밀번호\ndemo · prod\nexample-api\nAPI 키\ndemo · dev\n연결 1개\nsentry-dsn\n환경변수\ndemo · staging\n미리 보기 데이터\n금고"
+  },
+  {
+    "id": "ko-light-760x560-devices",
+    "surface": "devices",
+    "locale": "ko",
+    "theme": "light",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=devices",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "내 Mac",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "내 Mac\nMac 연결\nthis-mac\n이 Mac\n서버에 닿음\n서버\nlink.zeropw.invalid\n확인 코드\n7MQ3\nAANA\nLFKQ\n3H75\n고급 진단\n연결한 Mac\nstudio\n위치 3곳\n최신 버전까지 동기화됨\n미리 보기 데이터\n내 Mac"
+  },
+  {
+    "id": "ko-light-760x560-services",
+    "surface": "services",
+    "locale": "ko",
+    "theme": "light",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=services",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "서비스 연결",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "서비스 연결\nexample-api\napi.example.com\ndemo · dev\n미리 보기 데이터\n서비스 연결"
+  },
+  {
+    "id": "ko-light-760x560-developer",
+    "surface": "developer",
+    "locale": "ko",
+    "theme": "light",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=developer",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "개발자",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "개발자\n개발자 화면\n에이전트\n승인 요청 2\n공유\n\n에이전트는 로컬 서비스를 거쳐 연결을 써요. 원본 값은 받지 않아요\n\n에이전트\n에이전트 추가\nagent-1\n다른 계정 · agent\n권한 주기\nexample-api\n11월 7일 12:31까지 · 14회 사용\n회수\n열린 터미널\nagent-1\n다른 계정 · agent\n실행 중\n보기\n미리 보기 데이터\n개발자"
+  },
+  {
+    "id": "ko-light-760x560-activity",
+    "surface": "activity",
+    "locale": "ko",
+    "theme": "light",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=activity",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "활동",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "활동\n활동 종류\n사용 기록\n알림\n사고 대응\n시각\n한 일\n대상\n11월 7일 06:29\n승인 요청\nexample-api\n11월 7일 03:31\nAPI 중계\nexample-api\n11월 6일 11:31\n권한 주기\nexample-api\n11월 6일 10:31\n연결 만들기\nexample-api\n11월 6일 08:31\n에이전트 추가\n11월 6일 06:31\n프로젝트 만들기\n11월 6일 06:31\n금고 만들기\n최근 200개까지 보여요\n미리 보기 데이터\n활동"
+  },
+  {
+    "id": "ko-light-760x560-settings",
+    "surface": "settings",
+    "locale": "ko",
+    "theme": "light",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=settings",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "설정",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "설정\n잠금과 보안\n잠금, 모든 사용 멈추기, 기기 키\n연결 서버\n다른 Mac을 찾아 연결할 때 쓰는 서버\n기기와 동기화\n같은 네트워크의 기기 접속\n개발자 기능\n로컬 서비스와 포트\n백업과 복원\n암호화한 백업 파일\n진단과 앱 정보\n문제를 찾을 때 볼 상태\n미리 보기 데이터\n설정"
+  },
+  {
+    "id": "ko-light-760x560-onboarding",
+    "surface": "onboarding",
+    "locale": "ko",
+    "theme": "light",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "나만의 금고",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [
+      {
+        "html": "<div class=\"select\"><select id=\"_r_0_\"><option value=\"system\">시스템 설정</option><option value=\"ko\">한국어</option><option value=\"en\">English</option></select><svg width=\"14\" height=\"14\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\" focusable=\"false\"><path d=\"m3.5 6.25 4.5 4.5 4.5-4.5\"></path></svg></div>",
+        "ancestors": [
+          {
+            "tag": "DIV",
+            "cls": "select",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "1px solid rgba(0, 0, 0, 0.11)",
+            "shadow": "rgba(0, 0, 0, 0.03) 0px 0.5px 1px 0px",
+            "padding": "0px",
+            "borderRadius": "9px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "field",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "language-choice is-compact",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "HEADER",
+            "cls": "setup-head",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "setup-card",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "26px 24px 28px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "setup",
+            "role": "main",
+            "background": "rgb(236, 236, 240)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "48px 20px 36px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          }
+        ]
+      }
+    ],
+    "bodyText": "언어\n시스템 설정\n한국어\nEnglish\n나만의 금고\n\n내 비밀을 내 Mac에 보관하고, 승인한 다른 Mac과 암호화된 채로 동기화해요\n\n시작하기\n다른 Mac의 금고와 연결\n미리 보기 데이터"
+  },
+  {
+    "id": "ko-light-760x560-locked",
+    "surface": "locked",
+    "locale": "ko",
+    "theme": "light",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "금고가 잠겨 있어요",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [
+      {
+        "html": "<div class=\"select\"><select id=\"_r_1_\"><option value=\"system\">시스템 설정</option><option value=\"ko\">한국어</option><option value=\"en\">English</option></select><svg width=\"14\" height=\"14\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\" focusable=\"false\"><path d=\"m3.5 6.25 4.5 4.5 4.5-4.5\"></path></svg></div>",
+        "ancestors": [
+          {
+            "tag": "DIV",
+            "cls": "select",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "1px solid rgba(0, 0, 0, 0.11)",
+            "shadow": "rgba(0, 0, 0, 0.03) 0px 0.5px 1px 0px",
+            "padding": "0px",
+            "borderRadius": "9px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "field",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "language-choice is-compact",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "FORM",
+            "cls": "lock-card",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "lock",
+            "role": null,
+            "background": "rgb(236, 236, 240)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "40px 24px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "BODY",
+            "cls": "",
+            "role": null,
+            "background": "rgb(236, 236, 240)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          }
+        ]
+      }
+    ],
+    "bodyText": "금고가 잠겨 있어요\n\n관리 비밀번호로 열어 주세요\n\n관리 비밀번호\n금고 열기\n\n잠겨 있어도 에이전트 연결과 동기화는 계속돼요\n\n언어\n시스템 설정\n한국어\nEnglish\n미리 보기 데이터"
+  },
+  {
+    "id": "ko-dark-1180x780-vault",
+    "surface": "vault",
+    "locale": "ko",
+    "theme": "dark",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=vault",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "모든 항목 3",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [
+      {
+        "text": "모든 항목\n3",
+        "className": "nav-item"
+      },
+      {
+        "text": "비밀번호\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "API 키\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "환경변수\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "SSH 키",
+        "className": "nav-item"
+      },
+      {
+        "text": "설정",
+        "className": "nav-item"
+      }
+    ],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "ZeroPW\n금고\n모든 항목\n3\n비밀번호\n1\nAPI 키\n1\n환경변수\n1\nSSH 키\n위치\ndemo · dev\n1\ndemo · staging\n1\ndemo · prod\n1\n내 Mac\n서비스 연결\n개발자\n활동\n로컬 서비스 켜짐\n모두 차단\n설정\n모든 항목 3\ndb-password\n비밀번호\ndemo · prod\nexample-api\nAPI 키\ndemo · dev\n연결 1개\nsentry-dsn\n환경변수\ndemo · staging\ndb-password\n\n비밀"
+  },
+  {
+    "id": "ko-dark-1180x780-devices",
+    "surface": "devices",
+    "locale": "ko",
+    "theme": "dark",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=devices",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "내 Mac",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [
+      {
+        "text": "모든 항목\n3",
+        "className": "nav-item"
+      },
+      {
+        "text": "비밀번호\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "API 키\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "환경변수\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "SSH 키",
+        "className": "nav-item"
+      },
+      {
+        "text": "설정",
+        "className": "nav-item"
+      }
+    ],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "ZeroPW\n금고\n모든 항목\n3\n비밀번호\n1\nAPI 키\n1\n환경변수\n1\nSSH 키\n위치\ndemo · dev\n1\ndemo · staging\n1\ndemo · prod\n1\n내 Mac\n서비스 연결\n개발자\n활동\n로컬 서비스 켜짐\n모두 차단\n설정\n내 Mac\nMac 연결\nthis-mac\n이 Mac\n서버에 닿음\n서버\nlink.zeropw.invalid\n확인 코드\nIL6E\nXJSL\nUNSD\nEBPN\n고급 진단\n연결한 Mac\nstudio\n위치 3곳\n최신 버전까지"
+  },
+  {
+    "id": "ko-dark-1180x780-services",
+    "surface": "services",
+    "locale": "ko",
+    "theme": "dark",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=services",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "서비스 연결",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [
+      {
+        "text": "모든 항목\n3",
+        "className": "nav-item"
+      },
+      {
+        "text": "비밀번호\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "API 키\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "환경변수\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "SSH 키",
+        "className": "nav-item"
+      },
+      {
+        "text": "설정",
+        "className": "nav-item"
+      }
+    ],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "ZeroPW\n금고\n모든 항목\n3\n비밀번호\n1\nAPI 키\n1\n환경변수\n1\nSSH 키\n위치\ndemo · dev\n1\ndemo · staging\n1\ndemo · prod\n1\n내 Mac\n서비스 연결\n개발자\n활동\n로컬 서비스 켜짐\n모두 차단\n설정\n서비스 연결\nexample-api\napi.example.com\ndemo · dev\nexample-api\n\n사용 중\n·\nHTTP API\n·\ndemo · dev\n\n연결 대상\n주소\nhttps://api.example."
+  },
+  {
+    "id": "ko-dark-1180x780-developer",
+    "surface": "developer",
+    "locale": "ko",
+    "theme": "dark",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=developer",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "개발자",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [
+      {
+        "text": "모든 항목\n3",
+        "className": "nav-item"
+      },
+      {
+        "text": "비밀번호\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "API 키\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "환경변수\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "SSH 키",
+        "className": "nav-item"
+      },
+      {
+        "text": "설정",
+        "className": "nav-item"
+      }
+    ],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "ZeroPW\n금고\n모든 항목\n3\n비밀번호\n1\nAPI 키\n1\n환경변수\n1\nSSH 키\n위치\ndemo · dev\n1\ndemo · staging\n1\ndemo · prod\n1\n내 Mac\n서비스 연결\n개발자\n활동\n로컬 서비스 켜짐\n모두 차단\n설정\n개발자\n개발자 화면\n에이전트\n승인 요청 2\n공유\n\n에이전트는 로컬 서비스를 거쳐 연결을 써요. 원본 값은 받지 않아요\n\n에이전트\n에이전트 추가\nagent-1\n다른 계정 · agent\n권한 주기\nexample-ap"
+  },
+  {
+    "id": "ko-dark-1180x780-activity",
+    "surface": "activity",
+    "locale": "ko",
+    "theme": "dark",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=activity",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "활동",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [
+      {
+        "text": "모든 항목\n3",
+        "className": "nav-item"
+      },
+      {
+        "text": "비밀번호\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "API 키\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "환경변수\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "SSH 키",
+        "className": "nav-item"
+      },
+      {
+        "text": "설정",
+        "className": "nav-item"
+      }
+    ],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "ZeroPW\n금고\n모든 항목\n3\n비밀번호\n1\nAPI 키\n1\n환경변수\n1\nSSH 키\n위치\ndemo · dev\n1\ndemo · staging\n1\ndemo · prod\n1\n내 Mac\n서비스 연결\n개발자\n활동\n로컬 서비스 켜짐\n모두 차단\n설정\n활동\n활동 종류\n사용 기록\n알림\n사고 대응\n시각\n한 일\n누가\n대상\n11월 7일 06:29\n승인 요청\nagent-1\nexample-api\n11월 7일 03:31\nAPI 중계\nagent-1\nexample-api\n11"
+  },
+  {
+    "id": "ko-dark-1180x780-settings",
+    "surface": "settings",
+    "locale": "ko",
+    "theme": "dark",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=settings",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "설정",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [
+      {
+        "text": "모든 항목\n3",
+        "className": "nav-item"
+      },
+      {
+        "text": "비밀번호\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "API 키\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "환경변수\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "SSH 키",
+        "className": "nav-item"
+      },
+      {
+        "text": "설정",
+        "className": "nav-item"
+      }
+    ],
+    "paneOverflow": [],
+    "selects": [
+      {
+        "html": "<div class=\"select\"><select id=\"_r_0_\"><option value=\"system\">시스템 설정</option><option value=\"ko\">한국어</option><option value=\"en\">English</option></select><svg width=\"14\" height=\"14\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\" focusable=\"false\"><path d=\"m3.5 6.25 4.5 4.5 4.5-4.5\"></path></svg></div>",
+        "ancestors": [
+          {
+            "tag": "DIV",
+            "cls": "select",
+            "role": null,
+            "background": "rgb(44, 44, 46)",
+            "border": "1px solid rgba(255, 255, 255, 0.12)",
+            "shadow": "rgba(0, 0, 0, 0.03) 0px 0.5px 1px 0px",
+            "padding": "0px",
+            "borderRadius": "9px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "field",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "language-choice",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "SECTION",
+            "cls": "section",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "pane-content settings-content",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "24px 32px 44px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "pane-body",
+            "role": null,
+            "background": "rgb(28, 28, 30)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "pane pane-detail",
+            "role": null,
+            "background": "rgb(28, 28, 30)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          }
+        ]
+      }
+    ],
+    "bodyText": "ZeroPW\n금고\n모든 항목\n3\n비밀번호\n1\nAPI 키\n1\n환경변수\n1\nSSH 키\n위치\ndemo · dev\n1\ndemo · staging\n1\ndemo · prod\n1\n내 Mac\n서비스 연결\n개발자\n활동\n로컬 서비스 켜짐\n모두 차단\n설정\n설정\n잠금과 보안\n잠금, 모든 사용 멈추기, 기기 키\n연결 서버\n다른 Mac을 찾아 연결할 때 쓰는 서버\n기기와 동기화\n같은 네트워크의 기기 접속\n개발자 기능\n로컬 서비스와 포트\n백업과 복원\n암호화한 백업 파일\n"
+  },
+  {
+    "id": "ko-dark-1180x780-onboarding",
+    "surface": "onboarding",
+    "locale": "ko",
+    "theme": "dark",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "나만의 금고",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [
+      {
+        "html": "<div class=\"select\"><select id=\"_r_0_\"><option value=\"system\">시스템 설정</option><option value=\"ko\">한국어</option><option value=\"en\">English</option></select><svg width=\"14\" height=\"14\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\" focusable=\"false\"><path d=\"m3.5 6.25 4.5 4.5 4.5-4.5\"></path></svg></div>",
+        "ancestors": [
+          {
+            "tag": "DIV",
+            "cls": "select",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "1px solid rgba(255, 255, 255, 0.12)",
+            "shadow": "rgba(0, 0, 0, 0.03) 0px 0.5px 1px 0px",
+            "padding": "0px",
+            "borderRadius": "9px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "field",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "language-choice is-compact",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "HEADER",
+            "cls": "setup-head",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "setup-card",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "26px 24px 28px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "setup",
+            "role": "main",
+            "background": "rgb(38, 38, 40)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "48px 20px 36px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          }
+        ]
+      }
+    ],
+    "bodyText": "언어\n시스템 설정\n한국어\nEnglish\n나만의 금고\n\n내 비밀을 내 Mac에 보관하고, 승인한 다른 Mac과 암호화된 채로 동기화해요\n\n시작하기\n다른 Mac의 금고와 연결\n미리 보기 데이터"
+  },
+  {
+    "id": "ko-dark-1180x780-locked",
+    "surface": "locked",
+    "locale": "ko",
+    "theme": "dark",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "금고가 잠겨 있어요",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [
+      {
+        "html": "<div class=\"select\"><select id=\"_r_1_\"><option value=\"system\">시스템 설정</option><option value=\"ko\">한국어</option><option value=\"en\">English</option></select><svg width=\"14\" height=\"14\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\" focusable=\"false\"><path d=\"m3.5 6.25 4.5 4.5 4.5-4.5\"></path></svg></div>",
+        "ancestors": [
+          {
+            "tag": "DIV",
+            "cls": "select",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "1px solid rgba(255, 255, 255, 0.12)",
+            "shadow": "rgba(0, 0, 0, 0.03) 0px 0.5px 1px 0px",
+            "padding": "0px",
+            "borderRadius": "9px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "field",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "language-choice is-compact",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "FORM",
+            "cls": "lock-card",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "lock",
+            "role": null,
+            "background": "rgb(38, 38, 40)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "40px 24px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "BODY",
+            "cls": "",
+            "role": null,
+            "background": "rgb(38, 38, 40)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          }
+        ]
+      }
+    ],
+    "bodyText": "금고가 잠겨 있어요\n\n관리 비밀번호로 열어 주세요\n\n관리 비밀번호\n금고 열기\n\n잠겨 있어도 에이전트 연결과 동기화는 계속돼요\n\n언어\n시스템 설정\n한국어\nEnglish\n미리 보기 데이터"
+  },
+  {
+    "id": "ko-dark-760x560-vault",
+    "surface": "vault",
+    "locale": "ko",
+    "theme": "dark",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=vault",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "모든 항목 3",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "모든 항목 3\ndb-password\n비밀번호\ndemo · prod\nexample-api\nAPI 키\ndemo · dev\n연결 1개\nsentry-dsn\n환경변수\ndemo · staging\n미리 보기 데이터\n금고"
+  },
+  {
+    "id": "ko-dark-760x560-devices",
+    "surface": "devices",
+    "locale": "ko",
+    "theme": "dark",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=devices",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "내 Mac",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "내 Mac\nMac 연결\nthis-mac\n이 Mac\n서버에 닿음\n서버\nlink.zeropw.invalid\n확인 코드\nFH3A\nHQEZ\nLBQJ\nUA74\n고급 진단\n연결한 Mac\nstudio\n위치 3곳\n최신 버전까지 동기화됨\n미리 보기 데이터\n내 Mac"
+  },
+  {
+    "id": "ko-dark-760x560-services",
+    "surface": "services",
+    "locale": "ko",
+    "theme": "dark",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=services",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "서비스 연결",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "서비스 연결\nexample-api\napi.example.com\ndemo · dev\n미리 보기 데이터\n서비스 연결"
+  },
+  {
+    "id": "ko-dark-760x560-developer",
+    "surface": "developer",
+    "locale": "ko",
+    "theme": "dark",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=developer",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "개발자",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "개발자\n개발자 화면\n에이전트\n승인 요청 2\n공유\n\n에이전트는 로컬 서비스를 거쳐 연결을 써요. 원본 값은 받지 않아요\n\n에이전트\n에이전트 추가\nagent-1\n다른 계정 · agent\n권한 주기\nexample-api\n11월 7일 12:31까지 · 14회 사용\n회수\n열린 터미널\nagent-1\n다른 계정 · agent\n실행 중\n보기\n미리 보기 데이터\n개발자"
+  },
+  {
+    "id": "ko-dark-760x560-activity",
+    "surface": "activity",
+    "locale": "ko",
+    "theme": "dark",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=activity",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "활동",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "활동\n활동 종류\n사용 기록\n알림\n사고 대응\n시각\n한 일\n대상\n11월 7일 06:30\n승인 요청\nexample-api\n11월 7일 03:31\nAPI 중계\nexample-api\n11월 6일 11:31\n권한 주기\nexample-api\n11월 6일 10:31\n연결 만들기\nexample-api\n11월 6일 08:31\n에이전트 추가\n11월 6일 06:31\n프로젝트 만들기\n11월 6일 06:31\n금고 만들기\n최근 200개까지 보여요\n미리 보기 데이터\n활동"
+  },
+  {
+    "id": "ko-dark-760x560-settings",
+    "surface": "settings",
+    "locale": "ko",
+    "theme": "dark",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=settings",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "설정",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "설정\n잠금과 보안\n잠금, 모든 사용 멈추기, 기기 키\n연결 서버\n다른 Mac을 찾아 연결할 때 쓰는 서버\n기기와 동기화\n같은 네트워크의 기기 접속\n개발자 기능\n로컬 서비스와 포트\n백업과 복원\n암호화한 백업 파일\n진단과 앱 정보\n문제를 찾을 때 볼 상태\n미리 보기 데이터\n설정"
+  },
+  {
+    "id": "ko-dark-760x560-onboarding",
+    "surface": "onboarding",
+    "locale": "ko",
+    "theme": "dark",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "나만의 금고",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [
+      {
+        "html": "<div class=\"select\"><select id=\"_r_0_\"><option value=\"system\">시스템 설정</option><option value=\"ko\">한국어</option><option value=\"en\">English</option></select><svg width=\"14\" height=\"14\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\" focusable=\"false\"><path d=\"m3.5 6.25 4.5 4.5 4.5-4.5\"></path></svg></div>",
+        "ancestors": [
+          {
+            "tag": "DIV",
+            "cls": "select",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "1px solid rgba(255, 255, 255, 0.12)",
+            "shadow": "rgba(0, 0, 0, 0.03) 0px 0.5px 1px 0px",
+            "padding": "0px",
+            "borderRadius": "9px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "field",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "language-choice is-compact",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "HEADER",
+            "cls": "setup-head",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "setup-card",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "26px 24px 28px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "setup",
+            "role": "main",
+            "background": "rgb(38, 38, 40)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "48px 20px 36px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          }
+        ]
+      }
+    ],
+    "bodyText": "언어\n시스템 설정\n한국어\nEnglish\n나만의 금고\n\n내 비밀을 내 Mac에 보관하고, 승인한 다른 Mac과 암호화된 채로 동기화해요\n\n시작하기\n다른 Mac의 금고와 연결\n미리 보기 데이터"
+  },
+  {
+    "id": "ko-dark-760x560-locked",
+    "surface": "locked",
+    "locale": "ko",
+    "theme": "dark",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired",
+    "errors": [],
+    "logs": [],
+    "lang": "ko",
+    "title": "금고가 잠겨 있어요",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [
+      {
+        "html": "<div class=\"select\"><select id=\"_r_1_\"><option value=\"system\">시스템 설정</option><option value=\"ko\">한국어</option><option value=\"en\">English</option></select><svg width=\"14\" height=\"14\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\" focusable=\"false\"><path d=\"m3.5 6.25 4.5 4.5 4.5-4.5\"></path></svg></div>",
+        "ancestors": [
+          {
+            "tag": "DIV",
+            "cls": "select",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "1px solid rgba(255, 255, 255, 0.12)",
+            "shadow": "rgba(0, 0, 0, 0.03) 0px 0.5px 1px 0px",
+            "padding": "0px",
+            "borderRadius": "9px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "field",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "language-choice is-compact",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "FORM",
+            "cls": "lock-card",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "lock",
+            "role": null,
+            "background": "rgb(38, 38, 40)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "40px 24px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "BODY",
+            "cls": "",
+            "role": null,
+            "background": "rgb(38, 38, 40)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          }
+        ]
+      }
+    ],
+    "bodyText": "금고가 잠겨 있어요\n\n관리 비밀번호로 열어 주세요\n\n관리 비밀번호\n금고 열기\n\n잠겨 있어도 에이전트 연결과 동기화는 계속돼요\n\n언어\n시스템 설정\n한국어\nEnglish\n미리 보기 데이터"
+  },
+  {
+    "id": "en-light-1180x780-vault",
+    "surface": "vault",
+    "locale": "en",
+    "theme": "light",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=vault",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "All Items 3",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [
+      {
+        "text": "All Items\n3",
+        "className": "nav-item"
+      },
+      {
+        "text": "Passwords\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "API Keys\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "Environment Variables\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "SSH Keys",
+        "className": "nav-item"
+      },
+      {
+        "text": "Settings",
+        "className": "nav-item"
+      }
+    ],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "ZeroPW\nVault\nAll Items\n3\nPasswords\n1\nAPI Keys\n1\nEnvironment Variables\n1\nSSH Keys\nPlaces\ndemo · dev\n1\ndemo · staging\n1\ndemo · prod\n1\nMy Macs\nService Connections\nDeveloper\nActivity\nLocal service on\nBlock All\nSettings\nAll Items 3\ndb-password\nPasswords\nd"
+  },
+  {
+    "id": "en-light-1180x780-devices",
+    "surface": "devices",
+    "locale": "en",
+    "theme": "light",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=devices",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "My Macs",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [
+      {
+        "text": "All Items\n3",
+        "className": "nav-item"
+      },
+      {
+        "text": "Passwords\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "API Keys\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "Environment Variables\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "SSH Keys",
+        "className": "nav-item"
+      },
+      {
+        "text": "Settings",
+        "className": "nav-item"
+      }
+    ],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "ZeroPW\nVault\nAll Items\n3\nPasswords\n1\nAPI Keys\n1\nEnvironment Variables\n1\nSSH Keys\nPlaces\ndemo · dev\n1\ndemo · staging\n1\ndemo · prod\n1\nMy Macs\nService Connections\nDeveloper\nActivity\nLocal service on\nBlock All\nSettings\nMy Macs\nConnect Mac\nthis-mac\nThis M"
+  },
+  {
+    "id": "en-light-1180x780-services",
+    "surface": "services",
+    "locale": "en",
+    "theme": "light",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=services",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "Service Connections",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [
+      {
+        "text": "All Items\n3",
+        "className": "nav-item"
+      },
+      {
+        "text": "Passwords\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "API Keys\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "Environment Variables\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "SSH Keys",
+        "className": "nav-item"
+      },
+      {
+        "text": "Settings",
+        "className": "nav-item"
+      }
+    ],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "ZeroPW\nVault\nAll Items\n3\nPasswords\n1\nAPI Keys\n1\nEnvironment Variables\n1\nSSH Keys\nPlaces\ndemo · dev\n1\ndemo · staging\n1\ndemo · prod\n1\nMy Macs\nService Connections\nDeveloper\nActivity\nLocal service on\nBlock All\nSettings\nService Connections\nexample-api\napi"
+  },
+  {
+    "id": "en-light-1180x780-developer",
+    "surface": "developer",
+    "locale": "en",
+    "theme": "light",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=developer",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "Developer",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [
+      {
+        "text": "All Items\n3",
+        "className": "nav-item"
+      },
+      {
+        "text": "Passwords\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "API Keys\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "Environment Variables\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "SSH Keys",
+        "className": "nav-item"
+      },
+      {
+        "text": "Settings",
+        "className": "nav-item"
+      }
+    ],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "ZeroPW\nVault\nAll Items\n3\nPasswords\n1\nAPI Keys\n1\nEnvironment Variables\n1\nSSH Keys\nPlaces\ndemo · dev\n1\ndemo · staging\n1\ndemo · prod\n1\nMy Macs\nService Connections\nDeveloper\nActivity\nLocal service on\nBlock All\nSettings\nDeveloper\nDeveloper tools\nAgents\nAp"
+  },
+  {
+    "id": "en-light-1180x780-activity",
+    "surface": "activity",
+    "locale": "en",
+    "theme": "light",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=activity",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "Activity",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [
+      {
+        "text": "All Items\n3",
+        "className": "nav-item"
+      },
+      {
+        "text": "Passwords\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "API Keys\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "Environment Variables\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "SSH Keys",
+        "className": "nav-item"
+      },
+      {
+        "text": "Settings",
+        "className": "nav-item"
+      }
+    ],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "ZeroPW\nVault\nAll Items\n3\nPasswords\n1\nAPI Keys\n1\nEnvironment Variables\n1\nSSH Keys\nPlaces\ndemo · dev\n1\ndemo · staging\n1\ndemo · prod\n1\nMy Macs\nService Connections\nDeveloper\nActivity\nLocal service on\nBlock All\nSettings\nActivity\nActivity type\nUsage\nAlerts"
+  },
+  {
+    "id": "en-light-1180x780-settings",
+    "surface": "settings",
+    "locale": "en",
+    "theme": "light",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=settings",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "Settings",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [
+      {
+        "text": "All Items\n3",
+        "className": "nav-item"
+      },
+      {
+        "text": "Passwords\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "API Keys\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "Environment Variables\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "SSH Keys",
+        "className": "nav-item"
+      },
+      {
+        "text": "Settings",
+        "className": "nav-item"
+      }
+    ],
+    "paneOverflow": [],
+    "selects": [
+      {
+        "html": "<div class=\"select\"><select id=\"_r_0_\"><option value=\"system\">System Default</option><option value=\"ko\">한국어</option><option value=\"en\">English</option></select><svg width=\"14\" height=\"14\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\" focusable=\"false\"><path d=\"m3.5 6.25 4.5 4.5 4.5-4.5\"></path></svg></div>",
+        "ancestors": [
+          {
+            "tag": "DIV",
+            "cls": "select",
+            "role": null,
+            "background": "rgb(255, 255, 255)",
+            "border": "1px solid rgba(0, 0, 0, 0.11)",
+            "shadow": "rgba(0, 0, 0, 0.03) 0px 0.5px 1px 0px",
+            "padding": "0px",
+            "borderRadius": "9px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "field",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "language-choice",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "SECTION",
+            "cls": "section",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "pane-content settings-content",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "24px 32px 44px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "pane-body",
+            "role": null,
+            "background": "rgb(255, 255, 255)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "pane pane-detail",
+            "role": null,
+            "background": "rgb(255, 255, 255)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          }
+        ]
+      }
+    ],
+    "bodyText": "ZeroPW\nVault\nAll Items\n3\nPasswords\n1\nAPI Keys\n1\nEnvironment Variables\n1\nSSH Keys\nPlaces\ndemo · dev\n1\ndemo · staging\n1\ndemo · prod\n1\nMy Macs\nService Connections\nDeveloper\nActivity\nLocal service on\nBlock All\nSettings\nSettings\nLock and security\nLock, st"
+  },
+  {
+    "id": "en-light-1180x780-onboarding",
+    "surface": "onboarding",
+    "locale": "en",
+    "theme": "light",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "Your Personal Vault",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [
+      {
+        "html": "<div class=\"select\"><select id=\"_r_0_\"><option value=\"system\">System Default</option><option value=\"ko\">한국어</option><option value=\"en\">English</option></select><svg width=\"14\" height=\"14\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\" focusable=\"false\"><path d=\"m3.5 6.25 4.5 4.5 4.5-4.5\"></path></svg></div>",
+        "ancestors": [
+          {
+            "tag": "DIV",
+            "cls": "select",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "1px solid rgba(0, 0, 0, 0.11)",
+            "shadow": "rgba(0, 0, 0, 0.03) 0px 0.5px 1px 0px",
+            "padding": "0px",
+            "borderRadius": "9px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "field",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "language-choice is-compact",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "HEADER",
+            "cls": "setup-head",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "setup-card",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "26px 24px 28px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "setup",
+            "role": "main",
+            "background": "rgb(236, 236, 240)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "48px 20px 36px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          }
+        ]
+      }
+    ],
+    "bodyText": "Language\nSystem Default\n한국어\nEnglish\nYour Personal Vault\n\nKeep your secrets on your Mac and sync them, encrypted, with other Macs you approve\n\nGet Started\nConnect to Another Mac's Vault\nPreview data"
+  },
+  {
+    "id": "en-light-1180x780-locked",
+    "surface": "locked",
+    "locale": "en",
+    "theme": "light",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "Vault Locked",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [
+      {
+        "html": "<div class=\"select\"><select id=\"_r_1_\"><option value=\"system\">System Default</option><option value=\"ko\">한국어</option><option value=\"en\">English</option></select><svg width=\"14\" height=\"14\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\" focusable=\"false\"><path d=\"m3.5 6.25 4.5 4.5 4.5-4.5\"></path></svg></div>",
+        "ancestors": [
+          {
+            "tag": "DIV",
+            "cls": "select",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "1px solid rgba(0, 0, 0, 0.11)",
+            "shadow": "rgba(0, 0, 0, 0.03) 0px 0.5px 1px 0px",
+            "padding": "0px",
+            "borderRadius": "9px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "field",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "language-choice is-compact",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "FORM",
+            "cls": "lock-card",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "lock",
+            "role": null,
+            "background": "rgb(236, 236, 240)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "40px 24px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "BODY",
+            "cls": "",
+            "role": null,
+            "background": "rgb(236, 236, 240)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          }
+        ]
+      }
+    ],
+    "bodyText": "Vault Locked\n\nEnter the admin password to open it\n\nAdmin Password\nOpen Vault\n\nWhile locked, agent connections and sync keep running\n\nLanguage\nSystem Default\n한국어\nEnglish\nPreview data"
+  },
+  {
+    "id": "en-light-760x560-vault",
+    "surface": "vault",
+    "locale": "en",
+    "theme": "light",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=vault",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "All Items 3",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "All Items 3\ndb-password\nPasswords\ndemo · prod\nexample-api\nAPI Keys\ndemo · dev\nConnections: 1\nsentry-dsn\nEnvironment Variables\ndemo · staging\nPreview data\nVault"
+  },
+  {
+    "id": "en-light-760x560-devices",
+    "surface": "devices",
+    "locale": "en",
+    "theme": "light",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=devices",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "My Macs",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "My Macs\nConnect Mac\nthis-mac\nThis Mac\nServer reachable\nServer\nlink.zeropw.invalid\nVerification code\nEE6R\nEQMG\n7H7S\nYOKY\nAdvanced Diagnostics\nConnected Macs\nstudio\n3 places\nSynced to the latest version\nPreview data\nMy Macs"
+  },
+  {
+    "id": "en-light-760x560-services",
+    "surface": "services",
+    "locale": "en",
+    "theme": "light",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=services",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "Service Connections",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "Service Connections\nexample-api\napi.example.com\ndemo · dev\nPreview data\nService Connections"
+  },
+  {
+    "id": "en-light-760x560-developer",
+    "surface": "developer",
+    "locale": "en",
+    "theme": "light",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=developer",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "Developer",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "Developer\nDeveloper tools\nAgents\nApproval requests 2\nSharing\n\nAgents use connections through the local service. They do not receive the original values\n\nAgents\nAdd Agent\nagent-1\nOther account · agent\nGrant Access\nexample-api\nUntil Nov 7, 12:32 · 14 u"
+  },
+  {
+    "id": "en-light-760x560-activity",
+    "surface": "activity",
+    "locale": "en",
+    "theme": "light",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=activity",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "Activity",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "Activity\nActivity type\nUsage\nAlerts\nIncidents\nTime\nEvent\nTarget\nNov 7, 06:30\nApproval requested\nexample-api\nNov 7, 03:32\nAPI relayed\nexample-api\nNov 6, 11:32\nPermission given\nexample-api\nNov 6, 10:32\nConnection created\nexample-api\nNov 6, 08:32\nAgent "
+  },
+  {
+    "id": "en-light-760x560-settings",
+    "surface": "settings",
+    "locale": "en",
+    "theme": "light",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=settings",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "Settings",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "Settings\nLock and security\nLock, stop all use and device key\nConnection server\nHelp your Macs find each other\nDevices and sync\nConnections on the same network\nDeveloper\nLocal service and port\nBackup and restore\nEncrypted backup files\nDiagnostics and "
+  },
+  {
+    "id": "en-light-760x560-onboarding",
+    "surface": "onboarding",
+    "locale": "en",
+    "theme": "light",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "Your Personal Vault",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [
+      {
+        "html": "<div class=\"select\"><select id=\"_r_0_\"><option value=\"system\">System Default</option><option value=\"ko\">한국어</option><option value=\"en\">English</option></select><svg width=\"14\" height=\"14\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\" focusable=\"false\"><path d=\"m3.5 6.25 4.5 4.5 4.5-4.5\"></path></svg></div>",
+        "ancestors": [
+          {
+            "tag": "DIV",
+            "cls": "select",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "1px solid rgba(0, 0, 0, 0.11)",
+            "shadow": "rgba(0, 0, 0, 0.03) 0px 0.5px 1px 0px",
+            "padding": "0px",
+            "borderRadius": "9px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "field",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "language-choice is-compact",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "HEADER",
+            "cls": "setup-head",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "setup-card",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "26px 24px 28px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "setup",
+            "role": "main",
+            "background": "rgb(236, 236, 240)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "48px 20px 36px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          }
+        ]
+      }
+    ],
+    "bodyText": "Language\nSystem Default\n한국어\nEnglish\nYour Personal Vault\n\nKeep your secrets on your Mac and sync them, encrypted, with other Macs you approve\n\nGet Started\nConnect to Another Mac's Vault\nPreview data"
+  },
+  {
+    "id": "en-light-760x560-locked",
+    "surface": "locked",
+    "locale": "en",
+    "theme": "light",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "Vault Locked",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [
+      {
+        "html": "<div class=\"select\"><select id=\"_r_1_\"><option value=\"system\">System Default</option><option value=\"ko\">한국어</option><option value=\"en\">English</option></select><svg width=\"14\" height=\"14\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\" focusable=\"false\"><path d=\"m3.5 6.25 4.5 4.5 4.5-4.5\"></path></svg></div>",
+        "ancestors": [
+          {
+            "tag": "DIV",
+            "cls": "select",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "1px solid rgba(0, 0, 0, 0.11)",
+            "shadow": "rgba(0, 0, 0, 0.03) 0px 0.5px 1px 0px",
+            "padding": "0px",
+            "borderRadius": "9px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "field",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "language-choice is-compact",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "FORM",
+            "cls": "lock-card",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "lock",
+            "role": null,
+            "background": "rgb(236, 236, 240)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "40px 24px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "BODY",
+            "cls": "",
+            "role": null,
+            "background": "rgb(236, 236, 240)",
+            "border": "0px none rgb(29, 29, 31)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          }
+        ]
+      }
+    ],
+    "bodyText": "Vault Locked\n\nEnter the admin password to open it\n\nAdmin Password\nOpen Vault\n\nWhile locked, agent connections and sync keep running\n\nLanguage\nSystem Default\n한국어\nEnglish\nPreview data"
+  },
+  {
+    "id": "en-dark-1180x780-vault",
+    "surface": "vault",
+    "locale": "en",
+    "theme": "dark",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=vault",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "All Items 3",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [
+      {
+        "text": "All Items\n3",
+        "className": "nav-item"
+      },
+      {
+        "text": "Passwords\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "API Keys\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "Environment Variables\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "SSH Keys",
+        "className": "nav-item"
+      },
+      {
+        "text": "Settings",
+        "className": "nav-item"
+      }
+    ],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "ZeroPW\nVault\nAll Items\n3\nPasswords\n1\nAPI Keys\n1\nEnvironment Variables\n1\nSSH Keys\nPlaces\ndemo · dev\n1\ndemo · staging\n1\ndemo · prod\n1\nMy Macs\nService Connections\nDeveloper\nActivity\nLocal service on\nBlock All\nSettings\nAll Items 3\ndb-password\nPasswords\nd"
+  },
+  {
+    "id": "en-dark-1180x780-devices",
+    "surface": "devices",
+    "locale": "en",
+    "theme": "dark",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=devices",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "My Macs",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [
+      {
+        "text": "All Items\n3",
+        "className": "nav-item"
+      },
+      {
+        "text": "Passwords\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "API Keys\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "Environment Variables\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "SSH Keys",
+        "className": "nav-item"
+      },
+      {
+        "text": "Settings",
+        "className": "nav-item"
+      }
+    ],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "ZeroPW\nVault\nAll Items\n3\nPasswords\n1\nAPI Keys\n1\nEnvironment Variables\n1\nSSH Keys\nPlaces\ndemo · dev\n1\ndemo · staging\n1\ndemo · prod\n1\nMy Macs\nService Connections\nDeveloper\nActivity\nLocal service on\nBlock All\nSettings\nMy Macs\nConnect Mac\nthis-mac\nThis M"
+  },
+  {
+    "id": "en-dark-1180x780-services",
+    "surface": "services",
+    "locale": "en",
+    "theme": "dark",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=services",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "Service Connections",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [
+      {
+        "text": "All Items\n3",
+        "className": "nav-item"
+      },
+      {
+        "text": "Passwords\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "API Keys\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "Environment Variables\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "SSH Keys",
+        "className": "nav-item"
+      },
+      {
+        "text": "Settings",
+        "className": "nav-item"
+      }
+    ],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "ZeroPW\nVault\nAll Items\n3\nPasswords\n1\nAPI Keys\n1\nEnvironment Variables\n1\nSSH Keys\nPlaces\ndemo · dev\n1\ndemo · staging\n1\ndemo · prod\n1\nMy Macs\nService Connections\nDeveloper\nActivity\nLocal service on\nBlock All\nSettings\nService Connections\nexample-api\napi"
+  },
+  {
+    "id": "en-dark-1180x780-developer",
+    "surface": "developer",
+    "locale": "en",
+    "theme": "dark",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=developer",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "Developer",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [
+      {
+        "text": "All Items\n3",
+        "className": "nav-item"
+      },
+      {
+        "text": "Passwords\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "API Keys\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "Environment Variables\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "SSH Keys",
+        "className": "nav-item"
+      },
+      {
+        "text": "Settings",
+        "className": "nav-item"
+      }
+    ],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "ZeroPW\nVault\nAll Items\n3\nPasswords\n1\nAPI Keys\n1\nEnvironment Variables\n1\nSSH Keys\nPlaces\ndemo · dev\n1\ndemo · staging\n1\ndemo · prod\n1\nMy Macs\nService Connections\nDeveloper\nActivity\nLocal service on\nBlock All\nSettings\nDeveloper\nDeveloper tools\nAgents\nAp"
+  },
+  {
+    "id": "en-dark-1180x780-activity",
+    "surface": "activity",
+    "locale": "en",
+    "theme": "dark",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=activity",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "Activity",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [
+      {
+        "text": "All Items\n3",
+        "className": "nav-item"
+      },
+      {
+        "text": "Passwords\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "API Keys\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "Environment Variables\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "SSH Keys",
+        "className": "nav-item"
+      },
+      {
+        "text": "Settings",
+        "className": "nav-item"
+      }
+    ],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "ZeroPW\nVault\nAll Items\n3\nPasswords\n1\nAPI Keys\n1\nEnvironment Variables\n1\nSSH Keys\nPlaces\ndemo · dev\n1\ndemo · staging\n1\ndemo · prod\n1\nMy Macs\nService Connections\nDeveloper\nActivity\nLocal service on\nBlock All\nSettings\nActivity\nActivity type\nUsage\nAlerts"
+  },
+  {
+    "id": "en-dark-1180x780-settings",
+    "surface": "settings",
+    "locale": "en",
+    "theme": "dark",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=settings",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "Settings",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [
+      {
+        "text": "All Items\n3",
+        "className": "nav-item"
+      },
+      {
+        "text": "Passwords\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "API Keys\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "Environment Variables\n1",
+        "className": "nav-item"
+      },
+      {
+        "text": "SSH Keys",
+        "className": "nav-item"
+      },
+      {
+        "text": "Settings",
+        "className": "nav-item"
+      }
+    ],
+    "paneOverflow": [],
+    "selects": [
+      {
+        "html": "<div class=\"select\"><select id=\"_r_0_\"><option value=\"system\">System Default</option><option value=\"ko\">한국어</option><option value=\"en\">English</option></select><svg width=\"14\" height=\"14\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\" focusable=\"false\"><path d=\"m3.5 6.25 4.5 4.5 4.5-4.5\"></path></svg></div>",
+        "ancestors": [
+          {
+            "tag": "DIV",
+            "cls": "select",
+            "role": null,
+            "background": "rgb(44, 44, 46)",
+            "border": "1px solid rgba(255, 255, 255, 0.12)",
+            "shadow": "rgba(0, 0, 0, 0.03) 0px 0.5px 1px 0px",
+            "padding": "0px",
+            "borderRadius": "9px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "field",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "language-choice",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "SECTION",
+            "cls": "section",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "pane-content settings-content",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "24px 32px 44px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "pane-body",
+            "role": null,
+            "background": "rgb(28, 28, 30)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "pane pane-detail",
+            "role": null,
+            "background": "rgb(28, 28, 30)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          }
+        ]
+      }
+    ],
+    "bodyText": "ZeroPW\nVault\nAll Items\n3\nPasswords\n1\nAPI Keys\n1\nEnvironment Variables\n1\nSSH Keys\nPlaces\ndemo · dev\n1\ndemo · staging\n1\ndemo · prod\n1\nMy Macs\nService Connections\nDeveloper\nActivity\nLocal service on\nBlock All\nSettings\nSettings\nLock and security\nLock, st"
+  },
+  {
+    "id": "en-dark-1180x780-onboarding",
+    "surface": "onboarding",
+    "locale": "en",
+    "theme": "dark",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "Your Personal Vault",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [
+      {
+        "html": "<div class=\"select\"><select id=\"_r_0_\"><option value=\"system\">System Default</option><option value=\"ko\">한국어</option><option value=\"en\">English</option></select><svg width=\"14\" height=\"14\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\" focusable=\"false\"><path d=\"m3.5 6.25 4.5 4.5 4.5-4.5\"></path></svg></div>",
+        "ancestors": [
+          {
+            "tag": "DIV",
+            "cls": "select",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "1px solid rgba(255, 255, 255, 0.12)",
+            "shadow": "rgba(0, 0, 0, 0.03) 0px 0.5px 1px 0px",
+            "padding": "0px",
+            "borderRadius": "9px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "field",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "language-choice is-compact",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "HEADER",
+            "cls": "setup-head",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "setup-card",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "26px 24px 28px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "setup",
+            "role": "main",
+            "background": "rgb(38, 38, 40)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "48px 20px 36px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          }
+        ]
+      }
+    ],
+    "bodyText": "Language\nSystem Default\n한국어\nEnglish\nYour Personal Vault\n\nKeep your secrets on your Mac and sync them, encrypted, with other Macs you approve\n\nGet Started\nConnect to Another Mac's Vault\nPreview data"
+  },
+  {
+    "id": "en-dark-1180x780-locked",
+    "surface": "locked",
+    "locale": "en",
+    "theme": "dark",
+    "size": {
+      "width": 1180,
+      "height": 780
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "Vault Locked",
+    "rootWidth": 1180,
+    "rootScroll": 1180,
+    "bodyWidth": 1180,
+    "bodyScroll": 1180,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [
+      {
+        "html": "<div class=\"select\"><select id=\"_r_1_\"><option value=\"system\">System Default</option><option value=\"ko\">한국어</option><option value=\"en\">English</option></select><svg width=\"14\" height=\"14\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\" focusable=\"false\"><path d=\"m3.5 6.25 4.5 4.5 4.5-4.5\"></path></svg></div>",
+        "ancestors": [
+          {
+            "tag": "DIV",
+            "cls": "select",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "1px solid rgba(255, 255, 255, 0.12)",
+            "shadow": "rgba(0, 0, 0, 0.03) 0px 0.5px 1px 0px",
+            "padding": "0px",
+            "borderRadius": "9px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "field",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "language-choice is-compact",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "FORM",
+            "cls": "lock-card",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "lock",
+            "role": null,
+            "background": "rgb(38, 38, 40)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "40px 24px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "BODY",
+            "cls": "",
+            "role": null,
+            "background": "rgb(38, 38, 40)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          }
+        ]
+      }
+    ],
+    "bodyText": "Vault Locked\n\nEnter the admin password to open it\n\nAdmin Password\nOpen Vault\n\nWhile locked, agent connections and sync keep running\n\nLanguage\nSystem Default\n한국어\nEnglish\nPreview data"
+  },
+  {
+    "id": "en-dark-760x560-vault",
+    "surface": "vault",
+    "locale": "en",
+    "theme": "dark",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=vault",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "All Items 3",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "All Items 3\ndb-password\nPasswords\ndemo · prod\nexample-api\nAPI Keys\ndemo · dev\nConnections: 1\nsentry-dsn\nEnvironment Variables\ndemo · staging\nPreview data\nVault"
+  },
+  {
+    "id": "en-dark-760x560-devices",
+    "surface": "devices",
+    "locale": "en",
+    "theme": "dark",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=devices",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "My Macs",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "My Macs\nConnect Mac\nthis-mac\nThis Mac\nServer reachable\nServer\nlink.zeropw.invalid\nVerification code\nEO5T\nEX5N\nMYPC\n6DCM\nAdvanced Diagnostics\nConnected Macs\nstudio\n3 places\nSynced to the latest version\nPreview data\nMy Macs"
+  },
+  {
+    "id": "en-dark-760x560-services",
+    "surface": "services",
+    "locale": "en",
+    "theme": "dark",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=services",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "Service Connections",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "Service Connections\nexample-api\napi.example.com\ndemo · dev\nPreview data\nService Connections"
+  },
+  {
+    "id": "en-dark-760x560-developer",
+    "surface": "developer",
+    "locale": "en",
+    "theme": "dark",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=developer",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "Developer",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "Developer\nDeveloper tools\nAgents\nApproval requests 2\nSharing\n\nAgents use connections through the local service. They do not receive the original values\n\nAgents\nAdd Agent\nagent-1\nOther account · agent\nGrant Access\nexample-api\nUntil Nov 7, 12:33 · 14 u"
+  },
+  {
+    "id": "en-dark-760x560-activity",
+    "surface": "activity",
+    "locale": "en",
+    "theme": "dark",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=activity",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "Activity",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "Activity\nActivity type\nUsage\nAlerts\nIncidents\nTime\nEvent\nTarget\nNov 7, 06:31\nApproval requested\nexample-api\nNov 7, 03:33\nAPI relayed\nexample-api\nNov 6, 11:33\nPermission given\nexample-api\nNov 6, 10:33\nConnection created\nexample-api\nNov 6, 08:33\nAgent "
+  },
+  {
+    "id": "en-dark-760x560-settings",
+    "surface": "settings",
+    "locale": "en",
+    "theme": "dark",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired&open=settings",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "Settings",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [],
+    "bodyText": "Settings\nLock and security\nLock, stop all use and device key\nConnection server\nHelp your Macs find each other\nDevices and sync\nConnections on the same network\nDeveloper\nLocal service and port\nBackup and restore\nEncrypted backup files\nDiagnostics and "
+  },
+  {
+    "id": "en-dark-760x560-onboarding",
+    "surface": "onboarding",
+    "locale": "en",
+    "theme": "dark",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "Your Personal Vault",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [
+      {
+        "html": "<div class=\"select\"><select id=\"_r_0_\"><option value=\"system\">System Default</option><option value=\"ko\">한국어</option><option value=\"en\">English</option></select><svg width=\"14\" height=\"14\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\" focusable=\"false\"><path d=\"m3.5 6.25 4.5 4.5 4.5-4.5\"></path></svg></div>",
+        "ancestors": [
+          {
+            "tag": "DIV",
+            "cls": "select",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "1px solid rgba(255, 255, 255, 0.12)",
+            "shadow": "rgba(0, 0, 0, 0.03) 0px 0.5px 1px 0px",
+            "padding": "0px",
+            "borderRadius": "9px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "field",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "language-choice is-compact",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "HEADER",
+            "cls": "setup-head",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "setup-card",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "26px 24px 28px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "setup",
+            "role": "main",
+            "background": "rgb(38, 38, 40)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "48px 20px 36px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          }
+        ]
+      }
+    ],
+    "bodyText": "Language\nSystem Default\n한국어\nEnglish\nYour Personal Vault\n\nKeep your secrets on your Mac and sync them, encrypted, with other Macs you approve\n\nGet Started\nConnect to Another Mac's Vault\nPreview data"
+  },
+  {
+    "id": "en-dark-760x560-locked",
+    "surface": "locked",
+    "locale": "en",
+    "theme": "dark",
+    "size": {
+      "width": 760,
+      "height": 560
+    },
+    "url": "http://localhost:1420/?state=ready&link&paired",
+    "errors": [],
+    "logs": [],
+    "lang": "en",
+    "title": "Vault Locked",
+    "rootWidth": 760,
+    "rootScroll": 760,
+    "bodyWidth": 760,
+    "bodyScroll": 760,
+    "clipped": [],
+    "wrapped": [],
+    "paneOverflow": [],
+    "selects": [
+      {
+        "html": "<div class=\"select\"><select id=\"_r_1_\"><option value=\"system\">System Default</option><option value=\"ko\">한국어</option><option value=\"en\">English</option></select><svg width=\"14\" height=\"14\" viewBox=\"0 0 16 16\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\" focusable=\"false\"><path d=\"m3.5 6.25 4.5 4.5 4.5-4.5\"></path></svg></div>",
+        "ancestors": [
+          {
+            "tag": "DIV",
+            "cls": "select",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "1px solid rgba(255, 255, 255, 0.12)",
+            "shadow": "rgba(0, 0, 0, 0.03) 0px 0.5px 1px 0px",
+            "padding": "0px",
+            "borderRadius": "9px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "field",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "language-choice is-compact",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "FORM",
+            "cls": "lock-card",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "lock",
+            "role": null,
+            "background": "rgb(38, 38, 40)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "40px 24px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "DIV",
+            "cls": "",
+            "role": null,
+            "background": "rgba(0, 0, 0, 0)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          },
+          {
+            "tag": "BODY",
+            "cls": "",
+            "role": null,
+            "background": "rgb(38, 38, 40)",
+            "border": "0px none rgb(245, 245, 247)",
+            "shadow": "none",
+            "padding": "0px",
+            "borderRadius": "0px"
+          }
+        ]
+      }
+    ],
+    "bodyText": "Vault Locked\n\nEnter the admin password to open it\n\nAdmin Password\nOpen Vault\n\nWhile locked, agent connections and sync keep running\n\nLanguage\nSystem Default\n한국어\nEnglish\nPreview data"
+  }
+]

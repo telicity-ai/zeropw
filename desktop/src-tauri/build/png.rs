@@ -1,46 +1,43 @@
-//! The app icon, drawn from the pixel logo (the 9×9 slashed zero of desktop/src/lib/sigil.ts)
-//! with an azure→iris gradient on a dark rounded square, and a minimal PNG encoder (8-bit
-//! RGBA, stored deflate blocks, CRC-32, Adler-32) so no image is committed and the build has
-//! no extra dependency. Used by build.rs; the tests run in the app crate.
+//! The app icon, the Personal Vault mark (desktop/src/ui/icons.tsx `Mark`): a rounded vault door
+//! and its dial drawn in ink on a warm paper tile, with one pine dot at the centre (DESIGN.md
+//! §2.1). A minimal PNG encoder (8-bit RGBA, stored deflate blocks, CRC-32, Adler-32) keeps the
+//! build free of committed images and extra dependencies. Used by build.rs; the tests run in
+//! the app crate.
 
-/// Pixels per side of the logo grid.
-const GRID: usize = 9;
 /// Samples per pixel side for anti-aliasing.
 const SUPERSAMPLE: u32 = 4;
-/// Dark tile behind the logo (a lifted `--void`, DESIGN.md §2.1).
-const TILE: [f64; 3] = [11.0, 11.0, 16.0];
-/// `--grad`: azure → #7a7cff → iris (DESIGN.md §2.1).
-const GRADIENT: [[f64; 3]; 3] = [
-    [91.0, 140.0, 255.0],
-    [122.0, 124.0, 255.0],
-    [154.0, 107.0, 255.0],
-];
+/// Warm paper tile (`--paper-1`).
+const PAPER: [f64; 3] = [245.0, 242.0, 236.0];
+/// Ink (`--ink-1`).
+const INK: [f64; 3] = [29.0, 26.0, 21.0];
+/// Pine accent (`--pine-1`).
+const PINE: [f64; 3] = [39.0, 95.0, 79.0];
 
-/// The ring-and-slash logo, `[y][x]`, exactly as `logoCells()` draws it in the webview.
-pub fn logo_cells() -> [[bool; GRID]; GRID] {
-    let mut cells = [[false; GRID]; GRID];
-    for (y, row) in cells.iter_mut().enumerate() {
-        for (x, cell) in row.iter_mut().enumerate() {
-            let (fx, fy) = (x as f64 - 4.0, y as f64 - 4.0);
-            let d = (fx * fx + fy * fy).sqrt();
-            *cell = (d - 3.6).abs() < 0.62 || (x + y == 8 && d < 3.2);
-        }
-    }
-    cells
+/// Distance from (px, py) to a rounded square centred at (c, c) with half side `half` and
+/// corner radius `r` (negative inside).
+fn rounded_square(px: f64, py: f64, c: f64, half: f64, r: f64) -> f64 {
+    let qx = (px - c).abs() - (half - r);
+    let qy = (py - c).abs() - (half - r);
+    let outside = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt();
+    outside + qx.max(qy).min(0.0) - r
 }
 
-fn gradient(t: f64) -> [f64; 3] {
-    let t = t.clamp(0.0, 1.0) * 2.0;
-    let (a, b, f) = if t < 1.0 {
-        (GRADIENT[0], GRADIENT[1], t)
+/// What the mark paints at a point of a tile of side `tile` starting at `inset`, or None for
+/// the bare paper.
+fn mark_color(px: f64, py: f64, inset: f64, tile: f64) -> Option<[f64; 3]> {
+    let c = inset + tile / 2.0;
+    let stroke = tile * 0.052;
+    let door_half = tile * 0.30;
+    let door = rounded_square(px, py, c, door_half, door_half * 0.30);
+    let d = ((px - c).powi(2) + (py - c).powi(2)).sqrt();
+    let dial = (d - tile * 0.12).abs();
+    if d <= tile * 0.048 {
+        Some(PINE)
+    } else if door.abs() <= stroke / 2.0 || dial <= stroke / 2.0 {
+        Some(INK)
     } else {
-        (GRADIENT[1], GRADIENT[2], t - 1.0)
-    };
-    [
-        a[0] + (b[0] - a[0]) * f,
-        a[1] + (b[1] - a[1]) * f,
-        a[2] + (b[2] - a[2]) * f,
-    ]
+        None
+    }
 }
 
 /// The icon as `size`×`size` RGBA pixels (straight alpha).
@@ -50,24 +47,6 @@ pub fn icon_rgba(size: u32) -> Vec<u8> {
     let inset = s * 100.0 / 1024.0;
     let tile = s - 2.0 * inset;
     let radius = tile * 0.2237;
-    let logo = tile * 0.58;
-    let cell = logo / GRID as f64;
-    let origin = (s - logo) / 2.0;
-    let cells = logo_cells();
-    let inside_tile = |px: f64, py: f64| {
-        let dx = (inset + radius - px)
-            .max(px - (inset + tile - radius))
-            .max(0.0);
-        let dy = (inset + radius - py)
-            .max(py - (inset + tile - radius))
-            .max(0.0);
-        px >= inset
-            && px <= inset + tile
-            && py >= inset
-            && py <= inset + tile
-            && dx * dx + dy * dy <= radius * radius
-    };
-
     let mut out = vec![0u8; (size * size * 4) as usize];
     let n = f64::from(SUPERSAMPLE);
     for y in 0..size {
@@ -78,18 +57,10 @@ pub fn icon_rgba(size: u32) -> Vec<u8> {
                 for sx in 0..SUPERSAMPLE {
                     let px = f64::from(x) + (f64::from(sx) + 0.5) / n;
                     let py = f64::from(y) + (f64::from(sy) + 0.5) / n;
-                    if !inside_tile(px, py) {
+                    if rounded_square(px, py, s / 2.0, tile / 2.0, radius) > 0.0 {
                         continue;
                     }
-                    let (cx, cy) = ((px - origin) / cell, (py - origin) / cell);
-                    let on_logo = (0.0..GRID as f64).contains(&cx)
-                        && (0.0..GRID as f64).contains(&cy)
-                        && cells[cy as usize][cx as usize];
-                    let color = if on_logo {
-                        gradient((cx + cy) / (2.0 * GRID as f64))
-                    } else {
-                        TILE
-                    };
+                    let color = mark_color(px, py, inset, tile).unwrap_or(PAPER);
                     for (acc, c) in sum.iter_mut().zip(color) {
                         *acc += c;
                     }
@@ -280,27 +251,7 @@ mod tests {
     }
 
     #[test]
-    fn the_logo_is_the_slashed_zero() {
-        let cells = logo_cells();
-        assert!(cells[4][4], "the slash crosses the center");
-        assert!(
-            cells[0][4] && cells[4][0] && cells[8][4] && cells[4][8],
-            "the ring"
-        );
-        assert!(!cells[0][0] && !cells[8][8] && !cells[2][2]);
-        assert!(
-            cells[2][6] && cells[6][2],
-            "the slash runs bottom-left to top-right"
-        );
-        for (y, row) in cells.iter().enumerate() {
-            for (x, cell) in row.iter().enumerate() {
-                assert_eq!(*cell, cells[x][y], "symmetric about the slash");
-            }
-        }
-    }
-
-    #[test]
-    fn icons_have_transparent_corners_and_a_gradient_logo() {
+    fn icons_are_the_vault_mark_on_a_paper_tile() {
         for size in [32u32, 128, 512] {
             let png = icon_png(size);
             assert!(!png.is_empty());
@@ -315,13 +266,17 @@ mod tests {
             let center = at(size / 2, size / 2);
             assert_eq!(center[3], 255);
             if size >= 128 {
-                // The middle of the slash is the middle of the gradient (#7a7cff).
-                for (got, want) in center[..3].iter().zip([122u8, 124, 255]) {
+                // the pine dot at the centre
+                for (got, want) in center[..3].iter().zip([39u8, 95, 79]) {
                     assert!(got.abs_diff(want) <= 6, "{center:?}");
                 }
-                // Inside the tile, off the logo: the dark tile.
-                let tile = at(size / 2, size * 15 / 100);
-                assert_eq!(tile, [11, 11, 16, 255]);
+                // inside the tile, outside the door: bare paper
+                assert_eq!(at(size / 2, size * 15 / 100), [245, 242, 236, 255]);
+                // the door's top edge is ink
+                let edge = (0..size / 2)
+                    .map(|y| at(size / 2, y))
+                    .find(|p| p[0] < 80 && p[3] == 255);
+                assert!(edge.is_some(), "no ink on the centre column above the dial");
             }
         }
     }

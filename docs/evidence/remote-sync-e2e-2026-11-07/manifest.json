@@ -1,0 +1,26 @@
+{
+  "actual_model": "gpt-6.1-sol",
+  "environment": "isolated Lima zeropw-parity Linux arm64 VM",
+  "zeropw_source_sha": "41d217f26a030042c9f0b1caac9417715470c0e1",
+  "zeropw_link_source_sha": "cc733dcacf9f1c170dcb7469d7d258b368726ed7",
+  "coturn_version": "4.18.0",
+  "go_version": "go1.27.3 linux/arm64",
+  "exit_code": 0,
+  "scenario_assertions_passed": 66,
+  "scenario_assertions_failed": 0,
+  "separate_fixture_secret_check": "PASS: 7 synthetic service secrets",
+  "physical_macs_tested": 0,
+  "oracle_deployed": false,
+  "sha256": {
+    "zeropw-admin": "a7a1a7d8f55def5343a862311f433566f00406d0d12f5056d14eb421d1741549",
+    "zeropw-link": "163dd51d06ec2465021aa79cad2137f268f4488377574c9120e91637af0f925d",
+    "zeropw-linkd": "536d7053e77c8d0c18ef820822cbc63a445577b45536001f915a96a44ae2051f",
+    "turnserver": "d3e7cf6fd8446d11757f6969e75e1eb7d8ba1183ec33c27da67556f837052380",
+    "zeropw-link/test/daemon-netns/run.sh": "8bbb6aef6a62e12dfaccac47d997bed306d2a6f6073c8c2f33a4f4185c70a080",
+    "scripts/e2e-remote-sync/run.sh": "51abd3effd5906ccc39cf01e9d5e90aad0e9ed58d8229f9b40ad337ca6e1d315",
+    "scripts/e2e-remote-sync/scenarios.py": "5675f0d59fa7744f841e61fce0e7c5a2360418c0d26f392dbbff05c42e6e2539",
+    "raw_log": "2fa04fc567c43e4cfa058d82f68c8cd280d1141d6764c33d9bea25eff829d066",
+    "assertions.json": "5b7587e9887fed479cc98d7c244866182463ac6e55644378c391cebd9c9a4da5"
+  },
+  "raw_log_archive": "zeropw-mlp-evidence/e2e/run-9-cc733dc.log"
+}

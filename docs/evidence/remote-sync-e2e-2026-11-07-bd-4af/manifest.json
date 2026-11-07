@@ -1,0 +1,207 @@
+{
+  "actual_model": "gpt-6.1-sol",
+  "role": "Independent functional E2E verification, not an Opus review",
+  "zeropw_source_sha": "52e87b07380a2f752c127c5f89e5f8f76c38937f",
+  "zeropw_rust_tree_sha": "2882ba592e2204eb62723d95e240525e75196f64",
+  "zeropw_link_source_sha": "4af5ac81b8e8e48ebc8e20f1ab382b12f8b685a2",
+  "environment": {
+    "os": "Ubuntu24.04.4 LTS arm64",
+    "kernel": "6.8.0-147-generic",
+    "host": "isolated Lima zeropw-parity, credential-free",
+    "rust": "1.98.1",
+    "cargo": "1.98.1",
+    "go": "go1.27.3 linux/arm64",
+    "scenario_python": "3.12.3",
+    "rust_build_configured_oracle_python": "3.12.14",
+    "native_mac_used": false,
+    "physical_macs_tested": 0,
+    "host_product_execution": false,
+    "production_access": false
+  },
+  "source_binding": {
+    "before_after_exact_git_blobs_sha256_modes_and_file_sets": true,
+    "source_counts": {
+      "zeropw": 640,
+      "link": 162
+    },
+    "source_checkpoints": [
+      "source-before.json",
+      "source-after-build.json",
+      "source-after-go-build.json",
+      "source-before-run.json",
+      "source-after-run.json"
+    ],
+    "expected_manifests": {
+      "zeropw": {
+        "path": "zeropw-expected.json",
+        "sha256": "ab79d59855daa429f910b03cd65cbc52b4faaacea679c2cef646e3ff903bde7a",
+        "source_archive_sha256": "1f04f65734ac1caa54a3ea9bd26f5bc88388375e2922901861c3896c1e80fa56",
+        "ls_tree_sha256": "acf8d6e95f057506c3855fa12a1da3923a23a6d9b8cb3d7ccc673dbe40b8347b"
+      },
+      "link": {
+        "path": "link-expected.json",
+        "sha256": "19b163a098693ee10c00fedf0bd5738520e7c9c3df561e00f52333e2f28b5157",
+        "source_archive_sha256": "c8f4051050a291885edbe2a1e56d9f8cb157877709352a8719e1a14e1c80d994",
+        "ls_tree_sha256": "c0df818cb099ec1e5e4f1450d685de478b0daf30c4f3c189c8f670d0f3d858c6"
+      }
+    }
+  },
+  "build": {
+    "rust_command": "cargo build --locked --offline --manifest-path rust/Cargo.toml --bin zeropw-admin in owned frozen zeropw export",
+    "rust_profile_flags": {
+      "CARGO_TARGET_DIR": "/home/parity/jobs/real-sync-bd-4af/rusttarget",
+      "CARGO_HOME": "/home/parity/jobs/real-sync-bd-4af/cargo-home",
+      "CARGO_INCREMENTAL": "0",
+      "CARGO_PROFILE_DEV_DEBUG": "0",
+      "CARGO_PROFILE_TEST_DEBUG": "0",
+      "CARGO_BUILD_JOBS": "1",
+      "CARGO_NET_OFFLINE": "true"
+    },
+    "dependency_cache_policy": "Public cached Cargo registry and Go module cache copied into own job; independent targets/GOCACHE; no active M1 target/cache or prior frozen Rust binaries modified/reused",
+    "go_flags": {
+      "CGO_ENABLED": "0",
+      "GOFLAGS": "-p=1",
+      "GOMAXPROCS": "2",
+      "GOTOOLCHAIN": "local",
+      "GOPROXY": "off",
+      "GOMODCACHE": "/home/parity/jobs/real-sync-bd-4af/gomodcache",
+      "GOCACHE": "/home/parity/jobs/real-sync-bd-4af/gocache"
+    },
+    "go_command": "Original fixture builds zeropw-link, zeropw-linkd and sockxfer with -mod=readonly -trimpath; fresh prebuild of zeropw-link used the same flags for bounded refusal probe"
+  },
+  "execution": {
+    "utc_begin": "2026-11-07T06:27:07Z",
+    "utc_end": "2026-11-07T06:31:34Z",
+    "command": "timeout --signal=TERM --kill-after=30s 15m bash /home/parity/jobs/real-sync-bd-4af/zeropw/scripts/e2e-remote-sync/run.sh /home/parity/jobs/real-sync-bd-4af/link /home/parity/jobs/real-sync-bd-4af/bin/zeropw-admin",
+    "driver_environment": "env -i HOME=/root, explicit PATH/LANG, own Go module/cache paths and GOFLAGS=-p=1 GOMAXPROCS=2; exact source labels; copied pinned ZPD_TURNSERVER",
+    "root_build_tmpdir": "/tmp/zpe-build-bd4af.mfAYn8 (root-owned0700, removed after run)",
+    "runtime_work": "/tmp/zpe.x1x1TD",
+    "namespace_prefix": "zpe-2157654",
+    "driver_exit_code": 0,
+    "source_after_exit_code": 0,
+    "tool_execution_exit_code": 0
+  },
+  "fixture_integrity": {
+    "executed_fixture_modified": false,
+    "run_script_sha256": "51abd3effd5906ccc39cf01e9d5e90aad0e9ed58d8229f9b40ad337ca6e1d315",
+    "scenarios_sha256": "5675f0d59fa7744f841e61fce0e7c5a2360418c0d26f392dbbff05c42e6e2539",
+    "link_daemon_netns_fixture_sha256": "8bbb6aef6a62e12dfaccac47d997bed306d2a6f6073c8c2f33a4f4185c70a080",
+    "assertion_names_match_original66": true,
+    "unexecuted_candidate_diff": {
+      "path": "collected/evidence/invocation-only.diff",
+      "executed": false,
+      "reason": "Abandoned parity/jobs runtime candidate; actual final run used original source fixture unmodified"
+    }
+  },
+  "scenario_assertions_passed": 66,
+  "scenario_assertions_failed": 0,
+  "separate_fixture_secret_scan": "PASS: seven synthetic service secrets in one separate log scan",
+  "runtime_binary_binding": {
+    "zeropw-admin": {
+      "path": "/tmp/zpe.x1x1TD/bin/zeropw-admin",
+      "sha256": "d59ad679feb25586d136f6b61a8191aad0b084d14e2146f6333bd8e3e1665e80",
+      "mode": "0o755",
+      "uid": 0
+    },
+    "zeropw-link": {
+      "path": "/tmp/zpe.x1x1TD/bin/zeropw-link",
+      "sha256": "9e5b4dc6026c6d5b2b5b8284dd2f95b89daeafbebb7860e38aa6c7ebdf9cfe51",
+      "mode": "0o755",
+      "uid": 0
+    },
+    "zeropw-linkd": {
+      "path": "/tmp/zpe.x1x1TD/bin/zeropw-linkd",
+      "sha256": "f66a0f292cbfdae0e91c620f0731bde6576c21efe358476f361c378227dab61d",
+      "mode": "0o755",
+      "uid": 0
+    },
+    "turnserver": {
+      "path": "/home/parity/jobs/real-sync-bd-4af/bin/turnserver",
+      "sha256": "d3e7cf6fd8446d11757f6969e75e1eb7d8ba1183ec33c27da67556f837052380",
+      "mode": "0o755",
+      "uid": 0
+    }
+  },
+  "support_sockxfer_binary": {
+    "after": {
+      "path": "/tmp/zpe.x1x1TD/bin/sockxfer",
+      "sha256": "02cf786428f0b9a6a32d54c0944c3e87286802d3eb940de4d8beb8d49f3f06cf",
+      "mode": "0o755",
+      "uid": 0
+    },
+    "pre_execution_digest_not_printed_by_original_fixture": true
+  },
+  "coturn": {
+    "version": "4.18.0",
+    "input": "Public binary snapshot copied within isolated VM from existing /opt/coturn/current/bin/turnserver",
+    "sha256": "d3e7cf6fd8446d11757f6969e75e1eb7d8ba1183ec33c27da67556f837052380",
+    "source_pin_from_BUILDINFO": "28d55294ac596fbd129b293a85e7bb1c5dc4bd15b7fb55c500f355149e5f4e28",
+    "source_commit": "23c6c1d32a3d2b21a56cee65d3203bcc4ea82d2b",
+    "compiled_by_this_run": false,
+    "buildinfo_path": "collected/evidence/coturn.BUILDINFO"
+  },
+  "runtime_uids_and_trust_paths": {
+    "observed_at": "2026-11-07T06:28:36Z",
+    "identity_record": "collected/evidence/runtime-identity.json",
+    "identity_record_sha256": "e39c02e9219373444a92133a8224eba81636a83dd5af38e11a0cd8a79e3953c4",
+    "link_daemons_and_rust_serves_euid": 2000,
+    "linkd_and_coturn_euid": 0,
+    "ca_ancestors": "Root-owned /0755 -> /tmp01777 sticky -> root-owned W0755 -> root-owned pki0755 -> public CA root0644; accepted for both actual euids",
+    "daemon_state_leaves": "a/b uid2000 mode0700; service state linkd uid0 mode0700",
+    "unsafe_parent_refusal": {
+      "log": "unsafe-parent-refusal.log",
+      "sha256": "dc75fa2857d16bfeb28553d9f5b18bf4a3fb84124f44240d20dfd66c59fd9fe8",
+      "euid": 2000,
+      "unsafe_ancestor": "/home/parity/jobs mode0775",
+      "exit_code": 1,
+      "observed_error": "state is not private to this user: writable service CA path jobs (mode drwxrwxr-x)",
+      "product_checks_weakened": false,
+      "shared_directory_permissions_changed": false
+    }
+  },
+  "cleanup": {
+    "namespaces": [
+      {
+        "namespace": "zpe-2157654-wan",
+        "present_after_cleanup": false
+      },
+      {
+        "namespace": "zpe-2157654-srv",
+        "present_after_cleanup": false
+      },
+      {
+        "namespace": "zpe-2157654-ra",
+        "present_after_cleanup": false
+      },
+      {
+        "namespace": "zpe-2157654-rb",
+        "present_after_cleanup": false
+      },
+      {
+        "namespace": "zpe-2157654-pa",
+        "present_after_cleanup": false
+      },
+      {
+        "namespace": "zpe-2157654-pb",
+        "present_after_cleanup": false
+      }
+    ],
+    "root_build_tmpdir_present": false
+  },
+  "run_log_sha256": "0dc6df3977098f5ea022d3a63b3266b64a9a223b51c3e8b011a880bf39df1101",
+  "assertions_sha256": "07ae4d16876dc18afb3eb61e74bf9711a7ea52ab57fa99bf6e4cba18509264d6",
+  "rust_build_log_sha256": "00154f4130fb09ced1569c9e6ce8311e608d06b792556414ca5e5aaf8427499f",
+  "go_build_log_sha256": "1a22d748aec924cf5fe8527eb9ddadaaf0996059c7b3cb4a33356855a14c7955",
+  "limitations": [
+    "No Opus review, release acceptance, production deployment or authority supplied; functional evidence does not replace the unavailable external review",
+    "Linux simulation of two devices, not physical Macs, native macOS UI/ACL behavior, packaging or actual sleep/wake",
+    "This frozen Rust tree predates M1 whole-secret tombstones and M2 authenticated snapshot bootstrap; initial signed-history transfer and version revocation do not close those gaps",
+    "Does not replace or resolve the separately retained bd065fc Linux full-suite grant-expiry failure",
+    "No power-loss durability, deliberate packet corruption/loss/reordering, long-duration renewal/capacity or OCI shape/resource measurements",
+    "Memory samples are point-in-time writable mappings, not RSS or proof against every transient value/encoding",
+    "Original fixture prints pre-execution digests for four product executables; support sockxfer has source-build provenance and post-run digest only",
+    "Generated fixture vault/state/key/token files were not collected; only structured assertion/identity/source/hash evidence was copied",
+    "Current coturn compilation path was not retested; an explicitly pinned cached binary/BUILDINFO was reused",
+    "Original netns fixture disables IPv6; this run does not test IPv6/mapped peer-denial policies or close DOS-1/other Opus findings"
+  ]
+}

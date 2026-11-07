@@ -1,0 +1,22 @@
+{
+  "taskId": "node:delegated-task:command%3Amcp%3A1dfe679c-e0dc-40f8-901b-badd51ab85ca%3Adelegate-task%3A9f73546a-aa4a-414e-a371-d965ca576928",
+  "childThreadId": "thread:delegated-task:command%3Amcp%3A1dfe679c-e0dc-40f8-901b-badd51ab85ca%3Adelegate-task%3A9f73546a-aa4a-414e-a371-d965ca576928",
+  "link": "<t3-thread://v2/5a536fd4-bd15-4f8f-be43-ce624c09b509/thread:delegated-task:command%3Amcp%3A1dfe679c-e0dc-40f8-901b-badd51ab85ca%3Adelegate-task%3A9f73546a-aa4a-414e-a371-d965ca576928>",
+  "childRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A1dfe679c-e0dc-40f8-901b-badd51ab85ca%253Adelegate-task%253A9f73546a-aa4a-414e-a371-d965ca576928:ordinal:1",
+  "childNodeId": "node:delegated-task:command%3Amcp%3A1dfe679c-e0dc-40f8-901b-badd51ab85ca%3Adelegate-task%3A9f73546a-aa4a-414e-a371-d965ca576928",
+  "status": "completed",
+  "workState": "result_available",
+  "hasPendingChildRuns": false,
+  "latestTerminalRunId": "run:thread:thread%3Adelegated-task%3Acommand%253Amcp%253A1dfe679c-e0dc-40f8-901b-badd51ab85ca%253Adelegate-task%253A9f73546a-aa4a-414e-a371-d965ca576928:ordinal:1",
+  "latestTerminalStatus": "completed",
+  "latestTerminalSummary": null,
+  "latestTerminalResultContextTransferId": null,
+  "providerInstanceId": "codex",
+  "model": "gpt-6-astra",
+  "options": [],
+  "summary": "**Astra product/UX acceptance: acceptable for this i18n/UI slice, with minor polish remaining. No concrete blocking defect found in the reviewed source and screenshots.** This is not release or security approval.\n\nActual model: **gpt-6-astra, medium reasoning**. Reviewed `fe5d3fe282a7f233244353cbd55c9216238f92ac` against `d01a33b8101be8761a38ab9b7ed8295e9aed1c40`, read-only.\n\n- Language changes preserve the component tree; successful persistence precedes locale changes. Tests cover preserved onboarding input, save failure, retry, and restoring the saved language. Dates use the selected locale.\n- Both screenshots have clear hierarchy, readable copy, and consistent spacing. Whole-item deletion is explicitly unsupported. The reviewed changes retain HTTP/SSH surfaces and distinguish connection from synchronization.\n- No untranslated Korean display literals surfaced in the TSX scan. Translation tables enforce matching keys and placeholders.\n\nMinor issues and exact suggested fixes:\n\n- **Plural type names on individual items:** [ItemDetail.tsx:58](/Users/ys/.t3/worktrees/zeropw/t3-b9268971/desktop/src/screens/vault/ItemDetail.tsx:58) renders “API Keys” beneath one item, visible in the English screenshot. Add singular item-type translation keys and use them for detail, row metadata, and type selectors; retain plurals for navigation.\n- **Existing toasts retain their previous language:** [App.tsx:21](/Users/ys/.t3/worktrees/zeropw/t3-b9268971/desktop/src/app/App.tsx:21) stores rendered strings. Store translation keys and variables, translating at render time. Low impact because toasts expire after 4.2 seconds.\n\nEvidence limits: 333 Vitest passes and check/type/build success are supplied results, not independently rerun. Full macOS/Linux verification and the transient fixture retry remain pending. Fixture matrices do not establish two-Mac behavior. The reported select finding alone does not establish nested-card styling. Screenshots precede the two stated final refinements; modified `DESIGN.md` and `docs/desktop-app.md` are outside the exact implementation commit.\n\nKnown synchronization/pairing gaps remain outside this acceptance. No Opus review was performed or substituted.",
+  "resultContextTransferId": "context-transfer:type:subagent_result:source-thread:thread%3Adelegated-task%3Acommand%253Amcp%253A1dfe679c-e0dc-40f8-901b-badd51ab85ca%253Adelegate-task%253A9f73546a-aa4a-414e-a371-d965ca576928:target-thread:f2ff416c-5367-4d6e-ba8a-1ecf10cb9aa2:1cece057-793d-49a6-81c2-8a779f417c6b",
+  "hasPendingQuestion": false,
+  "pendingApproval": null,
+  "waitTimedOut": false
+}

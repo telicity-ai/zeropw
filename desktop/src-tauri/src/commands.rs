@@ -170,6 +170,13 @@ pub async fn resume(shell: State<'_, Shell>, request: Request<'_>) -> Out<Contro
     blocking(move || core.resume(input)).await
 }
 
+#[tauri::command(rename_all = "snake_case")]
+pub async fn vault_unlock(shell: State<'_, Shell>, request: Request<'_>) -> Out<Control> {
+    let input: PassphraseIn = input(&request)?;
+    let core = core(&shell);
+    blocking(move || core.vault_unlock(input)).await
+}
+
 // -- projects ---------------------------------------------------------------------------------
 
 #[tauri::command(rename_all = "snake_case")]
@@ -574,6 +581,89 @@ pub async fn team_join(shell: State<'_, Shell>, request: Request<'_>) -> Out<Val
     blocking(move || core.team_join(input)).await
 }
 
+// -- remote sync between this user's Macs (docs/remote-sync.md §4) ----------------------------
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn link_status(shell: State<'_, Shell>) -> Out<LinkStatusOut> {
+    let core = core(&shell);
+    blocking(move || core.link_status()).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn link_enroll(shell: State<'_, Shell>, request: Request<'_>) -> Out<LinkStatusOut> {
+    let input: LinkEnrollIn = input(&request)?;
+    let core = core(&shell);
+    blocking(move || core.link_enroll(input)).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn pairing_create(
+    shell: State<'_, Shell>,
+    request: Request<'_>,
+) -> Out<PairingCreateOut> {
+    let input: PairingCreateIn = input(&request)?;
+    let core = core(&shell);
+    blocking(move || core.pairing_create(input)).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn pairing_preview(
+    shell: State<'_, Shell>,
+    request: Request<'_>,
+) -> Out<PairingPreviewOut> {
+    let input: PairingTextIn = input(&request)?;
+    let core = core(&shell);
+    blocking(move || core.pairing_preview(input)).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn pairing_join(shell: State<'_, Shell>, request: Request<'_>) -> Out<PairingJoinOut> {
+    let input: RefIn = input(&request)?;
+    let core = core(&shell);
+    blocking(move || core.pairing_join(input)).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn join_requests(shell: State<'_, Shell>, request: Request<'_>) -> Out<JoinRequestsOut> {
+    let input: EnvsIn = input(&request)?;
+    let core = core(&shell);
+    blocking(move || core.join_requests(input)).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn approve_join(shell: State<'_, Shell>, request: Request<'_>) -> Out<JoinDecisionOut> {
+    let input: JoinDecisionIn = input(&request)?;
+    let core = core(&shell);
+    blocking(move || core.approve_join(input)).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn deny_join(shell: State<'_, Shell>, request: Request<'_>) -> Out<JoinDecisionOut> {
+    let input: JoinDecisionIn = input(&request)?;
+    let core = core(&shell);
+    blocking(move || core.deny_join(input)).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn team_sync_status(shell: State<'_, Shell>, request: Request<'_>) -> Out<Value> {
+    let input: EnvIn = input(&request)?;
+    let core = core(&shell);
+    blocking(move || core.team_sync_status(input)).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn devices_overview(shell: State<'_, Shell>) -> Out<DevicesOut> {
+    let core = core(&shell);
+    blocking(move || core.devices_overview()).await
+}
+
+#[tauri::command(rename_all = "snake_case")]
+pub async fn device_remove(shell: State<'_, Shell>, request: Request<'_>) -> Out<DeviceRemoveOut> {
+    let input: DeviceRemoveIn = input(&request)?;
+    let core = core(&shell);
+    blocking(move || core.device_remove(input)).await
+}
+
 // -- one-time values --------------------------------------------------------------------------
 
 #[tauri::command(rename_all = "snake_case")]
@@ -702,6 +792,7 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         control_get,
         stop_all,
         resume,
+        vault_unlock,
         project_list,
         project_create,
         secret_list,
@@ -749,6 +840,17 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         team_revoke_invite,
         team_invite_preview,
         team_join,
+        link_status,
+        link_enroll,
+        pairing_create,
+        pairing_preview,
+        pairing_join,
+        join_requests,
+        approve_join,
+        deny_join,
+        team_sync_status,
+        devices_overview,
+        device_remove,
         onetime_show,
         onetime_copy,
         onetime_discard,

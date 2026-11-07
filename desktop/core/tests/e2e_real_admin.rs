@@ -63,6 +63,7 @@ fn real_serve_starts_attaches_and_stops() {
         .start(&ServeConfig {
             port,
             team_listen: None,
+            link_socket: None,
         })
         .unwrap();
     assert!(status.running);
@@ -118,6 +119,7 @@ fn real_serve_says_which_address_it_could_not_open() {
         .start(&ServeConfig {
             port,
             team_listen: None,
+            link_socket: None,
         })
         .unwrap_err();
     assert_eq!(
@@ -132,6 +134,7 @@ fn real_serve_says_which_address_it_could_not_open() {
         .start(&ServeConfig {
             port: free_port(),
             team_listen: Some(team_listen.clone()),
+            link_socket: None,
         })
         .unwrap_err();
     assert_eq!(
@@ -155,6 +158,8 @@ fn init_project_secret_put_and_list_without_values() {
     core.settings_set(Settings {
         gateway_port: free_port(),
         team_listen: None,
+        link_service: None,
+        language: None,
     })
     .unwrap();
 
@@ -207,6 +212,28 @@ fn init_project_secret_put_and_list_without_values() {
         .ok()
         .unwrap();
     assert_eq!(shown.expose(), value);
+
+    // the window's lock screen: the real CLI checks the passphrase through `--require-admin`,
+    // records a wrong one as `auth_failed` and changes nothing either way
+    let before = core.secret_list(SecretListIn::default()).unwrap();
+    let wrong = core
+        .vault_unlock(PassphraseIn {
+            admin_passphrase: "not-the-passphrase-0000".into(),
+        })
+        .unwrap_err();
+    assert_eq!(wrong.error, "AuthFailed", "{wrong}");
+    assert!(!wrong.to_string().contains("not-the-passphrase"));
+    let records = core.audit_tail(LimitIn { limit: 50 }).unwrap()["records"].clone();
+    let last = records.as_array().unwrap().last().unwrap().clone();
+    assert_eq!(last["event"], "auth_failed", "{last}");
+    assert!(!records.to_string().contains("not-the-passphrase"));
+    let control = core
+        .vault_unlock(PassphraseIn {
+            admin_passphrase: "velvet-ocean-27-quartz-lantern".into(),
+        })
+        .unwrap();
+    assert!(!control.stopped);
+    assert_eq!(core.secret_list(SecretListIn::default()).unwrap(), before);
 
     core.shutdown();
     assert!(!core.serve_status().running);
@@ -565,6 +592,8 @@ fn ssh_connection_made_without_its_ssh_is_repaired_and_runs_on_a_real_sshd() {
     core.settings_set(Settings {
         gateway_port: free_port(),
         team_listen: None,
+        link_service: None,
+        language: None,
     })
     .unwrap();
     let code = core.recovery_generate().unwrap();
@@ -731,6 +760,8 @@ fn app_made_ssh_connection_runs_agent_exec_on_a_real_sshd() {
     core.settings_set(Settings {
         gateway_port: free_port(),
         team_listen: None,
+        link_service: None,
+        language: None,
     })
     .unwrap();
     let code = core.recovery_generate().unwrap();

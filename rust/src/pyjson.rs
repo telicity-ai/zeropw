@@ -2088,3 +2088,29 @@ mod oracle_tests {
         assert!(loads("1e400").is_err());
     }
 }
+
+/// Strict root object parser for additive bounded session controls. Existing v1
+/// JSON keeps its historical duplicate-key behavior.
+pub fn loads_unique_object(text: &str) -> serde_json::Result<Value> {
+    use serde::de::{Error as _, MapAccess, Visitor};
+    struct Unique;
+    impl<'de> Visitor<'de> for Unique {
+        type Value = Value;
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("unique object")
+        }
+        fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> std::result::Result<Value, M::Error> {
+            let mut out = serde_json::Map::new();
+            while let Some((key, value)) = map.next_entry::<String, Value>()? {
+                if out.insert(key, value).is_some() {
+                    return Err(M::Error::custom("duplicate control key"));
+                }
+            }
+            Ok(Value::Object(out))
+        }
+    }
+    let mut de = serde_json::Deserializer::from_str(text);
+    let value = serde::de::Deserializer::deserialize_map(&mut de, Unique)?;
+    de.end()?;
+    Ok(value)
+}

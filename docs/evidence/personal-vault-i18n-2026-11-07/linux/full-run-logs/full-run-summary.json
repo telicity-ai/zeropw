@@ -1,0 +1,32 @@
+{
+  "desktop": {
+    "result": [
+      "START=2026-11-07T06:27:55Z",
+      "END=2026-11-07T06:48:18Z",
+      "EXIT=0"
+    ],
+    "steps": 8,
+    "failed_steps": [],
+    "integration_targets": 0,
+    "rust_test_passes_sum": 194,
+    "rust_test_failures_sum": 0,
+    "rust_test_ignored_sum": 0,
+    "verify_failed_empty": true,
+    "log_sha256": "4449866af845b96c00024ee64115e0f3917b0779a567c68648bfc4f70a6bc802"
+  },
+  "rust": {
+    "result": [
+      "START=2026-11-07T06:48:31Z",
+      "END=2026-11-07T07:19:00Z",
+      "EXIT=0"
+    ],
+    "steps": 100,
+    "failed_steps": [],
+    "integration_targets": 95,
+    "rust_test_passes_sum": 1623,
+    "rust_test_failures_sum": 0,
+    "rust_test_ignored_sum": 4,
+    "verify_failed_empty": true,
+    "log_sha256": "1d1e720f234b583682ea1c288c8d9d14b886242eebed8a5e4df4df182c30deb0"
+  }
+}

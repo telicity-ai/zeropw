@@ -2,19 +2,20 @@
 
 작성일: 2026-10-15 · 구현 명세 · 이슈 [#19](https://github.com/telicity-ai/zeropw/issues/19)
 
-이 문서는 ZeroPW 관리 기능을 Rust + Tauri v2 데스크톱 앱으로 제공하는 방법을 정한다. 화면과 움직임의 규칙은 [DESIGN.md](../DESIGN.md)에, 승인된 온보딩 목업은 [desktop/mockup/onboarding.html](../desktop/mockup/onboarding.html)에 있다. [제품 정의](product-intent.md)와 [보안 경계](security-design.md)의 요구사항은 바꾸지 않는다.
+이 문서는 ZeroPW 관리 기능을 Rust + Tauri v2 데스크톱 앱으로 제공하는 방법을 정한다. 화면과 상호작용의 규칙은 [DESIGN.md](../DESIGN.md)에 있다. 2026-11-07 사용자 요청으로 프런트엔드 전체를 "Personal Vault"(나만의 금고)로 새로 만들었다(§6). 이전 화면, 픽셀 필드, 온보딩 목업은 Git 기록에만 남는다. [제품 정의](product-intent.md)와 [보안 경계](security-design.md)의 요구사항은 바꾸지 않는다.
 
 ## 1. 범위
 
-- 관리자가 쓰는 기능 전부를 화면으로 옮긴다: 보관함 만들기, 프로젝트·환경, 키(환경변수 포함), 서비스 연결, 에이전트와 권한, 사용 기록·알림, 전체 정지·재개, 사고 처리, 백업·복원·복구, 팀 공유.
+- 관리자가 쓰는 기능 전부를 화면으로 옮긴다: 금고 만들기, 프로젝트·환경, 키(환경변수 포함), 서비스 연결, 에이전트와 권한, 사용 기록·알림, 전체 정지·재개, 사고 처리, 백업·복원·복구, 팀 공유.
 - 팀 초대는 24시간 동안 한 번만 쓸 수 있는 링크(`zeropw://join#…`)로 주고받는다. 링크를 열면 미리보기만 띄우고 자동으로 합류하지 않는다.
 - 에이전트 설정처럼 셸에서 하던 일은 앱 안 터미널에서 미리 채운 명령을 엔터로 실행해 끝낸다.
-- 첫 실행 온보딩에는 서비스 연결을 넣지 않는다. 연결은 대시보드에서 만든다(2026-10-15 사용자 결정).
-- 2026-10-26 사용자 요청에 따라 새 보관함 온보딩은 관리 비밀번호·복구 코드·보관함 만들기·프로젝트의 네 단계로 줄인다. 에이전트는 대시보드에서 추가한다. 공유와 초대는 한 시트에서 확인하며, 기존 코어의 재인증·일회용 링크·명시적 합류 조건은 유지한다. [2026-10-26 개선 기록](desktop-ux-e2e-2026-10-26.md)은 당시 소스의 검증 결과이며, 이후 main과 통합한 커밋의 검증을 대신하지 않는다.
+- 첫 실행 온보딩에는 서비스 연결을 넣지 않는다. 연결은 서비스 연결 화면에서 만든다(2026-10-15 사용자 결정).
+- 2026-11-07 사용자 요청: 제품 정체성은 "내 비밀을 내 Mac에 보관하고, 승인한 다른 Mac과 암호화된 채로 동기화하는" 개인 금고다. 첫 화면은 금고와 항목이고, 그다음이 내 Mac과 동기화, 서비스 연결과 개발자 기능, 설정과 진단이다. 프로젝트·환경·팀 권한 모델은 그대로 두고 화면에는 "위치", "다른 사람과 공유"처럼 필요한 개념만 드러낸다. 금고 데이터, Rust 백엔드, 암호화·권한·저장 형식은 바꾸지 않았다.
+- 2026-10-26 사용자 요청에 따라 새 금고 온보딩은 관리 비밀번호·복구 코드·금고 만들기·프로젝트의 네 단계로 줄인다. 에이전트는 대시보드에서 추가한다(2026-11-07 첫 실행 흐름으로 대체, §7). 공유와 초대는 한 시트에서 확인하며, 기존 코어의 재인증·일회용 링크·명시적 합류 조건은 유지한다. [2026-10-26 개선 기록](desktop-ux-e2e-2026-10-26.md)은 당시 소스의 검증 결과이며, 이후 main과 통합한 커밋의 검증을 대신하지 않는다.
 - macOS용으로는 Apple Silicon(arm64) .dmg를 ad-hoc 서명한 미리 보기로 만든다. 소유자는 2026-10-16에 이 이미지를 Developer ID 서명과 공증 없이 v0.2.0 제품 릴리스에 싣기로 정했다. 이 앱을 처음 싣는 릴리스가 v0.2.0이고, v0.1.0에는 앱이 없다. 공증하지 않은 빌드라 내려받아 처음 열 때 Gatekeeper가 막고, 사용자가 시스템 설정에서 직접 허용해야 열린다(§9, §10). v0.2.0 이미지는 macOS 26.5인 Mac 한 대에서 빌드하고 그 Mac에서 격리 속성 없이 실행해 봤을 뿐이고, 내려받은 이미지를 Gatekeeper를 거쳐 여는 과정은 어느 Mac에서도 시험하지 않았다. 소유자는 같은 날 깨끗한 Mac에서 설치하고 처음 여는 확인과 다른 확인 몇 가지를 이 미리 보기에 한해 면제했다(§9).
-- 화면 문구는 한국어로만 쓴다. 관리 문서와 제품 출력은 영어가 기본이라는 릴리스 규칙([releasing.md](releasing.md)의 Gates 2번)의 예외로, 소유자가 2026-10-15 디자인 검토에서 화면 문구를 쉬운 한국어로 쓰라고 지시했다. 앱이 macOS 로컬 네트워크 권한 창에 넣는 설명(`Info.release.plist`)도 한국어다. 그 창의 제목과 버튼은 macOS가 정한다. 이 명세와 [DESIGN.md](../DESIGN.md)도 한국어로만 있다.
+- 화면 문구는 처음(2026-10-15 소유자 결정)에는 한국어뿐이었고, 2026-11-07 사용자 요청으로 한국어와 영어 두 가지가 됐다. 언어는 첫 실행·잠금 화면과 설정 › 잠금과 보안에서 고르며 `settings.json`의 `language`(`ko`, `en`, 없으면 macOS 선호 언어)에 저장한다. 앱이 macOS 로컬 네트워크 권한 창에 넣는 설명(`Info.release.plist`)은 아직 한국어 한 가지다. 이 명세와 [DESIGN.md](../DESIGN.md)는 한국어로만 있다.
 
-하지 않는 것: 원본 비밀을 에이전트에게 주는 호환 경로, 일괄 평문 내보내기, 모든 CLI 호환 약속, Developer ID 앱 서명·공증·자동 업데이트, Intel Mac용 빌드, 같은 macOS 계정의 에이전트로부터 보관함을 격리하는 일(§8.9).
+하지 않는 것: 원본 비밀을 에이전트에게 주는 호환 경로, 일괄 평문 내보내기, 모든 CLI 호환 약속, Developer ID 앱 서명·공증·자동 업데이트, Intel Mac용 빌드, 같은 macOS 계정의 에이전트로부터 금고를 격리하는 일(§8.9).
 
 ## 2. 구조
 
@@ -95,7 +96,7 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 
 ### 4.3 일회용 보관소 (OneTimeStore)
 
-복구 코드, 호출 토큰, 초대 링크, 다시 본 비밀 값, 붙여 넣거나 링크로 받은 초대, 가져오려고 읽은 `.env` 파일을 `Zeroizing` 버퍼로 잠깐 들고 있는다. 무작위 128비트 참조로 꺼내며, 한 번 보여 주면 지운다. 수명은 비밀 값 60초, 붙여 넣거나 링크로 받은 초대 60분, 나머지 10분. 받은 초대만 길게 두는 것은 초대받은 사람이 링크를 확인한 뒤 보관함을 만들고(§7의 2~4단계) 합류하기 때문이다. `Debug`·`Serialize`를 구현하지 않는다.
+복구 코드, 호출 토큰, 초대 링크, 다시 본 비밀 값, 붙여 넣거나 링크로 받은 초대, 가져오려고 읽은 `.env` 파일을 `Zeroizing` 버퍼로 잠깐 들고 있는다. 무작위 128비트 참조로 꺼내며, 한 번 보여 주면 지운다. 수명은 비밀 값 60초, 붙여 넣거나 링크로 받은 초대 60분, 나머지 10분. 받은 초대만 길게 두는 것은 초대받은 사람이 링크를 확인한 뒤 금고를 만들고(§7의 2~4단계) 합류하기 때문이다. `Debug`·`Serialize`를 구현하지 않는다.
 
 - 항목마다 종류가 있어서 다른 용도로 꺼낼 수 없다. 웹뷰로 나갈 수 있는(`onetime_show`·`onetime_copy`) 것은 호출 토큰, 초대 링크, 다시 본 값뿐이다. 복구 코드는 `vault_init`만, 받은 초대는 `team_join`만, `.env` 파일은 `secret_import_preview`·`secret_import`만 읽는다.
 - 앱이 만든 값은 예약까지 합쳐 256개까지 든다. CLI 호출이 상태를 바꾸고 값을 한 번만 출력하는 명령(`principal_create`의 토큰, `team_invite_create`의 링크, 감사 기록을 남기는 `secret_reveal`)은 CLI를 실행하기 전에 자리를 예약한다. 보관소가 가득 차면 아무것도 바꾸기 전에 `onetime_store_full`로 거절하고, 만든 뒤에 값을 잃는 일은 없다.
@@ -126,10 +127,20 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 ### 4.5 설정과 경로
 
 - 상태 디렉터리: 앱 데이터 폴더의 `state/` (macOS `~/Library/Application Support/ZeroPW/state`).
-- 앱 설정 `settings.json`(0600): 중계기 포트, 팀 동기화 주소. 상태 디렉터리 안에는 쓰지 않는다.
+- 앱 설정 `settings.json`(0600): 중계기 포트, 팀 동기화 주소, 다음 등록에 쓸 연결 서버 주소(`link_service`, 선택). 상태 디렉터리 안에는 쓰지 않는다. 배포 예정 서버 `https://zeropw-turn.telicity.ai`는 설정 화면에서 한 번에 넣을 수 있지만 기본값은 아니며, 배포와 health check가 확인되기 전에는 화면이 운영 중이라고 말하지 않는다.
 - `zsh/`(0700): 앱 안 터미널의 zsh 시작 파일(§4.4). 터미널을 열 때마다 내용과 권한을 맞춘다. Debian·Ubuntu에서는 zsh의 완성 캐시(`.zcompdump`)도 여기 남는다.
 - 파일 선택(키 파일, CA, 백업, `.env`)은 Rust에서 네이티브 창을 열고 경로를 불투명한 `file_token`으로만 웹뷰에 알린다.
 - 창에 끌어다 놓은 파일도 경로는 Rust에만 있다. 셸이 놓인 경로를 코어에 넘기면 코어가 일반 파일 하나만 읽어 일회용 보관소에 두고, 웹뷰에는 `envfile://dropped`로 참조와 파일 이름만 알린다(§5, §8.10).
+
+### 4.6 다른 Mac과 동기화 (연결 데몬)
+
+[remote-sync.md](remote-sync.md) §4의 흐름이다. 2026-11-06 결정으로 macOS 앱에만 있다.
+
+- 연결 데몬 `zeropw-link`는 다른 저장소(zeropw-link)의 Go 프로그램이고, 다른 사이드카 옆에 함께 배포한다. 코어는 금고가 있으면 앱을 켤 때 `zeropw-link daemon --state <앱 데이터>/link`(0700)로 띄우고(§4.2와 같은 환경, 표준 오류는 0600 `link.log`), `link.json`으로 한 개만 둔다. 이어 붙기는 그 pid가 이 폴더의 데몬이고 소켓이 `{"op":"status"}`에 답할 때만 한다. 데몬이 스스로 끝나면 1초부터 두 배씩(최대 60초) 기다렸다가 다시 띄우고, 60초 넘게 돌았으면 처음부터 센다. 앱을 끝낼 때 중계기 다음에 SIGTERM을 보낸다. 바이너리가 없으면 다른 Mac과의 동기화만 쓸 수 없고 나머지는 그대로다.
+- 코어는 `<앱 데이터>/link/link.sock`에 zeropw-link protocol.md §5의 한 줄 요청을 보낸다(`status`, `enroll`, `link_token`, `devices`, `revoke`). 서버 초대 코드와 연결 토큰은 그 요청 본문에만 들어가고 argv·환경변수·로그·오류에는 나오지 않는다. 데몬의 오류 코드는 정해진 `link_*` 이유로만 바꾸고(모르는 코드는 `link_failed`), 데몬이 쓴 다른 글은 버린다.
+- 데몬이 답하는 동안 중계기는 `serve --link-socket=<소켓>`으로 돈다. 데몬이 나중에 켜지면 링크 상태를 읽을 때 중계기를 다시 켠다.
+- 연결 코드(`zeropw://pair#<base64url(JSON {v:1, service, link_token, peer, name, invites:[{env, invite}]})>`)는 일회용 보관소의 `pairing_code`(10분, 한 번만 보이거나 복사)로 만들고, 붙여 넣은 코드는 `pairing_text`(60분, 4개, 웹뷰로 다시 나가지 않음)로 `pairing_join`만 읽는다. 초대는 환경마다 하나이고 모두 승인이 필요하다(`team invite --approval --link --address zpl:<이 Mac의 연결 ID>`, `--require-admin`). 코드만으로는 합류하지 못한다.
+- `devices.json`(0600, 앱 데이터 폴더)은 어느 팀원이 어느 Mac인지(지문, 연결 ID, 환경)만 적는다. 비밀은 없다.
 
 ## 5. IPC 명령
 
@@ -143,6 +154,7 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 | `vault_init` | `{admin_passphrase, recovery: {ref}\|{typed}}` | `{state_dir, kms_key_id}` | `init` 후 `serve` 시작 | 두 비밀번호 |
 | `serve_start` / `serve_stop` / `serve_status` | | `ServeStatus`. 시작 실패 이유는 표 아래 | §4.2 | |
 | `control_get` / `stop_all` / `resume` | | `{stopped, restore_pending, incident_open}` | `status`, `stop-all`, `resume` | `resume`은 재인증 |
+| `vault_unlock` | `{admin_passphrase}` | `{stopped, restore_pending, incident_open}` | `status`(`--require-admin`). 틀린 비밀번호는 `auth_failed`로 기록된다. 아무것도 바꾸지 않는다 | 매번 |
 | `project_list` / `project_create` | `{name, environments[]}` | 프로젝트. `project_list`는 팀 환경이 있으면 `team_environments`(`{project, environment, env_id}`)도 준다. 팀 환경 연결표(`team/envs.json`)를 읽지 못하면 프로젝트는 그대로 주고 `team_environments` 대신 `team_environments_error`(`state_corrupt`)를 준다 | `project …` | |
 | `secret_list` / `secret_versions` | `{project?, environment?}` / `{id}` | 값 없는 목록 | `secret list/versions` | |
 | `secret_put` | `{id, kind, project, environment, source}` | 버전 정보 | `secret put --stdin` | |
@@ -164,12 +176,21 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 | `team_invites` / `team_revoke_invite` | `{env}` / `{env, invite_id}` | 목록 / 결과 | §3.2 | |
 | `team_invite_preview` | `{text}` | `{ref, preview}` | `team invite-info --stdin` | |
 | `team_join` | `{ref, project?, environment?}` | 합류 결과 | `team join --stdin` | |
+| `link_status` | | `{available, running, enrolled, revoked, device_id, online, service, service_host, default_service, device_name, peers[], problem}` | 데몬 `status`(§4.6) | |
+| `link_enroll` | `{invite_code, service?, name?}` | `link_status`와 같음 | 데몬 `enroll`. `service`가 없으면 설정의 `link_service`, 그것도 없으면 `desktop/core/src/link.rs`의 한 상수(풀리지 않는 `.invalid` 주소). `link_status`의 `default_service`도 같은 순서다 | |
+| `pairing_create` | `{envs?, name?, device_name, admin_passphrase}` | `{ref, expires_at, peer, fingerprint, environments[{env, invite_id, shared_now}]}` | 필요하면 `team share`, 환경마다 `team invite --approval --link`, 데몬 `link_token` | 재인증 |
+| `pairing_preview` | `{text}` | `{ref, preview}`: 다른 Mac 이름, 지문, 환경, 서버. 네트워크 없이 | 초대마다 `team invite-info --stdin` | |
+| `pairing_join` | `{ref}` | `{done, peer, environments[{env, state: joined\|pending\|failed, reason?, detail?, self_fingerprint?, inviter_fingerprint?}]}`. 같은 이름의 다른 로컬 환경에는 합류하지 않는다(`pairing_env_exists`) | 데몬 `enroll`(연결 토큰), 환경마다 `team join --stdin --link-socket` | |
+| `join_requests` | `{envs}` | `{requests[], errors[]}` | `team join-requests` | |
+| `approve_join` / `deny_join` | `{envs, fingerprint, admin_passphrase}` | `{fingerprint, envs[{env, ok, reason?, invites}]}` | `team approve-join` / `deny-join` | 재인증(`--require-admin`) |
+| `team_sync_status` / `devices_overview` | `{env}` / | `team sync-status` 출력 / 연결한 Mac, 팀원, 동기화 상태, 데몬의 기기 목록 | `team sync-status`, `team members`, 데몬 `status`·`devices` | |
+| `device_remove` | `{fingerprint?, link_device_id?, admin_passphrase?}` | `{removed, failed, link_revoked, link_error?}`. 모든 환경에서 내보낸 뒤에만 데몬 `revoke` | `team remove` | 재인증 |
 | `onetime_show` / `onetime_copy` / `onetime_discard` | `{ref}` | 한 번만 값 / 복사 결과 | 보관소 | |
 | `file_pick` | `{purpose}`: `secret`, `ssh_key`, `ca`, `env_file` | `{file_token, name}` | 네이티브 창 | |
 | `env_file_load` | `{file_token}` (`env_file`로 고른 것) | `{import_ref, name}` | 코어가 파일을 읽어 보관소에 둔다(64 KiB, UTF-8) | |
 | `secret_import_preview` | `{import_ref, project, environment, id_prefix?}` | 값 없는 미리 보기: 이름, 키 ID, 종류, 기본 선택과 이유, 동작, 상태, 빈 줄 | `secret import --stdin --dry-run` | |
 | `secret_import` | `{import_ref, project, environment, id_prefix?, selected, update}` | 값 없는 결과 | `secret import --stdin`, 기본 선택과의 차이를 `--include`/`--exclude`로 | |
-| `settings_get` / `settings_set` / `net_interfaces` | | 설정 / 주소 목록 | 코어 | |
+| `settings_get` / `settings_set` / `net_interfaces` | | 설정 `{gateway_port, team_listen, link_service?, language?}` / 주소 목록. `language`는 `ko`·`en`이거나 없음(시스템 따름)이고 그 밖의 값은 `invalid_language`(detail `language`). `link_service`는 아직 등록하지 않은 Mac이 쓸 연결 서버 주소다(없으면 파일에서도 빠진다). 형식이 틀리면 `link_service_invalid`(detail `link_service`). 이미 등록한 Mac의 서버는 바꾸지 않는다 | 코어 | |
 
 중계기 시작(`serve_start`, `vault_init` 끝의 시작도 같다)이 실패하면, 사이드카가 끝나면서 로그(표준 오류)에 남긴 CLI 오류의 `error`와 `reason`을 그대로 돌려준다. 주소를 열지 못한 실패는 `detail`에 어느 설정 때문인지만 적어서, 화면이 중계기 포트 문제와 팀 동기화 주소 문제를 가릴 수 있다. 그 밖의 CLI `detail`은 중계기 주소나 팀 동기화 주소가 들어 있으면 버린다.
 
@@ -196,23 +217,27 @@ Tauri에 의존하지 않는 Rust 라이브러리다. 모든 로직과 시험은
 
 이 수정 전의 앱(v0.2.0 포함)으로 만든 SSH 연결에는 ssh가 없다. `connection_set_cli_program`은 그런 연결에 같은 이름 그대로 ssh를 넣는다(`connection update --cli-program`). 코어는 빈 값을 `cli_program_required`로, 이 기기에 없는 실행 파일을 `cli_program_not_found`로 막는다. 넣은 경로는 바꿀 수 없어서 오타 하나로 연결 이름과 권한을 잃기 때문이다. 팀으로 공유한 환경에서는 같은 경로가 다른 기기에도 쓰이는데, 그 기기에 파일이 있는지는 이 확인으로 알 수 없다. 어느 연결에 넣을 수 있는지는 CLI가 정한다. SSH가 아니면 `cli_requires_ssh`, 끈 연결이면 `connection_disabled`, 이미 ssh가 있으면 `cli_already_set`이다. 넣은 ssh는 바꿀 수 없고, 바꾸려면 연결을 끄고 새로 만든다. ssh를 넣으면 연결이 넓어진 것으로 보아 그 연결에 준 권한은 모두 `stale`이 되고, 에이전트에게 권한을 다시 줘야 한다. 연결 화면은 ssh가 없는 SSH 연결의 줄에 "에이전트가 아직 못 써요"와 "ssh 경로 넣기" 버튼을 보인다. 확인 시트는 `/usr/bin/ssh`를 미리 채우고, 권한을 다시 줘야 한다는 파랑 알림과 경로를 나중에 바꿀 수 없다는 주황 알림을 단 뒤 관리 비밀번호를 받는다. 팀으로 공유한 환경에서는 CLI가 `connection.update` 커밋을 만들어 다른 기기에도 퍼진다([team-sync.md](team-sync.md) §12). `e2e_real_admin.rs`가 ssh 없이 만든 연결에서 `exec`가 `cli_not_supported`로 거절되고, ssh를 넣은 뒤 예전 권한은 `grant_stale`로 거절되며, 권한을 다시 주면 시험용 sshd에서 명령이 도는지 본다.
 
-코어가 보내는 이벤트는 `invite://preview`, `control://changed`, `serve://status`, `envfile://hover`(`{over}`: 파일을 창 위로 끌고 있는지), `envfile://dropped`(`{import_ref, name}` 또는 `{error}`)다. `serve://status`는 시작·중지 때와 사이드카가 스스로 끝났을 때(§4.2) 보낸다. `control://changed`는 앱에서 한 `stop_all`·`resume`만 보낸다. 계약의 `audit://records`는 자리만 있고 코어는 아직 보내지 않는다. 대시보드는 창이 보이는 동안 `audit_tail`을 4초마다 다시 불러 새 기록을 안다. 새 기록이 오면 `control_get`으로 정지·사고·복원 상태를 다시 읽는다. 중계기가 스스로 연 사고와 전체 정지, 앱 안 터미널에서 실행한 명령도 기록을 남기므로 이렇게 알게 된다. 상태가 바뀌었으면 창이 다시 앞에 올 때처럼 모든 화면을 다시 읽는다.
+코어가 보내는 이벤트는 `invite://preview`, `control://changed`, `serve://status`, `envfile://hover`(`{over}`: 파일을 창 위로 끌고 있는지), `envfile://dropped`(`{import_ref, name}` 또는 `{error}`)다. `serve://status`는 시작·중지 때와 사이드카가 스스로 끝났을 때(§4.2) 보낸다. `control://changed`는 앱에서 한 `stop_all`·`resume`만 보낸다. 계약의 `audit://records`는 자리만 있고 코어는 아직 보내지 않는다. 열린 금고 화면(`src/app/OpenVault.tsx`)은 창이 보이는 동안 `audit_tail`을 4초마다 다시 불러 새 기록을 안다. 잠긴 동안에는 읽지 않는다. 새 기록이 오면 `control_get`으로 정지·사고·복원 상태를 다시 읽는다. 중계기가 스스로 연 사고와 전체 정지, 앱 안 터미널에서 실행한 명령도 기록을 남기므로 이렇게 알게 된다. 상태가 바뀌었으면 창이 다시 앞에 올 때처럼 모든 화면을 다시 읽는다.
 
-`recover`는 복구 코드를 두 가지 형태로 시도할 수 있다. 앱이 만든 보관함은 표준형(`XXXX-XXXX-…`, 대문자 base32)을 저장했고, `zeropw-admin init`에 직접 넣은 보관함은 입력한 그대로를 저장했기 때문이다. 입력이 복구 코드 모양(하이픈과 공백을 빼면 base32 24자)인데 표준형과 다르면 표준형으로 먼저 시도하고, CLI가 `AuthFailed`로 답할 때만 입력 그대로 한 번 더 시도한다. 그 밖에는 한 번만 부른다. 그래서 요청 한 번에 CLI 호출은 최대 두 번이고, 틀린 코드는 `auth_failed` 감사 기록을 최대 두 줄 남긴다. `serve`가 돌고 있었다면 앱은 복구하는 동안 `serve`를 멈추고, 복구가 성공하든 실패하든 끝나면 다시 시작한다. 그사이 앱을 켤 때의 자동 시작이나 중계기 버튼이 `serve`를 시작하려 하면, 복구가 끝날 때까지 기다린다. `serve`는 KMS 키를 메모리에 들고 있어서, 계속 돌면 복구가 은퇴시킨 키를 그대로 쓴다. 그러면 새 키로 다시 감싼 팀 키를 읽지 못하고, 새로 받는 팀 키를 옛 키로 감싸 저장할 수 있다([#59](https://github.com/telicity-ai/zeropw/issues/59)). `serve`가 다시 시작하지 못해도 `recover`는 복구의 결과를 그대로 돌려주고, `serve`는 멈춘 상태로 보여 다시 시작할 수 있다.
+`recover`는 복구 코드를 두 가지 형태로 시도할 수 있다. 앱이 만든 금고는 표준형(`XXXX-XXXX-…`, 대문자 base32)을 저장했고, `zeropw-admin init`에 직접 넣은 금고는 입력한 그대로를 저장했기 때문이다. 입력이 복구 코드 모양(하이픈과 공백을 빼면 base32 24자)인데 표준형과 다르면 표준형으로 먼저 시도하고, CLI가 `AuthFailed`로 답할 때만 입력 그대로 한 번 더 시도한다. 그 밖에는 한 번만 부른다. 그래서 요청 한 번에 CLI 호출은 최대 두 번이고, 틀린 코드는 `auth_failed` 감사 기록을 최대 두 줄 남긴다. `serve`가 돌고 있었다면 앱은 복구하는 동안 `serve`를 멈추고, 복구가 성공하든 실패하든 끝나면 다시 시작한다. 그사이 앱을 켤 때의 자동 시작이나 중계기 버튼이 `serve`를 시작하려 하면, 복구가 끝날 때까지 기다린다. `serve`는 KMS 키를 메모리에 들고 있어서, 계속 돌면 복구가 은퇴시킨 키를 그대로 쓴다. 그러면 새 키로 다시 감싼 팀 키를 읽지 못하고, 새로 받는 팀 키를 옛 키로 감싸 저장할 수 있다([#59](https://github.com/telicity-ai/zeropw/issues/59)). `serve`가 다시 시작하지 못해도 `recover`는 복구의 결과를 그대로 돌려주고, `serve`는 멈춘 상태로 보여 다시 시작할 수 있다.
 
 ## 6. 기능과 화면
 
+2026-11-07의 Personal Vault 프런트엔드(`desktop/src/app`, `desktop/src/screens/*`, `desktop/src/ui`)다. 창은 사이드바와 목록·상세 칸으로 나뉘고(DESIGN.md §3), 모든 화면은 빈 상태, 처음 읽는 중, 읽기 실패와 다시 시도, 지원하지 않는 기능을 따로 그린다.
+
 | 화면 | 기능 | 쓰는 명령 |
 | --- | --- | --- |
-| 온보딩 | 관리 비밀번호, 복구 코드, 보관함 만들기, 첫 프로젝트 | `password_strength`, `recovery_generate`, `vault_init`, `project_create` |
-| 상단 막대 | 중계기 상태, 전체 정지·재개 | `serve_status`, `control_get`, `stop_all`, `resume` |
-| 홈 | 상태 요약, 최근 알림. 최근 알림의 "모두 보기"는 기록 화면을 알림 탭으로 연다 | `app_status`, `alerts` |
-| 키 | 비밀·환경변수 목록과 추가, 다시 보기, 교체·폐기, `.env` 가져오기(창 어디에 놓아도 이 화면에서 열린다) | `secret_*`, `onetime_*`, `file_pick`, `env_file_load` |
-| 연결 | API·SSH 연결 만들기, 범위, 끄기 | `connection_*`, `file_pick` |
-| 에이전트 | 에이전트와 권한, 앱 안 터미널, 승인 대기 | `principal_*`, `grant_*`, `terminal_*`, `approvals_*` |
-| 기록 | 사용 기록, 알림, 사고 | `audit_tail`, `alerts`, `incident_*`, `control_get` |
-| 팀 | 공유, 팀원, 초대 링크, 합류. 환경 목록에는 이 기기에서 공유한 환경과 다른 기기에서 합류한 환경(`project_list`의 `team_environments`)도 나온다. `team_environments_error`가 오면 공유하거나 합류한 환경이 빠졌을 수 있다고 짧게 알린다. 고른 환경이 그렇게 목록에서 빠지면 목록의 첫 환경을 보이고 그 환경을 읽는다 | `team_*`, `project_list` |
-| 설정 | 중계기 포트, 이 기기 주소, 백업·복원·복구, 망가진 설정 파일 되돌리기 | `settings_*`, `net_interfaces`, `backup_*`, `restore_ack`, `recover` |
+| 첫 실행 | 새 금고 만들기 또는 다른 Mac의 금고와 연결(어느 쪽이든 이 Mac에 금고를 먼저 만든다): 관리 비밀번호, 복구 코드, 금고 만들기(기본 위치 `personal/main` 포함), 완료 뒤 첫 항목 추가·다른 Mac 연결·받은 초대로 참여 | `password_strength`, `recovery_generate`, `vault_init`, `project_create`, `serve_status`, `serve_start` |
+| 잠금 | 이미 있는 금고는 늘 잠긴 채 열린다. ⌘L, 사이드바 단추, 15분 동안 입력이 없으면 다시 잠근다. 잠금은 이 창의 목록만 가리고 로컬 서비스·에이전트·동기화는 계속된다 | `vault_unlock` |
+| 사이드바 | 금고(모든 항목, 종류별 개수, 위치가 둘 이상이면 위치별), 내 Mac, 서비스 연결, 개발자, 활동, 설정. 아래쪽에 로컬 서비스 상태, 켜기·다시 시도, 복원 확인, 다른 기기 접속 끄기, 모든 사용 멈추기·다시 허용 | `app_status`, `serve_start`, `stop_all`, `resume`, `settings_*` |
+| 금고 | 항목 목록(검색, 이름순·최근 변경순, 키보드 이동), 항목 상세(값 보기·복사는 매번 재인증, 새 값 저장, 버전 기록과 사용 중지·철회, SSH 공개 키, 이 항목을 쓰는 연결, 공유 위치 표시), 항목 추가(비밀번호·API 키·환경변수·SSH 키, 입력·파일·새 SSH 키), 새 위치, `.env` 가져오기(창 어디에 놓아도 열린다). 항목 전체 삭제는 아직 지원하지 않는다고 쓴다 | `secret_*`, `project_*`, `onetime_*`, `file_pick`, `env_file_load`, `secret_import*`, `connection_list` |
+| 내 Mac | 이 Mac과 연결한 Mac 목록, 서버 등록, Mac 추가(연결 코드, 요청한 Mac의 지문 확인, 승인·거절), 코드로 연결(미리 보기, 내 지문 보여 주기, 기다리기), 위치별 동기화 상태, 고급 진단(경로·RTT·오류 코드), 연결 해제 | `link_status`, `link_enroll`, `devices_overview`, `pairing_*`, `join_requests`, `approve_join`, `deny_join`, `device_remove` |
+| 서비스 연결 | HTTP API·SSH 연결 목록과 상세(대상, 쓰는 항목, 인증 방식, 허용 메서드·경로, 쓸 수 있는 에이전트), 만들기, ssh 경로 넣기, 끄기, 지원 범위 안내 | `connection_*`, `secret_put`, `grant_list`, `principal_list`, `file_pick` |
+| 개발자 | 에이전트와 권한, 앱 안 터미널, 승인 요청, 다른 사람과 공유(위치 공유, 팀원, 초대 링크, 링크로 참여, 다른 기기 접속 켜기) | `principal_*`, `grant_*`, `terminal_*`, `approvals_*`, `team_*`, `settings_*`, `net_interfaces` |
+| 활동 | 사용 기록, 알림(충돌 확인 필요 포함), 사고 선언·닫기 | `audit_tail`, `alerts`, `incident_*`, `control_get` |
+| 설정 | 잠금과 보안(지금 잠그기, 모든 사용 멈추기, 복구 코드로 기기 키 바꾸기), 연결 서버(`link_service`), 기기와 동기화(다른 기기 접속), 개발자 기능(로컬 서비스, 포트, 망가진 설정 파일 되돌리기), 백업과 복원, 진단과 앱 정보(값 없는 상태만) | `settings_*`, `link_status`, `net_interfaces`, `serve_*`, `backup_*`, `restore_ack`, `recover`, `app_status` |
+
+화면 이름이 바뀐 것 말고 아래 규칙은 그대로다. "키 화면"은 금고, "연결 화면"은 서비스 연결, "기록 화면"은 활동, "팀 화면"은 개발자의 공유 탭이다. 홈 화면은 없어졌고 최근 알림은 활동 화면의 알림 탭에서 본다.
 
 환경변수는 `env_var` 종류의 비밀이다. 값은 중계기가 인증에 쓸 뿐 어느 프로세스의 환경변수로도 들어가지 않는다는 점을 키 화면에서 한 줄로 알린다.
 
@@ -226,18 +251,15 @@ SSH 연결을 만들거나 "ssh 경로 넣기"에서 경로를 넣을 때 코어
 
 사고가 열려 있으면 `incident declare`는 더 넓은 범위일 때만 그 사고를 넓힌다. 그 밖의 선언은 다른 에이전트나 실행 계정을 골라도 아무도 막지 않고 열린 사고를 `existing: true`, `widened: false`와 함께 그대로 돌려준다. 그래서 기록 화면의 사고 선언 시트는 열린 사고보다 넓은 범위만 보여 주고 주 버튼을 범위 넓히기로 쓰며, 전체 범위의 사고가 열려 있으면 더 넓힐 수 없다고만 쓴다. 사고가 열려 있는지는 코어처럼 열린 사고 포인터(`control_get`의 `incident_open`)로 정한다. 포인터가 없는데 사고 파일만 열림으로 남아 있으면(이 수정 전의 앱이 복원하며 남긴 상태 등) 모든 범위와 처음 선언하는 화면을 보인다. 포인터가 있으면 목록에서 열린 사고 가운데 가장 넓은 범위를 그 사고로 본다. `control_get`은 열려 있는지만 알려 주므로, 그런 낡은 파일과 새 사고가 함께 열려 있으면 시트가 넓힐 수 있는 범위를 덜 보일 수 있다. 낡은 사고는 목록에서 끝내면 된다. 시트를 연 뒤 다른 곳에서 사고가 열려 넓히지 못한 선언은 성공 알림 없이 아무 에이전트도 막지 않았다고 쓰고, 에이전트 하나를 막으려면 에이전트 화면에서 끄라며 그 화면으로 가는 버튼을 단다. 고른 범위가 그 사고 때문에 빠지면 다시 고를 때까지 선언하지 않는다.
 
-## 7. 온보딩 흐름
+## 7. 첫 실행 흐름
 
-1. **시작**: 시작하기 또는 초대받았어요.
-2. **관리 비밀번호**: 8자 이상, 두 칸 일치, 강도 점수 기준 통과. 강도는 Rust의 zxcvbn이 매기므로 입력이 바뀔 때마다 그때까지 친 값이 `password_strength`로 IPC를 건너간다(점수와 이유만 돌아온다). 보관함을 만들 때 `vault_init`로 한 번 더 넘어간다.
-3. **복구 코드**: Rust가 120비트 코드를 만들어 여섯 칸으로 보여 준다. 적어 두었다고 표시하면 두 칸을 다시 입력해 확인한다. 직접 정할 때는 더 높은 강도를 요구하고 관리 비밀번호와 같으면 막는다. 직접 정한 값도 2단계처럼 입력할 때마다 `password_strength`로 넘어간다.
-4. **보관함 만들기**: `vault_init` → `serve_start`. 목록의 점이 하나씩 켜지고 마지막에 구체가 터진다.
-5. **프로젝트**: 이름과 환경(dev, staging, prod). 환경은 나중에 바꿀 수 없다.
-6. **완료**: 대시보드로. 팀원 초대를 바로 시작할 수도 있다.
+1. **시작**: 새 금고 만들기, 또는 다른 Mac의 금고와 연결. 둘 다 이 Mac에 금고를 먼저 만든다. 서버나 다른 기기 없이도 로컬 금고는 바로 쓸 수 있다.
+2. **관리 비밀번호**: 8자 이상, 두 칸 일치, 강도 점수 기준 통과. 강도는 Rust의 zxcvbn이 매기므로 입력이 바뀔 때마다 그때까지 친 값이 `password_strength`로 IPC를 건너간다(점수와 이유만 돌아온다).
+3. **복구 코드**: Rust가 120비트 코드를 만들어 여섯 칸으로 보여 준다(창 내용 보호 요청이 답한 뒤에만, 창이 가려지면 숨긴다). 적어 두었다고 표시하면 두 칸을 다시 입력해 확인한다. 직접 정할 때는 더 높은 강도를 요구하고 관리 비밀번호와 같거나 그것을 품으면 막는다.
+4. **금고 만들기**: `vault_init` → `project_create`(`personal`, 환경 `main`; 이미 있으면 건너뜀) → `serve_start`. 각 줄은 그 호출이 답할 때만 바뀐다. `vault_init`는 두 번 실행하지 않으며, 실패 뒤에는 금고가 생겼는지 먼저 확인한다. 로컬 서비스가 켜지지 않아도 금고는 쓸 수 있으므로 다시 시도하거나 나중에 할 수 있다.
+5. **완료**: 첫 항목 추가, 다른 Mac 연결(연결 경로는 내 Mac의 코드로 연결, 새 금고는 Mac 추가), 받은 초대 링크가 있으면 그 초대로 참여, 또는 나중에. 백업은 설정에서 만든다.
 
-초대받기 경로는 링크 확인 → 2~4단계 → 합류다.
-
-에이전트 연결은 대시보드의 빠른 시작이나 에이전트 메뉴에서 한다. 이름과 실행할 곳(다른 계정 추천 / 이 계정)을 고르고 `principal_create` 뒤 터미널을 연다. 서비스 연결과 권한도 대시보드에서 설정한다.
+초대 링크(`zeropw://join#…`)를 금고가 없을 때 받으면 첫 실행은 링크를 받았다고만 알리고, 금고를 만든 뒤 개발자 › 공유에서 미리 보기를 띄운다. 합류는 그 화면에서 눌러야 일어난다.
 
 ## 8. 보안 경계
 
@@ -253,8 +275,10 @@ SSH 연결을 만들거나 "ssh 경로 넣기"에서 경로를 넣을 때 코어
    - macOS: Tauri의 `set_content_protected`로 창의 `NSWindow.sharingType`을 `none`으로 바꾸는 것이 전부다. macOS 15부터 ScreenCaptureKit을 쓰는 캡처·녹화·화면 공유 도구는 이 설정을 꼭 따르지 않는다는 개발자 보고가 있고, 배포 빌드에서 막히는지 시험하지 않았다. `secure_view`의 `{protected: true}`는 요청이 적용됐다는 뜻일 뿐이다.
    - Linux: 창 시스템에 이런 장치가 없어서 아무것도 하지 않고, `secure_view`는 늘 `{protected: false}`를 돌려준다.
    - 화면은 어느 플랫폼에서도 캡처를 막는다고 말하지 않는다.
-9. 같은 macOS 계정에서 도는 프로그램은 개발용 KMS 키 파일을 읽을 수 있다. 이 사실을 보관함 만들기 화면과 에이전트 실행 위치 선택에서 알린다. 실제 격리(신뢰 프로세스를 별도 계정의 데몬으로 실행)는 후속 이슈 [#21](https://github.com/telicity-ai/zeropw/issues/21)에서 다룬다.
+9. 같은 macOS 계정에서 도는 프로그램은 개발용 KMS 키 파일을 읽을 수 있다. 이 사실을 금고 만들기 화면과 에이전트 실행 위치 선택에서 알린다. 실제 격리(신뢰 프로세스를 별도 계정의 데몬으로 실행)는 후속 이슈 [#21](https://github.com/telicity-ai/zeropw/issues/21)에서 다룬다.
 10. 창은 파일을 끌어다 놓을 수 있다(`dragDropEnabled`). 놓인 경로는 셸이 코어로 넘기고, 코어는 일반 파일 하나만 막히지 않게 열어 읽는다(FIFO·장치 파일은 거절). 파일 내용은 웹뷰로 가지 않고, 앱 코드는 경로도 받지 않는다. 다만 Tauri가 자체 끌기 이벤트(`tauri://drag-*`)에 경로를 담아 그 이벤트를 듣는 페이지 리스너에 보내므로, 페이지에서 도는 스크립트가 리스너를 달면 경로를 알 수 있다(`core:default`가 이벤트 듣기를 허락한다). 앱 소스에는 그런 리스너가 없다(`scripts/check-static.mjs`가 막는다). Tauri가 놓인 경로에 넓히는 범위는 `protocol-asset` 기능이 꺼져 있어 아무것도 허락하지 않는다(`scripts/check-tauri.mjs`가 `cargo metadata`로 tauri에 실제로 켜진 기능을 본다).
+
+11. 창은 투명하고(`transparent: true`) macOS에서 사이드바 비브런시(`windowEffects: sidebar`, 늘 활성 상태)를 쓴다(2026-11-07 디자인 요청). Tauri 2.12.1에서 투명 창은 `macos-private-api` 기능 없이도 켜지며(그 기능은 2.12.1부터 아무 일도 하지 않는다), wry가 WKWebView의 비공개 키 `drawsBackground`를 끈다. tauri 의존성의 기능 목록은 그대로 비어 있고 `protocol-asset` 검사도 그대로다. 비브런시가 없는 곳(Linux, 개발용 브라우저)에서는 페이지가 불투명한 회색 바탕을 그린다. 창 내용 보호 요청(§8.8)은 이와 상관없이 같다.
 
 ## 9. 빌드·시험·CI
 
@@ -263,8 +287,9 @@ SSH 연결을 만들거나 "ssh 경로 넣기"에서 경로를 넣을 때 코어
 - 개발 실행: `npm run tauri dev`(Vite 1420번 포트). 사이드카는 디버그 빌드에서 `ZEROPW_BIN_DIR`로 가리킨다.
 - 배포 빌드: `npm run bundle`(먼저 `npm ci`). `scripts/prepare-sidecars.sh`가 두 가지를 준비하고 `tauri build --config src-tauri/tauri.bundle.conf.json`이 묶는다.
   - 사이드카: `zeropw-admin`, `zeropw_session`, `zeropw-agent`를 CLI 릴리스와 같은 방법으로 빌드한다. `scripts/build-release.py --bin`이 SHA-256으로 고정한 OpenSSL 3.5.9를 정적으로 넣고(`--features bundled-openssl`), 허용한 환경변수만 넘겨 빌드한다. libssl·libcrypto나 Homebrew 라이브러리에 링크된 바이너리, macOS에서 `/usr/lib`·`/System/Library` 밖의 라이브러리에 링크된 바이너리, 홈 폴더·저장소·빌드 폴더·`CARGO_HOME`·`RUSTUP_HOME`·`/Volumes/`·다른 계정 홈(`/Users/`, `/home/`) 경로가 남은 바이너리는 거부한다. `HOME`이 절대 경로가 아니면 시작하지 않는다. 결과는 `src-tauri/binaries/<이름>-<타깃>`이다. 빌드하는 기기와 같은 타깃만 만든다. 빌드 폴더 `${CARGO_TARGET_DIR:-rust/target}/sidecars-<타깃>`은 새 폴더, 빈 폴더, 이전 실행이 남긴 폴더만 받으므로, 이 규칙이 생기기 전에 만든 폴더는 한 번 지워야 한다.
-  - 고지: `scripts/third-party-licenses.py`가 `src-tauri/notices/THIRD_PARTY_LICENSES.md`를 쓴다. 다루는 것은 다섯 가지다. 앱 실행 파일의 Rust 크레이트, 사이드카의 크레이트와 OpenSSL, 네 실행 파일에 모두 들어가는 Rust 표준 라이브러리(한 번만 싣는다), 웹 화면에 들어가는 npm 패키지(Pretendard·JetBrains Mono 글꼴은 OFL-1.1이고, Pretendard에는 바탕 글꼴의 저작권과 예약 글꼴 이름을 밝힌 원래 저장소의 고지를 더한다), 빌드 도구가 번들에 넣는 코드(Rolldown의 실행 도우미, Vite를 거쳐 es-module-shims에서 온 모듈 미리 불러오기 보완 코드)다. 고지 파일을 싣지 않은 크레이트, 모든 OFL 글꼴, 번들에 코드를 넣는 빌드 도구는 정확한 버전마다 검토한 `desktop/licenses/supplement.json` 항목이 있어야 한다. 빠진 고지가 있거나, 사이드카 고지가 불완전하거나, 다른 `rust/Cargo.lock`이나 다른 Rust 툴체인·타깃으로 모은 것이면 아무것도 쓰지 않고 실패한다. 그래서 Vite, Rolldown, 글꼴을 올리거나 보충한 크레이트를 바꾸면 그 항목을 다시 검토할 때까지 고지를 모으지 못한다([releasing.md](releasing.md)의 "Desktop app").
-- 배포 설정은 `tauri.bundle.conf.json`에만 둔다. 사이드카 세 개, 자원으로 `LICENSE`와 `THIRD_PARTY_LICENSES.md`(macOS에서는 `Contents/Resources`), macOS 최소 버전 11.0, 임시(ad-hoc) 서명 `"-"`, 팀 공유용 로컬 네트워크 사용 설명이 든 `Info.release.plist`다. `tauri.conf.json`은 개발 실행과 시험에 필요한 것만 담는다. `scripts/check-tauri.mjs`가 이 키와 값만 허용하고, 서명 ID는 `"-"`이거나 없어야 하며, 인증서·공증·엔타이틀먼트·업데이터 설정은 어느 설정에도 둘 수 없다. Tauri가 알아서 합치는 파일도 `src-tauri/`에 둘 수 없다(대소문자 구분 없이 `tauri.<플랫폼>.conf.json`·`.json5`, `Tauri.<플랫폼>.toml`, `tauri.conf.json5`, `Tauri.toml`, `Info.plist`, `Info.release.plist`가 아닌 `.plist`·`.entitlements`). 딥 링크 설정은 정확히 `zeropw` 스킴 하나이고 도메인은 둘 수 없다.
+  - 고지: `scripts/third-party-licenses.py`가 `src-tauri/notices/THIRD_PARTY_LICENSES.md`를 쓴다. 다루는 것은 여섯 가지다. 앱 실행 파일의 Rust 크레이트, 사이드카의 크레이트와 OpenSSL, 네 Rust 실행 파일에 모두 들어가는 Rust 표준 라이브러리(한 번만 싣는다), 연결 데몬의 Go 모듈과 Go 표준 라이브러리(`build-link-sidecar.py`가 모은 것, 대상과 고정한 커밋이 맞아야 한다), 웹 화면에 들어가는 npm 패키지(Pretendard·JetBrains Mono 글꼴은 OFL-1.1이고, Pretendard에는 바탕 글꼴의 저작권과 예약 글꼴 이름을 밝힌 원래 저장소의 고지를 더한다), 빌드 도구가 번들에 넣는 코드(Rolldown의 실행 도우미, Vite를 거쳐 es-module-shims에서 온 모듈 미리 불러오기 보완 코드)다. 고지 파일을 싣지 않은 크레이트, 모든 OFL 글꼴, 번들에 코드를 넣는 빌드 도구는 정확한 버전마다 검토한 `desktop/licenses/supplement.json` 항목이 있어야 한다. 빠진 고지가 있거나, 사이드카 고지가 불완전하거나, 다른 `rust/Cargo.lock`이나 다른 Rust 툴체인·타깃으로 모은 것이면 아무것도 쓰지 않고 실패한다. 그래서 Vite, Rolldown, 글꼴을 올리거나 보충한 크레이트를 바꾸면 그 항목을 다시 검토할 때까지 고지를 모으지 못한다([releasing.md](releasing.md)의 "Desktop app").
+  - 연결 데몬: `ZEROPW_LINK_SRC`가 가리키는 zeropw-link 체크아웃에서 `desktop/zeropw-link.json`이 정한 커밋만 `git archive`로 꺼내 `scripts/build-link-sidecar.py`가 빌드한다. 기록한 Go 버전(`GOTOOLCHAIN=local`), 네트워크 없이(`GOPROXY=off`, `GOSUMDB=off`, `-mod=readonly`, `GOENV=off`; 모듈은 미리 받아 둔다), `CGO_ENABLED=0 -trimpath -buildvcs=false`, 빌드 ID 없음. 바이너리의 모듈이 `go.sum`과 맞는지, macOS 최소 버전이 기록과 같은지(Go 1.27은 macOS 13), 로컬 경로가 없는지 확인하고 Go 모듈과 Go 표준 라이브러리의 고지를 모은다. macOS 11·12에서는 이 데몬이 돌지 않아 다른 Mac과의 동기화를 쓸 수 없다. `package-macos.py`는 `--link-src`로 체크아웃을 받는다(물려받은 `ZEROPW_*` 변수는 여전히 거절한다).
+- 배포 설정은 `tauri.bundle.conf.json`에만 둔다. 사이드카 네 개, 자원으로 `LICENSE`와 `THIRD_PARTY_LICENSES.md`(macOS에서는 `Contents/Resources`), macOS 최소 버전 11.0, 임시(ad-hoc) 서명 `"-"`, 팀 공유용 로컬 네트워크 사용 설명이 든 `Info.release.plist`다. `tauri.conf.json`은 개발 실행과 시험에 필요한 것만 담는다. `scripts/check-tauri.mjs`가 이 키와 값만 허용하고, 서명 ID는 `"-"`이거나 없어야 하며, 인증서·공증·엔타이틀먼트·업데이터 설정은 어느 설정에도 둘 수 없다. Tauri가 알아서 합치는 파일도 `src-tauri/`에 둘 수 없다(대소문자 구분 없이 `tauri.<플랫폼>.conf.json`·`.json5`, `Tauri.<플랫폼>.toml`, `tauri.conf.json5`, `Tauri.toml`, `Info.plist`, `Info.release.plist`가 아닌 `.plist`·`.entitlements`). 딥 링크 설정은 정확히 `zeropw` 스킴 하나이고 도메인은 둘 수 없다.
 - macOS 배포 이미지: `env -i HOME="$HOME" PATH="$PATH" python3 desktop/scripts/package-macos.py --work-dir <작업 폴더> --out-dir <출력 폴더> --tag vX.Y.Z`. 두 폴더와 `CARGO_TARGET_DIR`는 저장소 밖이어야 하고, 작업 폴더는 새 폴더, 빈 폴더, 이전 실행이 남긴 폴더만 받는다. Apple Silicon Mac에서 커밋된 HEAD를 복사해 빌드한다. 이름이 `ZEROPW_`로 시작하거나 `TOKEN`, `SECRET`, `PASSW`, `PASSPHRASE`, `_KEY`, `AUTH`, `CSC_`, `P12`, `APPLE_`가 들어간(대소문자 무시) 변수나 서명·공증·업데이터 변수가 있으면 변수 이름만 알리고 시작하지 않는다. 보통 로그인 세션에 있는 `SSH_AUTH_SOCK`도 여기에 걸리므로 `env -i`로 시작한다. 빌드 단계에는 허용한 환경변수만 넘긴다. 결과는 `zeropw-desktop-vX.Y.Z-aarch64-apple-darwin.dmg`와 `.sha256`, 고지 파일, 검증 기록이다. 버전은 `rust/Cargo.toml`, `rust/Cargo.lock`의 `zeropw`, 데스크톱의 버전 필드가 모두 같을 때만 쓰고, `--tag`는 꼭 줘야 하고 그 값도 `vX.Y.Z`와 같아야 한다. 이미지를 확인하는 항목과 Developer ID 서명·공증 절차는 [releasing.md](releasing.md)의 "Desktop app"에 있다.
 - 임시 서명은 번들 전체를 봉인해 바뀐 파일을 찾아내지만 게시자를 증명하지 않는다. 공증하지 않았으므로 macOS 15 이후에는 이렇게 연다. 내려받은 이미지를 열어 ZeroPW를 응용 프로그램 폴더로 끌어다 놓고 이미지를 꺼낸다. 응용 프로그램 폴더에서 한 번 열면 Gatekeeper가 막는다. 그 뒤 한 시간쯤 안에 시스템 설정 › 개인정보 보호 및 보안에서 "그래도 열기"를 누르고 로그인 암호로 확인한다. 이미지에서 바로 열면 macOS가 앱을 임시 위치에서 실행할 수 있고(App Translocation), 제안 명령의 `<번들 경로>`(§4.4)가 그 위치를 가리켜 다른 계정은 실행하지 못할 수 있다.
 - 릴리스 전에는 브라우저로 내려받아 응용 프로그램 폴더에 설치한 앱에서 이 계정과 다른 계정의 에이전트 명령을 직접 실행해 보고, 앱을 Cmd+Q로 끝내 중계기가 멈추는지 본다([releasing.md](releasing.md) "Desktop app"의 Gates 3번). v0.2.0에서는 소유자 결정에 따라 같은 계정의 에이전트 확인만 코디네이터가 빌드한 Mac에서 한다. 깨끗한 Mac에서 설치하고 처음 여는 확인, 다른 계정의 에이전트 확인, "그래도 열기" 뒤에 macOS가 ad-hoc 서명한 사이드카를 어떻게 다루는지 보는 일, 앱을 Cmd+Q로 끝내는 확인은 면제했다(releasing.md의 "v0.2.0 owner decisions" 5, 6번).
@@ -274,12 +299,12 @@ SSH 연결을 만들거나 "ssh 경로 넣기"에서 경로를 넣을 때 코어
 
 ## 10. 남은 한계
 
-- 같은 macOS 계정의 에이전트로부터 보관함을 격리하지 않는다(§8.9).
+- 같은 macOS 계정의 에이전트로부터 금고를 격리하지 않는다(§8.9).
 - 창에 놓은 파일의 경로는 Tauri가 자체 끌기 이벤트로 그 이벤트를 듣는 페이지 리스너에 보낸다. 앱 페이지는 듣지 않지만, 웹뷰가 침해되면 리스너를 달아 놓인 파일의 경로를 알 수 있다. 파일 내용은 코어만 읽는다(§8.10).
 - `.env`를 가져와도 원래 파일은 그대로 남는다. 앱은 파일을 고치거나 지우지 않고, 에이전트가 읽을 수 있는 곳이면 지우라고 알린다([env-import.md](env-import.md) §8).
-- 화면은 한국어로만 나온다. 영어판은 없다(§1, 소유자 결정).
+- 화면은 한국어와 영어로 나온다(§1). macOS 로컬 네트워크 권한 창의 설명은 한국어뿐이다.
 - Developer ID 서명, 공증, 자동 업데이트는 하지 않는다. 배포하는 것은 ad-hoc 서명한 .dmg 미리 보기뿐이다(v0.2.0에 싣기로 한 소유자 결정, §1). 이 .dmg는 공증되지 않았으므로 내려받아 처음 열면 Gatekeeper가 막고, 사용자가 시스템 설정의 개인정보 보호 및 보안에서 직접 허용해야 열린다(§9). 앱은 응용 프로그램 폴더로 옮긴 뒤에 열어야 한다. ad-hoc 서명은 누가 만들었는지 보증하지 않는다. v0.2.0 미리 보기는 내려받은 이미지를 Gatekeeper를 거쳐 여는 과정을 어느 Mac에서도 시험하지 않았다. 다른 계정의 에이전트 실행, "그래도 열기" 뒤 사이드카에 대한 macOS의 처리, Cmd+Q로 앱을 끝내는 과정도 확인하지 않았다(§1, §9, 소유자 면제).
-- 복구 코드로 기기 키를 바꾸려면 지금 기기 키 파일이 있어야 한다. 바꾼 뒤에도 같은 데이터 키를 새 기기 키 파일로 다시 감쌀 뿐이라, 기기 키 파일이 새었을 때의 대책이 아니다. 바꾸기 전에 만든 백업은 더 이상 복원할 수 없다([#22](https://github.com/telicity-ai/zeropw/issues/22)). 설정 화면은 되돌릴 수 없다는 점을 주황 알림(`src/copy.ts`의 `set.recover.warn`)으로, 키 파일이 새었을 수 있을 때 할 일을 파랑 알림(`set.recover.leak`)으로 알리며, 기기 키를 바꾸는 일을 유출 대책으로 소개하지 않는다([DESIGN.md](../DESIGN.md) §5.3).
+- 복구 코드로 기기 키를 바꾸려면 지금 기기 키 파일이 있어야 한다. 바꾼 뒤에도 같은 데이터 키를 새 기기 키 파일로 다시 감쌀 뿐이라, 기기 키 파일이 새었을 때의 대책이 아니다. 바꾸기 전에 만든 백업은 더 이상 복원할 수 없다([#22](https://github.com/telicity-ai/zeropw/issues/22)). 설정 화면은 되돌릴 수 없다는 점을 주황 알림(`src/copy/settings.ts`의 `settings.recover.warn`)으로, 키 파일이 새었을 수 있을 때 할 일을 파랑 알림(`settings.recover.leak`)으로 알리며, 기기 키를 바꾸는 일을 유출 대책으로 소개하지 않는다([DESIGN.md](../DESIGN.md) §5.3).
 - Apple Silicon(arm64)용만 만든다. Intel Mac용이나 유니버설 빌드는 없다.
 - 새 버전이 나와도 앱이 알려 주거나 바꿔 주지 않는다. 사용자가 직접 받아 바꿔 넣어야 하고, 보안 수정도 그때까지 들어오지 않는다.
 - 팀 공유는 기존 명세대로 같은 LAN·VPN 안의 직접 연결만 지원한다.
@@ -292,5 +317,7 @@ SSH 연결을 만들거나 "ssh 경로 넣기"에서 경로를 넣을 때 코어
 - Linux에서 `zeropw://` 링크는 deb·AppImage로 설치해 `.desktop` 등록이 된 뒤에만 앱으로 온다. 실행 중에 스킴을 등록하지 않는다.
 - 웹뷰에서 보낸 비밀번호는 Tauri IPC 버퍼에 사본이 남을 수 있다. 관리 비밀번호와 직접 정한 복구 코드는 강도 확인 때문에 입력이 바뀔 때마다 그때까지의 값이 넘어가므로 사본이 여럿일 수 있다(§7). 코어로 넘어온 뒤에는 `Zeroizing`으로 지운다.
 - 이 수정 전의 앱(v0.2.0 포함)으로 만든 SSH 연결은 ssh가 없어서, 연결 화면의 "ssh 경로 넣기"로 ssh를 넣기 전까지 에이전트가 쓸 수 없다(§5). ssh를 넣으면 그 연결에 준 권한은 다시 줘야 한다. 넣은 ssh는 바꿀 수 없어서, 다른 ssh를 쓰려면 연결을 끄고 새 이름으로 다시 만들어야 한다. 끈 연결의 이름은 다시 쓸 수 없다.
+- 잠금은 이 창의 목록만 가린다. 잠겨 있어도 로컬 서비스, 에이전트, 동기화는 계속되며, 같은 macOS 계정의 프로그램은 상태 디렉터리를 그대로 읽을 수 있다(§8.9). 자동 잠금 시간은 15분으로 고정이다.
+- 항목 전체 삭제(영구 tombstone)와 인증된 스냅숏 전송은 아직 없다. 화면은 지원하지 않는다고 쓴다([personal-vault-frontend-2026-11-07.md](personal-vault-frontend-2026-11-07.md) §4).
 - 관리 비밀번호를 바꾸는 기능은 아직 없다. 사고 종료 절차가 요구하는 비밀번호 교체 단계는 화면에서 수동 단계로 안내한다.
 - 앱은 초대를 링크(`zeropw://join#…`)로만 만든다. 0.1.0 CLI는 링크를 읽지 못하므로 CLI로 합류하는 팀원은 0.2.0을 써야 한다. 0.1.0과 0.2.0 기기를 한 팀에 섞어 쓰는 경우는 시험하지 않았다.

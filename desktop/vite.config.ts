@@ -19,5 +19,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['test/**/*.test.ts'],
+    // the design test reads the stylesheets as text (`?raw`); unprocessed CSS would read as ''
+    css: { include: [/src\/styles\/.*\.css/] },
   },
 });

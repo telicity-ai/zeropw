@@ -1,0 +1,1061 @@
+{
+  "head": "7bcecfda8571ae40047fae406915f73d2e25bde0",
+  "rust_tree": "24fceecbec4b559aa8d1e31331ef5be0033ca2fa",
+  "release_parser_exit": [
+    "0"
+  ],
+  "release_payload_stack_exit": [
+    "0"
+  ],
+  "full_linux_exit": [
+    "0"
+  ],
+  "steps": [
+    {
+      "name": "fmt",
+      "exit": 0,
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": []
+    },
+    {
+      "name": "clippy",
+      "exit": 0,
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": []
+    },
+    {
+      "name": "lib-and-bins",
+      "exit": 0,
+      "passed": 685,
+      "failed": 0,
+      "ignored": 4,
+      "result_lines": [
+        "test result: ok. 685 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 77.75s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "name": "test:admin_expanduser_parity",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s"
+      ]
+    },
+    {
+      "name": "test:admin_input_envelope",
+      "exit": 0,
+      "passed": 12,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.26s"
+      ]
+    },
+    {
+      "name": "test:admin_secret_import",
+      "exit": 0,
+      "passed": 9,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.71s"
+      ]
+    },
+    {
+      "name": "test:admin_sigint_cleanup_boundaries",
+      "exit": 0,
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.15s"
+      ]
+    },
+    {
+      "name": "test:admin_sigint_exit",
+      "exit": 0,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.84s"
+      ]
+    },
+    {
+      "name": "test:agent_help",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s"
+      ]
+    },
+    {
+      "name": "test:agent_proxy_parity",
+      "exit": 0,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "name": "test:astra_cleanup_publication_order",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.86s"
+      ]
+    },
+    {
+      "name": "test:astra_cli_runtime_round2",
+      "exit": 0,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.86s"
+      ]
+    },
+    {
+      "name": "test:astra_cli_runtime_round3",
+      "exit": 0,
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.13s"
+      ]
+    },
+    {
+      "name": "test:astra_cli_runtime_round4",
+      "exit": 0,
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.52s"
+      ]
+    },
+    {
+      "name": "test:astra_projects_final",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.66s"
+      ]
+    },
+    {
+      "name": "test:astra_pty_portability",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s"
+      ]
+    },
+    {
+      "name": "test:astra_response_acceptance",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.87s"
+      ]
+    },
+    {
+      "name": "test:astra_response_final",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.03s"
+      ]
+    },
+    {
+      "name": "test:astra_response_final_recheck",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.13s"
+      ]
+    },
+    {
+      "name": "test:astra_response_review",
+      "exit": 0,
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.04s"
+      ]
+    },
+    {
+      "name": "test:astra_response_round2",
+      "exit": 0,
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.39s"
+      ]
+    },
+    {
+      "name": "test:astra_response_round3",
+      "exit": 0,
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.07s"
+      ]
+    },
+    {
+      "name": "test:astra_response_round4",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.77s"
+      ]
+    },
+    {
+      "name": "test:astra_run_context_lease",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.94s"
+      ]
+    },
+    {
+      "name": "test:astra_runtime_final",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s"
+      ]
+    },
+    {
+      "name": "test:astra_runtime_review",
+      "exit": 0,
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.56s"
+      ]
+    },
+    {
+      "name": "test:astra_sigint_cleanup",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.33s"
+      ]
+    },
+    {
+      "name": "test:astra_sigint_cleanup_final",
+      "exit": 0,
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.14s"
+      ]
+    },
+    {
+      "name": "test:astra_team_fact_catchup",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.11s"
+      ]
+    },
+    {
+      "name": "test:astra_team_fact_duplicate_diagnostic",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.75s"
+      ]
+    },
+    {
+      "name": "test:astra_team_reconnect_diagnostic",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.49s"
+      ]
+    },
+    {
+      "name": "test:astra_team_review",
+      "exit": 0,
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.02s"
+      ]
+    },
+    {
+      "name": "test:astra_team_round2",
+      "exit": 0,
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.49s"
+      ]
+    },
+    {
+      "name": "test:astra_team_round3",
+      "exit": 0,
+      "passed": 9,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.26s"
+      ]
+    },
+    {
+      "name": "test:astra_team_round4",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.22s"
+      ]
+    },
+    {
+      "name": "test:base_cli_error_parity",
+      "exit": 0,
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 36.97s"
+      ]
+    },
+    {
+      "name": "test:canonical_helpers",
+      "exit": 0,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s"
+      ]
+    },
+    {
+      "name": "test:cli_commands",
+      "exit": 0,
+      "passed": 10,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.64s"
+      ]
+    },
+    {
+      "name": "test:cli_grant_limits_parity",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.15s"
+      ]
+    },
+    {
+      "name": "test:cli_parity",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 41.50s"
+      ]
+    },
+    {
+      "name": "test:democli_parity",
+      "exit": 0,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      ]
+    },
+    {
+      "name": "test:escaped_builtin_http_parity",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.79s"
+      ]
+    },
+    {
+      "name": "test:fake_upstream",
+      "exit": 0,
+      "passed": 20,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.27s"
+      ]
+    },
+    {
+      "name": "test:gateway",
+      "exit": 0,
+      "passed": 148,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 148 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 71.41s"
+      ]
+    },
+    {
+      "name": "test:gateway_oracle",
+      "exit": 0,
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 26.56s"
+      ]
+    },
+    {
+      "name": "test:gateway_replay_status_parity",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "name": "test:gateway_tls_parity",
+      "exit": 0,
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.27s"
+      ]
+    },
+    {
+      "name": "test:gateway_x1_credential_e2e",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.03s"
+      ]
+    },
+    {
+      "name": "test:ledger_float_parity",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.19s"
+      ]
+    },
+    {
+      "name": "test:native_admin_cli",
+      "exit": 0,
+      "passed": 25,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.97s"
+      ]
+    },
+    {
+      "name": "test:native_admin_cli_more",
+      "exit": 0,
+      "passed": 26,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 34.93s"
+      ]
+    },
+    {
+      "name": "test:native_agent_cli",
+      "exit": 0,
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.26s"
+      ]
+    },
+    {
+      "name": "test:native_atomic_cli",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.75s"
+      ]
+    },
+    {
+      "name": "test:native_cli_e2e",
+      "exit": 0,
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.61s"
+      ]
+    },
+    {
+      "name": "test:native_response_cli",
+      "exit": 0,
+      "passed": 17,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.70s"
+      ]
+    },
+    {
+      "name": "test:native_team_cli",
+      "exit": 0,
+      "passed": 20,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.45s"
+      ]
+    },
+    {
+      "name": "test:native_team_e2e",
+      "exit": 0,
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.82s"
+      ]
+    },
+    {
+      "name": "test:policy_oracle",
+      "exit": 0,
+      "passed": 26,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s"
+      ]
+    },
+    {
+      "name": "test:policy_parity_close",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s"
+      ]
+    },
+    {
+      "name": "test:python_numeric_comparison_parity",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "name": "test:relay_escape_parity",
+      "exit": 0,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 46.46s"
+      ]
+    },
+    {
+      "name": "test:response",
+      "exit": 0,
+      "passed": 32,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 26.05s"
+      ]
+    },
+    {
+      "name": "test:response_contract",
+      "exit": 0,
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.10s"
+      ]
+    },
+    {
+      "name": "test:response_integer_boundaries",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.91s"
+      ]
+    },
+    {
+      "name": "test:response_parity_gaps",
+      "exit": 0,
+      "passed": 9,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.20s"
+      ]
+    },
+    {
+      "name": "test:runs",
+      "exit": 0,
+      "passed": 21,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.50s"
+      ]
+    },
+    {
+      "name": "test:runtime_fix_boundaries",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.22s"
+      ]
+    },
+    {
+      "name": "test:runtime_parity_gaps",
+      "exit": 0,
+      "passed": 15,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.39s"
+      ]
+    },
+    {
+      "name": "test:serve_request_log",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.82s"
+      ]
+    },
+    {
+      "name": "test:server_accept_resilience",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.37s"
+      ]
+    },
+    {
+      "name": "test:signer_e2e",
+      "exit": 0,
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.22s"
+      ]
+    },
+    {
+      "name": "test:signer_oracle",
+      "exit": 0,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.16s"
+      ]
+    },
+    {
+      "name": "test:sshwire",
+      "exit": 0,
+      "passed": 86,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s"
+      ]
+    },
+    {
+      "name": "test:state_dir_cross_language",
+      "exit": 0,
+      "passed": 6,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s"
+      ]
+    },
+    {
+      "name": "test:store_cross_process_lock",
+      "exit": 0,
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.61s"
+      ]
+    },
+    {
+      "name": "test:store_oracle",
+      "exit": 0,
+      "passed": 2,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "name": "test:team_checkpoint_legacy_parser_regression",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "name": "test:team_checkpoint_manifest",
+      "exit": 0,
+      "passed": 10,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s"
+      ]
+    },
+    {
+      "name": "test:team_checkpoint_payload",
+      "exit": 0,
+      "passed": 13,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.15s"
+      ]
+    },
+    {
+      "name": "test:team_checkpoint_provenance",
+      "exit": 0,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+      ]
+    },
+    {
+      "name": "test:team_derive_lazy_parity",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.20s"
+      ]
+    },
+    {
+      "name": "test:team_envelope_parity_edges",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      ]
+    },
+    {
+      "name": "test:team_fold",
+      "exit": 0,
+      "passed": 31,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.20s"
+      ]
+    },
+    {
+      "name": "test:team_fold_lazy_parity",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.49s"
+      ]
+    },
+    {
+      "name": "test:team_invite_link",
+      "exit": 0,
+      "passed": 19,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.31s"
+      ]
+    },
+    {
+      "name": "test:team_link_transport",
+      "exit": 0,
+      "passed": 12,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.10s"
+      ]
+    },
+    {
+      "name": "test:team_membership_sync",
+      "exit": 0,
+      "passed": 10,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.02s"
+      ]
+    },
+    {
+      "name": "test:team_oracle",
+      "exit": 0,
+      "passed": 35,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s"
+      ]
+    },
+    {
+      "name": "test:team_pairing_approval",
+      "exit": 0,
+      "passed": 13,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.22s"
+      ]
+    },
+    {
+      "name": "test:team_parity_gaps",
+      "exit": 0,
+      "passed": 16,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 14.64s"
+      ]
+    },
+    {
+      "name": "test:team_remaining_contract",
+      "exit": 0,
+      "passed": 24,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 24 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 25.49s"
+      ]
+    },
+    {
+      "name": "test:team_secret_import",
+      "exit": 0,
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.44s"
+      ]
+    },
+    {
+      "name": "test:team_share_policy_version_parity",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.03s"
+      ]
+    },
+    {
+      "name": "test:team_snapshot_total_parity",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 36.94s"
+      ]
+    },
+    {
+      "name": "test:team_snapshot_version_order_parity",
+      "exit": 0,
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s"
+      ]
+    },
+    {
+      "name": "test:team_sync_status",
+      "exit": 0,
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 42.27s"
+      ]
+    },
+    {
+      "name": "test:team_transport",
+      "exit": 0,
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s"
+      ]
+    },
+    {
+      "name": "test:team_uncaught_scope_parity",
+      "exit": 0,
+      "passed": 3,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 43.97s"
+      ]
+    },
+    {
+      "name": "test:tools_server",
+      "exit": 0,
+      "passed": 27,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.76s"
+      ]
+    },
+    {
+      "name": "test:vault_context",
+      "exit": 0,
+      "passed": 46,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 46 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 23.23s"
+      ]
+    },
+    {
+      "name": "test:vault_context_oracle",
+      "exit": 0,
+      "passed": 32,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 15.69s"
+      ]
+    },
+    {
+      "name": "test:vault_public_parity",
+      "exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.77s"
+      ]
+    },
+    {
+      "name": "signer-probes",
+      "exit": 0,
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 685 filtered out; finished in 19.65s"
+      ]
+    },
+    {
+      "name": "doc-tests",
+      "exit": 0,
+      "passed": 10,
+      "failed": 0,
+      "ignored": 0,
+      "result_lines": [
+        "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s"
+      ]
+    }
+  ],
+  "failed_steps": [],
+  "total_passed": 1681,
+  "total_failed": 0,
+  "reported_ignored": 4,
+  "failed_test_lines": []
+}

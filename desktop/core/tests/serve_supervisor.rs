@@ -42,6 +42,7 @@ fn start_records_a_private_pid_file_and_a_second_supervisor_attaches() {
     let config = ServeConfig {
         port,
         team_listen: Some("192.168.1.20:47390".into()),
+        link_socket: None,
     };
     let status = first.start(&config).unwrap();
     assert!(status.running);
@@ -112,6 +113,7 @@ fn stop_escalates_to_sigkill_after_the_grace_period() {
         .start(&ServeConfig {
             port,
             team_listen: None,
+            link_socket: None,
         })
         .unwrap()
         .pid
@@ -141,6 +143,7 @@ fn a_serve_that_exits_reports_the_cli_error_from_its_log() {
         .start(&ServeConfig {
             port: free_port(),
             team_listen: None,
+            link_socket: None,
         })
         .unwrap_err();
     assert_eq!(
@@ -209,6 +212,7 @@ fn a_serve_that_cannot_listen_says_which_address_failed() {
             .start(&ServeConfig {
                 port: free_port(),
                 team_listen: team_listen.map(str::to_owned),
+                link_socket: None,
             })
             .unwrap_err();
         assert_eq!(
@@ -232,6 +236,7 @@ fn a_serve_that_cannot_listen_says_which_address_failed() {
         .start(&ServeConfig {
             port: free_port(),
             team_listen: Some(team.into()),
+            link_socket: None,
         })
         .unwrap_err();
     assert_eq!(
@@ -246,6 +251,7 @@ fn a_serve_that_cannot_listen_says_which_address_failed() {
         .start(&ServeConfig {
             port: free_port(),
             team_listen: Some(team.into()),
+            link_socket: None,
         })
         .unwrap_err();
     assert_eq!(
@@ -264,6 +270,7 @@ fn a_serve_that_never_gets_healthy_times_out_and_is_stopped() {
         .start(&ServeConfig {
             port: free_port(),
             team_listen: None,
+            link_socket: None,
         })
         .unwrap_err();
     assert_eq!(e.reason, "serve_start_timeout");
@@ -287,6 +294,7 @@ fn a_stop_during_a_start_cancels_it_promptly() {
         starter.start(&ServeConfig {
             port,
             team_listen: None,
+            link_socket: None,
         })
     });
     assert!(wait_until(Duration::from_secs(5), || fx.count("serve") == 1));
@@ -308,6 +316,7 @@ fn a_stop_during_a_start_cancels_it_promptly() {
         .start(&ServeConfig {
             port: healthy,
             team_listen: None,
+            link_socket: None,
         })
         .unwrap();
     assert!(status.running);
@@ -325,6 +334,7 @@ fn a_serve_printing_a_non_loopback_url_is_refused() {
         .start(&ServeConfig {
             port: free_port(),
             team_listen: None,
+            link_socket: None,
         })
         .unwrap_err();
     assert_eq!(e.reason, "serve_output_invalid");
@@ -340,6 +350,8 @@ fn watched_core(fx: &Fixture, events: std::sync::Arc<Events>, port: u16) -> Core
     core.settings_set(Settings {
         gateway_port: port,
         team_listen: None,
+        link_service: None,
+        language: None,
     })
     .unwrap();
     core
@@ -399,6 +411,7 @@ fn the_core_reports_an_adopted_sidecar_that_died() {
         .start(&ServeConfig {
             port,
             team_listen: None,
+            link_socket: None,
         })
         .unwrap()
         .pid
@@ -438,6 +451,7 @@ fn the_watch_runs_ps_on_an_adopted_sidecar_only_every_few_looks() {
     let config = ServeConfig {
         port: health_server(),
         team_listen: None,
+        link_socket: None,
     };
     let first = supervisor(&fx, Duration::from_secs(2));
     let adopter = supervisor(&fx, Duration::from_secs(2));
@@ -483,6 +497,7 @@ fn reports_of_a_start_a_stop_and_an_attach_come_before_any_other_look() {
     let config = ServeConfig {
         port: health_server(),
         team_listen: None,
+        link_socket: None,
     };
     let sup = Arc::new(supervisor(&fx, Duration::from_secs(2)));
     let adopter = Arc::new(supervisor(&fx, Duration::from_secs(2)));

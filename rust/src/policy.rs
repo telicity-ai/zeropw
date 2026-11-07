@@ -6278,6 +6278,25 @@ impl<'a> Policy<'a> {
             }
             Err(e) => return Err(e),
         };
+        if self.state.exists(crate::tombstone::PATH) {
+            let vault_doc = self.state.read_json(crate::vault::VAULT_DOC, Value::Null)?;
+            let raw_connections = self.connections()?;
+            let connection_env = connection_id
+                .as_str()
+                .and_then(|id| raw_connections.get(id))
+                .and_then(|entry| entry["shared_env"].as_str());
+            if crate::tombstone::is_deleted(
+                self.state,
+                &connection.secret_id,
+                connection_env
+                    .or_else(|| vault_doc["secrets"][&connection.secret_id]["shared_env"].as_str()),
+            )? {
+                return Ok(Decision::denied_with_connection(
+                    "secret_deleted",
+                    connection,
+                ));
+            }
+        }
         if connection.status != "active" {
             return Ok(Decision::denied_with_connection(
                 "connection_disabled",

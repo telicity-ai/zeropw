@@ -1,0 +1,21 @@
+{
+  "source_commit": "c38523ad7321270521745a0112dc90743beb0371",
+  "base_commit": "ce796bdcf5069af8e6cd85ab3c953cc22e1bf1a4",
+  "added_files": 147,
+  "protected_original_files_git_blobs_modes_and_set_unchanged": 652,
+  "fixture_files": 146,
+  "fixture_sum_entries_verified": 145,
+  "fixture_sums_sha256": "a5981856f26e687352a97836372816eaba0f98c285f8a8a41645678c8f8ebc88",
+  "helper_sha256": "d284a641ab430ee5744c1e114fc760e15c8d62b83b29b08406f358536515615d",
+  "worker_evidence_hash_entries_verified": 7,
+  "scope": "Source/manifests collection and separate internal Sol static audit; no root product execution, Opus or full M2 acceptance",
+  "coordinator_commit": "ac7a00cacf3415aa3f90ae176e65ec2c706d8a10",
+  "coordinator_rust_tree": "9982d235d7b464edf7a520c450f1db4c33ad86d0",
+  "rust_tree_matches_worker_tested_tree": true,
+  "static_audit": {
+    "actual_model": "gpt-6.1-sol",
+    "sha256": "6f6afa2d52214f140117f6518605735f9310f646d261f4b519866cc62ff98def",
+    "result": "No incorrect current golden or schema/hash/graph/seed mismatch found; three low helper-coverage observations documented",
+    "limitations": "No helper/product execution or crypto re-verification; production verifier must independently enforce complete counts/ordered sets/schema closure"
+  }
+}

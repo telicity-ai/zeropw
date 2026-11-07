@@ -89,6 +89,8 @@ impl ServeStatus {
 pub struct ServeConfig {
     pub port: u16,
     pub team_listen: Option<String>,
+    /// `serve --link-socket PATH` while the zeropw-link daemon runs (docs/remote-sync.md §3.1).
+    pub link_socket: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -98,6 +100,8 @@ struct PidFile {
     started_at: u64,
     #[serde(default)]
     team_listen: Option<String>,
+    #[serde(default)]
+    link_socket: Option<PathBuf>,
 }
 
 enum Running {
@@ -106,11 +110,13 @@ enum Running {
         child: Child,
         url: String,
         team_listen: Option<String>,
+        link_socket: Option<PathBuf>,
     },
     Attached {
         pid: u32,
         url: String,
         team_listen: Option<String>,
+        link_socket: Option<PathBuf>,
         /// Watch looks since the last one that ran `ps` ([`WATCH_PS_EVERY`]).
         signal_looks: u32,
     },
@@ -180,6 +186,20 @@ impl ServeSupervisor {
     /// The gateway URL while running.
     pub fn url(&self) -> Option<String> {
         self.status().url
+    }
+
+    /// The `--link-socket` the running sidecar was started with: `None` while stopped,
+    /// `Some(None)` for a sidecar without one (started before the link daemon ran, or by an
+    /// earlier app version).
+    pub fn link_socket(&self) -> Option<Option<PathBuf>> {
+        let mut running = self.lock();
+        self.refresh(&mut running, false);
+        match &*running {
+            Running::Stopped => None,
+            Running::Owned { link_socket, .. } | Running::Attached { link_socket, .. } => {
+                Some(link_socket.clone())
+            }
+        }
     }
 
     /// At app start: adopt a sidecar left by an earlier app run, without starting a new one.
@@ -314,6 +334,7 @@ impl ServeSupervisor {
                 pid: file.pid,
                 url: file.url,
                 team_listen: file.team_listen,
+                link_socket: file.link_socket,
                 signal_looks: 0,
             })),
             _ => Some(Recorded::Unhealthy(file.pid)),
@@ -355,6 +376,11 @@ impl ServeSupervisor {
                 return Err(AppError::invalid_input("invalid_listen").with_detail("team_listen"));
             }
             cmd.arg(format!("--team-listen={team}"));
+        }
+        if let Some(socket) = &config.link_socket {
+            let mut arg = OsString::from("--link-socket=");
+            arg.push(socket.as_os_str());
+            cmd.arg(arg);
         }
         cmd.arg("--quiet")
             .current_dir("/")
@@ -438,6 +464,7 @@ impl ServeSupervisor {
                 .map(|d| d.as_secs())
                 .unwrap_or(0),
             team_listen: config.team_listen.clone(),
+            link_socket: config.link_socket.clone(),
         };
         let bytes = serde_json::to_vec(&record).map_err(|_| AppError::internal("pid_encode"))?;
         if let Err(e) = paths::write_private_atomic(&self.pid_file, &bytes) {
@@ -448,6 +475,7 @@ impl ServeSupervisor {
             child,
             url,
             team_listen: config.team_listen.clone(),
+            link_socket: config.link_socket.clone(),
         })
     }
 
@@ -520,6 +548,7 @@ fn status_of(running: &mut Running) -> ServeStatus {
             child,
             url,
             team_listen,
+            ..
         } => ServeStatus {
             running: true,
             url: Some(url.clone()),
@@ -574,17 +603,17 @@ fn pid(pid: u32) -> Pid {
 }
 
 /// The pid exists and we may signal it (a zombie counts).
-fn signalable(p: u32) -> bool {
+pub(crate) fn signalable(p: u32) -> bool {
     kill(pid(p), None).is_ok()
 }
 
 /// Signalable by us and not a zombie.
-fn alive(p: u32) -> bool {
+pub(crate) fn alive(p: u32) -> bool {
     signalable(p) && !ps_info(p).is_some_and(|(stat, _)| stat.starts_with('Z'))
 }
 
 /// `(stat, full command line)` from `ps`, or `None` when the pid does not exist.
-fn ps_info(p: u32) -> Option<(String, String)> {
+pub(crate) fn ps_info(p: u32) -> Option<(String, String)> {
     let output = Command::new("/bin/ps")
         .args(["-ww", "-o", "stat=", "-o", "command=", "-p"])
         .arg(p.to_string())
@@ -604,7 +633,7 @@ fn ps_info(p: u32) -> Option<(String, String)> {
     Some((stat.to_owned(), command.trim().to_owned()))
 }
 
-fn terminate_child(child: &mut Child, grace: Duration) {
+pub(crate) fn terminate_child(child: &mut Child, grace: Duration) {
     if !matches!(child.try_wait(), Ok(None)) {
         return;
     }
@@ -621,7 +650,7 @@ fn terminate_child(child: &mut Child, grace: Duration) {
     let _ = child.wait();
 }
 
-fn terminate_pid(p: u32, grace: Duration) {
+pub(crate) fn terminate_pid(p: u32, grace: Duration) {
     if kill(pid(p), Signal::SIGTERM).is_err() {
         return;
     }

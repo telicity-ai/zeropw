@@ -65,6 +65,13 @@ for a in "$@"; do
 done
 
 r="$dir/responses/$key"
+# A response for only the k-th call with this key (responses/<key>.<k>.json, …) wins.
+kc="$calls/key.$key.count"
+k=$(( $(cat "$kc" 2>/dev/null || echo 0) + 1 ))
+echo "$k" > "$kc.$$" && mv "$kc.$$" "$kc"
+if [ -f "$r.$k.json" ] || [ -f "$r.$k.stderr" ] || [ -f "$r.$k.exit" ]; then
+  r="$r.$k"
+fi
 if [ -f "$r.sleep" ]; then
   sleep "$(cat "$r.sleep")"
 fi

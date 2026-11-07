@@ -1,0 +1,87 @@
+{
+  "desktop": {
+    "result": [
+      "START=2026-11-07T06:27:55Z",
+      "END=2026-11-07T06:48:18Z",
+      "EXIT=0"
+    ],
+    "steps": 8,
+    "failed_steps": [],
+    "integration_targets": 0,
+    "rust_test_passes_sum": 194,
+    "rust_test_failures_sum": 0,
+    "rust_test_ignored_sum": 0,
+    "verify_failed_empty": true,
+    "log_sha256": "4449866af845b96c00024ee64115e0f3917b0779a567c68648bfc4f70a6bc802"
+  },
+  "rust": {
+    "result": [
+      "START=2026-11-07T06:48:31Z",
+      "END=2026-11-07T07:19:00Z",
+      "EXIT=0"
+    ],
+    "steps": 100,
+    "failed_steps": [],
+    "integration_targets": 95,
+    "rust_test_passes_sum": 1623,
+    "rust_test_failures_sum": 0,
+    "rust_test_ignored_sum": 4,
+    "verify_failed_empty": true,
+    "log_sha256": "1d1e720f234b583682ea1c288c8d9d14b886242eebed8a5e4df4df182c30deb0"
+  },
+  "final_frontend": {
+    "commit": "6427d6fa73e2501e391e3289580193f3ca01d95b",
+    "result": [
+      "START=2026-11-07T07:19:40Z",
+      "CHECK_EXIT=0",
+      "TEST_EXIT=0",
+      "BUILD_EXIT=0",
+      "END=2026-11-07T07:20:23Z",
+      "EXIT=0"
+    ],
+    "test_files_passed": 26,
+    "tests_passed": 334,
+    "log_sha256": {
+      "frontend-build.log": "4ebe6458a7d2e9933c4820c2959e2975bd297ee55eb84c3e9d10efe2cefbafa1",
+      "frontend-check.log": "92bf85139b7c73c0f6cbbac8e3640b7550ba12a9a6cbcb9d2d7b8d2463406fd3",
+      "frontend-tests.log": "25f967c0e5f3324d1d364f9ab0766c2ba57d580b117fdff89f6f7e1474c51c54"
+    }
+  },
+  "source_binding": {
+    "commit": "6427d6fa73e2501e391e3289580193f3ca01d95b",
+    "desktop_git_tree": "663ca13c14ad10f6e27c4db0ea78b5eb33e221ee",
+    "rust_git_tree": "f147723da8e8b5b6e42ae678819f20d57ffc36bb",
+    "full_run_archive_sha256": "c6db92ab6f844664d052d35be6ee67a255ad7d981baffb40ddf3dcf9027e5150",
+    "final_archive_sha256": "ae46fcfc9c45445294834d565b498f6ec72ba548fe5e633ea6d7cf8757d65d2b",
+    "rust_desktop_native_files": 296,
+    "rust_desktop_native_tree_sha256": "1e126a75eaf9d7dc30a77b51fd6b49ccb9ed2fbc2d743bfe26480825b4cf3fd5",
+    "changed_relevant_paths": [],
+    "byte_identical": true,
+    "node_dependency_files_byte_identical": true,
+    "rust_desktop_native_tree_hash_contract": "SHA-256 of sorted path + NUL + SHA-256(file bytes, or symlink target bytes) + newline entries for rust/**, desktop/core/**, desktop/src-tauri/**, desktop/Cargo.toml, desktop/Cargo.lock and desktop/verify.sh"
+  },
+  "environment": {
+    "vm": "zeropw-parity",
+    "user": "parity uid=2000 gid=2000 only parity group",
+    "full_job": "/home/parity/jobs/personal-vault-i18n-20261107",
+    "final_frontend_job": "/home/parity/jobs/personal-vault-i18n-20261107-final-6427d6f",
+    "cargo_build_jobs": 1,
+    "cargo_incremental": 0,
+    "cargo_profile_dev_debug": 0,
+    "cargo_profile_test_debug": 0,
+    "tmpdir_mode": "0700",
+    "node": "v22.20.0",
+    "npm": "10.9.3",
+    "cargo": "1.98.1 (797e8a9bc 2026-08-05)",
+    "gtk": "3.24.41",
+    "webkit2gtk": "2.52.6",
+    "isolation_observation": "No virtiofs/9p or host-home mount appeared in /proc/mounts metadata. No actual home or credential file was inspected. This is a mount-metadata observation, not a general OS isolation guarantee.",
+    "other_work": "No M1 work path/process or cache was modified or deleted. Final frontend reuses only this task own node_modules after package.json/package-lock.json byte equality was confirmed."
+  },
+  "executor": {
+    "model": "gpt-6.1-sol",
+    "reasoning_effort": "ultra",
+    "provider": "Codex harness in T3 Code",
+    "review_status": "Verification only. Not an Opus adversarial review."
+  }
+}

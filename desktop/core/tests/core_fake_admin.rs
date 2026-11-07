@@ -51,6 +51,8 @@ fn vault_init_passes_passphrases_only_in_the_envelope_then_starts_serve() {
     core.settings_set(Settings {
         gateway_port: port,
         team_listen: None,
+        link_service: None,
+        language: None,
     })
     .unwrap();
 
@@ -715,6 +717,41 @@ fn control_commands_reduce_the_incident_id_and_emit_events() {
     assert_eq!(events.named("control://changed").len(), 2);
 }
 
+/// The lock screen: the passphrase goes only in the envelope, the CLI checks it with
+/// `--require-admin` on the read-only `status`, an empty one never reaches the CLI, and the
+/// stop state is not announced as a change.
+#[test]
+fn vault_unlock_checks_the_passphrase_on_status_without_changing_anything() {
+    let fx = Fixture::new();
+    let events = arc_events();
+    let core = Core::new(CoreConfig::new(fx.paths.clone()), events.clone());
+    assert_eq!(
+        core.vault_unlock(PassphraseIn {
+            admin_passphrase: "".into()
+        })
+        .unwrap_err()
+        .reason,
+        "passphrase_missing"
+    );
+    assert_eq!(fx.count("status"), 0);
+    fx.respond(
+        "status",
+        r#"{"incident_open":null,"restore_pending":false,"stopped":true}"#,
+    );
+    let control = core
+        .vault_unlock(PassphraseIn {
+            admin_passphrase: pass(),
+        })
+        .unwrap();
+    assert!(control.stopped && !control.incident_open);
+    let call = fx.last("status");
+    assert!(call.requires_admin());
+    assert_eq!(call.args(), ["status"]);
+    assert_eq!(call.stdin_json(), json!({"admin_passphrase": ADMIN_PASS}));
+    assert!(!call.argv.iter().any(|a| a.contains(ADMIN_PASS)));
+    assert!(events.named("control://changed").is_empty());
+}
+
 #[test]
 fn http_connection_argv_and_ca_file_token() {
     let fx = Fixture::new();
@@ -1035,6 +1072,8 @@ fn recover_stops_a_running_serve_and_starts_it_again() {
     core.settings_set(Settings {
         gateway_port: port,
         team_listen: None,
+        link_service: None,
+        language: None,
     })
     .unwrap();
     let recover = || {
@@ -1491,6 +1530,8 @@ fn terminal_open_injects_the_principal_token_from_the_store() {
     core.settings_set(Settings {
         gateway_port: port,
         team_listen: None,
+        link_service: None,
+        language: None,
     })
     .unwrap();
     core.serve_start().unwrap();
@@ -1571,6 +1612,8 @@ fn settings_set_replaces_a_damaged_settings_file() {
         let defaults = Settings {
             gateway_port: 47380,
             team_listen: None,
+            link_service: None,
+            language: None,
         };
         assert_eq!(defaults, Settings::default());
         assert_eq!(core.settings_set(defaults.clone()).unwrap(), defaults);

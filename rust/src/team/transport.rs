@@ -4,6 +4,8 @@ use std::collections::{HashMap, HashSet};
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs};
+use std::os::fd::AsFd;
+use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread;
@@ -38,12 +40,50 @@ fn capture_wire(direction: &str, bytes: &[u8]) {
         return;
     };
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        // Formatting can make several writes. O_APPEND protects each
+        // individual write, not the whole record, so cooperating writers
+        // in other threads/processes must hold the same file lock.
+        loop {
+            match rustix::fs::flock(&file, rustix::fs::FlockOperation::LockExclusive) {
+                Ok(()) => break,
+                Err(rustix::io::Errno::INTR) => continue,
+                Err(_) => return,
+            }
+        }
         let _ = writeln!(file, "{} {}", direction, hex::encode(bytes));
+        let _ = rustix::fs::flock(&file, rustix::fs::FlockOperation::Unlock);
     }
 }
 
 pub type MembershipCheck = Arc<dyn Fn(&str, &str) -> Option<DeviceRecord> + Send + Sync>;
-pub type InviteCheck = Arc<dyn Fn(&str, &DeviceRecord, &[u8], &[u8]) -> bool + Send + Sync>;
+/// What an invitation proof decides for a non-member initiator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InviteDecision {
+    /// The proof consumed an invitation: the session goes to the sync layer.
+    Accept,
+    /// No valid invitation: the handshake fails without detail.
+    Reject,
+    /// The proof is valid for an approval-required invitation this device is
+    /// not approved for yet (docs/remote-sync.md §3.2): the handshake
+    /// completes, one encrypted [`JOIN_PENDING_TYPE`] frame is sent and the
+    /// session is closed, never handed to the sync layer.
+    Pending,
+}
+pub type InviteCheck =
+    Arc<dyn Fn(&str, &DeviceRecord, &[u8], &[u8]) -> InviteDecision + Send + Sync>;
+/// The one frame an approval-pending joiner receives.
+pub const JOIN_PENDING_TYPE: &str = "JOIN_PENDING";
+/// The handshake-failed hook's reason for a pending join: not a failure to
+/// audit as one (the join request is audited where it is recorded).
+pub const JOIN_PENDING_REASON: &str = "join_pending";
+/// How long the responder keeps reading (and discarding) after the
+/// JOIN_PENDING frame, so closing with unread input cannot reset the
+/// connection before the joiner has read it.
+const JOIN_PENDING_LINGER: Duration = Duration::from_secs(2);
+/// [`Session::transport_kind`] of a session carried by TCP.
+pub const TCP_TRANSPORT_KIND: &str = "tcp";
+/// [`Session::transport_kind`] of a session the zeropw-link daemon carries.
+pub const LINK_TRANSPORT_KIND: &str = "link";
 pub type HandshakeFailedHook = Arc<dyn Fn(&str, Option<&str>) + Send + Sync>;
 pub type OnSession = Arc<dyn Fn(Arc<dyn Session>) + Send + Sync>;
 pub type InviteProof = Arc<dyn Fn(&[u8]) -> Vec<u8> + Send + Sync>;
@@ -79,6 +119,19 @@ pub trait Session: Send + Sync {
     fn close(&self);
     fn is_closed(&self) -> bool;
     fn created_at(&self) -> Instant;
+    /// The `zpl:<link device id>` this session runs over when it is carried
+    /// by the zeropw-link daemon (docs/remote-sync.md §3.1), `None` for every
+    /// other transport. It is the peer's link device as the daemon reported
+    /// it: a dial hint, never a reason to trust the peer, whose identity is
+    /// the team handshake's alone.
+    fn link_address(&self) -> Option<String> {
+        None
+    }
+    /// What carries the session, for the sync status (`"tcp"`, `"link"`);
+    /// `None` when unknown (the in-process test transport).
+    fn transport_kind(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 pub trait Transport: Send + Sync {
@@ -119,10 +172,17 @@ fn parse_record(value: Option<&Value>) -> std::result::Result<DeviceRecord, Hand
     Ok(record)
 }
 
-trait ByteChannel: Send + Sync {
+/// A message-framed byte pipe the team handshake and encrypted session run
+/// over: the in-process queue, or a length-prefixed stream socket (TCP, or
+/// the Unix stream the zeropw-link daemon hands over).
+pub(crate) trait ByteChannel: Send + Sync {
     fn send(&self, bytes: &[u8]) -> std::result::Result<(), SessionClosed>;
     fn recv(&self, timeout: Duration) -> std::result::Result<Option<Vec<u8>>, SessionClosed>;
     fn close(&self);
+    /// [`Session::transport_kind`] of the sessions this channel carries.
+    fn kind(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 struct EncryptedSession {
@@ -138,6 +198,7 @@ struct EncryptedSession {
     closed: AtomicBool,
     created_at: Instant,
     on_close: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+    link_address: OnceLock<String>,
 }
 impl EncryptedSession {
     fn new(
@@ -162,10 +223,16 @@ impl EncryptedSession {
             closed: AtomicBool::new(false),
             created_at: Instant::now(),
             on_close: Mutex::new(None),
+            link_address: OnceLock::new(),
         }
     }
     fn set_on_close(&self, callback: Box<dyn FnOnce() + Send>) {
         *self.on_close.lock().unwrap_or_else(|e| e.into_inner()) = Some(callback);
+    }
+    fn set_link_address(&self, address: Option<String>) {
+        if let Some(address) = address {
+            let _ = self.link_address.set(address);
+        }
     }
 }
 impl Session for EncryptedSession {
@@ -232,6 +299,16 @@ impl Session for EncryptedSession {
                 self.close();
                 SessionClosed("frame_malformed")
             })?;
+        if super::tombstone_gate::is_control(message["type"].as_str().unwrap_or(""))
+            && (plaintext.len() > super::tombstone_gate::MAX_CONTROL_BYTES
+                || std::str::from_utf8(&plaintext)
+                    .ok()
+                    .is_none_or(|text| crate::pyjson::loads_unique_object(text).is_err())
+                || super::tombstone_gate::validate(&message).is_err())
+        {
+            self.close();
+            return Err(SessionClosed("team_sync_control_malformed"));
+        }
         if !message.is_object() {
             self.close();
             return Err(SessionClosed("frame_malformed"));
@@ -257,6 +334,18 @@ impl Session for EncryptedSession {
     }
     fn created_at(&self) -> Instant {
         self.created_at
+    }
+    fn link_address(&self) -> Option<String> {
+        self.link_address.get().cloned()
+    }
+    /// `"link"` for a session the zeropw-link daemon carries (dialed or
+    /// accepted through it), whatever the local byte channel; otherwise the
+    /// channel's own kind.
+    fn transport_kind(&self) -> Option<&'static str> {
+        if self.link_address.get().is_some() {
+            return Some(LINK_TRANSPORT_KIND);
+        }
+        self.channel.kind()
     }
 }
 
@@ -323,22 +412,70 @@ fn queue_pair() -> (Arc<dyn ByteChannel>, Arc<dyn ByteChannel>) {
     )
 }
 
-struct SocketChannel {
-    reader: Mutex<TcpStream>,
-    writer: Mutex<TcpStream>,
-    shutdown: TcpStream,
+/// A connected stream socket a [`SocketChannel`] frames: a TCP connection,
+/// or the Unix stream the zeropw-link daemon passes the peer's bytes over.
+/// Both get the same frame limit, absolute read deadlines, write timeout and
+/// wire capture.
+pub(crate) trait StreamSocket: AsFd + Read + Write + Send + Sync + Sized + 'static {
+    /// [`Session::transport_kind`] of the sessions this socket carries.
+    const KIND: &'static str;
+    fn duplicate(&self) -> std::io::Result<Self>;
+    fn set_write_limit(&self, timeout: Option<Duration>) -> std::io::Result<()>;
+    fn shut_down(&self);
+    /// Socket options set once when the channel is made.
+    fn configure(&self) {}
+}
+impl StreamSocket for TcpStream {
+    const KIND: &'static str = TCP_TRANSPORT_KIND;
+    fn duplicate(&self) -> std::io::Result<Self> {
+        self.try_clone()
+    }
+    fn set_write_limit(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+        self.set_write_timeout(timeout)
+    }
+    fn shut_down(&self) {
+        let _ = self.shutdown(Shutdown::Both);
+    }
+    fn configure(&self) {
+        let _ = self.set_nodelay(true);
+    }
+}
+/// The only Unix streams a team session runs over are the ones the
+/// zeropw-link daemon hands over after a dial or accept.
+impl StreamSocket for UnixStream {
+    const KIND: &'static str = LINK_TRANSPORT_KIND;
+    fn duplicate(&self) -> std::io::Result<Self> {
+        self.try_clone()
+    }
+    fn set_write_limit(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+        self.set_write_timeout(timeout)
+    }
+    fn shut_down(&self) {
+        let _ = self.shutdown(Shutdown::Both);
+    }
+}
+
+struct SocketChannel<S: StreamSocket> {
+    reader: Mutex<S>,
+    writer: Mutex<S>,
+    shutdown: S,
     closed: AtomicBool,
 }
-impl SocketChannel {
-    fn new(stream: TcpStream) -> std::io::Result<Self> {
-        let _ = stream.set_nodelay(true);
+impl<S: StreamSocket> SocketChannel<S> {
+    fn new(stream: S) -> std::io::Result<Self> {
+        stream.configure();
         Ok(Self {
-            reader: Mutex::new(stream.try_clone()?),
-            writer: Mutex::new(stream.try_clone()?),
+            reader: Mutex::new(stream.duplicate()?),
+            writer: Mutex::new(stream.duplicate()?),
             shutdown: stream,
             closed: AtomicBool::new(false),
         })
     }
+}
+
+/// The length-prefixed [`ByteChannel`] over a connected stream socket.
+pub(crate) fn socket_channel<S: StreamSocket>(stream: S) -> std::io::Result<Arc<dyn ByteChannel>> {
+    Ok(Arc::new(SocketChannel::new(stream)?))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -350,8 +487,10 @@ enum SocketReadError {
 
 /// Enforce one absolute deadline for an entire frame segment. `read_exact`
 /// with SO_RCVTIMEO would restart the timeout after every slow-dripped byte.
-fn read_exact_until(
-    stream: &mut TcpStream,
+/// Poll plus nonblocking recv also drains buffered Unix-stream data after
+/// a Darwin peer closes, when changing SO_RCVTIMEO returns EINVAL.
+fn read_exact_until<S: StreamSocket>(
+    stream: &mut S,
     mut target: &mut [u8],
     deadline: Instant,
 ) -> std::result::Result<(), SocketReadError> {
@@ -360,29 +499,29 @@ fn read_exact_until(
             .checked_duration_since(Instant::now())
             .filter(|d| !d.is_zero())
             .ok_or(SocketReadError::Timeout)?;
-        stream
-            .set_read_timeout(Some(
-                remaining.min(Duration::from_secs(SOCKET_OP_TIMEOUT_SECONDS)),
-            ))
-            .map_err(|_| SocketReadError::Failed)?;
-        match stream.read(target) {
-            Ok(0) => return Err(SocketReadError::PeerClosed),
-            Ok(n) => target = &mut target[n..],
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
-                ) =>
-            {
-                return Err(SocketReadError::Timeout);
-            }
+        let timeout = rustix::event::Timespec::try_from(
+            remaining.min(Duration::from_secs(SOCKET_OP_TIMEOUT_SECONDS)),
+        )
+        .map_err(|_| SocketReadError::Failed)?;
+        let mut ready = [rustix::event::PollFd::new(
+            &*stream,
+            rustix::event::PollFlags::IN,
+        )];
+        match rustix::event::poll(&mut ready, Some(&timeout)) {
+            Ok(0) | Err(rustix::io::Errno::INTR) => continue,
+            Ok(_) => {}
+            Err(_) => return Err(SocketReadError::Failed),
+        }
+        match rustix::net::recv(&*stream, &mut *target, rustix::net::RecvFlags::DONTWAIT) {
+            Ok((0, _)) => return Err(SocketReadError::PeerClosed),
+            Ok((n, _)) => target = &mut target[n..],
+            Err(rustix::io::Errno::INTR | rustix::io::Errno::AGAIN) => {}
             Err(_) => return Err(SocketReadError::Failed),
         }
     }
     Ok(())
 }
-impl ByteChannel for SocketChannel {
+impl<S: StreamSocket> ByteChannel for SocketChannel<S> {
     fn send(&self, bytes: &[u8]) -> std::result::Result<(), SessionClosed> {
         if bytes.len() > WIRE_FRAME_LIMIT {
             return Err(SessionClosed("frame_too_large"));
@@ -393,7 +532,7 @@ impl ByteChannel for SocketChannel {
         capture_wire("send", bytes);
         let mut stream = self.writer.lock().unwrap_or_else(|e| e.into_inner());
         stream
-            .set_write_timeout(Some(Duration::from_secs(SOCKET_OP_TIMEOUT_SECONDS)))
+            .set_write_limit(Some(Duration::from_secs(SOCKET_OP_TIMEOUT_SECONDS)))
             .and_then(|_| stream.write_all(&(bytes.len() as u32).to_be_bytes()))
             .and_then(|_| stream.write_all(bytes))
             .map_err(|_| {
@@ -408,7 +547,7 @@ impl ByteChannel for SocketChannel {
         let mut stream = self.reader.lock().unwrap_or_else(|e| e.into_inner());
         let deadline = Instant::now() + timeout;
         let mut header = [0u8; 4];
-        match read_exact_until(&mut stream, &mut header, deadline) {
+        match read_exact_until(&mut *stream, &mut header, deadline) {
             Ok(()) => {}
             Err(SocketReadError::Timeout) => return Ok(None),
             Err(SocketReadError::PeerClosed) => return Err(SessionClosed("peer_closed")),
@@ -420,7 +559,7 @@ impl ByteChannel for SocketChannel {
         }
         let mut payload = vec![0; length];
         let payload_deadline = deadline + Duration::from_secs(SOCKET_OP_TIMEOUT_SECONDS);
-        read_exact_until(&mut stream, &mut payload, payload_deadline).map_err(|e| match e {
+        read_exact_until(&mut *stream, &mut payload, payload_deadline).map_err(|e| match e {
             SocketReadError::Timeout => SessionClosed("frame_incomplete"),
             SocketReadError::PeerClosed => SessionClosed("peer_closed"),
             SocketReadError::Failed => SessionClosed("recv_failed"),
@@ -430,7 +569,10 @@ impl ByteChannel for SocketChannel {
     }
     fn close(&self) {
         self.closed.store(true, Ordering::SeqCst);
-        let _ = self.shutdown.shutdown(Shutdown::Both);
+        self.shutdown.shut_down();
+    }
+    fn kind(&self) -> Option<&'static str> {
+        Some(S::KIND)
     }
 }
 
@@ -536,17 +678,40 @@ fn respond(
         return Err(HandshakeFailed::with_fp("signature_invalid", fp));
     }
     let hash = Sha256::digest(&t);
+    let mut pending = false;
     if member.is_none() {
         let proof = if msg3.get("invite_proof").is_some() {
             b64d(msg3.get("invite_proof"))?
         } else {
             vec![]
         };
-        if !invite.is_some_and(|check| check(env_id, &initiator, &hash, &proof)) {
-            return Err(HandshakeFailed::with_fp("invite_invalid", fp));
+        match invite.map_or(InviteDecision::Reject, |check| {
+            check(env_id, &initiator, &hash, &proof)
+        }) {
+            InviteDecision::Accept => {}
+            InviteDecision::Reject => return Err(HandshakeFailed::with_fp("invite_invalid", fp)),
+            InviteDecision::Pending => pending = true,
         }
     }
     let (i2r, r2i) = keys(&shared, &hash)?;
+    if pending {
+        // Only a party that proved the invitation secret gets here: tell it,
+        // encrypted, that the join waits for approval, and hand nothing on.
+        let session = EncryptedSession::new(
+            channel.clone(),
+            initiator,
+            env_id.to_owned(),
+            r2i,
+            i2r,
+            *b"R2I\0",
+            *b"I2R\0",
+        );
+        if session.send(&json!({"type": JOIN_PENDING_TYPE})).is_ok() {
+            linger(channel.as_ref(), Instant::now() + JOIN_PENDING_LINGER);
+        }
+        session.close();
+        return Err(HandshakeFailed::with_fp(JOIN_PENDING_REASON, fp));
+    }
     Ok(Arc::new(EncryptedSession::new(
         channel,
         initiator,
@@ -556,6 +721,18 @@ fn respond(
         *b"R2I\0",
         *b"I2R\0",
     )))
+}
+/// Read and discard until the peer closes or `deadline` passes.
+fn linger(channel: &dyn ByteChannel, deadline: Instant) {
+    while let Some(remaining) = deadline
+        .checked_duration_since(Instant::now())
+        .filter(|d| !d.is_zero())
+    {
+        match channel.recv(remaining) {
+            Ok(Some(_)) => {}
+            Ok(None) | Err(_) => return,
+        }
+    }
 }
 fn initiate(
     channel: Arc<dyn ByteChannel>,
@@ -877,57 +1054,21 @@ impl TcpTransport {
                             drop(stream);
                             continue;
                         }
-                        if this.active.fetch_add(1, Ordering::SeqCst) >= this.max_connections {
-                            this.active.fetch_sub(1, Ordering::SeqCst);
+                        if !this.reserve_inbound() {
                             drop(stream);
                             continue;
                         }
                         let node = this.clone();
                         let cb = on_session.clone();
                         thread::spawn(move || {
-                            let channel: Arc<dyn ByteChannel> = match SocketChannel::new(stream) {
-                                Ok(c) => Arc::new(c),
+                            let channel = match socket_channel(stream) {
+                                Ok(c) => c,
                                 Err(_) => {
-                                    node.active.fetch_sub(1, Ordering::SeqCst);
+                                    node.release_inbound();
                                     return;
                                 }
                             };
-                            let membership = node
-                                .membership
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .clone();
-                            let invite = node
-                                .invite_check
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner())
-                                .clone();
-                            match respond(
-                                channel.clone(),
-                                &node.device,
-                                &membership,
-                                invite.as_ref(),
-                            ) {
-                                Ok(session) => {
-                                    let active = node.active.clone();
-                                    session.set_on_close(Box::new(move || {
-                                        active.fetch_sub(1, Ordering::SeqCst);
-                                    }));
-                                    cb(session);
-                                }
-                                Err(e) => {
-                                    channel.close();
-                                    node.active.fetch_sub(1, Ordering::SeqCst);
-                                    if let Some(h) = node
-                                        .failed
-                                        .lock()
-                                        .unwrap_or_else(|e| e.into_inner())
-                                        .as_ref()
-                                    {
-                                        h(e.reason, e.fingerprint.as_deref());
-                                    }
-                                }
-                            }
+                            node.respond_reserved(channel, &cb, None);
                         });
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -957,8 +1098,19 @@ impl TcpTransport {
                 TcpStream::connect_timeout(&a, Duration::from_secs(SOCKET_OP_TIMEOUT_SECONDS)).ok()
             })
             .ok_or(SessionClosed("team_dial_failed"))?;
-        let channel: Arc<dyn ByteChannel> =
-            Arc::new(SocketChannel::new(stream).map_err(|_| SessionClosed("team_dial_failed"))?);
+        let channel = socket_channel(stream).map_err(|_| SessionClosed("team_dial_failed"))?;
+        self.initiate_over(channel, env_id, invite_proof, None)
+    }
+    /// Run the initiator handshake on a connected `channel` (closed on
+    /// failure, which the handshake-failed hook hears of, as for a TCP
+    /// dial). `link_address` marks a session the link daemon carries.
+    pub(crate) fn initiate_over(
+        &self,
+        channel: Arc<dyn ByteChannel>,
+        env_id: &str,
+        invite_proof: Option<InviteProof>,
+        link_address: Option<String>,
+    ) -> std::result::Result<Arc<dyn Session>, SessionClosed> {
         let membership = self
             .membership
             .lock()
@@ -971,7 +1123,10 @@ impl TcpTransport {
             &membership,
             invite_proof.as_ref(),
         )
-        .map(|s| s as Arc<dyn Session>)
+        .map(|s| {
+            s.set_link_address(link_address);
+            s as Arc<dyn Session>
+        })
         .map_err(|e| {
             channel.close();
             if let Some(h) = self
@@ -984,6 +1139,63 @@ impl TcpTransport {
             }
             SessionClosed(e.reason)
         })
+    }
+    /// Take one of the inbound connection slots TCP and link streams share
+    /// (`max_connections`); `false` when all are in use.
+    pub(crate) fn reserve_inbound(&self) -> bool {
+        if self.active.fetch_add(1, Ordering::SeqCst) >= self.max_connections {
+            self.active.fetch_sub(1, Ordering::SeqCst);
+            return false;
+        }
+        true
+    }
+    /// Give back a slot [`Self::reserve_inbound`] took for a stream that
+    /// never reached the handshake.
+    pub(crate) fn release_inbound(&self) {
+        self.active.fetch_sub(1, Ordering::SeqCst);
+    }
+    /// Run the responder handshake on an inbound `channel` holding a
+    /// reserved slot: an authenticated session keeps the slot until it
+    /// closes and goes to `on_session`; a failed handshake closes the
+    /// channel, frees the slot and tells the handshake-failed hook.
+    pub(crate) fn respond_reserved(
+        &self,
+        channel: Arc<dyn ByteChannel>,
+        on_session: &OnSession,
+        link_address: Option<String>,
+    ) {
+        let membership = self
+            .membership
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let invite = self
+            .invite_check
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        match respond(channel.clone(), &self.device, &membership, invite.as_ref()) {
+            Ok(session) => {
+                session.set_link_address(link_address);
+                let active = self.active.clone();
+                session.set_on_close(Box::new(move || {
+                    active.fetch_sub(1, Ordering::SeqCst);
+                }));
+                on_session(session);
+            }
+            Err(e) => {
+                channel.close();
+                self.release_inbound();
+                if let Some(h) = self
+                    .failed
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .as_ref()
+                {
+                    h(e.reason, e.fingerprint.as_deref());
+                }
+            }
+        }
     }
     pub fn shutdown(&self) {
         self.stop.store(true, Ordering::SeqCst);
@@ -1029,6 +1241,76 @@ impl Transport for Arc<TcpTransport> {
 }
 
 #[cfg(test)]
+mod capture_tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::process::{Command, Stdio};
+
+    #[test]
+    fn concurrent_capture_records_are_whole() {
+        const CHILD: &str = "ZEROPW_TEST_CAPTURE_WRITER";
+        if let Ok(process) = std::env::var(CHILD) {
+            let process: u8 = process.parse().unwrap();
+            let workers: Vec<_> = (0..4u8)
+                .map(|writer| {
+                    thread::spawn(move || {
+                        for record in 0..64u8 {
+                            let mut payload = [0x5a; 64];
+                            payload[..3].copy_from_slice(&[process, writer, record]);
+                            capture_wire(if writer % 2 == 0 { "send" } else { "recv" }, &payload);
+                        }
+                    })
+                })
+                .collect();
+            for worker in workers {
+                worker.join().unwrap();
+            }
+            return;
+        }
+        // Keep synthetic diagnostic records on failure, clean them on success.
+        let dir = tempfile::tempdir().unwrap().keep();
+        let capture = dir.join("wire.hex");
+        let mut children: Vec<_> = (0..2u8)
+            .map(|process| {
+                Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "team::transport::capture_tests::concurrent_capture_records_are_whole",
+                        "--test-threads=1",
+                    ])
+                    .env(CHILD, process.to_string())
+                    .env(WIRE_CAPTURE_ENV, &capture)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .unwrap()
+            })
+            .collect();
+        for child in &mut children {
+            assert!(child.wait().unwrap().success());
+        }
+        let text = std::fs::read_to_string(&capture).unwrap();
+        let mut observed = HashSet::new();
+        for line in text.lines() {
+            let (direction, encoded) = line.split_once(' ').unwrap();
+            assert!(
+                matches!(direction, "send" | "recv"),
+                "interleaved capture direction; synthetic fixture retained at {}",
+                dir.display()
+            );
+            let bytes = hex::decode(encoded).expect("capture record must contain complete hex");
+            assert_eq!(bytes.len(), 64);
+            assert!(bytes[0] < 2 && bytes[1] < 4 && bytes[2] < 64);
+            assert!(bytes[3..].iter().all(|byte| *byte == 0x5a));
+            assert_eq!(direction, if bytes[1] % 2 == 0 { "send" } else { "recv" });
+            assert!(observed.insert((bytes[0], bytes[1], bytes[2])));
+        }
+        assert_eq!(observed.len(), 2 * 4 * 64);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
 mod deadline_tests {
     use super::*;
 
@@ -1057,6 +1339,89 @@ mod deadline_tests {
         assert!(started.elapsed() < Duration::from_millis(200));
         drop(reader);
         writer.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod unix_channel_tests {
+    use super::*;
+
+    #[test]
+    fn a_buffered_frame_survives_peer_close_and_truncation_still_fails() {
+        for payload in [b"synthetic-frame".as_slice(), b"".as_slice()] {
+            let (mut raw, reader) = UnixStream::pair().unwrap();
+            raw.write_all(&(payload.len() as u32).to_be_bytes())
+                .unwrap();
+            raw.write_all(payload).unwrap();
+            drop(raw);
+            let channel = socket_channel(reader).unwrap();
+            assert_eq!(
+                channel.recv(Duration::from_secs(1)),
+                Ok(Some(payload.into()))
+            );
+            assert_eq!(
+                channel.recv(Duration::from_secs(1)),
+                Err(SessionClosed("peer_closed"))
+            );
+        }
+        for bytes in [b"\x00\x00".as_slice(), b"\x00\x00\x00\x04abc".as_slice()] {
+            let (mut raw, reader) = UnixStream::pair().unwrap();
+            raw.write_all(bytes).unwrap();
+            drop(raw);
+            let channel = socket_channel(reader).unwrap();
+            assert_eq!(
+                channel.recv(Duration::from_secs(1)),
+                Err(SessionClosed("peer_closed"))
+            );
+        }
+    }
+
+    /// The link daemon's Unix stream gets the TCP channel's framing, frame
+    /// limit and absolute deadlines (docs/remote-sync.md §3.1).
+    #[test]
+    fn a_unix_stream_channel_frames_bounds_and_times_out_like_tcp() {
+        let (left, right) = UnixStream::pair().unwrap();
+        let (a, b) = (
+            socket_channel(left).unwrap(),
+            socket_channel(right).unwrap(),
+        );
+        a.send(b"synthetic-frame").unwrap();
+        assert_eq!(
+            b.recv(Duration::from_secs(2)).unwrap().as_deref(),
+            Some(&b"synthetic-frame"[..])
+        );
+        assert_eq!(b.recv(Duration::from_millis(50)), Ok(None));
+        assert_eq!(
+            a.send(&vec![0u8; WIRE_FRAME_LIMIT + 1]),
+            Err(SessionClosed("frame_too_large"))
+        );
+        a.close();
+        assert_eq!(
+            b.recv(Duration::from_secs(2)),
+            Err(SessionClosed("peer_closed"))
+        );
+
+        let (mut raw, right) = UnixStream::pair().unwrap();
+        let channel = socket_channel(right).unwrap();
+        raw.write_all(&((WIRE_FRAME_LIMIT + 1) as u32).to_be_bytes())
+            .unwrap();
+        assert_eq!(
+            channel.recv(Duration::from_secs(2)),
+            Err(SessionClosed("frame_too_large"))
+        );
+
+        // A header promising more than ever arrives: the frame deadline
+        // (the receive timeout plus one socket operation) ends it.
+        let (mut raw, mut right) = UnixStream::pair().unwrap();
+        raw.write_all(&8u32.to_be_bytes()).unwrap();
+        raw.write_all(b"abc").unwrap();
+        let mut target = [0u8; 10];
+        let started = Instant::now();
+        assert_eq!(
+            read_exact_until(&mut right, &mut target, started + Duration::from_millis(75)),
+            Err(SocketReadError::Timeout)
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 }
 

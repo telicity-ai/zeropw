@@ -1,0 +1,24 @@
+   Compiling zeropw v0.2.0 (/Users/admin/i18n-baseline-d01a33b/rust)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 22.85s
+     Running tests/gateway_tls_parity.rs (/Users/admin/zeropw/rust/target/debug/deps/gateway_tls_parity-c9e61b23087f97a1)
+
+running 1 test
+test common_name_fallback_applies_to_dns_names_only ... FAILED
+
+failures:
+
+---- common_name_fallback_applies_to_dns_names_only stdout ----
+
+thread 'common_name_fallback_applies_to_dns_names_only' (112667) panicked at tests/gateway_tls_parity.rs:741:5:
+assertion `left == right` failed
+  left: (502, Some("upstream_tls_failed"))
+ right: (200, None)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    common_name_fallback_applies_to_dns_names_only
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 7 filtered out; finished in 4.66s
+
+error: test failed, to rerun pass `--test gateway_tls_parity`

@@ -226,6 +226,12 @@ fn build_parser() -> Parser {
     )
     .arg(Arg::opt("--id").required())
     .arg(Arg::opt("--version").ty(EXACT_INT).required());
+    add(
+        secret,
+        "delete",
+        "permanently delete every version of this ID (admin re-auth)",
+    )
+    .arg(Arg::opt("--id").required());
     // docs/env-import.md §6. Hidden from `secret`'s listing and choices, like
     // `status`: the recorded command-line contract pins that help text.
     let p = secret.add_hidden_parser(
@@ -609,11 +615,45 @@ fn build_parser() -> Parser {
         Arg::opt("--address")
             .append()
             .metavar("HOST:PORT")
-            .help("this node's reachable address (repeatable)"),
+            .help("this node's reachable address, HOST:PORT or zpl:<link device id> (repeatable)"),
     )
     .arg(Arg::opt("--link").flag().help(
         "also print a one-day zeropw://join# link, its invite id and expiry (the TTL is fixed at 24h)",
+    ))
+    .arg(Arg::opt("--approval").flag().help(
+        "the joining device also needs explicit approval of its fingerprint (team approve-join)",
     ));
+    add(
+        team,
+        "join-requests",
+        "list devices that proved an approval invite and wait for a decision",
+    )
+    .arg(env_arg());
+    add(
+        team,
+        "approve-join",
+        "approve a waiting device's fingerprint for its approval invites",
+    )
+    .arg(env_arg())
+    .arg(Arg::opt("--fingerprint").required().metavar("FINGERPRINT"))
+    .arg(
+        Arg::opt("--invite-id")
+            .metavar("INVITE_ID")
+            .help("approve only this invite (default: every one the device asked with)"),
+    );
+    add(
+        team,
+        "deny-join",
+        "revoke the approval invites a waiting device asked with",
+    )
+    .arg(env_arg())
+    .arg(Arg::opt("--fingerprint").required().metavar("FINGERPRINT"));
+    add(
+        team,
+        "sync-status",
+        "per-peer sync state from the running serve, merged with the local store",
+    )
+    .arg(env_arg());
     add(
         team,
         "invites",
@@ -645,6 +685,11 @@ fn build_parser() -> Parser {
             Arg::opt("--stdin")
                 .flag()
                 .help("read the invite string or link from standard input (or the input envelope)"),
+        )
+        .arg(
+            Arg::opt("--link-socket")
+                .metavar("PATH")
+                .help("zeropw-link daemon socket (absolute path) for the invite's zpl: addresses"),
         );
     add(team, "members", "list team members").arg(env_arg());
     add(
@@ -702,7 +747,11 @@ fn build_parser() -> Parser {
         "list, or (with --device) add, a peer's known address",
     )
     .arg(env_arg())
-    .arg(Arg::opt("--add").metavar("HOST:PORT"))
+    .arg(
+        Arg::opt("--add")
+            .metavar("HOST:PORT")
+            .help("HOST:PORT, or zpl:<link device id> for a peer reached through zeropw-link"),
+    )
     .arg(
         Arg::opt("--device")
             .metavar("FINGERPRINT")
@@ -737,6 +786,11 @@ fn build_parser() -> Parser {
             .metavar("HOST:PORT")
             .help("start team sync on a separate LAN/VPN-facing socket (default: team sync off)"),
     )
+    // docs/remote-sync.md §3.1: team sync through the local zeropw-link
+    // daemon socket (absolute path), with `--team-listen` or alone (link-only
+    // inbound). Left out of the help listing (`help=SUPPRESS`) because the
+    // recorded command-line contract pins `serve --help`.
+    .arg(Arg::opt("--link-socket").metavar("PATH").suppress_help())
     .arg(
         Arg::opt("--quiet")
             .flag()
@@ -1425,6 +1479,20 @@ fn secret_view(m: SecretMeta) -> Value {
         }).collect::<Vec<_>>()})
 }
 
+fn secret_metadata(ctx: &Context, meta: SecretMeta) -> Result<Value, Error> {
+    let doc = ctx.state.read_json(crate::vault::VAULT_DOC, json!({}))?;
+    let deleted = crate::tombstone::is_deleted(
+        ctx.state,
+        &meta.id,
+        doc["secrets"][&meta.id]["shared_env"].as_str(),
+    )?;
+    let mut view = secret_view(meta);
+    if deleted {
+        view["deleted"] = json!(true);
+    }
+    Ok(view)
+}
+
 fn csv(v: Option<&str>) -> Vec<String> {
     v.unwrap_or("")
         .split(',')
@@ -2071,9 +2139,9 @@ fn local_command(a: &Args) -> Result<Value, Error> {
         }
         ("secret", "import") => secret_import(&ctx, a),
         ("secret", "list") => Ok(
-            json!({"secrets":ctx.vault.list_secrets(a.get("project"),a.get("environment"))?.into_iter().map(secret_view).collect::<Vec<_>>()}),
+            json!({"secrets":ctx.vault.list_secrets(a.get("project"),a.get("environment"))?.into_iter().map(|m| secret_metadata(&ctx,m)).collect::<Result<Vec<_>,_>>()?}),
         ),
-        ("secret", "versions") => Ok(secret_view(ctx.vault.get_meta(a.req("id"))?)),
+        ("secret", "versions") => secret_metadata(&ctx, ctx.vault.get_meta(a.req("id"))?),
         ("secret", "reveal") => {
             let pass = passphrase("ZEROPW_ADMIN_PASSPHRASE")?;
             let auth = match ctx.admin.verify(&pass, None) {
@@ -2100,6 +2168,40 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             } else {
                 out["value_base64"] = json!(pybase64::b64encode(value.expose()));
                 out["encoding"] = json!("base64");
+            }
+            Ok(out)
+        }
+        ("secret", "delete") => {
+            let pass = passphrase("ZEROPW_ADMIN_PASSPHRASE")?;
+            let auth = ctx.admin.verify(&pass, None)?;
+            let _lock = ctx.state.lock()?;
+            let id = a.req("id");
+            let mut out = json!({"secret_id":id,"status":"deleted","permanent_id":true,"provider_revocation_required":true,"sync_status":"local"});
+            if let Some(env_id) = secret_shared_env(&ctx, id)? {
+                let doc = shared_document(&ctx, &env_id)?;
+                let device = crate::team::identity::DeviceKey::load(ctx.state, ctx.kms)?;
+                if !crate::team::sync::is_admin(&doc, &device.fingerprint()?) {
+                    return Err(Error::policy_denied("team_fact_not_authorized"));
+                }
+                let (facts, _, _) = crate::team::sync::load_facts(&ctx, &env_id)?;
+                if !facts.deleted_secrets.contains(id) {
+                    let result =
+                        team_fact(&ctx, &env_id, "secret_deleted", json!({"secret_id":id}))?;
+                    out["fact"] = result["fact"].clone();
+                } else {
+                    crate::team::membership::refold_and_derive(&ctx, &env_id)?;
+                }
+                ctx.audit.record(
+                    "secret_delete",
+                    RecordArgs {
+                        result: Some("ok"),
+                        extra: vec![("secret_id", json!(id)), ("env_id", json!(env_id))],
+                        ..Default::default()
+                    },
+                )?;
+                out["sync_status"] = json!("pending");
+            } else {
+                ctx.vault.delete_secret(id, &auth)?;
             }
             Ok(out)
         }
@@ -2842,6 +2944,9 @@ fn local_command(a: &Args) -> Result<Value, Error> {
             let reapplied = {
                 let _lock = ctx.state.lock()?;
                 let reapplied = Vault::reapply_revocations(ctx.state)?;
+                for env_id in crate::team::sync::discover_envs(ctx.state)? {
+                    crate::team::membership::refold_and_derive(&ctx, &env_id)?;
+                }
                 ctx.policy.set_restore_pending(false)?;
                 reapplied
             };
@@ -3020,9 +3125,39 @@ fn project_shared_env(
 }
 fn secret_shared_env(ctx: &Context, secret_id: &str) -> Result<Option<String>, Error> {
     let doc = ctx.state.read_json(crate::vault::VAULT_DOC, json!({}))?;
-    Ok(doc["secrets"][secret_id]["shared_env"]
-        .as_str()
-        .map(str::to_owned))
+    if let Some(entry) = doc["secrets"].get(secret_id) {
+        if let Some(env) = entry["shared_env"].as_str() {
+            return Ok(Some(env.into()));
+        }
+        return crate::tombstone::restored_scope(
+            ctx.state,
+            secret_id,
+            &entry["project"],
+            &entry["environment"],
+        );
+    }
+    let ledger = crate::tombstone::load(ctx.state)?;
+    if ledger["local"].get(secret_id).is_some() {
+        return Ok(None);
+    }
+    let mut scopes = Vec::new();
+    for env in ledger["shared"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(env, _)| env)
+    {
+        if crate::tombstone::shared_facts(ctx.state, env)?
+            .iter()
+            .any(|fact| fact["target"]["secret_id"] == secret_id)
+        {
+            scopes.push(env.clone());
+        }
+    }
+    if scopes.len() > 1 {
+        return Err(Error::policy_denied("secret_identity_ambiguous"));
+    }
+    Ok(scopes.pop())
 }
 fn connection_shared_env(ctx: &Context, connection_id: &str) -> Result<Option<String>, Error> {
     let doc = ctx.state.read_json(crate::policy::CONNECTIONS, json!({}))?;
@@ -3073,6 +3208,7 @@ fn shared_put(
     // The folded document is read and both commits written under one lock.
     let _lock = ctx.state.lock()?;
     let doc = shared_document(ctx, env_id)?;
+    crate::tombstone::require_live(ctx.state, id, Some(env_id))?;
     let (generation, dek) = current_dek(ctx, env_id, &doc)?;
     let version_id = random_version_id();
     let ciphertext =
@@ -3549,7 +3685,15 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
     }
     let mutating = !matches!(
         a.action.as_str(),
-        "members" | "status" | "log" | "show" | "diff" | "incidents" | "invites"
+        "members"
+            | "status"
+            | "log"
+            | "show"
+            | "diff"
+            | "incidents"
+            | "invites"
+            | "join-requests"
+            | "sync-status"
     ) && (a.action != "peers" || a.get("add").is_some_and(|v| !v.is_empty()));
     let ctx = open(a, mutating)?;
     if a.action == "init" {
@@ -3583,7 +3727,8 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
         ));
     }
     if a.action == "join" {
-        use crate::team::transport::TcpTransport;
+        use crate::team::link::{LINK_SOCKET_REQUIRED, LinkTransport, valid_link_address};
+        let link_socket = link_socket_arg(a.get("link-socket"))?;
         // Strict parsing of the untrusted invite (or link) and a local expiry
         // check before anything is dialed.
         let text = invite_text(a, a.positional.first().map(String::as_str))?;
@@ -3592,20 +3737,34 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
             return Err(Error::invalid_input("invite_expired")
                 .with_detail("the invite is past its expiry; ask for a new one"));
         }
+        // docs/remote-sync.md §3.1: an inviter reachable only through
+        // zeropw-link needs the daemon socket; refuse before anything is
+        // stored rather than dial nothing.
+        if link_socket.is_none()
+            && !invite.addresses.is_empty()
+            && invite.addresses.iter().all(|a| valid_link_address(a))
+        {
+            return Err(Error::invalid_input(LINK_SOCKET_REQUIRED).with_detail(
+                "this invite is reachable through zeropw-link only; pass --link-socket PATH",
+            ));
+        }
         drop(invite);
         let invite_string = M::invite_string_of(&text)?;
         let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
-        let transport = TcpTransport::new(
+        // `HOST:PORT` addresses dial over TCP exactly as before; `zpl:` ones
+        // go through the daemon, or fail as `link_socket_required`.
+        let transport: Arc<dyn crate::team::transport::Transport> = Arc::new(LinkTransport::new(
             device.clone(),
             Arc::new(|_, _| None),
             crate::team::transport::DEFAULT_MAX_CONNECTIONS,
-        );
-        let team = sync::TeamSync::new(Arc::new(ctx), Arc::new(transport.clone()), device);
+            link_socket,
+        )?);
+        let team = sync::TeamSync::new(Arc::new(ctx), transport.clone(), device);
         team.start(None)?;
         let result = M::join(
             &team.ctx,
             invite_string,
-            &transport,
+            transport.as_ref(),
             &team,
             a.get("project"),
             a.get("environment"),
@@ -3622,7 +3781,7 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
                 Some(text) => ttl_seconds_for_bounded_consumer(&ttl(text)?),
                 None => M::DEFAULT_INVITE_TTL_SECONDS,
             };
-            let created = M::create_invite_with(
+            let created = M::create_invite_opts(
                 &ctx,
                 &env_id,
                 a.req("role"),
@@ -3630,16 +3789,29 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
                 ttl,
                 &a.list("address"),
                 a.has("link"),
+                a.has("approval"),
             )?;
             let mut out = json!({"env_id":env_id,"invite":created.invite,"role":a.req("role"),"name":a.req("name"),"warning":"this string is a secret: never paste it into chat, issues, tickets, or logs"});
-            // Only `--link` adds keys; the plain output is unchanged.
+            // Only `--link` and `--approval` add keys; the plain output is unchanged.
             if let Some(link) = created.link {
                 out["link"] = json!(link);
                 out["invite_id"] = json!(created.invite_id);
                 out["expires_at"] = json!(created.expires_at);
             }
+            if created.approval {
+                out["approval"] = json!(crate::team::pairing::APPROVAL_REQUIRED);
+            }
             out
         }
+        "join-requests" => crate::team::pairing::list_requests(&ctx, &env_id)?,
+        "approve-join" => crate::team::pairing::approve_join(
+            &ctx,
+            &env_id,
+            a.req("fingerprint"),
+            a.get("invite-id").filter(|id| !id.is_empty()),
+        )?,
+        "deny-join" => crate::team::pairing::deny_join(&ctx, &env_id, a.req("fingerprint"))?,
+        "sync-status" => crate::team::sync_status::status(&ctx, &env_id)?,
         "invites" => M::list_invites(&ctx, &env_id)?,
         "revoke-invite" => M::revoke_invite(&ctx, &env_id, a.req("id"))?,
         "members" => {
@@ -3894,12 +4066,39 @@ pub fn run_serve(
     team_listen: Option<&str>,
     stop: Arc<AtomicBool>,
 ) -> Result<Value, Error> {
+    run_serve_with(state_dir, listen, quiet, team_listen, None, stop)
+}
+
+/// The zeropw-link daemon socket of `--link-socket`: an absolute path
+/// (`invalid_link_socket` otherwise), never connected here.
+fn link_socket_arg(path: Option<&str>) -> Result<Option<std::path::PathBuf>, Error> {
+    path.map(|path| {
+        crate::team::link::LinkClient::new(path).map(|client| client.socket().to_path_buf())
+    })
+    .transpose()
+}
+
+/// [`run_serve`] with `serve --link-socket` (docs/remote-sync.md §3.1): team
+/// sync also dials `zpl:` addresses and accepts inbound streams through the
+/// link daemon at `link_socket`, alone (link-only inbound) or beside
+/// `team_listen`. A daemon that is absent or restarts is retried with
+/// backoff; it never stops the server. The startup payload then also names
+/// the socket as `link_socket`.
+pub fn run_serve_with(
+    state_dir: &str,
+    listen: &str,
+    quiet: bool,
+    team_listen: Option<&str>,
+    link_socket: Option<&str>,
+    stop: Arc<AtomicBool>,
+) -> Result<Value, Error> {
     use std::io::Write;
     let (host, port) = parse_listen(listen)?;
     let host = require_loopback(&host)?;
     if let Some(address) = team_listen {
         parse_listen(address)?;
     }
+    let link_path = link_socket_arg(link_socket)?;
     let config = Config {
         listen_host: host.clone(),
         listen_port: i64::from(port),
@@ -3912,11 +4111,23 @@ pub fn run_serve(
     )?);
     ctx.audit.require_writable()?;
     let _detector = crate::intrusion::install(ctx.clone(), None)?;
-    let team = if let Some(address) = team_listen {
+    let team = if let Some(path) = link_path {
+        use crate::team::{identity::DeviceKey, link::LinkTransport, sync::TeamSync};
+        let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
+        let transport = LinkTransport::new(device.clone(), Arc::new(|_, _| None), 64, Some(path))?;
+        let team = TeamSync::new(ctx.clone(), Arc::new(transport), device);
+        // serve writes sync_state.json whichever transport carries it
+        // (docs/remote-sync.md §3.3), link-only inbound included.
+        team.enable_sync_state();
+        // An empty listen address is link-only inbound.
+        team.start(Some(team_listen.unwrap_or("")))?;
+        Some(team)
+    } else if let Some(address) = team_listen {
         use crate::team::{identity::DeviceKey, sync::TeamSync, transport::TcpTransport};
         let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
         let transport = TcpTransport::new(device.clone(), Arc::new(|_, _| None), 64);
         let team = TeamSync::new(ctx.clone(), Arc::new(transport), device);
+        team.enable_sync_state();
         team.start(Some(address))?;
         Some(team)
     } else {
@@ -3926,6 +4137,9 @@ pub fn run_serve(
         crate::server::ZeroPWServer::new_with_quiet(ctx.clone(), Some(&host), Some(port), quiet)?;
     server.serve_in_thread()?;
     let mut payload = json!({"url":server.url(),"pid":std::process::id(),"ssh_signer":"available","state_dir":ctx.state.path.to_string_lossy(),"team_listen":team_listen});
+    if let Some(path) = link_socket {
+        payload["link_socket"] = json!(path);
+    }
     if let Some(obj) = control(&ctx)?.as_object() {
         for (k, v) in obj {
             payload[k] = v.clone();
@@ -4053,11 +4267,12 @@ pub fn main(argv: &[String]) -> i32 {
             output(&error.to_dict(), true);
             return 1;
         }
-        return match run_serve(
+        return match run_serve_with(
             &args.state_dir,
             args.get("listen").unwrap_or("127.0.0.1:0"),
             args.has("quiet"),
             args.get("team-listen"),
+            args.get("link-socket"),
             stop,
         ) {
             Ok(_) => 0,

@@ -4,18 +4,24 @@
 //! (`identity`), DEK envelopes (`envelope`), signed commits (`commit`),
 //! deterministic fold and local derivation (`fold`), human-readable rendering
 //! (`humanview`). Networking and membership (later stages): the authenticated
-//! session transport (`transport`, in-process and TCP), the replication /
+//! session transport (`transport`, in-process and TCP; `link` carries it
+//! through the local zeropw-link daemon, docs/remote-sync.md), the replication /
 //! monotone-fact runtime attached to a running context (`sync`), and
 //! share/invite/join/remove flows (`membership`). Python behaviour is the
 //! specification; recorded differences live in `rust/DEVIATIONS.md`.
 
+pub mod checkpoint;
 pub mod commit;
 pub mod envelope;
 pub mod fold;
 pub mod humanview;
 pub mod identity;
+pub mod link;
 pub mod membership;
+pub mod pairing;
 pub mod sync;
+pub mod sync_status;
+pub mod tombstone_gate;
 pub mod transport;
 
 use std::collections::HashSet;

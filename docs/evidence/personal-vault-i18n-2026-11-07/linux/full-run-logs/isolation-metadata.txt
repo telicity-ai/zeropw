@@ -1,0 +1,31 @@
+OBSERVED=2026-11-07T07:11:00Z
+uid=2000(parity) gid=2000(parity) groups=2000(parity)
+700 parity parity /home/parity/jobs/personal-vault-i18n-20261107
+700 parity parity /home/parity/jobs/personal-vault-i18n-20261107/tmp
+/sys sysfs rw
+/proc proc rw
+/dev devtmpfs rw
+/dev/pts devpts rw
+/run tmpfs rw
+/sys/firmware/efi/efivars efivarfs rw
+/ ext4 rw
+/sys/kernel/security securityfs rw
+/dev/shm tmpfs rw
+/run/lock tmpfs rw
+/sys/fs/cgroup cgroup2 rw
+/sys/fs/pstore pstore rw
+/sys/fs/bpf bpf rw
+/proc/sys/fs/binfmt_misc autofs rw
+/dev/hugepages hugetlbfs rw
+/sys/kernel/tracing tracefs rw
+/sys/kernel/debug debugfs rw
+/dev/mqueue mqueue rw
+/sys/fs/fuse/connections fusectl rw
+/sys/kernel/config configfs rw
+/boot ext4 rw
+/boot/efi vfat rw
+/proc/sys/fs/binfmt_misc binfmt_misc rw
+/run/user/501 tmpfs rw
+/mnt/lima-cidata iso9660 ro
+/run/netns tmpfs rw
+/sys/kernel/debug/tracing tracefs rw

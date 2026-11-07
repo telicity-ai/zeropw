@@ -1,0 +1,16 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running tests/terminal_pty.rs (target/debug/deps/terminal_pty-0ed7772fa9994e7c)
+
+running 9 tests
+test close_hangs_up_a_running_shell ... ok
+test a_program_that_does_not_read_input_blocks_nothing ... ok
+test keyboard_input_and_resize_reach_the_shell ... ok
+test unwritable_zsh_startup_child ... ok
+test the_token_is_in_the_environment_and_never_on_screen ... ok
+test zsh_starts_without_the_app_startup_files_when_they_cannot_be_written ... ok
+test zsh_keeps_the_bundle_folder_first_after_the_user_startup_files ... ok
+test exited_terminals_give_way_when_the_registry_is_full ... ok
+test close_and_quit_stop_every_process_the_terminal_started ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.48s
+

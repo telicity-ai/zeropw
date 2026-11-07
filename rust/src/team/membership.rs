@@ -169,6 +169,11 @@ fn parse_expiry(value: &Value) -> Option<f64> {
     let days = era * 146_097 + doe - 719_468;
     Some((days * 86_400 + h * 3_600 + min * 60 + sec) as f64)
 }
+/// A stored time (epoch seconds or the `%Y-%m-%dT%H:%M:%SZ` UTC form) as
+/// epoch seconds.
+pub(crate) fn parse_stored_time(value: &Value) -> Option<f64> {
+    parse_expiry(value)
+}
 fn token(n: usize) -> String {
     let mut data = vec![0; n];
     rand::rngs::OsRng.fill_bytes(&mut data);
@@ -199,7 +204,7 @@ pub fn load_environment(ctx: &Context, env_id: &str) -> Result<FoldResult> {
         Some(ctx.audit),
     )
 }
-fn refold_and_derive(ctx: &Context, env_id: &str) -> Result<FoldResult> {
+pub(crate) fn refold_and_derive(ctx: &Context, env_id: &str) -> Result<FoldResult> {
     let result = load_environment(ctx, env_id)?;
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
     let (project, environment) = sync::env_project_environment(ctx.state, env_id)?;
@@ -245,6 +250,17 @@ fn require_editing_standing(
 ) -> Result<fold::Facts> {
     let (facts, _, _) = sync::load_facts(ctx, env_id)?;
     let commits = CommitStore::new(ctx.state, env_id).all_commits()?;
+    for op in ops {
+        if op["op"]
+            .as_str()
+            .is_some_and(|name| name.starts_with("secret."))
+            && op["secret_id"]
+                .as_str()
+                .is_some_and(|id| facts.deleted_secrets.contains(id))
+        {
+            return Err(Error::policy_denied("secret_deleted"));
+        }
+    }
     let self_removal = ops
         .iter()
         .all(|op| op["op"] == "member.remove" && op["fingerprint"] == author);
@@ -582,7 +598,7 @@ pub fn invite_string_of(text: &str) -> Result<&str> {
 }
 
 /// What `invalid_address` tells the inviter (no input is repeated).
-const INVITE_ADDRESS_DETAIL: &str = "use HOST:PORT: a host name, an IPv4 address or a bracketed IPv6 address such as [2001:db8::5]:47001";
+const INVITE_ADDRESS_DETAIL: &str = "use HOST:PORT: a host name, an IPv4 address or a bracketed IPv6 address such as [2001:db8::5]:47001, or zpl: and a 26-character zeropw-link device id";
 
 fn is_host_name_byte(byte: u8) -> bool {
     byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_')
@@ -599,7 +615,13 @@ fn is_host_name_byte(byte: u8) -> bool {
 /// [`parse_invite_or_link`] accepts only these, so an invite this crate makes
 /// is never refused by its own `team join`; an unbracketed IPv6 address and
 /// surrounding whitespace are refused on both sides.
+///
+/// A zeropw-link address `zpl:<device-id>` (26 characters `[a-z2-7]`,
+/// docs/remote-sync.md §3.1) is accepted too; any other `zpl:` text is not.
 pub fn valid_invite_address(address: &str) -> bool {
+    if super::link::valid_link_address(address) {
+        return true;
+    }
     if address.is_empty() || address.len() > MAX_ADDRESS_BYTES {
         return false;
     }
@@ -637,7 +659,7 @@ fn valid_fingerprint(text: &str) -> bool {
 
 /// `parse_invite` for untrusted input (a preview or a join): accepts an
 /// invite string or a `zeropw://join#` link, and additionally requires at most
-/// [`MAX_ADDRESSES`] valid `HOST:PORT` addresses, a device-fingerprint
+/// [`MAX_ADDRESSES`] valid `HOST:PORT` or `zpl:` addresses, a device-fingerprint
 /// `inviter` and a UTC expiry. [`parse_invite`] keeps the prototype's lenient
 /// grammar for the library's own callers.
 pub fn parse_invite_or_link(text: &str) -> Result<Invite> {
@@ -649,7 +671,7 @@ pub fn parse_invite_or_link(text: &str) -> Result<Invite> {
         || !invite.addresses.iter().all(|a| valid_invite_address(a))
     {
         return Err(malformed(
-            "addresses must be at most 16 HOST:PORT entries of at most 128 bytes",
+            "addresses must be at most 16 HOST:PORT or zpl:<device-id> entries of at most 128 bytes",
         ));
     }
     if parse_expiry(&json!(invite.expires_at)).is_none() {
@@ -681,12 +703,14 @@ pub fn invite_preview(invite: &Invite, now: f64) -> Value {
     })
 }
 
-/// What [`create_invite_with`] made. `link` is set for a link invite.
+/// What [`create_invite_with`] made. `link` is set for a link invite;
+/// `approval` for one that needs explicit pairing approval.
 pub struct CreatedInvite {
     pub invite: String,
     pub invite_id: String,
     pub expires_at: String,
     pub link: Option<String>,
+    pub approval: bool,
 }
 
 pub fn create_invite(
@@ -715,6 +739,25 @@ pub fn create_invite_with(
     ttl_seconds: i64,
     addresses: &[String],
     link: bool,
+) -> Result<CreatedInvite> {
+    create_invite_opts(ctx, env_id, role, name, ttl_seconds, addresses, link, false)
+}
+
+/// [`create_invite_with`], optionally requiring explicit pairing approval
+/// (docs/remote-sync.md §3.2): the entry stores `approval: "required"`, and
+/// a valid proof from a device not approved for it records a join request
+/// instead of consuming it ([`check_invite`]). The invitation string itself
+/// is the same format either way.
+#[allow(clippy::too_many_arguments)]
+pub fn create_invite_opts(
+    ctx: &Context,
+    env_id: &str,
+    role: &str,
+    name: &str,
+    ttl_seconds: i64,
+    addresses: &[String],
+    link: bool,
+    approval: bool,
 ) -> Result<CreatedInvite> {
     if role != "admin" && role != "user" {
         return Err(Error::invalid_input("invalid_role"));
@@ -769,6 +812,9 @@ pub fn create_invite_with(
     if link.is_some() {
         entry["link"] = json!(true);
     }
+    if approval {
+        entry["approval"] = json!(super::pairing::APPROVAL_REQUIRED);
+    }
     invites[&id] = entry;
     ctx.state.write_json(&path, &invites)?;
     audit(
@@ -782,6 +828,7 @@ pub fn create_invite_with(
         invite_id: id,
         expires_at,
         link,
+        approval,
     })
 }
 
@@ -823,21 +870,24 @@ pub fn list_invites(ctx: &Context, env_id: &str) -> Result<Value> {
         } else {
             "pending"
         };
-        items.push((
-            created,
-            json!({
-                "invite_id": id,
-                "role": text(entry, "role"),
-                "name": text(entry, "name"),
-                "link": entry.get("link") == Some(&Value::Bool(true)),
-                "created_at": stored_time(entry, "created_at"),
-                "expires_at": expires.map_or(Value::Null, |ts| json!(iso(Some(ts)))),
-                "status": status,
-                "used_at": stored_time(entry, "used_at"),
-                "used_by": text(entry, "used_by"),
-                "revoked_at": stored_time(entry, "revoked_at"),
-            }),
-        ));
+        let mut item = json!({
+            "invite_id": id,
+            "role": text(entry, "role"),
+            "name": text(entry, "name"),
+            "link": entry.get("link") == Some(&Value::Bool(true)),
+            "created_at": stored_time(entry, "created_at"),
+            "expires_at": expires.map_or(Value::Null, |ts| json!(iso(Some(ts)))),
+            "status": status,
+            "used_at": stored_time(entry, "used_at"),
+            "used_by": text(entry, "used_by"),
+            "revoked_at": stored_time(entry, "revoked_at"),
+        });
+        // Only an approval invitation adds keys; other items are unchanged.
+        if super::pairing::is_approval_entry(entry) {
+            item["approval"] = json!(super::pairing::APPROVAL_REQUIRED);
+            item["approved_fingerprint"] = text(entry, "approved_fingerprint");
+        }
+        items.push((created, item));
     }
     // `invites.json` is written key-sorted; order by creation (stable).
     items.sort_by(|(a, _), (b, _)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -949,7 +999,9 @@ pub fn consume_invite(
 
 /// `consume_invite`, recording who used the invite (`used_by`, the joining
 /// device's fingerprint) and when (`used_at`). Revoked invites never match;
-/// the wrapped secret of the consumed invite is deleted.
+/// the wrapped secret of the consumed invite is deleted. An approval
+/// invitation is consumed only by the device approved for it; this records
+/// no join request ([`check_invite`] does).
 pub fn consume_invite_by(
     ctx: &Context,
     env_id: &str,
@@ -957,14 +1009,62 @@ pub fn consume_invite_by(
     proof: &[u8],
     joiner: Option<&str>,
 ) -> Result<Option<(String, String)>> {
+    Ok(
+        match match_invite(ctx, env_id, transcript_hash, proof, joiner, false)? {
+            InviteOutcome::Consumed { role, name } => Some((role, name)),
+            _ => None,
+        },
+    )
+}
+
+/// What an invitation proof did ([`check_invite`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InviteOutcome {
+    /// An invitation was consumed: enrol the device with this role and name.
+    Consumed { role: String, name: String },
+    /// The proof is valid for an approval invitation this device is not
+    /// approved for: its join request was recorded or refreshed.
+    Pending {
+        invite_id: String,
+        new_request: bool,
+        attempts: u64,
+    },
+    /// No usable invitation matches the proof; nothing was recorded.
+    NoMatch,
+}
+
+/// The handshake's invitation check (docs/team-sync.md §4.3,
+/// docs/remote-sync.md §3.2): verify the proof's HMAC against every usable
+/// invitation under the state lock; consume a normal invitation, or an
+/// approval invitation approved for exactly `joiner`; for any other device
+/// proving an approval invitation, record its join request instead. An
+/// invalid proof records nothing.
+pub fn check_invite(
+    ctx: &Context,
+    env_id: &str,
+    transcript_hash: &[u8],
+    proof: &[u8],
+    joiner: &str,
+) -> Result<InviteOutcome> {
+    match_invite(ctx, env_id, transcript_hash, proof, Some(joiner), true)
+}
+
+fn match_invite(
+    ctx: &Context,
+    env_id: &str,
+    transcript_hash: &[u8],
+    proof: &[u8],
+    joiner: Option<&str>,
+    record_request: bool,
+) -> Result<InviteOutcome> {
     if proof.is_empty() {
-        return Ok(None);
+        return Ok(InviteOutcome::NoMatch);
     }
     let _lock = ctx.state.lock()?;
     let path = format!("team/{env_id}/invites.json");
     let mut invites = ctx.state.read_json(&path, json!({}))?;
     let Some(entries) = invites.as_object() else {
-        return Ok(None);
+        return Ok(InviteOutcome::NoMatch);
     };
     let now = (ctx.clock)();
     let mut matched = None;
@@ -998,6 +1098,24 @@ pub fn consume_invite_by(
         }
     }
     if let Some((id, role, name)) = matched {
+        let entry = &invites[&id];
+        if super::pairing::is_approval_entry_value(entry) {
+            let approved = joiner.is_some_and(|joiner| entry["approved_fingerprint"] == joiner);
+            if !approved {
+                return match joiner {
+                    Some(joiner) if record_request => {
+                        let (new_request, attempts) =
+                            super::pairing::record_request(ctx, env_id, &id, joiner, now)?;
+                        Ok(InviteOutcome::Pending {
+                            invite_id: id,
+                            new_request,
+                            attempts,
+                        })
+                    }
+                    _ => Ok(InviteOutcome::NoMatch),
+                };
+            }
+        }
         let entry = &mut invites[&id];
         entry["used"] = json!(true);
         entry["used_at"] = json!(now);
@@ -1008,9 +1126,9 @@ pub fn consume_invite_by(
             entry.remove("wrapped_secret");
         }
         ctx.state.write_json(&path, &invites)?;
-        return Ok(Some((role, name)));
+        return Ok(InviteOutcome::Consumed { role, name });
     }
-    Ok(None)
+    Ok(InviteOutcome::NoMatch)
 }
 
 pub fn join(
@@ -1058,9 +1176,19 @@ pub fn join(
         session.close();
         return Err(Error::state("team_join_wrong_peer"));
     }
+    // A pending mark left by an earlier attempt on this node is not this one's.
+    team.take_join_pending(&invite.env_id, &invite.inviter);
     team.adopt_outbound_session_checked(&invite.env_id, session, &address)?;
     let deadline = Instant::now() + Duration::from_secs_f64(timeout);
     while Instant::now() < deadline {
+        // The inviter answered with JOIN_PENDING: this device's join waits for
+        // the inviter's explicit approval (docs/remote-sync.md §3.2).
+        if team.take_join_pending(&invite.env_id, &invite.inviter) {
+            let mut fields = Map::new();
+            fields.insert("self_fingerprint".into(), json!(device.fingerprint()?));
+            fields.insert("inviter_fingerprint".into(), json!(invite.inviter));
+            return Err(Error::state("join_pending_approval").with_detail_fields(fields));
+        }
         if team.is_active_member(&invite.env_id, &device.fingerprint()?) {
             audit(
                 ctx,
@@ -1373,12 +1501,23 @@ pub fn share_environment(
         envelope::wrap_dek(&dek, &env_id, &generation, &device.record()?)?,
     );
     let init = json!({"op":"env.init","owner_device":device.record()?.to_dict(),"owner_name":owner_name,"generation_id":generation,"wraps":wraps});
+    let ledger = crate::tombstone::load(ctx.state)?;
+    let deleted_ids: Vec<String> = ledger["local"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(_, m)| m["project"] == project && m["environment"] == environment)
+        .map(|(id, _)| id.clone())
+        .collect();
     let mut shareable = Map::new();
     for (sid, entry) in &secrets_doc {
         if entry["project"] != project
             || entry["environment"] != environment
             || !entry["shared_env"].is_null()
         {
+            continue;
+        }
+        if deleted_ids.contains(sid) {
             continue;
         }
         if entry["versions"].as_object().is_some_and(|m| {
@@ -1497,9 +1636,9 @@ pub fn share_environment(
     }
     // The pure computation above precedes all retag and commit writes.
     let _lock = ctx.state.lock()?;
-    if !shareable.is_empty() {
+    if !shareable.is_empty() || !deleted_ids.is_empty() {
         let mut doc = ctx.state.read_json(crate::vault::VAULT_DOC, json!({}))?;
-        for sid in shareable.keys() {
+        for sid in shareable.keys().chain(deleted_ids.iter()) {
             doc["secrets"][sid]["shared_env"] = json!(env_id);
         }
         ctx.state.write_json(crate::vault::VAULT_DOC, &doc)?;
@@ -1549,6 +1688,15 @@ pub fn share_environment(
         team.register_env(&env_id)?;
     }
     author_commit(ctx, team, &env_id, vec![init])?;
+    for id in &deleted_ids {
+        author_fact(
+            ctx,
+            team,
+            &env_id,
+            "secret_deleted",
+            json!({"secret_id":id}),
+        )?;
+    }
     for op in secret_ops {
         author_commit(ctx, team, &env_id, vec![op])?;
     }
@@ -1617,6 +1765,39 @@ mod invite_compat_tests {
                 expected,
                 "{input:?}"
             );
+        }
+    }
+
+    /// docs/remote-sync.md §3.1: `zpl:` + a 26-character `[a-z2-7]` device
+    /// id is an invite address; any other `zpl:` text is not, and the
+    /// `HOST:PORT` rule is untouched.
+    #[test]
+    fn invite_addresses_accept_well_formed_link_addresses_only() {
+        for address in [
+            "zpl:abcdefghijklmnopqrstuvwxyz",
+            "zpl:aaaaaaaaaaaaaaaaaaaaaaaaa7",
+            "192.0.2.10:47001",
+            "[fe80::1%en0]:47001",
+            "node-a.example.test:1",
+            // Still the `HOST:PORT` of a host named `zpl`.
+            "zpl:47001",
+        ] {
+            assert!(valid_invite_address(address), "{address:?}");
+        }
+        for address in [
+            "zpl:",
+            "zpl:abcdefghijklmnopqrstuvwxy",
+            "zpl:abcdefghijklmnopqrstuvwxyza",
+            "zpl:ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+            "zpl:abcdefghijklmnopqrstuvwxy1",
+            "zpl:abcdefghijklmnopqrstuvwxyz:47001",
+            "zpl:abcdefghijklmnopqrstuvwxyz ",
+            " zpl:abcdefghijklmnopqrstuvwxyz",
+            "ZPL:abcdefghijklmnopqrstuvwxyz",
+            "node-a",
+            "2001:db8::5:47001",
+        ] {
+            assert!(!valid_invite_address(address), "{address:?}");
         }
     }
 

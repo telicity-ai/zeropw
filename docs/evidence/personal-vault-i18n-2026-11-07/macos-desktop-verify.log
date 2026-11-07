@@ -1,0 +1,486 @@
+VERIFY_STEP_BEGIN=npm-ci
+
+added 95 packages in 14s
+VERIFY_STEP_END=npm-ci exit=0
+VERIFY_STEP_BEGIN=static-check
+
+> zeropw-desktop@0.2.0 check
+> node scripts/check-static.mjs && node scripts/check-tauri.mjs
+
+check-static: ok (98 files)
+check-tauri: ok (79 commands, 269 files scanned)
+VERIFY_STEP_END=static-check exit=0
+VERIFY_STEP_BEGIN=unit-tests
+
+> zeropw-desktop@0.2.0 test
+> vitest run
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv5.0.4 [39m[90m/Users/admin/zeropw/desktop[39m
+
+ [32m✓[39m test/dash.test.ts [2m([22m[2m46 tests[22m[2m)[22m[32m 129[2mms[22m[39m
+ [32m✓[39m test/mock-dashboard.test.ts [2m([22m[2m53 tests[22m[2m)[22m[33m 382[2mms[22m[39m
+ [32m✓[39m test/remote-sync-lib.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 215[2mms[22m[39m
+ [32m✓[39m test/records.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 86[2mms[22m[39m
+ [32m✓[39m test/devices.test.ts [2m([22m[2m8 tests[22m[2m)[22m[33m 2430[2mms[22m[39m
+   [32m✓[39m Mac list [2m(4)[22m
+     [33m[2m✓[22m[39m says each state in plain words; a connection alone is not "synced"[33m 775[2mms[22m[39m
+     [33m[2m✓[22m[39m keeps how a Mac is connected under the advanced diagnostics only[33m 376[2mms[22m[39m
+     [33m[2m✓[22m[39m maps enrolment refusals to plain words and clears the code[33m 309[2mms[22m[39m
+   [32m✓[39m adding a Mac [2m(2)[22m
+     [33m[2m✓[22m[39m makes a code that leaves only through onetime_*, and approves a request with the passphrase[33m 342[2mms[22m[39m
+ [32m✓[39m test/developer.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 6249[2mms[22m[39m
+   [32m✓[39m agents [2m(5)[22m
+     [33m[2m✓[22m[39m creates an agent and copies its token only once[33m 1942[2mms[22m[39m
+     [33m[2m✓[22m[39m opens the terminal with the new token and never discards it[33m 518[2mms[22m[39m
+     [33m[2m✓[22m[39m discards a token nobody used when the dialog closes[33m 368[2mms[22m[39m
+     [33m[2m✓[22m[39m gives a permission only with the administrator passphrase[33m 875[2mms[22m[39m
+   [32m✓[39m approvals [2m(1)[22m
+     [33m[2m✓[22m[39m approves one pending request with the passphrase[33m 432[2mms[22m[39m
+   [32m✓[39m sharing [2m(4)[22m
+     [33m[2m✓[22m[39m shares the place, then makes an invite whose link stays masked and is copied once[33m 697[2mms[22m[39m
+     [33m[2m✓[22m[39m joins with a pasted link after the preview, keeping the link out of the page[33m 437[2mms[22m[39m
+     [33m[2m✓[22m[39m adopts a link opened outside the app and joins with its reference[33m 387[2mms[22m[39m
+     [33m[2m✓[22m[39m discards an adopted link when the dialog closes without joining[33m 368[2mms[22m[39m
+ [32m✓[39m test/onboarding.test.ts [2m([22m[2m11 tests[22m[2m)[22m[33m 7297[2mms[22m[39m
+   [32m✓[39m first run [2m(5)[22m
+     [33m[2m✓[22m[39m creates the vault with the generated code, the personal place and the service, then offers the first item[33m 2758[2mms[22m[39m
+     [33m[2m✓[22m[39m on the connect path leads to joining with the other Mac first[33m 1025[2mms[22m[39m
+     [33m[2m✓[22m[39m takes a chosen recovery code and refuses one that contains the passphrase[33m 1286[2mms[22m[39m
+     [33m[2m✓[22m[39m lets the person finish when the local service does not start[33m 1057[2mms[22m[39m
+     [33m[2m✓[22m[39m mentions an invite link received during the first run without taking it[33m 1145[2mms[22m[39m
+ [32m✓[39m test/reasons.test.ts [2m([22m[2m14 tests[22m[2m)[22m[32m 48[2mms[22m[39m
+ [32m✓[39m test/vault.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 2352[2mms[22m[39m
+   [32m✓[39m vault page [2m(8)[22m
+     [33m[2m✓[22m[39m lists the items of the view and narrows them with a search[33m 351[2mms[22m[39m
+     [33m[2m✓[22m[39m follows a kind filter, and tells an empty filter from an empty vault[33m 418[2mms[22m[39m
+     [33m[2m✓[22m[39m adds an API key with a typed value through secret_put[33m 462[2mms[22m[39m
+     [33m[2m✓[22m[39m generates an SSH key in Rust and shows only its public half[33m 302[2mms[22m[39m
+     [33m[2m✓[22m[39m reveals a value only after the passphrase, then hides it[33m 435[2mms[22m[39m
+ [32m✓[39m test/mock-ipc.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 49[2mms[22m[39m
+ [32m✓[39m test/envimport.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m test/validators.test.ts [2m([22m[2m75 tests[22m[2m)[22m[32m 43[2mms[22m[39m
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+ [32m✓[39m test/services.test.ts [2m([22m[2m10 tests[22m[2m)[22m[33m 1827[2mms[22m[39m
+   [32m✓[39m services page [2m(7)[22m
+     [33m[2m✓[22m[39m creates an HTTP connection: the key once, then the connection with the passphrase and methods[33m 457[2mms[22m[39m
+     [33m[2m✓[22m[39m shows only the SSH essentials and opens "더 보기" for an error inside it[33m 347[2mms[22m[39m
+ [32m✓[39m test/settings.test.ts [2m([22m[2m5 tests[22m[2m)[22m[33m 915[2mms[22m[39m
+ [32m✓[39m test/app.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 983[2mms[22m[39m
+ [32m✓[39m test/terminal-input.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 172[2mms[22m[39m
+ [32m✓[39m test/invite-preview.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m test/copy.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 214[2mms[22m[39m
+ [32m✓[39m test/fonts.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 34[2mms[22m[39m
+ [32m✓[39m test/invite.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m test/activity.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 1023[2mms[22m[39m
+   [32m✓[39m records and alerts [2m(2)[22m
+     [33m[2m✓[22m[39m lists records newest first and switches to alerts[33m 461[2mms[22m[39m
+   [32m✓[39m incidents [2m(2)[22m
+     [33m[2m✓[22m[39m asks for the passphrase for the widest scope[33m 367[2mms[22m[39m
+ [32m✓[39m test/ipc-events.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 149[2mms[22m[39m
+ [32m✓[39m test/terminal-size.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 28[2mms[22m[39m
+ [32m✓[39m test/pending-invite.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m test/format.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 31[2mms[22m[39m
+ [32m✓[39m test/design.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m26 passed[39m[22m[90m (26)[39m
+[2m      Tests [22m [1m[32m333 passed[39m[22m[90m (333)[39m
+[2m   Start at [22m 06:29:17
+[2m   Duration [22m 29.38s[2m (tests 34%, environment 30%, transform 27%, import 8%, worker 1%)[22m
+
+[2m    Isolate [22m [33m26 workers spawned[39m[2m · ~1.34s startup each (spawn + environment, per file)[22m
+[2m            [22m [2mat least ~10.29s faster with [22m[33misolate: false[39m[2m — reuses workers across files instead of one per file[22m
+
+VERIFY_STEP_END=unit-tests exit=0
+VERIFY_STEP_BEGIN=build
+
+> zeropw-desktop@0.2.0 build
+> tsc --noEmit && vite build
+
+vite v8.3.4 building client environment for production...
+transforming...
+✓ 109 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                                               0.43 kB │ gzip:   0.28 kB
+dist/assets/PretendardVariable.subset.66-C3HqaDeY.woff2       8.25 kB
+dist/assets/PretendardVariable.subset.64-CTbrgYF9.woff2       8.26 kB
+dist/assets/PretendardVariable.subset.65-B66rjuyf.woff2      11.10 kB
+dist/assets/PretendardVariable.subset.68-DS9B48d0.woff2      16.34 kB
+dist/assets/PretendardVariable.subset.73-DMrK970F.woff2      18.33 kB
+dist/assets/PretendardVariable.subset.72-pYYGrEQR.woff2      19.50 kB
+dist/assets/PretendardVariable.subset.75-CxKdrRNf.woff2      19.99 kB
+dist/assets/PretendardVariable.subset.90-BF7RiZjm.woff2      20.85 kB
+dist/assets/jetbrains-mono-latin-400-normal-V6pRDFza.woff2   21.16 kB
+dist/assets/jetbrains-mono-latin-500-normal-BWZEU5yA.woff2   21.83 kB
+dist/assets/PretendardVariable.subset.67-BmuXdlDy.woff2      21.84 kB
+dist/assets/PretendardVariable.subset.89-DOzqWPpX.woff2      21.86 kB
+dist/assets/PretendardVariable.subset.74-D4tQnymK.woff2      22.39 kB
+dist/assets/PretendardVariable.subset.84-Brb8EsYQ.woff2      24.49 kB
+dist/assets/PretendardVariable.subset.87-Lzui2vbK.woff2      24.66 kB
+dist/assets/PretendardVariable.subset.76-DhPm2b_q.woff2      24.92 kB
+dist/assets/PretendardVariable.subset.85-Byo_x2hf.woff2      25.10 kB
+dist/assets/PretendardVariable.subset.88-CqX6JSgh.woff2      25.64 kB
+dist/assets/PretendardVariable.subset.86-XG7lTN_6.woff2      25.71 kB
+dist/assets/PretendardVariable.subset.77-DwaxqOC8.woff2      26.04 kB
+dist/assets/PretendardVariable.subset.79-XpoyPP38.woff2      26.22 kB
+dist/assets/PretendardVariable.subset.81-BZzF9Hb3.woff2      26.30 kB
+dist/assets/PretendardVariable.subset.82-BgAHe30u.woff2      26.50 kB
+dist/assets/PretendardVariable.subset.78-DhqRbBzT.woff2      26.54 kB
+dist/assets/PretendardVariable.subset.83-DF-zBLLe.woff2      26.96 kB
+dist/assets/jetbrains-mono-latin-400-normal-6-qcROiO.woff    27.49 kB
+dist/assets/PretendardVariable.subset.70-BUXiAGMT.woff2      27.54 kB
+dist/assets/PretendardVariable.subset.37-BD6FyOtY.woff2      27.91 kB
+dist/assets/jetbrains-mono-latin-500-normal-CJOVTJB7.woff    28.20 kB
+dist/assets/PretendardVariable.subset.71-DuPZj8us.woff2      28.32 kB
+dist/assets/PretendardVariable.subset.80-DsV9Qp_h.woff2      28.79 kB
+dist/assets/PretendardVariable.subset.63-B35xsm4O.woff2      28.81 kB
+dist/assets/PretendardVariable.subset.40-BDaOfdUe.woff2      29.84 kB
+dist/assets/PretendardVariable.subset.43-DHdpry7N.woff2      30.38 kB
+dist/assets/PretendardVariable.subset.7-E2HaA55t.woff2       31.91 kB
+dist/assets/PretendardVariable.subset.1-C-__qv6_.woff2       32.04 kB
+dist/assets/PretendardVariable.subset.44-qHopVhdd.woff2      32.13 kB
+dist/assets/PretendardVariable.subset.24-CmkE8Q8D.woff2      32.30 kB
+dist/assets/PretendardVariable.subset.10-DzSWztS8.woff2      33.03 kB
+dist/assets/PretendardVariable.subset.41-BUACvzZC.woff2      33.18 kB
+dist/assets/PretendardVariable.subset.50-C8IyFH7L.woff2      33.22 kB
+dist/assets/PretendardVariable.subset.54-Dt2-cQkx.woff2      33.34 kB
+dist/assets/PretendardVariable.subset.5-K_MNGNCe.woff2       33.62 kB
+dist/assets/PretendardVariable.subset.6-Bxhohlcm.woff2       33.96 kB
+dist/assets/PretendardVariable.subset.9-Btb3bmS6.woff2       34.01 kB
+dist/assets/PretendardVariable.subset.55-jFgflYjX.woff2      34.18 kB
+dist/assets/PretendardVariable.subset.39-B_7wfth9.woff2      34.25 kB
+dist/assets/PretendardVariable.subset.52-CNgqKOOJ.woff2      34.35 kB
+dist/assets/PretendardVariable.subset.0-BHUkWNFR.woff2       34.56 kB
+dist/assets/PretendardVariable.subset.53-BSRnyb-u.woff2      34.57 kB
+dist/assets/PretendardVariable.subset.42-Dp-5mnyL.woff2      34.60 kB
+dist/assets/PretendardVariable.subset.45-BniyRFfm.woff2      34.66 kB
+dist/assets/PretendardVariable.subset.36-Dn5IBRQB.woff2      34.68 kB
+dist/assets/PretendardVariable.subset.34-CaCS33Md.woff2      34.72 kB
+dist/assets/PretendardVariable.subset.69-YT16ymcp.woff2      34.78 kB
+dist/assets/PretendardVariable.subset.38-D4hu443z.woff2      34.80 kB
+dist/assets/PretendardVariable.subset.62-DGSAWCfb.woff2      34.87 kB
+dist/assets/PretendardVariable.subset.33--0OT__YQ.woff2      34.91 kB
+dist/assets/PretendardVariable.subset.17-BfZSA-Xc.woff2      34.94 kB
+dist/assets/PretendardVariable.subset.4-Bvh2YGoc.woff2       35.15 kB
+dist/assets/PretendardVariable.subset.56-BwZdvJZQ.woff2      35.18 kB
+dist/assets/PretendardVariable.subset.35-DWFYRGLp.woff2      35.35 kB
+dist/assets/PretendardVariable.subset.27-CT6nuW9L.woff2      35.42 kB
+dist/assets/PretendardVariable.subset.61-PUuTnod4.woff2      35.64 kB
+dist/assets/PretendardVariable.subset.15-D04iXIE3.woff2      35.66 kB
+dist/assets/PretendardVariable.subset.13-C42mj_j2.woff2      35.70 kB
+dist/assets/PretendardVariable.subset.47-B-cWO2pw.woff2      35.72 kB
+dist/assets/PretendardVariable.subset.57-BwFDg-Fs.woff2      35.96 kB
+dist/assets/PretendardVariable.subset.51-Bxd0gTAs.woff2      36.02 kB
+dist/assets/PretendardVariable.subset.49-BblQVys9.woff2      36.05 kB
+dist/assets/PretendardVariable.subset.20-Ig1-z3n5.woff2      36.12 kB
+dist/assets/PretendardVariable.subset.14-Bl512uUX.woff2      36.51 kB
+dist/assets/PretendardVariable.subset.46-BMRq7xC-.woff2      36.54 kB
+dist/assets/PretendardVariable.subset.8-CRbJhhyA.woff2       36.69 kB
+dist/assets/PretendardVariable.subset.21-yKPEdLXC.woff2      37.26 kB
+dist/assets/PretendardVariable.subset.11-CqVmlKJn.woff2      37.40 kB
+dist/assets/PretendardVariable.subset.48-Ct-fWrPO.woff2      37.77 kB
+dist/assets/PretendardVariable.subset.60-CeHezjjf.woff2      37.77 kB
+dist/assets/PretendardVariable.subset.16-BQUnS2GX.woff2      37.91 kB
+dist/assets/PretendardVariable.subset.12-BHuZSgT0.woff2      37.94 kB
+dist/assets/PretendardVariable.subset.91-Csm0YNoH.woff2      37.99 kB
+dist/assets/PretendardVariable.subset.30-CWDM1c0J.woff2      38.44 kB
+dist/assets/PretendardVariable.subset.28-CpO0Y96p.woff2      38.46 kB
+dist/assets/PretendardVariable.subset.22-CSqxKoOs.woff2      38.68 kB
+dist/assets/PretendardVariable.subset.59-CMkWjhdo.woff2      38.97 kB
+dist/assets/PretendardVariable.subset.29-D6hjrUWm.woff2      39.28 kB
+dist/assets/PretendardVariable.subset.32-CGnFWD2i.woff2      40.21 kB
+dist/assets/PretendardVariable.subset.23-DK80wi0t.woff2      40.28 kB
+dist/assets/PretendardVariable.subset.26-Sozl8dw8.woff2      40.32 kB
+dist/assets/PretendardVariable.subset.3-Dqw33sf4.woff2       40.64 kB
+dist/assets/PretendardVariable.subset.58-DlucQts_.woff2      41.56 kB
+dist/assets/PretendardVariable.subset.18-CwAxMC3C.woff2      41.60 kB
+dist/assets/PretendardVariable.subset.31-CdmyZ5mm.woff2      41.89 kB
+dist/assets/PretendardVariable.subset.25-CsoWBIZB.woff2      42.03 kB
+dist/assets/PretendardVariable.subset.19-CJu4Zcdo.woff2      42.32 kB
+dist/assets/PretendardVariable.subset.2-dCZkyKLw.woff2       43.92 kB
+dist/assets/index-ZhrQ4mCg.css                              112.31 kB │ gzip:  28.00 kB
+dist/assets/index-MIaDV9Ee.js                               969.70 kB │ gzip: 267.48 kB
+
+✓ built in 2.88s
+VERIFY_STEP_END=build exit=0
+VERIFY_STEP_BEGIN=fmt
+VERIFY_STEP_END=fmt exit=0
+VERIFY_STEP_BEGIN=clippy
+   Compiling objc2-exception-helper v0.1.1
+    Checking zeropw-desktop-core v0.2.0 (/Users/admin/zeropw/desktop/core)
+   Compiling zeropw-desktop v0.2.0 (/Users/admin/zeropw/desktop/src-tauri)
+   Compiling objc2 v0.6.5
+    Checking block2 v0.6.2
+    Checking objc2-core-foundation v0.3.2
+    Checking dispatch2 v0.3.1
+    Checking objc2-foundation v0.3.2
+    Checking objc2-core-graphics v0.3.2
+    Checking objc2-quartz-core v0.3.2
+    Checking objc2-app-kit v0.3.2
+    Checking objc2-web-kit v0.3.2
+    Checking tao v0.37.1
+    Checking muda v0.20.0
+    Checking window-vibrancy v0.8.1
+    Checking rfd v0.16.0
+    Checking arboard v3.6.1
+    Checking wry v0.57.0
+    Checking tauri-runtime v2.12.2
+    Checking tauri-runtime-wry v2.12.2
+    Checking tauri v2.12.1
+    Checking tauri-plugin-fs v2.7.1
+    Checking tauri-plugin-deep-link v2.6.1
+    Checking tauri-plugin-dialog v2.8.1
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 20s
+VERIFY_STEP_END=clippy exit=0
+VERIFY_STEP_BEGIN=product-bins
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.26s
+VERIFY_STEP_END=product-bins exit=0
+VERIFY_STEP_BEGIN=core-tests
+   Compiling objc2-exception-helper v0.1.1
+   Compiling objc2 v0.6.5
+   Compiling zeropw-desktop-core v0.2.0 (/Users/admin/zeropw/desktop/core)
+   Compiling zeropw-desktop v0.2.0 (/Users/admin/zeropw/desktop/src-tauri)
+   Compiling objc2-core-foundation v0.3.2
+   Compiling block2 v0.6.2
+   Compiling objc2-foundation v0.3.2
+   Compiling wry v0.57.0
+   Compiling dispatch2 v0.3.1
+   Compiling objc2-core-graphics v0.3.2
+   Compiling objc2-quartz-core v0.3.2
+   Compiling objc2-app-kit v0.3.2
+   Compiling objc2-web-kit v0.3.2
+   Compiling tao v0.37.1
+   Compiling muda v0.20.0
+   Compiling tauri-runtime v2.12.2
+   Compiling window-vibrancy v0.8.1
+   Compiling rfd v0.16.0
+   Compiling arboard v3.6.1
+   Compiling tauri-runtime-wry v2.12.2
+   Compiling tauri v2.12.1
+   Compiling tauri-plugin-fs v2.7.1
+   Compiling tauri-plugin-deep-link v2.6.1
+   Compiling tauri-plugin-dialog v2.8.1
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2m 53s
+     Running unittests src/main.rs (desktop/target/debug/deps/zeropw_desktop-5e15cf655cd2c48d)
+
+running 9 tests
+test commands::tests::shown_text_serializes_as_the_contract_shape ... ok
+test commands::tests::a_rejected_payload_does_not_echo_its_values ... ok
+test commands::tests::shell_inputs_take_the_contract_keys_and_nothing_else ... ok
+test deeplink::tests::navigation_stays_inside_the_app ... ok
+test deeplink::tests::only_the_quit_flag_quits ... ok
+test png::tests::checksums_match_reference_values ... ok
+test shell::instance_lock::tests::a_second_instance_finds_the_lock_held_until_the_first_ends ... ok
+test png::tests::encoded_images_round_trip ... ok
+test png::tests::icons_are_the_vault_mark_on_a_paper_tile ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.77s
+
+     Running unittests src/lib.rs (desktop/target/debug/deps/zeropw_desktop_core-51f1a2fd9e6774a4)
+
+running 89 tests
+test admin::tests::child_env_is_the_fixed_allowlist ... ok
+test admin::tests::options_are_single_flag_equals_value_tokens ... ok
+test admin::tests::positionals_are_format_checked ... ok
+test admin::tests::require_admin_is_off_unless_asked_and_not_part_of_the_command ... ok
+test admin::tests::values_with_control_characters_are_rejected_without_echo ... ok
+test admin::tests::envelope_has_only_present_fields ... ok
+test admin::tests::missing_binary_is_reported ... ok
+test commands::remote::tests::iso_time_round_trips_with_the_parser ... ok
+test commands::remote::tests::pending_detail_yields_both_fingerprints ... ok
+test commands::remote::tests::env_lists_are_checked ... ok
+test commands::tests::control_reduces_incident_id_to_bool ... ok
+test commands::tests::a_selection_becomes_the_difference_from_the_default ... ok
+test commands::tests::contract_inputs_deserialize ... ok
+test commands::tests::drop_events_carry_a_reference_and_a_name_or_a_reason ... ok
+test commands::tests::helpers ... ok
+test commands::tests::import_inputs_are_checked_before_the_cli_runs ... ok
+test commands::tests::outputs_use_contract_names ... ok
+test devices::tests::notes_are_bounded_and_name_the_new_mac ... ok
+test admin::tests::envelope_value_bounds ... ok
+test devices::tests::a_link_id_is_inferred_only_when_unambiguous ... ok
+test devices::tests::upsert_merges_environments_and_keeps_a_known_link_id ... ok
+test error::tests::an_object_detail_keeps_only_fingerprints ... ok
+test error::tests::detail_is_bounded_and_control_free ... ok
+test error::tests::parses_last_json_line_after_usage_text ... ok
+test error::tests::rejects_lines_that_are_not_cli_errors ... ok
+test error::tests::serializes_without_empty_detail ... ok
+test hooks::tests::event_names_match_the_contract ... ok
+test error::tests::drops_detail_that_contains_a_secret ... ok
+test link::tests::backoff_doubles_up_to_its_limit ... ok
+test link::tests::daemon_errors_become_link_reasons_without_their_text ... ok
+test link::tests::invite_codes_and_ids_have_their_shapes ... ok
+test link::tests::names_are_bounded_and_control_free ... ok
+test link::tests::service_urls_are_https_or_loopback_http_without_extras ... ok
+test link::tests::times_parse_from_numbers_and_utc_text ... ok
+test link::tests::status_values_from_the_daemon_are_checked ... ok
+test netif::tests::classification ... ok
+test netif::tests::listing_has_no_loopback_and_is_sorted ... ok
+test devices::tests::the_file_is_private_and_a_damaged_one_is_an_error ... ok
+test onetime::tests::kinds_cannot_be_crossed ... ok
+test onetime::tests::pairing_codes_are_shown_once_and_pasted_ones_stay_in_rust ... ok
+test onetime::tests::labels_travel_with_the_value ... ok
+test onetime::tests::peek_keeps_and_discard_removes ... ok
+test onetime::tests::env_files_stay_in_rust_for_ten_minutes_in_a_pool_of_their_own ... ok
+test onetime::tests::recovery_codes_are_never_shown_again ... ok
+test onetime::tests::refs_are_random_and_validated ... ok
+test onetime::tests::revealed_secrets_expire_after_60s_invites_after_60min_others_after_10min ... ok
+test onetime::tests::reservations_hold_their_slot_until_filled_or_dropped ... ok
+test onetime::tests::values_are_single_use ... ok
+test pairing::tests::a_code_round_trips ... ok
+test pairing::tests::invitations_may_be_links_and_env_names_split ... ok
+test hooks::tests::file_tokens_are_single_use_and_purpose_bound ... ok
+test paths::tests::layout_keeps_settings_outside_state ... ok
+test pairing::tests::malformed_codes_are_refused_without_echo ... ok
+test recovery::tests::base32_matches_rfc4648_vectors ... ok
+test onetime::tests::store_is_bounded ... ok
+test onetime::tests::pasted_invites_have_their_own_pool_and_cannot_fill_the_store ... ok
+test secret::tests::deserializes_from_json_and_exposes_only_explicitly ... ok
+test secret::tests::rejects_non_string_json ... ok
+test serve::tests::healthz_on_a_closed_port_fails ... ok
+test recovery::tests::normalize_accepts_what_a_person_types ... ok
+test recovery::tests::generated_codes_have_six_groups_of_four_base32_chars ... ok
+test serve::tests::listen_failures_name_their_setting ... ok
+test serve::tests::loopback_urls_only ... ok
+test serve::tests::healthz_reads_status_and_server_header ... ok
+test settings::tests::corrupt_file_is_an_error ... ok
+test serve::tests::ps_info_sees_this_process ... ok
+test settings::tests::invalid_values_are_refused ... ok
+test paths::tests::private_files_are_0600_and_dirs_0700 ... ok
+test serve::tests::status_without_a_sidecar_is_stopped_and_stale_pid_files_are_dropped ... ok
+test sshkey::tests::container_layout_matches_openssh_key_v1 ... ok
+test settings::tests::defaults_when_missing_and_round_trip_with_0600 ... ok
+test sshkey::tests::generated_keys_differ_and_comments_are_sanitized ... ok
+test settings::tests::link_service_round_trips_and_is_left_out_while_unset ... ok
+test settings::tests::language_is_ko_en_or_unset ... ok
+test sshkey::tests::ssh_keygen_accepts_the_key_when_available ... ok
+test strength::tests::common_passwords_score_low_with_a_reason ... ok
+test strength::tests::short_values_are_capped_and_flagged ... ok
+test terminal::tests::env_is_allowlisted_and_injected ... ok
+test strength::tests::score_stays_within_zxcvbn_range ... ok
+test terminal::tests::process_table_rows_and_tty_names ... ok
+test terminal::tests::ring_cuts_only_at_character_boundaries ... ok
+test terminal::tests::ring_keeps_the_newest_output_within_capacity ... ok
+test terminal::tests::shell_quoting ... ok
+test terminal::tests::suggestions_for_this_and_another_account ... ok
+test terminal::tests::terminal_groups_cover_the_tree_and_the_terminal ... ok
+test terminal::tests::utf8_chunks_are_reassembled ... ok
+test terminal::tests::input_queue_is_bounded_and_wiped_on_close ... ok
+test strength::tests::long_random_values_pass_both_thresholds ... ok
+test strength::tests::related_inputs_lower_the_score ... ok
+
+test result: ok. 89 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
+
+     Running tests/core_fake_admin.rs (desktop/target/debug/deps/core_fake_admin-e7236f02907f54cf)
+
+running 35 tests
+test app_status_before_init_does_not_run_the_cli ... ok
+test a_full_one_time_store_refuses_before_the_cli_changes_anything ... ok
+test a_hung_cli_call_is_killed_at_the_timeout ... ok
+test control_commands_reduce_the_incident_id_and_emit_events ... ok
+test deep_links_only_preview_and_emit_an_event ... ok
+test cli_errors_are_parsed_and_never_echo_secrets ... ok
+test http_connection_argv_and_ca_file_token ... ok
+test an_ssh_path_that_names_no_executable_here_is_refused_before_the_cli ... ok
+test incident_all_scope_needs_the_passphrase ... ok
+test failed_init_keeps_the_generated_code_for_a_retry ... ok
+test invite_lists_never_forward_link_strings ... ok
+test invite_link_is_stored_and_the_raw_invite_dropped ... ok
+test onetime_copy_clears_the_clipboard_only_if_unchanged ... ok
+test preview_then_join_keep_the_invite_out_of_argv_and_the_webview ... ok
+test principal_token_goes_to_the_store_only ... ok
+test project_create_checks_the_positional_name ... ok
+test list_commands_use_flag_equals_value ... ok
+test quitting_clears_a_copied_value_still_on_the_clipboard ... ok
+test secret_put_from_a_picked_file_uses_a_single_use_token ... ok
+test secret_put_generated_ssh_key_returns_only_public_parts ... ok
+test secret_put_typed_value_travels_as_value_b64 ... ok
+test secret_reveal_returns_a_reference_shown_once ... ok
+test settings_set_replaces_a_damaged_settings_file ... ok
+test ssh_connection_repeats_host_keys_and_names_its_ssh ... ok
+test ssh_connection_without_its_ssh_is_refused_before_the_cli ... ok
+test recover_tries_the_canonical_code_then_the_exact_text_and_no_more ... ok
+test ssh_program_is_given_through_connection_update_behind_the_admin_password ... ok
+test terminal_needs_a_caller_token_reference_and_a_running_gateway ... ok
+test vault_init_checks_passphrases_before_running_anything ... ok
+test terminal_open_injects_the_principal_token_from_the_store ... ok
+test vault_init_passes_passphrases_only_in_the_envelope_then_starts_serve ... ok
+test vault_unlock_checks_the_passphrase_on_status_without_changing_anything ... ok
+test deep_links_cannot_fill_the_one_time_store ... ok
+test versions_go_back_to_the_cli_as_it_printed_them ... ok
+test recover_stops_a_running_serve_and_starts_it_again ... ok
+
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 28.92s
+
+     Running tests/core_reauth_reattach.rs (desktop/target/debug/deps/core_reauth_reattach-846a3dc2ac0783e8)
+
+running 8 tests
+test reauth_commands_still_refuse_an_empty_passphrase_before_running ... ok
+test secure_view_toggles_the_window_hook_and_reports_what_it_got ... ok
+test attach_during_output_has_no_gap_and_no_repeat ... ok
+test the_core_list_matches_the_documented_reauth_commands ... ok
+test invite_previews_stay_pending_until_joined ... ok
+test terminals_are_listed_and_reattached_with_their_buffered_output ... ok
+test the_replay_is_bounded_to_the_newest_output ... ok
+test require_admin_goes_with_exactly_the_reauth_commands ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.87s
+
+     Running tests/e2e_env_import.rs (desktop/target/debug/deps/e2e_env_import-eb028612e98e084d)
+
+running 1 test
+test a_dropped_or_picked_env_file_is_previewed_and_imported_without_values_leaving_rust ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.33s
+
+     Running tests/e2e_real_admin.rs (desktop/target/debug/deps/e2e_real_admin-c88d462baee79930)
+
+running 7 tests
+test real_serve_says_which_address_it_could_not_open ... ok
+test real_serve_starts_attaches_and_stops ... ok
+test app_made_ssh_connection_runs_agent_exec_on_a_real_sshd ... ok
+test an_open_incident_takes_in_a_narrower_declaration_and_survives_a_restore has been running for over 60 seconds
+test init_project_secret_put_and_list_without_values has been running for over 60 seconds
+test init_project_secret_put_and_list_without_values ... ok
+test an_open_incident_takes_in_a_narrower_declaration_and_survives_a_restore ... ok
+test recover_reaches_a_vault_whose_code_was_typed_into_the_cli ... ok
+test ssh_connection_made_without_its_ssh_is_repaired_and_runs_on_a_real_sshd ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 105.64s
+
+     Running tests/e2e_remote_pairing.rs (desktop/target/debug/deps/e2e_remote_pairing-ea8c3ebca6098677)
+
+running 2 tests
+test a_refused_mac_never_joins has been running for over 60 seconds
+test two_macs_pair_through_the_link_daemon_only_after_explicit_approval has been running for over 60 seconds
+test a_refused_mac_never_joins ... FAILED
+test two_macs_pair_through_the_link_daemon_only_after_explicit_approval ... FAILED
+
+failures:
+
+---- a_refused_mac_never_joins stdout ----
+
+thread 'a_refused_mac_never_joins' (63246) panicked at core/tests/e2e_remote_pairing.rs:732:5:
+assertion `left == right` failed: PairingJoinOut { done: false, peer: "aaaaaaaaaaaaaaaaaaaaaaaaaa", environments: [PairingJoinEnv { env: "demo/dev", state: "failed", reason: Some("team_join_failed"), detail: Some("handshake_channel_closed"), self_fingerprint: None, inviter_fingerprint: None, project: None, environment: None }] }
+  left: "failed"
+ right: "pending"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- two_macs_pair_through_the_link_daemon_only_after_explicit_approval stdout ----
+
+thread 'two_macs_pair_through_the_link_daemon_only_after_explicit_approval' (63247) panicked at core/tests/e2e_remote_pairing.rs:475:5:
+assertion `left == right` failed: PairingJoinOut { done: false, peer: "aaaaaaaaaaaaaaaaaaaaaaaaaa", environments: [PairingJoinEnv { env: "demo/dev", state: "failed", reason: Some("team_join_failed"), detail: Some("handshake_channel_closed"), self_fingerprint: None, inviter_fingerprint: None, project: None, environment: None }] }
+  left: "failed"
+ right: "pending"
+
+
+failures:
+    a_refused_mac_never_joins
+    two_macs_pair_through_the_link_daemon_only_after_explicit_approval
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 62.76s
+
+error: test failed, to rerun pass `-p zeropw-desktop-core --test e2e_remote_pairing`
+VERIFY_STEP_END=core-tests exit=101
+VERIFY_FAILED=core-tests

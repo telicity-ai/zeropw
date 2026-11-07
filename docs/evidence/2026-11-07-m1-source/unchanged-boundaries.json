@@ -1,0 +1,12 @@
+{
+  "head": "8258a8d2eac7541e229f414151271bb3faa215f8",
+  "changed_files_by_protected_path": {
+    "AGENTS.md": [],
+    "rust/verify.sh": [],
+    "desktop/verify.sh": [],
+    ".github": [],
+    "harness": [],
+    "rust/tests/fixtures": []
+  },
+  "all_unchanged": true
+}

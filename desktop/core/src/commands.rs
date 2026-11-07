@@ -22,6 +22,7 @@
 //! `--require-admin` ([`REQUIRE_ADMIN_COMMANDS`]) so the CLI checks the envelope's passphrase
 //! before it runs them.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -39,6 +40,7 @@ use crate::admin::{
 };
 use crate::error::AppError;
 use crate::hooks::{Clipboard, CoreEvent, EventSink, FilePurpose, FileTokens, ScreenGuard};
+use crate::link::{self, Backoff, LinkSupervisor};
 use crate::netif::{self, NetInterface};
 use crate::onetime::{OneTimeKind, OneTimeStore};
 use crate::paths::{self, AppPaths};
@@ -68,9 +70,12 @@ const MAX_NAME_LIST_CHARS: usize = 2000;
 /// The longest version text the core passes on (the CLI prints integers).
 const MAX_VERSION_CHARS: usize = 64;
 
+mod remote;
+pub use remote::*;
+
 /// zeropw-admin commands that run with `--require-admin` (docs/desktop-app.md §5: the app
 /// re-authenticates them, the CLI alone would not).
-pub const REQUIRE_ADMIN_COMMANDS: [&[&str]; 9] = [
+pub const REQUIRE_ADMIN_COMMANDS: [&[&str]; 11] = [
     &["resume"],
     &["connection", "create-http"],
     &["connection", "create-ssh"],
@@ -79,6 +84,8 @@ pub const REQUIRE_ADMIN_COMMANDS: [&[&str]; 9] = [
     &["approvals", "approve"],
     &["team", "invite"],
     &["team", "remove"],
+    &["team", "approve-join"],
+    &["team", "deny-join"],
     &["restore"],
 ];
 const MAX_LIMIT: u32 = 10_000;
@@ -714,6 +721,12 @@ pub struct CoreConfig {
     pub clipboard_clear_after: Duration,
     pub terminal_program: TerminalProgram,
     pub terminal_ring_bytes: usize,
+    /// The zeropw-link daemon: how long a start may take to answer, the stop grace, the
+    /// restart backoff, and how often the watch looks.
+    pub link_start_timeout: Duration,
+    pub link_stop_grace: Duration,
+    pub link_backoff: Backoff,
+    pub link_watch_interval: Duration,
 }
 
 impl CoreConfig {
@@ -728,6 +741,10 @@ impl CoreConfig {
             clipboard_clear_after: CLIPBOARD_CLEAR_AFTER,
             terminal_program: TerminalProgram::LoginShell,
             terminal_ring_bytes: RING_BYTES,
+            link_start_timeout: link::START_TIMEOUT,
+            link_stop_grace: link::STOP_GRACE,
+            link_backoff: Backoff::default(),
+            link_watch_interval: link::WATCH_INTERVAL,
         }
     }
 }
@@ -761,6 +778,15 @@ pub struct Core {
     settings_lock: Mutex<()>,
     /// Held by `recover` while the sidecar is down for it; `serve_start` waits on it.
     recovery_lock: Mutex<()>,
+    /// The zeropw-link daemon sidecar (remote sync).
+    link: Arc<LinkSupervisor>,
+    /// Serialises `devices.json` updates.
+    devices_lock: Mutex<()>,
+    /// One `pairing_join` at a time.
+    pairing_lock: Mutex<()>,
+    /// Per pasted pairing code: the environments joined so far (`pairing_join` retries only
+    /// the others).
+    pairings: Mutex<HashMap<String, Vec<Option<PairingJoinEnv>>>>,
 }
 
 impl Core {
@@ -777,6 +803,12 @@ impl Core {
             events.clone(),
             config.serve_watch_interval,
         );
+        let link = Arc::new(
+            LinkSupervisor::new(&paths)
+                .with_timeouts(config.link_start_timeout, config.link_stop_grace)
+                .with_backoff(config.link_backoff),
+        );
+        watch_link(Arc::downgrade(&link), config.link_watch_interval);
         Self {
             runner: AdminRunner::new(&paths.bin_dir, &paths.state_dir())
                 .with_default_timeout(config.admin_timeout),
@@ -795,6 +827,10 @@ impl Core {
             pending_clears: Arc::new(Mutex::new(PendingClears::default())),
             settings_lock: Mutex::new(()),
             recovery_lock: Mutex::new(()),
+            link,
+            devices_lock: Mutex::new(()),
+            pairing_lock: Mutex::new(()),
+            pairings: Mutex::new(HashMap::new()),
             paths,
         }
     }
@@ -821,12 +857,14 @@ impl Core {
     }
 
     /// App quit: clear the clipboard if it still holds a value copied in the last 60 s, forget
-    /// one-time values, stop every terminal and what runs in it, SIGTERM the sidecar.
+    /// one-time values, stop every terminal and what runs in it, SIGTERM the sidecar, then the
+    /// link daemon it was using.
     pub fn shutdown(&self) {
         self.clear_pending_clipboard();
         self.store.clear();
         self.terminals.close_all();
         self.serve.stop_reported(|status| self.show_serve(status));
+        self.link.stop();
     }
 
     /// The early run of every pending 60 s clear: the clipboard is emptied if it still holds
@@ -950,12 +988,20 @@ impl Core {
         self.start_serve()
     }
 
+    /// With `--link-socket` whenever the link daemon answers (docs/remote-sync.md §3.1).
     fn start_serve(&self) -> Result<ServeStatus, AppError> {
         let settings = self.settings_get()?;
+        // a vault made or restored in this app run: the link daemon comes up with the relay (at
+        // app start `link_startup` already ran; once wanted, the watch restarts it)
+        if !self.link.wanted() {
+            self.link_startup();
+        }
+        let link_socket = self.link.ready().then(|| self.paths.link_socket());
         self.serve.start_reported(
             &ServeConfig {
                 port: settings.gateway_port,
                 team_listen: settings.team_listen,
+                link_socket,
             },
             |status| self.show_serve(status),
         )
@@ -989,6 +1035,18 @@ impl Core {
         )?)?;
         self.events.emit(CoreEvent::ControlChanged(control));
         Ok(control)
+    }
+
+    /// `vault_unlock`: the window's lock screen. Checks the administrator passphrase the way the
+    /// CLI re-authenticates (`--require-admin`, which records a failed attempt as `auth_failed`)
+    /// on the read-only `status`, and returns the stop state. Nothing in the vault changes; the
+    /// lock only hides the window's lists, it does not stop the relay or any agent.
+    pub fn vault_unlock(&self, input: PassphraseIn) -> Result<Control, AppError> {
+        require_passphrase(&input.admin_passphrase)?;
+        Control::from_cli(&self.run(
+            AdminArgs::command(&["status"]).require_admin(),
+            Envelope::new().admin_passphrase(&input.admin_passphrase),
+        )?)
     }
 
     // -- projects -----------------------------------------------------------------------------
@@ -2008,6 +2066,28 @@ fn watch_serve(
         eprintln!(
             "zeropw: serve watch did not start ({:?}): the window learns that serve stopped \
              only when it asks",
+            e.kind()
+        );
+    }
+}
+
+/// The link daemon watch: every `every`, notice an exit and restart a wanted daemon after its
+/// backoff ([`LinkSupervisor::watch`]). Ends once the core is gone.
+fn watch_link(link: Weak<LinkSupervisor>, every: Duration) {
+    let spawned = thread::Builder::new()
+        .name("link-watch".into())
+        .spawn(move || {
+            loop {
+                thread::sleep(every);
+                let Some(link) = link.upgrade() else {
+                    return;
+                };
+                link.watch();
+            }
+        });
+    if let Err(e) = spawned {
+        eprintln!(
+            "zeropw: link watch did not start ({:?}): an exited link daemon is not restarted",
             e.kind()
         );
     }
