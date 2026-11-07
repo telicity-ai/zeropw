@@ -99,7 +99,7 @@ export function VaultPage({ intent }: { intent?: Intent }) {
   }, [intent, envFile, clearIntent, takeEnvFile, addKind]);
 
   const taken = useMemo(() => (secrets ?? []).map((s) => s.id), [secrets]);
-  const title = filter.by === 'kind' ? kindLabel(filter.kind) : filter.by === 'place' ? placeText(filter.place) : t('nav.all');
+  const title = filter.by === 'kind' ? t(`nav.kind.${filter.kind}` as CopyKey) : filter.by === 'place' ? placeText(filter.place) : t('nav.all');
   const close = () => setDlg(null);
 
   const listBody = () => {

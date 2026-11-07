@@ -20,7 +20,7 @@ export function parseView(view: string | undefined): VaultFilter {
   return { by: 'all' };
 }
 
-export const kindLabel = (k: string): string => (KINDS.includes(k as SecretKind) ? t(`nav.kind.${k}` as CopyKey) : k);
+export const kindLabel = (k: string): string => (KINDS.includes(k as SecretKind) ? t(`vault.kind.${k}` as CopyKey) : k);
 export const placeOf = (s: Pick<SecretView, 'project' | 'environment'>): string => envKey(String(s.project), String(s.environment));
 export const placeText = (key: string): string => {
   const i = key.indexOf('/');

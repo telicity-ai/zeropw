@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { COPY, COPY_AREAS, COPY_AREAS_EN, COPY_EN, hasCopy, resolveLocale, setLocale, t, tLines, type CopyKey } from '../src/copy';
+import { kindLabel } from '../src/screens/vault/logic';
 
 // Every visible string lives in one area table; a key defined twice would silently take the
 // later area's text, so keys are unique across areas.
@@ -42,6 +43,16 @@ describe('copy tables', () => {
 describe('the English table', () => {
   const keys = Object.keys(COPY) as CopyKey[];
   const holes = (v: string) => [...v.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort().join(',');
+
+  it('names one item in the singular while keeping navigation categories plural', () => {
+    try {
+      setLocale('en');
+      expect(kindLabel('api_key')).toBe('API Key');
+      expect(kindLabel('password')).toBe('Password');
+      expect(t('nav.kind.api_key')).toBe('API Keys');
+      expect(t('nav.kind.password')).toBe('Passwords');
+    } finally { setLocale('ko'); }
+  });
 
   it('has every key, area by area, and nothing else', () => {
     for (const [area, table] of Object.entries(COPY_AREAS)) {

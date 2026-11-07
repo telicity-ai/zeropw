@@ -4,6 +4,10 @@ import type { Translation } from './types';
 // copying values, versions and the .env import.
 
 export const VAULT = {
+  'vault.kind.password': '비밀번호',
+  'vault.kind.api_key': 'API 키',
+  'vault.kind.env_var': '환경변수',
+  'vault.kind.ssh_private_key': 'SSH 키',
   // list
   'vault.list.aria': '항목 목록',
   'vault.list.more': '목록 더 보기',
@@ -180,6 +184,10 @@ export const VAULT = {
 } as const;
 
 export const VAULT_EN: Translation<typeof VAULT> = {
+  'vault.kind.password': 'Password',
+  'vault.kind.api_key': 'API Key',
+  'vault.kind.env_var': 'Environment Variable',
+  'vault.kind.ssh_private_key': 'SSH Key',
   'vault.list.aria': 'Items',
   'vault.list.more': 'More list actions',
   'vault.current.hidden': 'Hidden value',
