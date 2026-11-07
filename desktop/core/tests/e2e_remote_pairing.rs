@@ -327,6 +327,7 @@ fn mac(root: &Path, name: &str) -> Core {
     core.settings_set(Settings {
         gateway_port: free_port(),
         team_listen: None,
+        link_service: None,
     })
     .unwrap();
     core

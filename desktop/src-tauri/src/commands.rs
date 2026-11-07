@@ -170,6 +170,13 @@ pub async fn resume(shell: State<'_, Shell>, request: Request<'_>) -> Out<Contro
     blocking(move || core.resume(input)).await
 }
 
+#[tauri::command(rename_all = "snake_case")]
+pub async fn vault_unlock(shell: State<'_, Shell>, request: Request<'_>) -> Out<Control> {
+    let input: PassphraseIn = input(&request)?;
+    let core = core(&shell);
+    blocking(move || core.vault_unlock(input)).await
+}
+
 // -- projects ---------------------------------------------------------------------------------
 
 #[tauri::command(rename_all = "snake_case")]
@@ -785,6 +792,7 @@ pub fn handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static 
         control_get,
         stop_all,
         resume,
+        vault_unlock,
         project_list,
         project_create,
         secret_list,

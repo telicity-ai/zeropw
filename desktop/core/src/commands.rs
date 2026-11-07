@@ -1037,6 +1037,18 @@ impl Core {
         Ok(control)
     }
 
+    /// `vault_unlock`: the window's lock screen. Checks the administrator passphrase the way the
+    /// CLI re-authenticates (`--require-admin`, which records a failed attempt as `auth_failed`)
+    /// on the read-only `status`, and returns the stop state. Nothing in the vault changes; the
+    /// lock only hides the window's lists, it does not stop the relay or any agent.
+    pub fn vault_unlock(&self, input: PassphraseIn) -> Result<Control, AppError> {
+        require_passphrase(&input.admin_passphrase)?;
+        Control::from_cli(&self.run(
+            AdminArgs::command(&["status"]).require_admin(),
+            Envelope::new().admin_passphrase(&input.admin_passphrase),
+        )?)
+    }
+
     // -- projects -----------------------------------------------------------------------------
 
     pub fn project_list(&self) -> Result<Value, AppError> {

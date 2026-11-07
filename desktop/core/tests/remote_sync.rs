@@ -16,7 +16,7 @@ use std::time::Duration;
 use common::{FakeLink, Fixture, err, health_server, ok};
 use serde_json::{Value, json};
 use zeropw_desktop_core::commands::*;
-use zeropw_desktop_core::link::LinkClient;
+use zeropw_desktop_core::link::{DEFAULT_SERVICE_URL, LinkClient};
 use zeropw_desktop_core::pairing::{PairInvite, PairingCode};
 use zeropw_desktop_core::{Core, CoreConfig, NoEvents, SecretString, Settings};
 
@@ -44,6 +44,7 @@ fn core(fx: &Fixture) -> Core {
     core.settings_set(Settings {
         gateway_port: health_server(),
         team_listen: None,
+        link_service: None,
     })
     .unwrap();
     core
@@ -245,6 +246,39 @@ fn enrolment_sends_the_invite_code_only_in_the_socket_request() {
         name: None,
     }));
     assert_eq!(e.reason, "link_already_enrolled");
+}
+
+/// The server address saved in Settings is what an enrolment without an explicit service uses,
+/// and what `link_status` reports as the default before enrolment; without the setting the
+/// built-in default (which never resolves) stays.
+#[test]
+fn the_saved_link_service_is_the_enrolment_default() {
+    let fx = Fixture::new();
+    let core = core(&fx);
+    let status = core.link_status().unwrap();
+    assert_eq!(status.default_service, DEFAULT_SERVICE_URL);
+    core.settings_set(Settings {
+        link_service: Some(SERVICE.into()),
+        ..core.settings_get().unwrap()
+    })
+    .unwrap();
+    let status = core.link_status().unwrap();
+    assert_eq!(status.default_service, SERVICE);
+    assert_eq!(status.service_host, "link.example.org");
+
+    let daemon = Daemon::new(false, OWN_LINK);
+    let link = daemon.serve(&fx);
+    ok(core.link_enroll(LinkEnrollIn {
+        invite_code: INVITE_CODE.into(),
+        service: None,
+        name: Some("work laptop".into()),
+    }));
+    let enroll = link
+        .requests()
+        .into_iter()
+        .find(|r| r["op"] == "enroll")
+        .unwrap();
+    assert_eq!(enroll["service"], SERVICE);
 }
 
 #[test]
