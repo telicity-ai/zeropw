@@ -4,6 +4,17 @@ Status: **incomplete; no release acceptance and no aggregate Opus PASS**. This i
 a dated evidence record, not a change to the acceptance requirements. The
 [TURN checklist](remote-sync-turn-checklist.md) keeps its completion gates open.
 
+The M2a fixture package was collected from Sol commit
+`c38523ad7321270521745a0112dc90743beb0371` as coordinator commit `ac7a00c`.
+Both Rust trees are `9982d235d7b464edf7a520c450f1db4c33ad86d0`: only a test-only
+helper and 146 new fixture files were added, with all 652 original files unchanged.
+Four isolated generation/crypto/golden tests, strict helper Clippy, formatting,
+independent byte/hash checks and deterministic regeneration passed.
+[Collection and execution record](evidence/2026-11-07-m2a-fixtures/REPORT.md).
+This is fixture consistency, not parser, semantic admission, full-matrix, native
+or Opus acceptance. The feature-neutral verifier implementation is a separate
+ongoing task; PC-R1–R5 and M2-G01–G10 remain open until their actual evidence.
+
 Latest service-fix evidence: link `e115879f6a73d8f95e359a116da38ebb334d5ced`
 passed isolated Linux vet, the full Go suite, server/daemon race checks and
 CGO-free Darwin arm64 CLI/test cross-builds, with all 162 Git blobs, modes and
