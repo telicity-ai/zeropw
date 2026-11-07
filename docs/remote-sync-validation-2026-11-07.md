@@ -26,6 +26,13 @@ reproducibility comparison. No new Opus
 verdict, OCI product deployment or final sidecar-pin integration is claimed.
 This factual addendum was recorded by actual `gpt-6.1-sol`.
 
+The [new Opus attempt at 4af5ac8](evidence/2026-11-07-link-4af5ac8-review-unavailable.json)
+failed before source review because Claude's five-hour API quota was exhausted.
+The provider reported reset at 2026-11-07 17:50 KST. No new review verdict exists,
+the original ca01275 REVISE is unchanged, and no substitute-model approval or
+production deployment is claimed. Independent implementation and isolated
+verification continue; retry must be a new review task after that reset.
+
 ## Source and execution identity
 
 | Item | Exact source or scope |
