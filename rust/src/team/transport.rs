@@ -40,7 +40,18 @@ fn capture_wire(direction: &str, bytes: &[u8]) {
         return;
     };
     if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        // Formatting can make several writes. O_APPEND protects each
+        // individual write, not the whole record, so cooperating writers
+        // in other threads/processes must hold the same file lock.
+        loop {
+            match rustix::fs::flock(&file, rustix::fs::FlockOperation::LockExclusive) {
+                Ok(()) => break,
+                Err(rustix::io::Errno::INTR) => continue,
+                Err(_) => return,
+            }
+        }
         let _ = writeln!(file, "{} {}", direction, hex::encode(bytes));
+        let _ = rustix::fs::flock(&file, rustix::fs::FlockOperation::Unlock);
     }
 }
 
