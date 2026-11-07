@@ -1,0 +1,18 @@
+[
+  {
+    "cause": "Collector compared the preparation-report digest to the differently structured preflight report. The intended coordinator-cache-preparation/verified-registry.json digest was subsequently verified exactly. No actual required source/cache/driver mismatch.",
+    "error": "AssertionError: PREFLIGHT_CACHE_REPORT_HASH",
+    "evidence": "prelaunch.stderr",
+    "exit": 1,
+    "product_execution": "NOTRUN at this point; no setup or source/cache/driver correction occurred",
+    "stage": "initial prelaunch DATA collector"
+  },
+  {
+    "cause": "Nested triple-quote delimiter in host stdlib DATA/transport snippet; parse failed before any code or SSH launch. Quoting corrected for collection only.",
+    "error": "SyntaxError: invalid syntax",
+    "evidence": "Original tool result chunk 89e133 retained in task timeline",
+    "exit": 1,
+    "product_execution": "No product rerun; frozen driver had already ended with exit0",
+    "stage": "first host collection command parse"
+  }
+]

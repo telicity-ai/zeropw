@@ -1,0 +1,243 @@
+{
+  "source_head": "29362020ed7a57451d0984eefb6eeb4e6c110b0c",
+  "rust_tree": "4536b42fb5206b446d4c6760c37c80281bcd3cbe",
+  "native_status": "REQUESTED_PHASES_PASSED",
+  "full_verify": {
+    "all_exits_zero": true,
+    "all_expected_steps_in_exact_order": true,
+    "failed_within_matrix_only": 0,
+    "integration_targets": 104,
+    "passed_within_matrix_only": 1769,
+    "per_step_counts": [
+      {
+        "ignored": 4,
+        "name": "lib-and-bins",
+        "passed": 703,
+        "summaries": 6
+      },
+      {
+        "ignored": 0,
+        "name": "signer-probes",
+        "passed": 4,
+        "summaries": 1
+      },
+      {
+        "ignored": 0,
+        "name": "doc-tests",
+        "passed": 27,
+        "summaries": 1
+      }
+    ],
+    "result_summary_count": 112,
+    "steps": 109
+  },
+  "phases": [
+    {
+      "phase": "toolchain-python",
+      "exit": 0,
+      "passed_within_phase": 0,
+      "failed_within_phase": 0,
+      "elapsed_seconds": 0.018080583002301864
+    },
+    {
+      "phase": "platform-uname",
+      "exit": 0,
+      "passed_within_phase": 0,
+      "failed_within_phase": 0,
+      "elapsed_seconds": 0.0044980000020586886
+    },
+    {
+      "phase": "platform-swvers",
+      "exit": 0,
+      "passed_within_phase": 0,
+      "failed_within_phase": 0,
+      "elapsed_seconds": 0.017436083995562512
+    },
+    {
+      "phase": "platform-sip",
+      "exit": 0,
+      "passed_within_phase": 0,
+      "failed_within_phase": 0,
+      "elapsed_seconds": 0.008915416998206638
+    },
+    {
+      "phase": "platform-hardware",
+      "exit": 0,
+      "passed_within_phase": 0,
+      "failed_within_phase": 0,
+      "elapsed_seconds": 0.00535616600245703
+    },
+    {
+      "phase": "toolchain-rustc",
+      "exit": 0,
+      "passed_within_phase": 0,
+      "failed_within_phase": 0,
+      "elapsed_seconds": 0.03207612500409596
+    },
+    {
+      "phase": "toolchain-cargo",
+      "exit": 0,
+      "passed_within_phase": 0,
+      "failed_within_phase": 0,
+      "elapsed_seconds": 0.0169118330013589
+    },
+    {
+      "phase": "toolchain-openssl",
+      "exit": 0,
+      "passed_within_phase": 0,
+      "failed_within_phase": 0,
+      "elapsed_seconds": 0.008605750001152046
+    },
+    {
+      "phase": "features-before",
+      "exit": 0,
+      "passed_within_phase": 0,
+      "failed_within_phase": 0,
+      "elapsed_seconds": 0.39285970800119685
+    },
+    {
+      "phase": "focused-debug",
+      "exit": 0,
+      "passed_within_phase": 18,
+      "failed_within_phase": 0,
+      "elapsed_seconds": 542.9470610829958
+    },
+    {
+      "phase": "stack-debug-candidate",
+      "exit": 0,
+      "passed_within_phase": 1,
+      "failed_within_phase": 0,
+      "elapsed_seconds": 0.6605967089999467
+    },
+    {
+      "phase": "stack-debug-fold",
+      "exit": 0,
+      "passed_within_phase": 1,
+      "failed_within_phase": 0,
+      "elapsed_seconds": 0.23632079199887812
+    },
+    {
+      "phase": "old-regressions",
+      "exit": 0,
+      "passed_within_phase": 57,
+      "failed_within_phase": 0,
+      "elapsed_seconds": 47.53457795900613
+    },
+    {
+      "phase": "checkpoint-lib-debug",
+      "exit": 0,
+      "passed_within_phase": 14,
+      "failed_within_phase": 0,
+      "elapsed_seconds": 20.04685608300497
+    },
+    {
+      "phase": "checkpoint-lib-release",
+      "exit": 0,
+      "passed_within_phase": 14,
+      "failed_within_phase": 0,
+      "elapsed_seconds": 172.47764587499842
+    },
+    {
+      "phase": "focused-release",
+      "exit": 0,
+      "passed_within_phase": 18,
+      "failed_within_phase": 0,
+      "elapsed_seconds": 204.78852608400484
+    },
+    {
+      "phase": "stack-release-candidate",
+      "exit": 0,
+      "passed_within_phase": 1,
+      "failed_within_phase": 0,
+      "elapsed_seconds": 0.5807292500030599
+    },
+    {
+      "phase": "stack-release-fold",
+      "exit": 0,
+      "passed_within_phase": 1,
+      "failed_within_phase": 0,
+      "elapsed_seconds": 0.11986437500308966
+    },
+    {
+      "phase": "full-verify",
+      "exit": 0,
+      "passed_within_phase": 1769,
+      "failed_within_phase": 0,
+      "elapsed_seconds": 2105.4457923340015
+    },
+    {
+      "phase": "features-after",
+      "exit": 0,
+      "passed_within_phase": 0,
+      "failed_within_phase": 0,
+      "elapsed_seconds": 0.10437066599843092
+    }
+  ],
+  "selectors": {
+    "stack-debug-candidate": {
+      "exact_selector": "complete_candidate_depth64_success_late_error_repeat_drop_and_65_refusal_on_256_kib",
+      "failed": 0,
+      "has_exact_flag": true,
+      "passed": 1,
+      "selected": 1,
+      "summary_count": 1
+    },
+    "stack-debug-fold": {
+      "exact_selector": "complete_fold_depth64_on_actual_256_kib_stack",
+      "failed": 0,
+      "has_exact_flag": true,
+      "passed": 1,
+      "selected": 1,
+      "summary_count": 1
+    },
+    "stack-release-candidate": {
+      "exact_selector": "complete_candidate_depth64_success_late_error_repeat_drop_and_65_refusal_on_256_kib",
+      "failed": 0,
+      "has_exact_flag": true,
+      "passed": 1,
+      "selected": 1,
+      "summary_count": 1
+    },
+    "stack-release-fold": {
+      "exact_selector": "complete_fold_depth64_on_actual_256_kib_stack",
+      "failed": 0,
+      "has_exact_flag": true,
+      "passed": 1,
+      "selected": 1,
+      "summary_count": 1
+    }
+  },
+  "feature_graph_identical": true,
+  "raw_value_absent": true,
+  "source_checks": {
+    "after": {
+      "generated_files": 0,
+      "matches_exact_prestaged_manifest": true,
+      "mismatch_count": 0,
+      "source_files": 1259
+    },
+    "before": {
+      "generated_files": 0,
+      "matches_exact_prestaged_manifest": true,
+      "mismatch_count": 0,
+      "source_files": 1259
+    }
+  },
+  "cache_checks": {
+    "after": {
+      "checksums": "MATCH",
+      "network": "OFFLINE",
+      "packages": 172,
+      "source_files": 8194
+    },
+    "before": {
+      "checksums": "MATCH",
+      "network": "OFFLINE",
+      "packages": 172,
+      "source_files": 8194
+    }
+  },
+  "requested_phases_NOTRUN": [],
+  "count_scope": "Each phase/profiles overlap; never add native focused counts or historical Linux counts to native full matrix",
+  "gate_status": "All M2-G01-G10 OPEN; no runtime/physical/review/acceptance/release"
+}

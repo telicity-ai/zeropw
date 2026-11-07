@@ -11,7 +11,7 @@ use super::{
 };
 use crate::pyint::PyInt;
 use crate::team::{
-    commit::{self, Commit, Hlc},
+    commit::{self, Commit},
     fold::{self, CheckpointAuthorityTrace, CheckpointPosition},
     identity::DeviceRecord,
     sync::{self, Fact},
@@ -158,7 +158,6 @@ type Result<T> = std::result::Result<T, SemanticError>;
 use SemanticError as E;
 const SCHEMA: E = E::Checkpoint(CheckpointError::SchemaUnsupported);
 const SIGNATURE: E = E::Checkpoint(CheckpointError::SignatureInvalid);
-const BINDING: E = E::Checkpoint(CheckpointError::BindingMismatch);
 
 /// Explicit caller observations; these are neither authenticated collection nor
 /// persisted approval. A future trusted collector must repeat them under lock.
@@ -241,10 +240,10 @@ pub struct LocalRestrictions {
     pub backup_barrier: bool,
 }
 pub struct SemanticLocalInputs {
-    bindings: SemanticBindings,
-    inventory: ObservedInventory,
-    occupied: Vec<OccupiedLocalId>,
-    restrictions: LocalRestrictions,
+    pub(super) bindings: SemanticBindings,
+    pub(super) inventory: ObservedInventory,
+    pub(super) occupied: Vec<OccupiedLocalId>,
+    pub(super) restrictions: LocalRestrictions,
 }
 fn label(value: &str) -> bool {
     !value.is_empty() && value.len() <= 200 && !value.chars().any(char::is_control)
@@ -500,17 +499,20 @@ super::redacted_debug!(
     FactRoleInterval<'_>
 );
 
-struct CommitIndex {
-    hash: String,
-    author: String,
-    hlc: (PyInt, PyInt),
-    original_index: usize,
+pub(super) struct CommitIndex {
+    pub(super) hash: String,
+    pub(super) author: String,
+    pub(super) hlc: (PyInt, PyInt),
+    pub(super) original_index: usize,
 }
-fn component<'a>(payload: &'a IntegrityCheckedPayload<'_>, i: usize) -> Result<&'a Value> {
+pub(super) fn component<'a>(
+    payload: &'a IntegrityCheckedPayload<'_>,
+    i: usize,
+) -> Result<&'a Value> {
     let components = array(field(&payload.index.metadata, "components")?)?;
     Ok(field(components.get(i).ok_or(SCHEMA)?, "data")?)
 }
-fn original_commit(payload: &IntegrityCheckedPayload<'_>, i: usize) -> Result<Commit> {
+pub(super) fn original_commit(payload: &IntegrityCheckedPayload<'_>, i: usize) -> Result<Commit> {
     let value = strict_json::materialize(payload.index.commits.get(i).ok_or(SCHEMA)?)?;
     let original = field(&value, "record")?;
     let commit = Commit::from_dict(original).map_err(|_| SCHEMA)?;
@@ -521,7 +523,10 @@ fn original_commit(payload: &IntegrityCheckedPayload<'_>, i: usize) -> Result<Co
     }
     Ok(commit)
 }
-fn device_copy(value: &Value, devices: &BTreeMap<String, DeviceRecord>) -> Result<String> {
+pub(super) fn device_copy(
+    value: &Value,
+    devices: &BTreeMap<String, DeviceRecord>,
+) -> Result<String> {
     let device = record(value)?;
     let fp = device.fingerprint();
     if canonical(value)? != canonical(&device.to_dict())? {
@@ -532,14 +537,14 @@ fn device_copy(value: &Value, devices: &BTreeMap<String, DeviceRecord>) -> Resul
     }
     Ok(fp)
 }
-fn require_device(devices: &BTreeMap<String, DeviceRecord>, fp: &str) -> Result<()> {
+pub(super) fn require_device(devices: &BTreeMap<String, DeviceRecord>, fp: &str) -> Result<()> {
     if devices.contains_key(fp) {
         Ok(())
     } else {
         Err(E::AuthorityUnproven)
     }
 }
-fn inventory_check(local: &SemanticLocalInputs) -> Result<()> {
+pub(super) fn inventory_check(local: &SemanticLocalInputs) -> Result<()> {
     let i = &local.inventory;
     if [
         i.admitted_commits,
@@ -573,162 +578,14 @@ pub fn verify_retained_authority<'m, 'p, 'b>(
     payload: &'p IntegrityCheckedPayload<'b>,
     local: &'m SemanticLocalInputs,
 ) -> Result<RetainedAuthorityCandidate<'m, 'p, 'b>> {
+    let originals =
+        super::originals::AuthenticatedOriginals::authenticate(manifest, payload, local)?;
     let signed = &manifest.data.signed;
     let b = &local.bindings;
     let env = text(signed, "env_id")?;
     let recipient = text(signed, "recipient")?;
-    if payload.manifest_hash != manifest.data.hash
-        || b.manifest_hash != manifest.data.hash
-        || b.env_id != env
-        || b.recipient_record.fingerprint() != recipient
-        || b.recipient_role.as_str() != text(signed, "recipient_role")?
-        || b.approval_sha256 != text(signed, "approval_sha256")?
-        || b.session_nonce != text(signed, "session_nonce")?
-        || b.onboarding_nonce != text(signed, "onboarding_nonce")?
-    {
-        return Err(BINDING);
-    }
-    inventory_check(local)?;
-    let mut devices = BTreeMap::new();
-    for entry in array(component(payload, 0)?)? {
-        let value = field(entry, "record")?;
-        let device = record(value)?;
-        if canonical(value)? != canonical(&device.to_dict())? {
-            return Err(SCHEMA);
-        }
-        let fp = device.fingerprint();
-        if text(entry, "fingerprint")? != fp || devices.insert(fp, device).is_some() {
-            return Err(SCHEMA);
-        }
-    }
-    if devices.get(recipient) != Some(&b.recipient_record)
-        || devices.get(text(signed, "signer")?) != Some(&manifest.data.pinned)
-    {
-        return Err(BINDING);
-    }
-    let commits_component = component(payload, 2)?;
-    let genesis = text(commits_component, "genesis_commit_hash")?;
-    let admission = text(commits_component, "recipient_admission_commit_hash")?;
-    let owner = commit::env_owner_fingerprint(env).map_err(|_| SCHEMA)?;
-    let mut indices = Vec::new();
-    let mut slots = BTreeMap::new();
-    let mut authority = BTreeSet::new();
-    let mut inits = 0;
-    let mut admissions = Vec::new();
-    let mut secret_ids = BTreeSet::new();
-    let mut connection_ids = BTreeSet::new();
-    let mut removal_claim = false;
-    for i in 0..payload.index.commits.len() {
-        let commit = original_commit(payload, i)?;
-        let hash = commit.hash().map_err(|_| SCHEMA)?;
-        let author = devices.get(&commit.author).ok_or(E::AuthorityUnproven)?;
-        if commit.env_id != env {
-            return Err(BINDING);
-        }
-        commit::validate_ops(&commit.ops).map_err(|_| SCHEMA)?;
-        if !commit::verify_commit(&commit, author) {
-            return Err(SIGNATURE);
-        }
-        let hlc = Hlc::parse(&commit.hlc).map_err(|_| SCHEMA)?;
-        if commit.author_seq <= 0
-            || manifest
-                .data
-                .vector
-                .get(&commit.author)
-                .is_none_or(|s| commit.author_seq > *s)
-            || slots
-                .insert(
-                    (commit.author.clone(), commit.author_seq.clone()),
-                    (hash.clone(), hlc.clone()),
-                )
-                .is_some()
-        {
-            return Err(E::SemanticMismatch);
-        }
-        for (op_index, op) in commit.ops.iter().enumerate() {
-            let name = text(op, "op")?;
-            removal_claim |= op.get("removal_fact_hash").is_some();
-            if fold::checkpoint_authority_kind(name) {
-                authority.insert(hash.clone());
-            }
-            match name {
-                "env.init" => {
-                    inits += 1;
-                    if hash != genesis
-                        || op_index != 0
-                        || commit.author != owner
-                        || commit.author_seq != 1
-                        || device_copy(field(op, "owner_device")?, &devices)? != owner
-                    {
-                        return Err(E::AuthorityUnproven);
-                    }
-                }
-                "member.add" => {
-                    let fp = device_copy(field(op, "device")?, &devices)?;
-                    if fp == recipient {
-                        if text(op, "role")? != b.recipient_role.as_str() {
-                            return Err(E::AuthorityUnproven);
-                        }
-                        admissions.push((hash.clone(), op_index));
-                    }
-                }
-                "member.set_role" | "member.remove" | "owner.transfer" => {
-                    require_device(&devices, text(op, "fingerprint")?)?
-                }
-                _ => {}
-            }
-            if matches!(name, "env.init" | "dek.rotate") {
-                for fp in field(op, "wraps")?.as_object().ok_or(SCHEMA)?.keys() {
-                    require_device(&devices, fp)?;
-                }
-            }
-            if let Some(id) = op.get("secret_id").and_then(Value::as_str) {
-                secret_ids.insert(id.to_owned());
-            }
-            if name.starts_with("connection.")
-                && let Some(id) = op.get("id").and_then(Value::as_str)
-            {
-                connection_ids.insert(id.to_owned());
-            }
-        }
-        indices.push(CommitIndex {
-            hash,
-            author: commit.author,
-            hlc,
-            original_index: i,
-        });
-    }
-    // Authenticate every original fact before interpreting removal scope or
-    // applying any effect, including unsupported-but-signed removal facts.
-    let mut facts = BTreeMap::new();
-    for span in &payload.index.facts {
-        let value = strict_json::materialize(span)?;
-        let original = field(&value, "record")?;
-        let fact = Fact::from_dict(original).map_err(|_| SCHEMA)?;
-        if fact.env_id != env {
-            return Err(BINDING);
-        }
-        let author = devices.get(&fact.author).ok_or(E::AuthorityUnproven)?;
-        sync::validate_fact_target(&fact.kind, &fact.target).map_err(|_| SCHEMA)?;
-        if canonical(original)? != fact.canonical_json(true).map_err(|_| SCHEMA)?
-            || fact.hash().map_err(|_| SCHEMA)? != text(&value, "hash")?
-        {
-            return Err(E::SemanticMismatch);
-        }
-        if !sync::verify_fact(&fact, author) {
-            return Err(SIGNATURE);
-        }
-        if let Some(fp) = fact.target.get("fingerprint").and_then(Value::as_str) {
-            require_device(&devices, fp)?;
-        }
-        if let Some(id) = fact.target.get("secret_id").and_then(Value::as_str) {
-            secret_ids.insert(id.to_owned());
-        }
-        if let Some(id) = fact.target.get("connection_id").and_then(Value::as_str) {
-            connection_ids.insert(id.to_owned());
-        }
-        facts.insert(text(&value, "hash")?.to_owned(), fact);
-    }
+    let facts = &originals.facts;
+    let removal_claim = originals.removal_claim;
     let removals = component(payload, 4)?;
     if removal_claim
         || facts.values().any(|f| f.kind == "member_removed")
@@ -744,47 +601,15 @@ pub fn verify_retained_authority<'m, 'p, 'b>(
     {
         return Err(E::ScopeUnsupported);
     }
-    if inits != 1 {
-        return Err(E::HistoryProofUnavailable);
-    }
-    let declared: BTreeSet<_> =
-        super::payload::hash_set(field(commits_component, "authority_commit_hashes")?)?
-            .into_iter()
-            .collect();
-    if authority != declared {
-        return Err(E::HistoryProofUnavailable);
-    }
-    if admissions.len() != 1 || admissions.first().is_none_or(|(h, _)| h != admission) {
-        return Err(E::AuthorityUnproven);
-    }
-    let mut previous: BTreeMap<&str, &(PyInt, PyInt)> = BTreeMap::new();
-    for ((author, _), (_, hlc)) in &slots {
-        if previous.insert(author, hlc).is_some_and(|p| p >= hlc) {
-            return Err(E::SemanticMismatch);
-        }
-    }
-    for head in &manifest.data.heads {
-        if slots.get(&(head.author.clone(), head.sequence.clone()))
-            != Some(&(head.hash.clone(), head.hlc.clone()))
-        {
-            return Err(E::HistoryProofUnavailable);
-        }
-    }
-    for index in &indices {
-        let c = original_commit(payload, index.original_index)?;
-        for (fp, seq) in &c.seen {
-            require_device(&devices, fp)?;
-            if *seq < 0
-                || manifest.data.vector.get(fp).is_none_or(|v| seq > v)
-                || (fp == &c.author && seq >= &c.author_seq)
-                || slots
-                    .get(&(fp.clone(), seq.clone()))
-                    .is_some_and(|(_, h)| h > &index.hlc)
-            {
-                return Err(E::SemanticMismatch);
-            }
-        }
-    }
+    originals.check_history()?;
+    let super::originals::AuthenticatedOriginals {
+        devices,
+        mut indices,
+        facts,
+        mut secret_ids,
+        mut connection_ids,
+        ..
+    } = originals;
     indices.sort_by(|a, b| (&a.hlc, &a.author).cmp(&(&b.hlc, &b.author)));
     let cut = indices.last().ok_or(E::HistoryProofUnavailable)?;
     let cut_hash = cut.hash.clone();
