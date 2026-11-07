@@ -39,7 +39,7 @@ changes, so `rust/PORTING.md` §1 boundaries 1 and 2 hold:
 | Later sync | Only commits missing from the peer's version vector are sent (§6.3). |
 | Offline edits | Stored locally as commits; exchanged both ways on reconnect (§6.6). |
 | Concurrent edits | Every `secret.put_version` is kept; mutable fields resolve by total order and the losing author gets `team_op_overridden` (§7.2). Nothing is silently lost: the overridden version stays in history and in the vault. |
-| Deletion that stays deleted | Revocation and disable are irreversible facts (§7.4) re-applied after every fold; an old device cannot resurrect them. |
+| Single-version revocation and connection disable | These irreversible facts (§7.4) are re-applied after every fold, so a stale peer cannot reactivate the revoked version or disabled connection. Revoking one version can leave an older valid version active; whole-secret deletion/tombstones are not implemented. |
 | Duplicates, lost ACKs, restarts | Hash deduplication, consecutive sequences and vector repair; a commit is applied only after it is durably stored under the state lock. |
 | Authenticity before apply | Signature, environment, sequence, role and format checks before folding (§5.4). |
 | End-to-end encryption | The team handshake (X25519 + Ed25519, SIGMA-style) and ChaCha20-Poly1305 frames run inside the link stream. TURN TLS and QUIC TLS are not relied on for this. |
@@ -139,6 +139,12 @@ allocations and similar terms appear only in the diagnostics view.
 
 ## 5. Limits
 
+- Initial snapshot transfer is not implemented. Onboarding uses signed history;
+  a new device cannot recover the required deleted history after compaction.
+- Whole-secret deletion with a permanent tombstone is not implemented. Revoking
+  one version does not delete every version or prevent another valid version from
+  becoming active. Whole-secret no-resurrection needs separate implementation
+  and acceptance evidence; single-version revocation tests do not establish it.
 - Sync needs both devices online. Nothing is queued on the server.
 - A server outage blocks new remote connections; local vaults and LAN TCP sync (when
   configured) keep working.
@@ -147,4 +153,6 @@ allocations and similar terms appear only in the diagnostics view.
   allocation lifetime. Vault access is refused by the team layer independently.
 - Environments created after pairing need another pairing code.
 - Two physical Macs were not available to the implementer at writing time; see the
-  dated validation report for what was and was not run.
+  [dated validation report](remote-sync-validation-2026-11-07.md) for what was and
+  was not run, and the [proposed next milestones](remote-sync-next-milestones.md)
+  for the snapshot and deletion gaps.

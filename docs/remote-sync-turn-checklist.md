@@ -1,8 +1,8 @@
 # 개인 기기 동기화: coturn 서비스 설계와 구현 체크리스트
 
-작성: 2026-11-06 · Astra · 상태: 소스 조사와 설계, 구현·배포·부하시험 전
+작성: 2026-11-06 · Astra · 상태: 구현 통합 및 일부 Linux 검증, 출시 인수 미완료
 
-갱신: 2026-11-06 · 같은 날 사용자 결정(아래 §0)을 반영했다. 이 갱신도 구현·시험 완료 표시가 아니다. 실행 증거는 [remote-sync.md](remote-sync.md)와 날짜가 붙은 검증 기록에 따로 남긴다.
+갱신: 2026-11-07 · 아래 §0.1에 실제 소스·검증·미완료 상태를 추가했다. 사용자 결정은 §0, 설계는 [remote-sync.md](remote-sync.md), 실행 증거와 열린 리뷰는 [2026-11-07 검증 기록](remote-sync-validation-2026-11-07.md)에 구분한다. 부분 시험 통과는 전체 항목 완료가 아니다.
 
 ## 0. 2026-11-06 결정으로 달라진 범위
 
@@ -20,12 +20,94 @@
 
 아직 유효한 보안 요구는 §1~§4 그대로 둔다. §4의 E10은 macOS 출시 검증과 기존 Linux 검증을 구분해 기록하는 것으로 읽는다(Linux 실행을 생략했다면 생략했다고 쓴다). 기존 동기화·wire·암호화 계약을 재사용하는 구체 설계는 [remote-sync.md](remote-sync.md) §2–§3에 있다.
 
+### 0.1. 2026-11-07 작업 상태와 항목별 근거
+
+이번 문서 갱신 전 비교한 ZeroPW 소스는 `1f60bc2a3f2b91fa691dfa9f79c81bfb131aabe1`이다. Linux 검증
+대상 `41d217f26a030042c9f0b1caac9417715470c0e1`과 Rust tree
+`f2c67647fcba83ae78dd6fd10418b6f42a58a6f8`이 같다. 현재 sidecar pin은 link 수정 커밋 `858ddc07007eedaa978bdbb9ecafeebb7f332668`이며,
+초기 리뷰는 이전 `bcdaaecd569a71bf4df07c738869e1e0c7a577e1`만 대상으로 했다.
+통합 구현은 존재하지만 **출시 인수는 미완료**다. Linux desktop 검증의 336개
+Vitest와 fake-daemon 페어링 2개 통과를 실제 네트워크나 물리 Mac 2대 시험으로
+표시하지 않는다. Linux 전체 Rust 첫 실행은 디스크 부족으로 실패했으나 전체 재실행은
+exit 0(100단계, 1,621통과)으로 끝났고 별도 signer probe도 통과했다. 실제 네트워크
+E2E는 최종 pin `858ddc`에서도 66/66과 7개 합성 서비스 비밀 로그 검사를 통과했다.
+격리 Tart macOS 26.6.2 arm64 VM의 native 전체 Rust/Go 시험은 진행 중이며
+최종 결과는 없다. 물리 Mac 2대 시험은 NOTRUN이다.
+
+아래 표는 §4의 각 요구에 붙인 진행 기록이다. `부분`은 구현 또는 일부 시험
+근거만 있다는 뜻이며 체크박스를 채우는 근거가 아니다. 상세 환경·로그·원래
+리뷰 전문은 [날짜별 검증 기록](remote-sync-validation-2026-11-07.md)을 따른다.
+§3의 Iroh/coturn 소스 조사는 여전히 조사이며 upstream 시험 통과 기록이 아니다.
+
+| ID | 현재 근거와 남은 조건 |
+| --- | --- |
+| A01 | 부분: link 의존성 선택과 라이선스 수집 코드 존재. 최종 배포 산출물의 크기·합산 메모리·취약점 검증표 미완료 |
+| A02 | 조사: §3은 upstream 참고 출처. 최종 산출물의 소스 재사용·고지 대조 완료 근거 미확정 |
+| A03 | 부분: Linux link-core `49d6f8d`의 실제 coturn UDP/TCP/TLS 전송 로그. 현재 통합 head·macOS 인수는 별도 |
+| A04 | 부분: QUIC/ICE 전송 및 이전 netns 시험. MTU·손실·열화 전체 행렬과 현재 통합 head의 완료 근거 없음 |
+| A05 | 부분: 별도 link wire/stream 계약과 파서 시험 존재. 최종 고정 head와 전체 종료·취소 경계 검증 필요 |
+| B01 | 부분: 초대 HMAC 저장·트랜잭션 소비 구현. 동시 실패 예산 ZPLINK-OPUS-02 수정·Linux 시험 통과, Opus 재인수 대기 |
+| B02 | 부분: Ed25519 challenge/session 구현. 공용 challenge 고갈 ZPLINK-OPUS-01 수정·Linux 시험 통과, Opus 재인수 대기 |
+| B03 | 부분: 명시적 fingerprint 승인과 desktop 흐름, fake-daemon 시험 2개 통과. 실제 Linux 네트워크 최종 `858ddc` 통과; native 시험 진행 중/두 Mac 미검증 |
+| B04 | 부분: 세션·등록 제한 구현. challenge 고갈/유실 응답 복구 수정·시험 통과. OPUS-03 orphan 회수/재시작/키 회전도 `858ddc` 시험 통과; Opus 재인수 대기 |
+| B05 | 부분: link `docs/protocol.md`에 구현 API 계약 존재. 최종 수정 head의 통합 검증 필요 |
+| B06 | 부분: 서명된 rendezvous와 replay 제한 구현 및 이전 link 단위시험. 최종 head·macOS 경로 검증 필요 |
+| B07 | 부분: 서비스 계정 권한과 금고 승인 분리. TURN bearer 잔존·회수 보장은 실제 배포 시험과 구분 |
+| B08 | 부분: LAN fallback과 상태/오류 UX 구현. 최종 두 Mac 환경에서 서버 장애 시나리오 미검증 |
+| C01 | 부분: coturn 4.18.0 고정. 고유 build UID/non-root probe를 쓴 격리 VM 실제 빌드 통과; OCI 설치/인수 없음 |
+| C02 | 부분: 서비스/coturn 전용 secret 구성 및 합성 로그 시험 이력. 운영 배포는 아직 없음 |
+| C03 | 부분: 이전 Linux lab의 만료·Refresh·allocation 잔존 시험. 선택 배포 설정에서 재확인 필요 |
+| C04 | 부분: coturn CLI 회수 구현과 이전 daemon lab의 종료 계측. Linux E2E 최종 `858ddc`의 금고/서비스 기기 회수 통과; 실제 배포 인수 별도 |
+| C05 | 부분: quota/대역폭 설정과 이전 lab 시험. timestamp별 우회·최종 합산 용량 보장 미완료 |
+| C06 | 부분: 차단 목록 및 이전 coturn lab 존재. 실제 OCI 주소/방화벽 적용과 지원 주소 계열 인수 미완료 |
+| C07 | 부분: TURN 오용 제한 설계·설정. 공용 배포 악용/경보 시험 미완료 |
+| C08 | 부분: loopback 관리 포트/로그 제한 구성. OCI 외부 노출 검사 미실행; DOS-1과 운영 리뷰 미완료 |
+| C09 | 부분: metrics 운영 정책 문서. 실제 배포의 label 수·메모리 장시간 계측 없음 |
+| D01 | 미완료: 암호화 팀 세션/분리 daemon 구현. 프로세스 분리만으로 OS 격리 입증 불가; macOS ACL ZPL-SEC-03 열림 |
+| D02 | 부분: `zpl:` ZeroPW 어댑터 통합 및 PORTING 반영. Linux 전체 Rust 검증 통과, native macOS 시험 진행 중 |
+| D03 | **제품 공백**: 초기 snapshot 미구현. 현재 signed-history bootstrap은 compacted history 신규 기기 온보딩 불가 |
+| D04 | 부분: 기존 서명 commit·vector·durable 저장 재사용. Linux 프로세스/coturn 재시작 E2E 통과. crash/ACK 유실/원자성 전체 인수와 snapshot 경로 없음 |
+| D05 | 부분: link 프레임/큐 및 기존 팀 권한 검사. 최종 통합 head의 저장·자원 실패 경계 검증 미완료 |
+| D06 | **미완료**: 버전 회수는 전체 secret 삭제가 아님. 이전 유효 버전이 활성화될 수 있어 tombstone/no-resurrection 별도 시험 필요; 디스크 부족·강제 종료도 별도 |
+| E01 | 부분: handlecu/ap-chuncheon-1 Free Tier에서 zeropw-link-beta VM 생성 성공. 공인 IP 168.107.31.44/사설 IP 10.0.0.234 확인. DNS-only A zeropw-turn.telicity.ai 확인. NSG 7규칙 primary VNIC 연결과 인증서 발급 완료. OS 80 허용 저장/서비스 활성화 확인; 제품 배포·전체 방화벽 인수 미완료 |
+| E02 | 설계/산출물: HTTPS 443와 TURN TLS 5349 분리. OCI 실제 bind/외부 도달 시험 없음; 443-only망 지원 주장 없음 |
+| E03 | 부분: relay 포트 범위 산정/설정 존재. 실제 OCI allocation 용량 시험 없음 |
+| E04 | 합산 부하시험 NOTRUN: OCI OS-only 메모리/디스크 baseline만 기록. coturn+서비스+OS 합산 자원/egress 측정 없음 |
+| E05 | NOTRUN: 200기기·24시간·동시 초기 snapshot 시험 없음. 100명 수용 보장 없음 |
+| E06 | 개발 시험은 합성 값/통제 endpoint. OCI 생성은 기존 공개 SSH 키만 사용; 이 기록에 운영 비밀 없음 |
+| E07 | NOTRUN: 전체 시나리오 데이터 불일치·95%/60초 재접속 목표 측정 없음 |
+| E08 | 부분: 재배포·복구·health/로그 운영 산출물 및 이전 nspawn 시험. OCI 적용/장애·경보 시험 없음 |
+| E09 | 부분: 등록 DB와 revocation journal 복구 절차/이전 시험. 실제 OCI 백업·복원과 용량 인수 미완료 |
+| E10 | **미완료**: Linux 전체 Rust 검증 통과; native macOS 시험 진행 중/두 Mac NOTRUN. 6개 finding과 partial HIGH DOS-1 수정·시험 후 Opus 대기; SEC03 열림, network/ops 리뷰 미완료, aggregate PASS 없음 |
+
+초기 유효 리뷰와 검증은 실제 `claude-opus-5-5` 실행이다. 초기 구현 작업자도
+실제 `claude-opus-5-5`였으며 Sol로 바꿔 기록하지 않는다. 현재 coordinator는
+`gpt-6.1-sol`, 현재 실제 네트워크 E2E 작업자도 `gpt-6.1-sol`, 이 상태 기록 담당은
+`gpt-6-astra`다. network 리뷰 로그에는
+Opus 5.5와 4.8이 섞였고 결과가 잘려 완료 리뷰로 받지 않았다. Claude 제한의
+확인된 해제 시각은 2026-11-07 12:50 KST이며 이 기록에서 재호출하지 않았다.
+link 수정은 `cc733dc` 및 orphan 회수 후 복구 추가 `858ddc`로 커밋되어 비공개 저장소의 [draft PR #1](https://github.com/telicity-ai/zeropw-link/pull/1)에 있다.
+Linux Go 전체/vet·server/daemon race·shell lint, 배포 단위시험 106개, 실제 coturn
+빌드, Darwin cross-build, desktop 패키징 도구 시험 61개가 통과했다. macOS 실행이나
+Opus 재인수는 아니다. 이전 Go 실패와 수정한 시험의 종료 조건도 검증 기록에 보존했다.
+최종 pin `858ddc`에서도 패키징 도구 61개, Darwin cross-build, 실제 네트워크
+66/66+7개 합성 비밀 검사가 통과했다. Tart VM은 synthetic-only/no host mounts,
+Rust 1.98.1/Go 1.27.3 환경에서 native 전체 Rust/Go 시험을 진행 중이다.
+Let’s Encrypt 인증서(만료 2027-02-05) 발급과 certbot.timer 활성화는 확인했지만
+제품·HTTPS·TURN listener는 아직 없으며, endpoint 동작을 확인한 것은 아니다.
+OS 80 허용은 netfilter-persistent 1.0.20으로 저장(exit 0)하고 활성화했다.
+인증서 갱신 dry-run은 진행 중이며 통과로 표시하지 않는다.
+초기 snapshot과 전체 secret 삭제의 [다음 마일스톤](remote-sync-next-milestones.md)은
+실제 Rust 코드를 근거로 한 제안이며 구현 완료 근거가 아니다.
+원래 severity와 반박 검증은
+[partial archive](reviews/2026-11-07-link-initial.partial.json)에 그대로 보존했다.
+
 ## 1. 확정된 결정과 범위
 
 사용자의 최신 결정이 이전 제품 문서의 개인 동기화·클라우드 전제보다 우선한다.
 
 - 개인의 로그인 정보·비밀번호·API 키를 본인 기기 사이에서 암호화 동기화한다.
-- 별도 저장소에서 재사용 가능한 연결 모듈과 서비스 계층을 관리한다. 저장소 이름·소유자는 미정이다.
+- 별도 저장소 `telicity-ai/zeropw-link`에서 재사용 가능한 연결 모듈과 서비스 계층을 관리한다(§0 결정).
 - Iroh 전체 SDK를 제품 의존성으로 넣지 않는다. 소스와 테스트를 참고해 요구사항을 도출한다.
 - 암호화·ICE·TURN 처리를 위한 필요한 소형 라이브러리는 허용한다. 암호 알고리즘이나 신뢰성 전송을 새로 발명하지 않는다.
 - 서버 중계는 coturn, 운영 환경은 Oracle Cloud로 한다.
@@ -33,7 +115,7 @@
 - 무료 VM으로 시작하며 일시적인 원격 동기화 중단을 허용한다. 유료 자원 자동 전환은 하지 않는다.
 - 원본 비밀 비전달, 신뢰 금고·HTTP gateway·SSH signer 경계는 유지한다. 이번 결정은 SSH 서명 기능 제거가 아니다.
 
-다음은 제안 기본값이며 사용자 확정과 구분한다: 100명/사용자당 2기기, 양쪽 온라인일 때 자동 동기화, 첨부파일 제외, 서버에 금고 암호문도 영구 보관하지 않음. 이 문서는 TURN 기반 신규 구현의 인수 기준이며 기존 제품이 이미 이를 지원한다는 뜻이 아니다.
+다음은 제안 기본값이며 사용자 확정과 구분한다: 100명/사용자당 2기기, 첨부파일 제외. 양쪽 온라인일 때 버전별 동기화하고 서버에 오프라인 금고 사본을 보관하지 않는 조건은 §0에서 확정했다. 이 문서는 TURN 기반 신규 구현의 인수 기준이며 모든 항목이 이미 지원·검증됐다는 뜻이 아니다.
 
 ## 2. 구성과 책임
 
@@ -146,7 +228,7 @@ coturn 설정 조사 기준 커밋: `ad8885a54ac1d59a39f2cc49ae7662fc2d842c64`.
 - ~~최초 지원 OS~~: §0에서 macOS만으로 확정.
 - 베타 범위: 100명·기기 2대·비밀 텍스트만·양쪽 온라인일 때 동기화 제안. 첨부파일과 서버 보관은 후속.
 - 복구 UX: 이메일 없이 모든 기기를 잃었을 때 복구 코드+암호화 백업을 지원할지. 운영자가 금고를 복호화하는 복구는 제공하지 않음.
-- 배포 입력: OCI 현재 리전/shape, 사용할 도메인, 새 저장소 소유자·이름·공개 여부. 비밀값은 채팅으로 받지 않음.
+- 배포 입력: `zeropw-turn.telicity.ai` DNS-only A 레코드 확인. NSG 연결과 인증서 발급은 완료했다. OS 80 허용의 저장/서비스 활성화도 확인했다. 갱신 dry-run, 제품 배포·listener TLS·전체 방화벽 인수는 아직 완료되지 않았다. OCI 리전/shape와 저장소 이름은 §0.1 및 검증 기록을 따른다. 비밀값은 채팅으로 받지 않음.
 - ~~제한 네트워크~~: §0에서 5349 TURN TLS로 시작하기로 확정.
 - 메타데이터 보관: 제안은 최소 기기 등록·회수 상태 영구 보관(서비스 탈퇴까지), rendezvous 최대 5분, 원본 IP 운영 로그 최대 24시간, 익명 집계 7일. 공개 전 실제 로그 설정과 사용자 안내에 일치시킬 것.
 
@@ -159,4 +241,4 @@ coturn 설정 조사 기준 커밋: `ad8885a54ac1d59a39f2cc49ae7662fc2d842c64`.
 - [coturn 조사 설정](https://github.com/coturn/coturn/blob/ad8885a54ac1d59a39f2cc49ae7662fc2d842c64/examples/etc/turnserver.conf): 단기 자격, quota, 포트, 접근 제한, metrics 설정.
 - [Oracle Always Free](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm): shape·네트워크·유휴 회수 정책. 배포 시 계정의 실제 할당량 재확인.
 
-이번 변경은 문서만 추가한다. 원격 저장소 생성, OCI 프로비저닝, coturn 실행, 실제 서비스 통합 및 테스트는 아직 수행하지 않았다.
+최초 작성(2026-11-06)은 조사·설계 문서만 추가했다. 이후 구현·시험·OCI VM 생성이 진행됐으므로 현재 상태는 §0.1과 날짜별 검증 기록을 따른다. VM 생성은 서비스 배포나 출시 인수를 뜻하지 않는다.

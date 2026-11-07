@@ -62,6 +62,12 @@ rust/target/debug/zeropw-demo
 
 초기화부터 비밀과 연결 등록, 권한 설정, `serve` 실행, 에이전트 호출까지의 명령은 [구현 현황](docs/implementation.md) §10에도 있다.
 
+## 내 Mac 사이 원격 동기화 (MLP 작업 중)
+
+[원격 동기화 MLP](docs/remote-sync.md)는 개인 기기 사이 직접 연결과 coturn 중계를 추가하는 작업이다. 아직 미완료이며 v0.2.0 릴리스에 포함되지 않는다. 기록된 소스의 Linux Rust 전체 시험과 실제 네트워크 E2E는 통과했지만 native macOS 시험은 진행 중이며 물리 Mac 2대 인수 시험은 하지 않았다. 보안 리뷰도 미완료이고 초기 snapshot 기능이 없다. 실제 검증 범위와 남은 일은 [날짜별 검증 기록](docs/remote-sync-validation-2026-11-07.md)에 있다.
+
+연결 모듈과 서비스 코드는 별도의 [zeropw-link 저장소](https://github.com/telicity-ai/zeropw-link)에 있으며 현재 비공개다. [자가 호스팅 문서](https://github.com/telicity-ai/zeropw-link/blob/main/docs/self-host.md)는 배포 구성을 설명한다. Oracle VM·DNS·NSG 연결·인증서는 준비했지만 제품 HTTPS/TURN 서비스는 아직 배포하지 않았고, 출시 준비가 끝난 원격 동기화 바이너리를 제공하는 단계는 아니다.
+
 ## 데스크톱 앱 (미리 보기)
 
 `desktop/`에는 관리 기능을 화면으로 옮긴 Tauri 데스크톱 앱의 미리 보기 버전이 있다. 금고 만들기, 키, 연결, 에이전트와 권한, 기록, 전체 정지, 사고 처리, 백업과 복구, 팀 초대 링크를 다룬다. 금고 코드를 링크하지 않고 함께 묶은 `zeropw-admin`을 명령마다 자식 프로세스로 실행한다. v0.2.0 릴리스에는 이 앱이 Apple Silicon Mac용 ad-hoc 서명 미리 보기 디스크 이미지 `zeropw-desktop-v0.2.0-aarch64-apple-darwin.dmg`로 들어 있고, `.dmg.sha256` 파일이 함께 있다. 이 이미지는 macOS 26.5인 Mac 한 대에서 빌드했고 그 Mac에서만 실행해 봤다. 내려받은 파일에 붙는 격리 속성이 없는 상태였다. 다른 macOS 버전은 검증하지 않았고, 아래 Gatekeeper 절차는 시험하지 않았다. 자세한 내용은 [데스크톱 앱 명세](docs/desktop-app.md)와 [디자인 규칙](DESIGN.md)에 있다.

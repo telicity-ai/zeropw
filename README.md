@@ -68,6 +68,12 @@ Version 0.1.0 cannot read invite links (`zeropw://join#…`), which `team invite
 
 ZeroPW can import the keys of a `.env` file into the vault (`secret import`, or dropping the file on the desktop app; not in the 0.2.0 release) but never exports one or puts values into a process environment. Applications that require raw credentials in their environment, or database drivers without a dedicated integration, are unsupported. The tested CLI paths are the demo CLI and OpenSSH with destination-bound signing.
 
+## Remote sync between my Macs (MLP in progress)
+
+The [remote-sync MLP](docs/remote-sync.md) adds direct connections and a coturn fallback for personal devices. It is incomplete and is not part of the v0.2.0 release. The full Linux Rust matrix and real-network E2E pass for their recorded revisions; native macOS tests are in progress and physical two-Mac acceptance has not run, security review remains incomplete, and initial snapshots are missing. See the [dated validation and remaining work](docs/remote-sync-validation-2026-11-07.md).
+
+Connection and service code lives in the separate, currently private [zeropw-link repository](https://github.com/telicity-ai/zeropw-link). Its [self-host documentation](https://github.com/telicity-ai/zeropw-link/blob/main/docs/self-host.md) describes the deployment setup; the Oracle VM, DNS, NSG attachment and certificate are provisioned, but no product HTTPS/TURN service is deployed. No remote-sync binary is presented here as release-ready.
+
 ## Desktop app (preview)
 
 `desktop/` contains a preview Tauri desktop app for the administrator workflow: vault setup, keys, connections, agents and grants, records, stop-all, incidents, backup and recovery, and team invite links. It runs the bundled `zeropw-admin` as a child process for each command instead of linking the vault code. The v0.2.0 release includes it as an ad hoc signed preview disk image for Apple Silicon Macs, `zeropw-desktop-v0.2.0-aarch64-apple-darwin.dmg`, with its `.dmg.sha256` file. The image was built on one Mac with macOS 26.5 and launched only there, without the quarantine attribute that a downloaded file carries; other macOS versions are unverified, and the Gatekeeper steps below were not tested. The [desktop app specification](docs/desktop-app.md) and the [design rules](DESIGN.md) are written in Korean.
