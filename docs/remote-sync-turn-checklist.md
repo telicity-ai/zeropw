@@ -41,9 +41,21 @@ all-target Clippy와 244개 team 시험은 통과했으나 Linux 전체 matrix�
 1,621통과/1실패/4ignored로 끝났다. 실패는 team_link_transport의 송신 시도와
 실제 수신 프레임을 동일시한 assertion이며 평문 누출 검사 실패가 아니다. 모든 비밀 검사와
 수신 프레임의 relay 통과 증명을 유지하고 3개 초과 수신 guard를 추가한 test-only
-`7f0421a`에서 Clippy/12개 target 시험은 통과했다. 변경하지 않은 전체 검증은
-`integ/rust-verify-7f0421a-linux.log`에서 재실행 중이며 전체 PASS는 없다.
-Native guest driver는 frozen d77 Rust/core와 f544 Go를 실행하며 단계별 결과 대기 중이다.
+`7f0421a`에서 Clippy/12개 target 시험을 통과한 뒤, 변경하지 않은 전체 검증도
+exit 0으로 통과했다(100단계, 1,622통과/0실패, ordinary ignored 4개와 별도 signer probe 실행).
+근거는 `integ/rust-verify-7f0421a-linux.log`와 [결과 manifest](evidence/2026-11-07-linux-rust-7f0421a.json)다.
+Native d77 시험에서는 8,193바이트를 수신 전에 동기 송신하던 fixture가 Darwin의
+8,192바이트 버퍼를 채워 멈췄다. 모든 경계 assertion을 유지한 concurrent-writer
+test-only 수정 `d942263`의 Linux Clippy/8개 link 시험은 통과했다. 원래 driver는
+증거를 보존하고 중단했으며 새 v2 driver는 d942 Rust/core와 f544 Go를 검증 중이다.
+Native link 8개/frame 2개는 통과했지만 전체 Rust/Go/core 결과는 아직 대기 중이다.
+Native link integration은 strict capture 방향 검사에서 11통과/1실패였다.
+동시 기록의 조각이 섞이는 문제를 2프로세스/8스레드/512개 기록으로 재현했고,
+전체 기록에 file lock을 적용한 `945e6a6`에서 Linux Clippy·회귀시험·기존 전송
+12개 시험을 통과했다. 형식·평문 누출 검사는 유지했다. `945e6a6` 전체 Linux
+검증은 진행 중이며, native v2는 capture 실패를 보존한 고정 `d942263` 소스를
+계속 검증한다. `945e6a6` native 수정 검증은 별도로 필요하다. 이전 `7f0421a`
+전체 통과를 이 후속 tree 통과로 옮기지 않는다.
 이전 Linux/E2E 통과를 새 전체 matrix 통과로 옮기지 않는다. 물리 Mac 2대 시험은 NOTRUN이다.
 
 아래 표는 §4의 각 요구에 붙인 진행 기록이다. `부분`은 구현 또는 일부 시험
@@ -76,7 +88,7 @@ Native guest driver는 frozen d77 Rust/core와 f544 Go를 실행하며 단계별
 | C08 | 부분: loopback 관리 포트/로그 제한 구성. OCI 외부 노출 검사 미실행; DOS-1과 운영 리뷰 미완료 |
 | C09 | 부분: metrics 운영 정책 문서. 실제 배포의 label 수·메모리 장시간 계측 없음 |
 | D01 | 미완료: 암호화 팀 세션/분리 daemon 구현. 프로세스 분리만으로 OS 격리 입증 불가; macOS ACL f544478 수정·Linux 시험/API probe 통과, native 제품 regression/Opus 대기로 ZPL-SEC-03 열림 |
-| D02 | 부분: `zpl:` ZeroPW 어댑터 통합 및 PORTING 반영. 이전 tree Linux 전체 통과. native baseline 2실패/Linux d77 capture 1실패 보존. test-only 7f0421a target12 통과/전체 재실행·native handoff 진행 |
+| D02 | 부분: `zpl:` ZeroPW 어댑터 통합 및 PORTING 반영. Linux 7f0421a 전체 100단계/1,622통과. native baseline 2실패/Linux d77 capture 1실패 보존. d942 fixture 수정 후 native 전체 인수 진행 |
 | D03 | **제품 공백**: 초기 snapshot 미구현. 현재 signed-history bootstrap은 compacted history 신규 기기 온보딩 불가 |
 | D04 | 부분: 기존 서명 commit·vector·durable 저장 재사용. Linux 프로세스/coturn 재시작 E2E 통과. crash/ACK 유실/원자성 전체 인수와 snapshot 경로 없음 |
 | D05 | 부분: link 프레임/큐 및 기존 팀 권한 검사. 최종 통합 head의 저장·자원 실패 경계 검증 미완료 |
@@ -90,7 +102,7 @@ Native guest driver는 frozen d77 Rust/core와 f544 Go를 실행하며 단계별
 | E07 | NOTRUN: 전체 시나리오 데이터 불일치·95%/60초 재접속 목표 측정 없음 |
 | E08 | 부분: 재배포·복구·health/로그 운영 산출물 및 이전 nspawn 시험. OCI 적용/장애·경보 시험 없음 |
 | E09 | 부분: 등록 DB와 revocation journal 복구 절차/이전 시험. 실제 OCI 백업·복원과 용량 인수 미완료 |
-| E10 | **미완료**: 이전 tree Linux 전체 통과; native baseline 2실패/Linux d77 1실패. 7f0421a 전체 재실행/native handoff 결과 대기, 두 Mac NOTRUN. 6개 finding과 partial HIGH DOS-1 수정·시험 후 Opus 대기; SEC03 열림, network/ops 리뷰 미완료, aggregate PASS 없음 |
+| E10 | **미완료**: Linux 7f0421a 전체 통과; native baseline 2실패/Linux d77 1실패 보존. d942 targeted native 8+2 통과/전체 handoff 결과 대기, 두 Mac NOTRUN. 수정 후 Opus 대기; SEC03 열림, network/ops 리뷰 미완료, aggregate PASS 없음 |
 
 초기 유효 리뷰와 검증은 실제 `claude-opus-5-5` 실행이다. 초기 구현 작업자도
 실제 `claude-opus-5-5`였으며 Sol로 바꿔 기록하지 않는다. 현재 coordinator는
@@ -104,9 +116,10 @@ Linux Go 전체/vet·server/daemon race·shell lint, 배포 단위시험 106개,
 Opus 재인수는 아니다. 이전 Go 실패와 수정한 시험의 종료 조건도 검증 기록에 보존했다.
 이전 pin `858ddc`에서 패키징 도구 61개, Darwin cross-build, 실제 네트워크
 66/66+7개 합성 비밀 검사가 통과했다. Tart VM은 synthetic-only/no host mounts,
-Rust 1.98.1/Go 1.27.3 환경에서 native driver 7245가 d77 Rust/core와 f544 Go를
-실행한다. `/Volumes/ZeroPWBuild/verification-20261107/`와 host
-`macos/DURABLE-HANDOFF-20261107.md`가 상태 근거이며, 대기 중인 단계는 통과가 아니다.
+Rust 1.98.1/Go 1.27.3 환경이다. 기존 driver 7245는 fixture deadlock 증거를
+보존한 뒤 중단했다. 대체 driver 8090은 고정 d942 Rust/core와 f544 Go를
+`/Volumes/ZeroPWBuild/verification-20261107-v2/`에서 검증 중이다. 교체 기록은
+`macos/v2-owned-replacement.log`에 있으며, 대기 중인 단계는 통과가 아니다.
 Let’s Encrypt 인증서(만료 2027-02-05) 발급과 certbot.timer 활성화는 확인했지만
 제품·HTTPS·TURN listener는 아직 없으며, endpoint 동작을 확인한 것은 아니다.
 OS 80 허용은 netfilter-persistent 1.0.20으로 저장(exit 0)하고 활성화했다.

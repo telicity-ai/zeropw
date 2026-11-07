@@ -10,8 +10,9 @@ a dated evidence record, not a change to the acceptance requirements. The
 | --- | --- |
 | Pre-fix ZeroPW source compared | `1f60bc2a3f2b91fa691dfa9f79c81bfb131aabe1` on `feature/remote-sync-mlp`; comparison revision before this documentation update |
 | ZeroPW product source tested | `41d217f26a030042c9f0b1caac9417715470c0e1`; its Rust tree `f2c67647fcba83ae78dd6fd10418b6f42a58a6f8` is byte-identical to the compared revision's Rust tree |
-| New Rust fix awaiting full verification | `d77ce9ed7170f9e2689bc1ecf5244aa9602cc587`; Rust tree `181f99ddbffedb3b7f5c158d7484afca37be8a8a`, different from the earlier passing Linux tree |
-| Later test-only correction | `7f0421af335911b4ff21aebf7eb8447dbe20de5c` changes only `rust/tests/team_link_transport.rs`; product source remains the `d77ce9e` implementation. The unchanged full verification script is being rerun on this revision |
+| Rust reader-fix source (later verification below) | `d77ce9ed7170f9e2689bc1ecf5244aa9602cc587`; Rust tree `181f99ddbffedb3b7f5c158d7484afca37be8a8a`, different from the earlier passing Linux tree |
+| Later test-only correction | `7f0421af335911b4ff21aebf7eb8447dbe20de5c` changes only `rust/tests/team_link_transport.rs`; product source remains the `d77ce9e` implementation. Full Linux verification passed at this revision; later native-fixture correction `d942263` has separate focused evidence |
+| Latest diagnostic-record fix | `945e6a6fa9865f015c51cb0dcabd43b0b1e2c6af` serializes complete wire-capture records across threads/processes. Its regression was added at `55c833b`. Focused Linux checks passed; complete latest-tree verification is running. The `7f0421a` full PASS is historical evidence, not this later tree's full PASS |
 | Current link fixes and sidecar pin | ACL fix `f544478a48cea66be816efbed50967bafcacc8ac`; working `desktop/zeropw-link.json` now pins it. Native product regression and post-fix Opus acceptance are pending. The new `d77ce9e`/`f544478` E2E and pin-packaging checks passed; native acceptance remains separate |
 | Link README follow-up | `ca01275c60037b2e008714e646c79a57aa6c1462` changes only the root README after `f544478` |
 | E2E fixture/evidence | Earlier fixture/evidence commit `28abd9a450d8328424db5334443f1dd4bbd5cc24`; final `858ddc` run evidence is committed under `docs/evidence/remote-sync-e2e-2026-11-07-858ddc/` at the compared revision. Both runs use CLI source `41d217f26a030042c9f0b1caac9417715470c0e1` |
@@ -57,8 +58,11 @@ it does not establish working native macOS delivery or a deployed service.
 | ACL-fix sidecar pin packaging | Isolated Linux, `desktop/package-f544478.log` | PASS, exit 0: 61 tests for the `f544478` pin; still fixture-based tooling, not native app packaging |
 | Frozen-source native macOS Rust verification | Isolated Tart macOS 26.6.2 arm64 VM, synthetic-only, no host-directory mounts; Rust 1.98.1; frozen `1f60bc2`, `macos/rust-verify-1f60bc2.log` | FINISHED FAILED, exit 1: 100 steps, 99 passed and only `lib-and-bins` failed. Aggregate 1,622 tests passed, 2 failed, 4 ordinary-run ignored; signer probes ran separately. Both closed-peer library failures are retained |
 | New Rust fix verification | `d77ce9e`, tree `181f99ddbffedb3b7f5c158d7484afca37be8a8a` | Linux strict all-target Clippy and 244 focused team tests PASS. Full `integ/rust-verify-d77ce9e-linux.log` FINISHED FAILED: 100 steps; 1,621 tests passed, 1 failed, 4 ordinary-run ignored; only `test:team_link_transport` failed on capture/delivery accounting |
-| Test-only correction verification | `7f0421a`, `integ/link-wire-capture-proof-linux.log` | PASS, exit 0: strict Clippy and all 12 `team_link_transport` tests. Full unchanged matrix `integ/rust-verify-7f0421a-linux.log` IN PROGRESS; no overall PASS |
-| New native verification handoff | Durable guest driver 7245, frozen `d77ce9e` Rust/core and `f544478` Go, with optional `858ddc` ACL comparison | IN PROGRESS / pending phases: targeted and full Rust, Go and desktop core results must be read from the guest status files. No phase is marked passed in advance; VM execution is not two physical Macs |
+| Test-only correction verification | `7f0421a`, `integ/link-wire-capture-proof-linux.log` and `integ/rust-verify-7f0421a-linux.log`; [full result manifest](evidence/2026-11-07-linux-rust-7f0421a.json) | PASS, exit 0: strict Clippy/12-test target, then all 100 unchanged full-matrix steps; 1,622 passed, 0 failed, 4 ordinary-library ignored with all four signer probes explicitly run |
+| Native-fixture correction | `d94226364eae32a67a739312a8cd393cc64f3909`, `integ/link-fixture-concurrent-writer-linux.log` | Linux strict library Clippy and all eight link unit tests PASS, exit 0. Native v2 driver reports 8/8 link and 2/2 Unix-frame tests passed; complete native Rust/Go/core phases remain pending |
+| New native verification handoff | Replacement driver 8090, frozen `d942263` Rust/core and `f544478` Go; `/Volumes/ZeroPWBuild/verification-20261107-v2/` | IN PROGRESS: source checks and targeted results do not establish full native acceptance. Original driver 7245 was archived and interrupted after a confirmed test-fixture deadlock; it did not PASS. VM execution is not two physical Macs |
+| Native capture-proof failure | `d942263`, `macos/rust-d942-targeted-link-integration.log` | FAILED, exit 101: 11 passed, 1 failed on an invalid capture direction token. This is separate from the earlier writer deadlock. Original strict format and all secret scans remain; malformed records were not skipped |
+| Diagnostic capture concurrency regression | `55c833b` then `945e6a6`, isolated Linux; `integ/wire-capture-concurrency-before-fix.log` and `integ/wire-capture-concurrency-after-fix.log` | Before-fix regression FAILED, exit 101; a retained synthetic capture confirms interleaved records. Fix PASS, exit 0: strict all-target Clippy, the 512-record/two-process/eight-thread test and all 12 link integration tests. Native and full latest-tree verification remain separate |
 | Two physical Macs | Two-device test environment unavailable | NOTRUN |
 | 200-device/24-hour capacity, reconnect target and combined 1 GB VM budget | No completed current-source measurements | NOTRUN; no 100-user capacity claim |
 
@@ -301,18 +305,64 @@ relay bytes. It adds a guard requiring more than three received frames, rather
 than assuming interrupted send attempts must have been delivered. It changes no
 product code, verification script, harness, CI or original review severity.
 Strict Clippy and the full 12-test target passed with exit 0 in
-`integ/link-wire-capture-proof-linux.log`. The unchanged full matrix is now running
-in `integ/rust-verify-7f0421a-linux.log`; no overall PASS is recorded. The failed
-full-run logs remain retained alongside the correction and targeted result.
+`integ/link-wire-capture-proof-linux.log`. The unchanged full matrix subsequently
+passed with exit 0 in `integ/rust-verify-7f0421a-linux.log`: 100 steps, 1,622 passed,
+0 failed and 4 ordinary-library ignored, with all four signer probes explicitly
+run. Raw-log SHA-256 is
+`6e0d69a7ad8c1a238564d57b79c6b1c5353886ba1656f0891d2ccd5348bc3ed3`.
+Its [result manifest](evidence/2026-11-07-linux-rust-7f0421a.json) binds source
+`7f0421a` and Rust tree `27d5fd04acc4fde77ec459b0bef509fce20e36f6` to every step.
+The failed full-run logs remain retained; this later PASS does not rewrite them
+or validate future M1/M2 code.
 
-After the frozen native baseline, durable guest driver 7245 now runs frozen
-`d77ce9e` targeted/full Rust, `f544478` Go, and `d77ce9e` desktop core checks,
-with an optional `858ddc` ACL comparison. Driver SHA-256:
-`9ad6919575fc583d8852922ebc42baab06f9a9f089ba715b8f48c5a7fec0f34a`.
-Guest status/logs are under `/Volumes/ZeroPWBuild/verification-20261107/`; the
-host handoff is `macos/DURABLE-HANDOFF-20261107.md`. Pending phases are not passed.
-The driver uses `f544478`, not `858ddc`, for current Go verification. This local
-VM driver does not turn the coordinator into an always-on cloud service.
+After the frozen native baseline, driver 7245 started `d77ce9e` targeted tests,
+but the oversized-line fixture blocked before its reader started. Stack sampling
+located `UnixStream::write_all`; native controls measured 8,192-byte send/receive
+buffers, successful 8,191/8,192-byte synchronous sends and an 8,193-byte send that
+timed out with exactly 8,192 bytes buffered. A concurrent reader consumed all
+8,193 bytes. Evidence is under `macos/diagnosis-20261107T025800Z/`.
+
+Test-only `d942263` makes the mock writer concurrent and bounds its write and
+held-peer wait to two seconds. It preserves all exact 8,192/8,193-byte, EOF and
+absolute-deadline assertions. The original controller/status/script/logs/lock
+were retained and classified `interrupted_test_fixture_deadlock`, never PASS.
+Only its owned controller and hung phase process group were stopped.
+
+Replacement driver 8090 uses verified `d942263` sources and `f544478` Go in a new
+directory, `/Volumes/ZeroPWBuild/verification-20261107-v2/`. Its SHA-256 is
+`ca197b102230ff2434fe81c6a486a9c40f57a9f37b1d62c17147f12af79b320f`.
+The old directory contains a `CURRENT-RUN.json` pointer; replacement actions are
+in `macos/v2-owned-replacement.log`. Targeted phases have a 600-second bound and
+15-second status heartbeats. Eight native link tests and two native Unix-frame
+tests passed; full Rust/Go/core phases remain pending and are not passed in
+advance. This local driver is not an always-on cloud service or two-Mac evidence.
+
+The v2 targeted link integration then failed on its strict direction-token check
+(11 passed, 1 failed, exit 101). The raw log SHA-256 is
+`c07a16d24d28dfc0ef6d1ddbdf6e1a69864fbc8e36d812887db5972cb8807795`;
+`macos/v2-capture-proof-failure.md` preserves the open result. The full frozen
+v2 matrix and independent Go/core checks continue without source mutation.
+
+The coordinator added a concurrent-record regression at `55c833b`. Two processes
+with four threads each write 64 uniquely tagged 64-byte records per thread. The
+test failed against the original capture implementation: `writeln!` can make
+several writes, while `O_APPEND` alone does not keep a whole formatted record
+contiguous. The synthetic corrupt capture is retained as
+`integ/wire-capture-corrupt-before.hex`, SHA-256
+`67e42343cdc8a8da2184bdb98059b33242303f06d55487368796b3cd53265817`.
+Before-fix log SHA-256:
+`68c173d307c36d767312a099a2dee3b51da20be40e2168ce1d5d713b488a3128`.
+
+Fix `945e6a6` holds a safe rustix file lock for the complete diagnostic record,
+including cross-process writers, and retries interrupted acquisition. It leaves
+the format, strict direction check, frame proofs and every confidentiality scan
+intact. Linux strict all-target Clippy, all 512 unique complete records and the
+12-test link target passed with exit 0. After-fix log SHA-256:
+`75dfd72b71324e5b8a8c960d00af16d14c421015ba330af179b6cabda3af7f18`.
+The new full run is `integ/rust-verify-945e6a6-linux.log`; no overall latest-tree
+PASS is recorded yet. The M1 worker was steered to include these bounded fixes
+before its own final verification. This is a diagnostic I/O fix, not an Opus
+review or a reason to erase any prior failure.
 
 To make room for new verification, inactive MLP jobs `integ-dverify`,
 `integ-desktop` and `desktop-core` had their normal product executables moved to
@@ -326,8 +376,11 @@ free. It is not a product test or resource-capacity result.
 
 Earlier Linux Rust verification, `858ddc` real-network E2E, cross-build and
 packaging tooling checks retain their source-specific evidence above. Preserve
-the completed failed native baseline and Linux `d77ce9e` matrix; finish the
-Linux `7f0421a` full rerun and reconcile every native handoff phase. The new
+the completed failed native baseline and Linux `d77ce9e` matrix. Linux `7f0421a`
+full verification is now passed; reconcile every replacement native handoff phase.
+Finish the latest `945e6a6` complete verification and native capture correction;
+the earlier full PASS does not validate subsequent code changes.
+The new
 Rust/link E2E and `f544478` packaging-tooling checks passed;
 obtain post-fix Opus acceptance at the committed link head
 without changing the original severities; complete the network and operations

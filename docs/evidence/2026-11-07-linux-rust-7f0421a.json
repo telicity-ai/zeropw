@@ -1,0 +1,431 @@
+{
+  "source_sha": "7f0421af335911b4ff21aebf7eb8447dbe20de5c",
+  "rust_tree_sha": "27d5fd04acc4fde77ec459b0bef509fce20e36f6",
+  "actual_model": "gpt-6.1-sol",
+  "role": "local coordinator; product execution in isolated VM only",
+  "environment": "Ubuntu 24.04 arm64 Lima zeropw-parity, no host directory mounts, synthetic credentials and controlled endpoints",
+  "rust_version": "1.98.1",
+  "python_version": "3.12.14",
+  "script": "rust/verify.sh (unchanged)",
+  "exit_code": 0,
+  "exit_evidence": "Background command completion reported exit 0; all 100 VERIFY_STEP_END markers exit 0 and empty VERIFY_FAILED",
+  "passed_tests": 1622,
+  "failed_tests": 0,
+  "ordinary_ignored_tests": 4,
+  "ignored_signer_probes": "All four subsequently run explicitly by signer-probes; not counted as an unrun PASS",
+  "raw_log_archive": "zeropw-mlp-evidence/integ/rust-verify-7f0421a-linux.log",
+  "raw_log_sha256": "6e0d69a7ad8c1a238564d57b79c6b1c5353886ba1656f0891d2ccd5348bc3ed3",
+  "steps": [
+    {
+      "name": "fmt",
+      "exit_code": 0
+    },
+    {
+      "name": "clippy",
+      "exit_code": 0
+    },
+    {
+      "name": "lib-and-bins",
+      "exit_code": 0
+    },
+    {
+      "name": "test:admin_expanduser_parity",
+      "exit_code": 0
+    },
+    {
+      "name": "test:admin_input_envelope",
+      "exit_code": 0
+    },
+    {
+      "name": "test:admin_secret_import",
+      "exit_code": 0
+    },
+    {
+      "name": "test:admin_sigint_cleanup_boundaries",
+      "exit_code": 0
+    },
+    {
+      "name": "test:admin_sigint_exit",
+      "exit_code": 0
+    },
+    {
+      "name": "test:agent_help",
+      "exit_code": 0
+    },
+    {
+      "name": "test:agent_proxy_parity",
+      "exit_code": 0
+    },
+    {
+      "name": "test:astra_cleanup_publication_order",
+      "exit_code": 0
+    },
+    {
+      "name": "test:astra_cli_runtime_round2",
+      "exit_code": 0
+    },
+    {
+      "name": "test:astra_cli_runtime_round3",
+      "exit_code": 0
+    },
+    {
+      "name": "test:astra_cli_runtime_round4",
+      "exit_code": 0
+    },
+    {
+      "name": "test:astra_projects_final",
+      "exit_code": 0
+    },
+    {
+      "name": "test:astra_pty_portability",
+      "exit_code": 0
+    },
+    {
+      "name": "test:astra_response_acceptance",
+      "exit_code": 0
+    },
+    {
+      "name": "test:astra_response_final",
+      "exit_code": 0
+    },
+    {
+      "name": "test:astra_response_final_recheck",
+      "exit_code": 0
+    },
+    {
+      "name": "test:astra_response_review",
+      "exit_code": 0
+    },
+    {
+      "name": "test:astra_response_round2",
+      "exit_code": 0
+    },
+    {
+      "name": "test:astra_response_round3",
+      "exit_code": 0
+    },
+    {
+      "name": "test:astra_response_round4",
+      "exit_code": 0
+    },
+    {
+      "name": "test:astra_run_context_lease",
+      "exit_code": 0
+    },
+    {
+      "name": "test:astra_runtime_final",
+      "exit_code": 0
+    },
+    {
+      "name": "test:astra_runtime_review",
+      "exit_code": 0
+    },
+    {
+      "name": "test:astra_sigint_cleanup",
+      "exit_code": 0
+    },
+    {
+      "name": "test:astra_sigint_cleanup_final",
+      "exit_code": 0
+    },
+    {
+      "name": "test:astra_team_fact_catchup",
+      "exit_code": 0
+    },
+    {
+      "name": "test:astra_team_fact_duplicate_diagnostic",
+      "exit_code": 0
+    },
+    {
+      "name": "test:astra_team_reconnect_diagnostic",
+      "exit_code": 0
+    },
+    {
+      "name": "test:astra_team_review",
+      "exit_code": 0
+    },
+    {
+      "name": "test:astra_team_round2",
+      "exit_code": 0
+    },
+    {
+      "name": "test:astra_team_round3",
+      "exit_code": 0
+    },
+    {
+      "name": "test:astra_team_round4",
+      "exit_code": 0
+    },
+    {
+      "name": "test:base_cli_error_parity",
+      "exit_code": 0
+    },
+    {
+      "name": "test:canonical_helpers",
+      "exit_code": 0
+    },
+    {
+      "name": "test:cli_commands",
+      "exit_code": 0
+    },
+    {
+      "name": "test:cli_grant_limits_parity",
+      "exit_code": 0
+    },
+    {
+      "name": "test:cli_parity",
+      "exit_code": 0
+    },
+    {
+      "name": "test:democli_parity",
+      "exit_code": 0
+    },
+    {
+      "name": "test:escaped_builtin_http_parity",
+      "exit_code": 0
+    },
+    {
+      "name": "test:fake_upstream",
+      "exit_code": 0
+    },
+    {
+      "name": "test:gateway",
+      "exit_code": 0
+    },
+    {
+      "name": "test:gateway_oracle",
+      "exit_code": 0
+    },
+    {
+      "name": "test:gateway_replay_status_parity",
+      "exit_code": 0
+    },
+    {
+      "name": "test:gateway_tls_parity",
+      "exit_code": 0
+    },
+    {
+      "name": "test:gateway_x1_credential_e2e",
+      "exit_code": 0
+    },
+    {
+      "name": "test:ledger_float_parity",
+      "exit_code": 0
+    },
+    {
+      "name": "test:native_admin_cli",
+      "exit_code": 0
+    },
+    {
+      "name": "test:native_admin_cli_more",
+      "exit_code": 0
+    },
+    {
+      "name": "test:native_agent_cli",
+      "exit_code": 0
+    },
+    {
+      "name": "test:native_atomic_cli",
+      "exit_code": 0
+    },
+    {
+      "name": "test:native_cli_e2e",
+      "exit_code": 0
+    },
+    {
+      "name": "test:native_response_cli",
+      "exit_code": 0
+    },
+    {
+      "name": "test:native_team_cli",
+      "exit_code": 0
+    },
+    {
+      "name": "test:native_team_e2e",
+      "exit_code": 0
+    },
+    {
+      "name": "test:policy_oracle",
+      "exit_code": 0
+    },
+    {
+      "name": "test:policy_parity_close",
+      "exit_code": 0
+    },
+    {
+      "name": "test:python_numeric_comparison_parity",
+      "exit_code": 0
+    },
+    {
+      "name": "test:relay_escape_parity",
+      "exit_code": 0
+    },
+    {
+      "name": "test:response",
+      "exit_code": 0
+    },
+    {
+      "name": "test:response_contract",
+      "exit_code": 0
+    },
+    {
+      "name": "test:response_integer_boundaries",
+      "exit_code": 0
+    },
+    {
+      "name": "test:response_parity_gaps",
+      "exit_code": 0
+    },
+    {
+      "name": "test:runs",
+      "exit_code": 0
+    },
+    {
+      "name": "test:runtime_fix_boundaries",
+      "exit_code": 0
+    },
+    {
+      "name": "test:runtime_parity_gaps",
+      "exit_code": 0
+    },
+    {
+      "name": "test:serve_request_log",
+      "exit_code": 0
+    },
+    {
+      "name": "test:server_accept_resilience",
+      "exit_code": 0
+    },
+    {
+      "name": "test:signer_e2e",
+      "exit_code": 0
+    },
+    {
+      "name": "test:signer_oracle",
+      "exit_code": 0
+    },
+    {
+      "name": "test:sshwire",
+      "exit_code": 0
+    },
+    {
+      "name": "test:state_dir_cross_language",
+      "exit_code": 0
+    },
+    {
+      "name": "test:store_cross_process_lock",
+      "exit_code": 0
+    },
+    {
+      "name": "test:store_oracle",
+      "exit_code": 0
+    },
+    {
+      "name": "test:team_derive_lazy_parity",
+      "exit_code": 0
+    },
+    {
+      "name": "test:team_envelope_parity_edges",
+      "exit_code": 0
+    },
+    {
+      "name": "test:team_fold",
+      "exit_code": 0
+    },
+    {
+      "name": "test:team_fold_lazy_parity",
+      "exit_code": 0
+    },
+    {
+      "name": "test:team_invite_link",
+      "exit_code": 0
+    },
+    {
+      "name": "test:team_link_transport",
+      "exit_code": 0
+    },
+    {
+      "name": "test:team_membership_sync",
+      "exit_code": 0
+    },
+    {
+      "name": "test:team_oracle",
+      "exit_code": 0
+    },
+    {
+      "name": "test:team_pairing_approval",
+      "exit_code": 0
+    },
+    {
+      "name": "test:team_parity_gaps",
+      "exit_code": 0
+    },
+    {
+      "name": "test:team_remaining_contract",
+      "exit_code": 0
+    },
+    {
+      "name": "test:team_secret_import",
+      "exit_code": 0
+    },
+    {
+      "name": "test:team_share_policy_version_parity",
+      "exit_code": 0
+    },
+    {
+      "name": "test:team_snapshot_total_parity",
+      "exit_code": 0
+    },
+    {
+      "name": "test:team_snapshot_version_order_parity",
+      "exit_code": 0
+    },
+    {
+      "name": "test:team_sync_status",
+      "exit_code": 0
+    },
+    {
+      "name": "test:team_transport",
+      "exit_code": 0
+    },
+    {
+      "name": "test:team_uncaught_scope_parity",
+      "exit_code": 0
+    },
+    {
+      "name": "test:tools_server",
+      "exit_code": 0
+    },
+    {
+      "name": "test:vault_context",
+      "exit_code": 0
+    },
+    {
+      "name": "test:vault_context_oracle",
+      "exit_code": 0
+    },
+    {
+      "name": "test:vault_public_parity",
+      "exit_code": 0
+    },
+    {
+      "name": "signer-probes",
+      "exit_code": 0
+    },
+    {
+      "name": "doc-tests",
+      "exit_code": 0
+    }
+  ],
+  "scope_limits": [
+    "Not native macOS validation",
+    "Not two physical Macs",
+    "Not OCI deployment or capacity",
+    "Not M1 whole-secret deletion or M2 snapshot implementation evidence",
+    "Not an Opus review or release acceptance"
+  ],
+  "prior_failures_preserved": [
+    "rust-verify-d77ce9e-linux.log: failed captured-frame delivery assertion",
+    "rust-verify-41d217f-resume.log: disk exhaustion"
+  ]
+}

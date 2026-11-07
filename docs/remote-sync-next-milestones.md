@@ -170,63 +170,355 @@ review evidence is missing.
 
 ## M2: Authenticated snapshot onboarding after compaction
 
-Bound the first slice to a newly approved device joining one environment after
-compaction. Do not silently overwrite an existing divergent local environment.
-Existing-device repair with unsent local changes needs a separate reconciliation
-slice; until then return an explicit unsupported/conflict result without loss.
+### Decision and exact trust boundary
 
-1. Write and review the checkpoint trust contract first. A proposed basis is an
-   explicit checkpoint attestation from the existing administrator device whose
-   fingerprint the user approved during pairing, bound to that recipient and
-   onboarding attempt. Preserve and verify retained identity/membership/ownership/
-   DEK history and signed facts. Specify how signer authority and removal cutoffs
-   are established without trusting membership claimed only by the snapshot.
-   Decide how future ownership changes and compaction affect that proof. Do not
-   grant the service operator, link account membership or a transport TLS key any
-   checkpoint authority. If this proof/trust contract is insufficient, keep
-   compacted-history onboarding unsupported rather than bypassing validation.
-2. Define a new versioned manifest and chunk-transfer contract inside the existing
-   authenticated, encrypted team session. Bind environment, sender, recipient,
-   fresh bootstrap nonce, transfer ID, schema/capabilities, covered vector,
-   retained-history/fact digests, version order, removal schedule, payload length
-   and digest. Snapshot contents remain encrypted versions and metadata; keys/wraps
-   stay in the trusted team protocol. The link daemon and service receive opaque
-   bytes, never the vault file, plaintext values or decryption keys.
-3. Export a consistent checkpoint from the existing locked fold/compaction state.
-   Carry the required facts and retained authorization history together with the
-   snapshot, not only the folded visible document. Continue incremental commits
-   after the checkpoint vector. Preserve existing treatment of later removals,
-   late commits, unavailable generations and ciphertext validation; do not feed
-   untrusted remote JSON directly to the local snapshot-cache loader.
-4. Authenticate and authorize before substantial staging. Set concrete bounds for
-   manifest bytes, total bytes, chunks, concurrent transfers, temporary disk and
-   elapsed time. Verify every bound, digest and signature before installing the
-   result. Resume only the exact authenticated transfer; reject substituted,
-   mixed-environment, expired or replayed manifests and re-check membership before
-   final application. A digest alone is not authorization.
-5. Stage durable data, then atomically publish the checkpoint/history/facts and
-   derived state under the state lock. Specify crash recovery so a reader sees
-   either the old valid state or the complete new state. Send completion ACK only
-   after durable installation. An ACK loss must permit an idempotent retry, not a
-   duplicate member admission or invitation consumption. Show pending/failure
-   honestly; do not report up-to-date before the authenticated state is durable.
+Astra decision, 2026-11-07: implement **administrator-attested bootstrap** for a
+freshly approved recipient, under the contract below. This is a design decision,
+not implementation, validation or Opus acceptance. It requires M1's admitted
+monotone tombstone set and compatibility gate. This inspection used the parent
+checkout at `2c38d44d63cb30919cf3b60e1b29e0425f28531c`; it did not inspect the
+separate M1 implementation worktree.
 
-Acceptance cases: build real signed history, compact once and repeatedly, then
-approve a fresh device and compare all retained encrypted versions, decrypted
-synthetic values, vectors, membership and tombstones. Include a deleted secret,
-removed member, earlier facts and later commits. Test wrong signer/recipient/
-environment, forged or missing history/facts, stale checkpoint against known local
-facts, unsupported versions, malformed/oversized/truncated chunks, duplicate and
-reordered chunks, timeout/cancel, disk-full and process termination before/after
-each durable boundary, ACK loss, and signer/recipient revocation mid-transfer.
-Run through direct and forced TURN TLS with UDP blocked, then native two-Mac
-pairing. Assert no secret material in link/service outputs or observations.
+The trust anchor is the **specific inviter device key explicitly accepted by the
+joining human as this environment's checkpoint administrator**, together with
+that administrator's explicit approval of the recipient fingerprint. Merely
+pasting an invitation, possessing its secret, finding a key in the snapshot,
+joining the link service or completing TLS does not grant checkpoint authority.
+Extend the trusted join confirmation to identify the environment and inviter
+fingerprint and explain that the device attests to compacted state. Persist this
+local approval before requesting a checkpoint. Keep it separate from the
+inviter-side approval of the joining device; those are two different decisions.
+Use the existing human administrative surface and reauthentication boundary,
+never an agent tool or secret-bearing CLI argument.
 
-Deliverable: a separate bounded PR after M1's semantics and the checkpoint trust
-contract are fixed, with compatibility tests for existing state and signed/wire
-fixtures plus new Rust-format tests. Do not regenerate prototype fixtures or
-change their meaning. Run the full isolated verification and actual external
-review on the final head; retain failed and unrun cases explicitly.
+Grounding in current code:
+
+- `membership::join` checks the authenticated session peer against the invitation
+  fingerprint. `transport::{initiate,respond}` signs the environment-bound
+  ephemeral handshake and establishes encrypted sessions. This proves possession
+  of the pinned key, not that its holder is an administrator.
+- `pairing::approve_join` binds an approval invitation to the exact recipient;
+  `membership::match_invite` consumes it once and records `used_by`.
+  `TeamSync::admit_member` emits signed `member.add` and available recipient DEK
+  wraps. None of these is currently a checkpoint attestation.
+- `TeamSync::compact` retains every whole commit containing `env.init`,
+  `member.add`, `member.set_role`, `member.remove`, `owner.transfer` or `dek.rotate`.
+  Other author sequences may be missing. `snapshot_of_prefix` retains an
+  unflushed fold and version order; `snapshot_record` binds fact effects and
+  removal placement locally. Neither is a network authorization proof.
+- `receipt_fact` explicitly creates **local-only** signed admission receipts.
+  `load_facts` checks original signatures and local/historical authority.
+  Copying the sender's receipt file cannot authorize recipient admission.
+
+The approved administrator attests that the supplied checkpoint and exact fact
+set are the complete, locally admitted state of that device at the declared cut,
+including retained authority history. The receiver independently verifies all
+supplied original signatures and consistency/authorization checks below. It
+**cannot prove the absence of an omitted historical commit, deletion or removal**
+from signatures on the surviving subset. Nor can it prove the inviter knows every
+offline peer's latest edits. Trust in completeness and the omitted data prefix
+comes from the explicit administrator approval and signed attestation. A malicious
+approved administrator can lie about that prefix; this is not equivalent to
+independent verification of full signed history or consensus among devices.
+Record provenance as `administrator_attested`, never `full_history_verified`.
+
+No automatic alternative attestor or delegation is allowed in this slice. A new
+administrator after ownership/role change needs a new explicit recipient approval;
+the existing transfer is aborted. Retained history must establish the selected
+signer's active admin role and recipient's active approved membership at the cut,
+not merely repeat roles from the snapshot document. If the checks cannot establish
+this, fail `team_bootstrap_authority_unproven`; do not silently trust the document.
+
+### Admission, authority and payload contract
+
+Only one fresh local environment is eligible. An invitation preview/mapping and
+this transaction's own unpublished staging are allowed. Any existing admitted
+commit, fact, checkpoint, derived team entry, unsent local edit or conflicting
+local project/environment mapping is `team_bootstrap_existing_state_unsupported`.
+An exact completed-import receipt permits ACK recovery only, never replacement.
+Preserve existing local secret/connection collision protections; discover a
+collision before publication and leave unrelated state untouched. Repair/merge of
+an established or stale restored environment is outside M2.
+
+The sender exports an immutable cut under its existing state synchronization,
+after the approved recipient's `member.add` is durable. Export the **current full
+covered vector**, using the existing snapshot-seeded fold across all retained
+commits. Do not export an old compaction cache alone. Hold normal replication for
+this onboarding session until installation; close on bounded-buffer exhaustion
+rather than dropping live edits. Concurrent local edits remain durable; they
+invalidate finalization of this cut and require a fresh export.
+
+The versioned payload contains these separately hashed components:
+
+1. The unflushed snapshot document, vector and version order, plus the expected
+   final document digest after the existing fact/removal overlay. Preserve every
+   retained encrypted version and its original identifiers/ciphertext; a visible
+   active-secret list is not a checkpoint.
+2. All retained whole authority-changing commits listed above, original signatures
+   intact, including genesis and the recipient's admission. Also retain complete
+   commits needed by the removal schedule and the last admitted commit for each
+   nonzero author-vector entry, with its HLC/hash. Those heads provide continuation
+   bounds; they do not reconstruct missing sequences. Existing compacted state
+   without sufficient head/removal evidence is explicitly unsupported until the
+   evidence is available; never invent a last HLC or treat a sequence gap as zero.
+   M2 must first extend future compaction to retain these signed per-author heads
+   and removal witnesses, without rewriting old snapshot formats. Test onboarding
+   after compaction under that rule. A legacy compacted source missing a head
+   needs that exact original signed commit from another peer; if none retains it,
+   report this precise unsupported condition rather than claim universal legacy
+   compacted-state migration.
+3. Every admitted signed fact, including removed-member facts, connection disables,
+   version revocations and all M1 `secret_deleted` facts; sorted unique fact hashes,
+   the exact M1 tombstone digest, and removal bounds/pending/self-placement data.
+   The attestation explicitly covers this admitted set, not a filtered subset.
+4. Original signed recipient DEK wraps from admission/generation history. No raw
+   DEK, local KMS wrapper, vault database, private device key, invitation secret,
+   local receipt signature or plaintext secret goes in the payload. A generation
+   the sender cannot unwrap remains explicitly unavailable under existing rules;
+   do not fabricate a wrap or claim all retained values are usable. Missing a
+   required generation for a currently usable credential fails this first slice.
+
+Use a dedicated checkpoint verifier, not the permissive local snapshot-cache
+loader. Starting from the genesis owner embedded in `env_id`, verify its device
+record and original genesis signature. Verify every retained record/commit/fact,
+its environment, schema, canonical signature bytes and unique hash/identity.
+Replay the retained authority operations in existing total order, with existing
+owner-transfer and removal scheduling rules. Reject skipped/unauthorized authority
+operations, unknown signers, inconsistent device records, conflicting sequences,
+heads outside the vector and snapshot authority/DEK state inconsistent with that
+replay. The signer must be active admin and recipient active with the exact
+approved role. Completeness of this retained authority sequence is part of the
+pinned administrator's attestation; signatures alone do not prove completeness.
+Do not pass gapped retained history through the ordinary sequential receive path
+and weaken its gap checks to make bootstrap succeed.
+
+For historical facts, verify each original author signature and establish that
+its claimed kind/target had an applicable authority basis in retained history.
+Keep already admitted irreversible facts after later demotion/removal, following
+existing historical admission semantics and removal cutoffs. Where compacted
+history prevents independent reconstruction of the original admission decision,
+the administrator's signed **exact admitted-fact hash set** is the explicit
+checkpoint admission authority. Persist that distinct provenance and its approved
+key/manifest binding; never import the sender's local receipts or label this a
+normal independently replayed admission. Reject facts contradicted by retained
+proofs, unknown authors or malformed kinds/targets even if listed in the manifest.
+The new admission path is available only during this fresh, approved import;
+ordinary incoming `FACT` validation remains unchanged. A receiver may issue its
+own local receipt only after this checkpoint admission has been durably recorded.
+
+Recompute fact effects, removal placement and final document from the validated
+components and compare the signed digests. M1 tombstones survive overlay,
+compaction and restart even if no secret versions remain. Preserve the original
+fact objects/hashes for subsequent M1 reconciliation; a folded deleted-ID list is
+insufficient. Reject inconsistency instead of deleting inconvenient evidence.
+
+### Authenticated transfer and finite bounds
+
+Add `snapshot_bootstrap_v1` to M1's session capabilities, without changing M1's
+legacy/tombstone rules. Both endpoints must advertise it on the current encrypted
+team session. An old peer may continue existing uncompacted signed-history join;
+when a compacted prefix is missing, return explicit unsupported status. Never
+announce synchronization based on a partial history. New checkpoint messages use
+strict new schemas; old signed and persisted formats retain their exact bytes.
+
+Use these messages only inside the existing authenticated end-to-end session:
+
+- `BOOTSTRAP_REQUEST`: environment, recipient fingerprint, invitation ID and a
+  freshly generated 256-bit `onboarding_nonce` (64 lowercase hex characters).
+  Bind the request to the locally approved inviter key, current authenticated
+  peer and local monotonic deadline. The nonce is not the invitation proof.
+- `BOOTSTRAP_MANIFEST`: an Ed25519 signature by that pinned key over existing
+  canonical JSON with domain `zeropw-team-bootstrap-v1`, schema version 1,
+  environment, signer/recipient fingerprints, invitation ID, onboarding nonce,
+  fresh 128-bit transfer ID, creation/expiry times, required feature set, complete
+  vector and per-author head hashes/HLCs, component digests/counts, tombstone
+  digest, exact payload length/SHA-256 and ordered chunk SHA-256 values. The
+  signature excludes only its own field. Hashes use lowercase hex; no floats,
+  duplicate keys, unrecognized required fields or lossy integer coercions.
+- `BOOTSTRAP_CHUNK`: transfer ID, manifest hash, zero-based index and strict
+  base64 bytes. Each chunk must match its signed size/hash before being staged.
+  Whole-payload hashing and component validation are still mandatory.
+- `BOOTSTRAP_FINALIZE`: after validating all data, the recipient sends a fresh
+  256-bit finalize challenge with the exact transfer/manifest hash. The sender
+  rechecks approval, active signer/recipient and the entire cut under its lock.
+  It signs `BOOTSTRAP_READY` with domain `zeropw-team-bootstrap-ready-v1`, both
+  nonces, all identity/transfer bindings and manifest hash only if its vector,
+  authority and full fact set still match. Any changed cut requires restart.
+- `BOOTSTRAP_ACK`: recipient sends manifest hash, transfer ID, covered vector and
+  tombstone digest only after durable installation. This acknowledges that exact
+  installed cut; current `up_to_date` still requires fresh ordinary vector and
+  M1 tombstone-state/ACK convergence. READY or a received manifest is not an ACK.
+
+Initial limits are refusal thresholds, not capacity claims: 64 KiB manifest;
+16 MiB total decoded payload; 64 KiB chunks, at most 256; 128 KiB encoded chunk
+frame; at most 4 outstanding chunks and 512 KiB queued transfer frames; 256 device
+records, 65,536 total commit/fact/version records and JSON depth 64. All other
+control frames are at most 4 KiB, except ACK (which contains the vector) is
+bounded by the same 64 KiB limit as the manifest. Existing canonical integer/crypto formats stay
+unchanged; oversized otherwise-valid states fail explicitly. Do not compress or
+accept paths/archive entries. Limit staging to 64 MiB per transfer and 128 MiB per
+process, one transfer per environment and at most two total. File/parent ownership,
+mode and ACL protections apply to staging too; staged data contains encrypted
+payloads or locally encrypted derivations, never plaintext temporary values.
+
+The receiver's monotonic total deadline is ten minutes from request; idle timeout
+is 30 seconds. Manifest expiry is no more than ten minutes after creation; reject
+expiry or a creation time more than 60 seconds in the future. Neither wall-clock
+freshness nor signed timestamps substitute for the request nonce. Signature/key,
+recipient and bound checks precede substantial allocation or staging. Apply size
+and queue limits before JSON/base64 expansion. Cancel/timeout drops readiness and
+cleans unpublished staging; disk errors fail closed without ACK.
+
+Within the same authenticated session, resume by requesting the next contiguous
+chunk index for the exact manifest. Identical already-verified duplicates are
+idempotent; mixed IDs, changed bytes or out-of-order chunks are rejected. **No
+cross-session partial-byte resume in M2:** after disconnect/restart discard partial
+staging and request a new nonce, manifest and full transfer. This bounds replay
+state and avoids treating an old session's authorization as fresh. Reauthentication
+uses the same device identity and existing approved membership, not a second
+invitation consumption or `member.add`.
+
+Persist sender-side onboarding authorization for the approved invitation ID and
+recipient, with an idempotent link to its admission commit and an expiry no later
+than the original invitation expiry. Each transfer still has the ten-minute
+request bound. After authorization expires, a new human-approved onboarding
+authorization for the same already admitted identity is required; it does not
+re-admit the member. Recover the existing
+`used_by`/admission state after a crash between invitation consumption and creating
+that record; do not consume a different invitation, grant a different role or
+create a second admission. Cancellation revokes the onboarding attempt, not
+silently the already admitted membership. Only an explicitly renewed attempt may
+start again. Loss of the final ACK permits a new authenticated receipt query with
+a fresh challenge; the recipient returns its durable exact manifest receipt,
+without reinstalling data or assuming current convergence.
+
+A learned signer/recipient removal immediately cancels staging or blocks
+publication. READY is valid only in the same live session for the outstanding
+challenge and expires with the request. No online protocol can detect an unknown
+offline revocation or revoke bytes already delivered: this contract guarantees
+checks against locally known state at finalization and applies subsequent signed
+removals through normal replication. It does not promise globally instantaneous
+revocation across the network.
+
+### Durable installation and continuation
+
+Current `StateDir` writes fsync a file and rename it individually; they do not
+provide a transaction across snapshots, facts, mappings, DEKs and derived vault
+state. M2 must add an import-specific transaction and visibility barrier, without
+changing the meaning of old state or treating several renames as one atomic commit.
+
+The barrier check and affected state read/use must be serialized with import
+publication, or all values and the authorization/use decision must be validated
+against the same committed import epoch. A flag check followed by unlocked reads
+of several files is insufficient. An epoch change or pending import invalidates
+the assembled view: discard/reload it or fail closed before using credentials or
+reporting joined/synchronized state. The implementation must audit every affected
+read path, including already-running gateway/signer processes, cached credentials,
+long-lived contexts and background sync; checking only startup or a newly created
+`Context` does not satisfy this requirement. Cached state must carry its validated
+epoch and participate in the same serialization or revalidation at use. No new
+credential operation may begin from an invalidated view; this does not promise to
+undo an external operation already authorized and started before the barrier.
+
+The importer/recovery code alone may access unpublished state through an internally
+scoped bypass that cannot be selected through agent APIs or user-supplied flags.
+Scope the barrier to affected environments and their derived entries; do not
+require a global stop of unrelated environments. These are new implementation
+requirements, not claims that existing `StateDir` locks already provide read/write
+transactions or coherent cached views.
+
+1. Under the state lock, validate freshness/collisions again and durably create a
+   pending-import journal binding the local approval, manifest and staging paths.
+   Set a fail-closed barrier for this environment before any ordinary state file
+   is changed. All team loading, join success, local edits, credential lookup,
+   gateway/SSH use and sync-status paths must respect it, including after restart.
+   Until activation the new environment is absent or `bootstrap_pending`; it is
+   never partially usable. Unrelated environments retain their existing behavior.
+2. Stage and fsync the verified immutable bundle, provenance and derived encrypted
+   state. Use local generated paths, no peer-provided filesystem paths. Record
+   deterministic install operations and fsync the journal and containing
+   directories before publishing any files. Check READY and known revocations
+   again. Existing locks serialize this import with concurrent local mutation;
+   do not hold them while waiting on network frames.
+3. Install the snapshot/record, retained proof commits, facts and checkpoint
+   admission provenance, DEK wraps/local encrypted derivation and mapping.
+   Revalidate installed digests and fsync files and parent directories. Publish
+   a durable completed-import record as the single **visibility** commit under
+   the lock, then release the barrier and send ACK. No reader may observe the
+   intermediate file set; file-by-file physical installation is not itself atomic.
+4. After a crash, process pending journals before exposing affected state. Before
+   any install begins, an abandoned transaction can be discarded. Once installation
+   begins, recover by idempotently completing verified journal operations under
+   the barrier; corruption, missing staged bytes or no space leaves the environment
+   unavailable for explicit recovery, never an automatic partial rollback exposed
+   to readers. A crash after the completed record permits receipt-based ACK retry.
+   Verify the durable record and installed digests before clearing any barrier.
+
+Bootstrap initializes the covered author floors **and their HLC/head evidence**;
+ordinary new commits still require the next sequence and original signature,
+environment, monotonic HLC and operation checks. Do not turn missing compacted
+sequences into permission to admit arbitrary later commits. Retained duplicate
+hashes can be recognized; a missing pre-cut commit cannot be declared equivalent
+to an attested missing commit merely because its sequence is below the vector.
+Reject/quarantine it without claiming full-history verification.
+
+Continue with normal incremental replication only after installation. A late
+commit or new removal that would require refolding unavailable pre-checkpoint
+history is `team_checkpoint_history_required`: clear readiness, preserve received
+evidence and fail closed for affected derivation rather than silently recomputing
+from an incomplete subset. Already authenticated monotone restrictions, especially
+M1 tombstones and member removal, must still block use immediately; unavailable
+history is never a reason to retain a usable deleted credential. Unrelated
+operations must not erase the checkpoint.
+General reconciliation of that case is a later slice. Subsequent local compaction
+must retain bootstrap provenance, authority proofs, author head bounds and the
+complete admitted tombstone set; it cannot turn an attested prefix into a purported
+fully verified history or revert a tombstoned environment to legacy readiness.
+
+### Implementation boundaries and acceptance
+
+Implement in this order within a separate M2 change: strict manifest/payload
+verifier and trust/provenance record; approved session transfer and bounds;
+transaction/recovery barrier; join/status/continuation integration. A verifier
+that trusts document membership or a transfer without crash-safe publication is
+not a partial implementation to label supported. Existing invite/handshake,
+commit/fact and prototype persisted fixtures remain unchanged; add new-format
+fixtures and tests rather than regenerating the old ones. Old software is not a
+supported downgrade reader for an imported checkpoint requiring new provenance
+or tombstone semantics; disclose that limit and gate upgraded peer status.
+
+Acceptance must build real signed history, compact repeatedly, then approve a
+fresh recipient and compare all retained encrypted versions, available decrypted
+synthetic values, version order, vectors, authority/removal state and every
+admitted fact hash. Include prior demotion/removal, ownership transfer, unavailable
+generations and M1 deletion before/after compaction. Test a non-owner active-admin
+inviter and a new-owner inviter separately. Test continued next-sequence edits,
+post-cut removal and the explicit late-precut-history refusal.
+
+Negative cases include unapproved/mismatched inviter or recipient, self-claimed
+snapshot admin, substituted genesis/history/facts, missing tombstone, revoked
+signer, inconsistent cut/heads, cross-environment/session/nonce replay, old-peer
+capability failure, local collisions/divergent state, every length/count/queue
+limit, malformed/truncated/reordered/duplicate chunks, timeout/cancel, lost READY
+or ACK, and concurrent edits/revocation during finalization. A correctly signed
+but malicious pinned administrator's omission is a documented trust limitation,
+not a test the protocol can magically detect without independent evidence.
+
+Inject disk-full and process termination before/after each journal, file,
+directory-fsync and visibility boundary; prove no credential is usable while
+pending and restart never presents partial state as joined. Test interruption
+immediately after invite consumption and admission for exactly-once recovery.
+Add concurrent-reader tests that pause a reader between the barrier check and
+state reads, between separate file reads, and between cached authorization and
+credential use while import/recovery crosses each visibility boundary. Exercise
+pre-existing contexts and running gateway/signer processes, not only reopened
+readers. Assert that every observed view and use belongs to one committed epoch
+or is refused, unpublished state is inaccessible outside scoped recovery, and
+unrelated environments remain usable.
+Run real direct and forced TURN TLS/UDP-blocked onboarding with synthetic values,
+then isolated Linux/macOS full verification and native two-Mac pairing. Check
+link/service observations for secrets. Require actual adversarial Opus review of
+the final implementation head; this decision provides no such review or acceptance.
 
 ## Follow-on work and unchanged release gates
 
