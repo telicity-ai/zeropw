@@ -1,0 +1,14 @@
+{
+  "actual_exit": 1,
+  "actual_location": "outer inline script line28, nested report triple-single-quote opening prematurely terminates code raw string",
+  "command": "/usr/bin/python3 -I -S - with inline DATA authoring script; full exact failed command is retained in tool transcript",
+  "disposition": "Preserve failure. Do not repair/retry failed success packager under before-SSH-only correction allowance. Required raw execution and existing separate DATA analysis remain independently attributable; final handoff must disclose this failure/HOLD.",
+  "exception": "SyntaxError: invalid syntax",
+  "failed_code_corrected_or_rerun": false,
+  "intended_output": "finalize-evidence.py.txt",
+  "occurred_after_ssh_start": true,
+  "output_file_created": false,
+  "product_or_SSH_retry": false,
+  "source_or_H_or_controls_or_expected_values_or_test_criteria_changed": false,
+  "state": "PREPARATION_FAILED_NOT_EXECUTED"
+}

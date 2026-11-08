@@ -1,0 +1,192 @@
+{
+  "actual_model": "gpt-6.1-sol",
+  "checks": {
+    "external_archive": {
+      "catalogue_records": 66,
+      "checksum_records": 68,
+      "compressed_bytes": 2089753,
+      "external_regular_files": 69,
+      "regular_entries": 67,
+      "required_prefix": "required-generation-linux-r2-finish-sol-evidence/",
+      "safe_exact_bytes_modes": true,
+      "sha256": "7d7636ccf0e941d43a47dc9dcc8852283fc473292fbf0814283bf5ba32d1db7c",
+      "uncompressed_bytes": 5328758
+    },
+    "features": {
+      "after_actor": "finish worker",
+      "before_actor": "Root",
+      "bytes_each": 41358,
+      "exact_equal": true,
+      "raw_value_absent": true,
+      "sha256": "84f9ca7320bd9beb87d293ea74b3b268339709acb1ff05c6c916d7a4c2dc4308"
+    },
+    "frozen_inputs": {
+      "B": {
+        "entries": 30,
+        "exact_bytes_modes": true,
+        "freeze_sha256": "ccc8180add7a05635311994742461c2c21c44021ae5e18ca5789062e33c8d375"
+      },
+      "C": {
+        "entries": 15,
+        "exact_bytes_modes": true,
+        "freeze_sha256": "ff0d1d6937cb9435b227ad22fcc969203086be6f49cde986de97a2c96de50fdc"
+      },
+      "H": {
+        "entries": 3,
+        "exact_bytes_modes": true,
+        "freeze_sha256": "eff82d3a58ce40a03d37d2332196eeb8afccde43bd1b7b745f77f4ee7d2b40ff"
+      },
+      "P2": {
+        "entries": 14,
+        "exact_bytes_modes": true,
+        "freeze_sha256": "7df19c9fb35ddaae30af773e74fc866c8f933e120050d631f7be2dd828c9c4bd"
+      }
+    },
+    "full_matrix": {
+      "VERIFY_FAILED_empty": true,
+      "all_step_exit_zero": true,
+      "alternating_exact_markers": 222,
+      "explicit_probes": [
+        "idle_cpu_with_one_and_nine_live_bindings",
+        "per_binding_fd_cost_matches_python_ratio_of_one",
+        "per_client_fd_cost_matches_python_ratio_of_one",
+        "rlimit_probe_served_clients_and_accept_loop_survival"
+      ],
+      "focused_and_historical_selectors_not_added": true,
+      "prior_focused": {
+        "31-native-cli-e2e": {
+          "actor": "Root coordinator",
+          "all_names_also_ok_in_full": true,
+          "passed": 6
+        },
+        "32-signer-e2e": {
+          "actor": "Root coordinator",
+          "all_names_also_ok_in_full": true,
+          "passed": 6
+        }
+      },
+      "source_derived_integration_targets": 106,
+      "source_derived_steps": 111,
+      "summary_count": 114,
+      "totals": {
+        "failed": 0,
+        "filtered": 703,
+        "ignored": 5,
+        "measured": 0,
+        "passed": 1816
+      }
+    },
+    "guest_bundle": {
+      "collected_bytes_modes_exact": true,
+      "regular_entries": 20,
+      "root_partial_entries_exact": 12,
+      "sha256": "e807453e1fec715a886964cb0ff0830fc7661ea49ee07331143fcc38d2c8148c",
+      "uncompressed_bytes": 4054942
+    },
+    "lifecycle": {
+      "Root_prior_actor_scope": "3 waited children/5 joined transports; separate release",
+      "all_five_guest_children_waited": true,
+      "original_start": 1794102345.546906,
+      "own_children": 2,
+      "own_release": "RELEASED",
+      "own_supervisor_joined": true,
+      "own_transport_receipts": [
+        {
+          "ended_epoch": 1794103229.975106,
+          "exit": 0,
+          "name": "audit-before",
+          "pid": 42015,
+          "started_epoch": 1794103229.021651,
+          "waited": true
+        },
+        {
+          "ended_epoch": 1794105901.10869,
+          "exit": 0,
+          "name": "33-full-matrix",
+          "pid": 42035,
+          "started_epoch": 1794103229.976187,
+          "waited": true
+        },
+        {
+          "ended_epoch": 1794105901.6816902,
+          "exit": 0,
+          "name": "34-features-after",
+          "pid": 72261,
+          "started_epoch": 1794105901.111155,
+          "waited": true
+        },
+        {
+          "ended_epoch": 1794105902.2605052,
+          "exit": 0,
+          "name": "audit-after",
+          "pid": 72266,
+          "started_epoch": 1794105901.6833448,
+          "waited": true
+        },
+        {
+          "ended_epoch": 1794105902.459019,
+          "exit": 0,
+          "name": "collect-bundle",
+          "pid": 72272,
+          "started_epoch": 1794105902.2618392,
+          "waited": true
+        }
+      ],
+      "own_transports": 5,
+      "release_epoch": 1794106142.2201338,
+      "saved_observations_not_crypto_attestation": true,
+      "saved_residual_lists_empty": true,
+      "unchanged_deadline": 1794113145.546906,
+      "whole_VM": "Root-owned; collector did not query"
+    },
+    "source": {
+      "all_archive_bytes_Git_blobs_modes_verified": true,
+      "archive_bytes": 20388678,
+      "complete_before_after_inventories": 10,
+      "executed_head": "7d27fd7ec500e36f0e5cc548325e1ae5b34864d8",
+      "file_record_comparisons": 13380,
+      "files": 1338,
+      "five_phase_identity_exit_wait_residual_checks": true,
+      "full_tree": "329404aa15163928d9c61c43020b5e3764eac9ad",
+      "rust_tree": "4352ebbd0fa84bde0fb444c4d0902ef2510d0620"
+    },
+    "worker_host_DATA_errors": {
+      "descriptions": [
+        "post-SSH read-only historical list/dict display AttributeError",
+        "post-SSH read-only assumed oracle path KeyError",
+        "post-SSH packager authoring SyntaxError before file creation/execution"
+      ],
+      "distinct": 3,
+      "raw_failed_tool_transcript_not_independently_retrieved": true,
+      "receipts_sha256": {
+        "host-data-diagnostic-errors.json": "91ca7d83a9a4ca34dd4d986ff4774c506772153c7c3c66405835289f6ec1915e",
+        "host-data-inspection-error.json": "85beb48ccb0bd4712651ed127ba8a68ccf7d27077d865e18185ea54457164171",
+        "host-data-packager-failure.json": "61713d4744c843b4dc2340a6c67d10a9981fc5a306bf53975a3ba3b4ee705242"
+      },
+      "worker_HOLD": "unchanged; no worker failed script replayed"
+    }
+  },
+  "collected_utc": "2026-11-08T02:59:46.559995+00:00",
+  "collector_DATA_failures_before_output_writes": [
+    {
+      "cause": "initial DATA display assumed catalogue files list, actual dict",
+      "exception": "TypeError: unhashable type: slice"
+    },
+    {
+      "cause": "first independent collection assumed flat outer tar root; actual safe named prefix was then explicitly bound",
+      "exception": "AssertionError"
+    }
+  ],
+  "kind": "HOST_STDLIB_DATA_ONLY_NO_RUNTIME",
+  "limitations": [
+    "saved observations not cryptographic attestation",
+    "exact original failed tool transcript not independently fetched",
+    "no rerun,current process/VM query or source/control/ref/index mutation",
+    "all historical failures and acceptance/release holds unchanged"
+  ],
+  "original_worker_handoff": "HOLD_UNCHANGED",
+  "reasoning_effort": "ultra",
+  "runtime_observations": "PASS",
+  "schema": "zeropw-linux-r2-finish-independent-data-collection-v1",
+  "unresolved_evidence_integrity_gaps_found": []
+}

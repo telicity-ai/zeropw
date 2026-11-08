@@ -1,4 +1,6 @@
-# R2 runtime: two corrected-account SSH suites pass; full verifier pending
+# R2 original partial runtime handoff
+
+Later status: [the remaining full verifier and feature comparison passed](finish/README.md). The following text and table describe the original partial handoff; its NOTRUN entries are dated, not the final combined runtime result. Original raw partial evidence remains unchanged.
 
 Actual operator: coordinator gpt-6.1-sol/ultra, T3 Code through Codex. Source remains exact7d27fd7/Rust4352/1338 files, executed only in isolated UID2000 rg01 through the same root-owned frozen R2 plan and forced privilege-drop SSH. This is a new runtime observation; it does not relabel either the original full failure or the earlier aborted R2 host preflight.
 

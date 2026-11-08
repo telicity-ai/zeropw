@@ -1,0 +1,38 @@
+{
+  "actual_actor": "gpt-6.1-sol / ultra / requested default; service tier not exposed",
+  "evidence_handoff": "HOLD retained post-SSH host DATA preparation errors; failed code not corrected or retried",
+  "full_matrix_only": {
+    "explicit_signer_probes": {
+      "signer::tests::idle_cpu_with_one_and_nine_live_bindings": true,
+      "signer::tests::per_binding_fd_cost_matches_python_ratio_of_one": true,
+      "signer::tests::per_client_fd_cost_matches_python_ratio_of_one": true,
+      "signer::tests::rlimit_probe_served_clients_and_accept_loop_survival": true
+    },
+    "integration_targets": 106,
+    "steps": 111,
+    "summary_count": 114,
+    "totals_full_matrix_only": {
+      "failed": 0,
+      "filtered": 703,
+      "ignored": 5,
+      "measured": 0,
+      "passed": 1816
+    }
+  },
+  "no_source_control_expected_value_or_criteria_edits": true,
+  "original_failures_NOTRUN_and_all_external_holds": "UNCHANGED",
+  "own_product_phases": [
+    "33-full-matrix",
+    "34-features-after"
+  ],
+  "own_resources": "RELEASED per separate receipt",
+  "privacy_combined_matches": 0,
+  "privacy_combined_streams": 28,
+  "report_sha256": "b882793d9a134e3eec65eb5cdedfc1c019e49c15b031d6e30cb85d5c421df5a6",
+  "root_prior_phases": [
+    "30-features-before",
+    "31-native-cli-e2e",
+    "32-signer-e2e"
+  ],
+  "runtime_observations": "PASS"
+}

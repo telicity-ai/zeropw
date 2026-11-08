@@ -254,9 +254,12 @@ failing under the coordinator-created nologin account. All14 exact selectors
 passed; feature-after is NOTRUN. The account was corrected with management-login
 denial and a preserved privilege boundary. A separate R2 worker stopped beforeSSH
 with missing hosttomllib (all five phasesNOTRUN); after a Python3.9 DATA fix,
-coordinator R2 targeted suites eachpassed6tests. Full verification and after-feature
-comparison remain pending; these partial results are recorded separately.
-The original FAIL remains and validation is INCOMPLETE. A valid wide single-commit
+coordinator R2 targeted suites eachpassed6tests. The later unchanged R2 full
+verification passed111steps/106targets/1816tests,0failures,5ignored; feature bytes
+match exactly. The [independent collection](evidence/2026-11-08-required-generations-linux-7d27fd7/r2-runtime/finish/README.md)
+found no unresolved integrity gap, while retaining the worker handoff HOLD for
+post-SSH host DATA errors. The original FAIL and early R2 NOTRUN remain unchanged;
+acceptance is still INCOMPLETE. A valid wide single-commit
 native trial timed out at1800seconds; the final distributed-commit probe is
 different input and does not resolve that inherited cost. No M2,
 review, physical-device, deployment or release gate is closed by this stage.

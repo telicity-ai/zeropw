@@ -1,0 +1,2177 @@
+{
+  "VERIFY_FAILED_empty": true,
+  "all_step_exits_zero": true,
+  "driver_full_matrix": {
+    "explicit_signer_probes": {
+      "signer::tests::idle_cpu_with_one_and_nine_live_bindings": true,
+      "signer::tests::per_binding_fd_cost_matches_python_ratio_of_one": true,
+      "signer::tests::per_client_fd_cost_matches_python_ratio_of_one": true,
+      "signer::tests::rlimit_probe_served_clients_and_accept_loop_survival": true
+    },
+    "failed": 0,
+    "ignored": 5,
+    "integration_targets": 106,
+    "ordered_markers_match": true,
+    "passed": 1816,
+    "steps": 111,
+    "test_summary_count": 114
+  },
+  "explicit_signer_probes": {
+    "signer::tests::idle_cpu_with_one_and_nine_live_bindings": true,
+    "signer::tests::per_binding_fd_cost_matches_python_ratio_of_one": true,
+    "signer::tests::per_client_fd_cost_matches_python_ratio_of_one": true,
+    "signer::tests::rlimit_probe_served_clients_and_accept_loop_survival": true
+  },
+  "focused_overlap_not_added": true,
+  "integration_targets": 106,
+  "ordered_begin_end_and_alternating_events_exact": true,
+  "step_details": [
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "fmt",
+      "passed": 0,
+      "summaries": []
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "clippy",
+      "passed": 0,
+      "summaries": []
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 4,
+      "ignored_test_names": [
+        "signer::tests::idle_cpu_with_one_and_nine_live_bindings",
+        "signer::tests::per_binding_fd_cost_matches_python_ratio_of_one",
+        "signer::tests::per_client_fd_cost_matches_python_ratio_of_one",
+        "signer::tests::rlimit_probe_served_clients_and_accept_loop_survival"
+      ],
+      "name": "lib-and-bins",
+      "passed": 703,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 4,
+          "measured": 0,
+          "passed": 703,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 0,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 0,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 0,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 0,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 0,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:admin_expanduser_parity",
+      "passed": 1,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:admin_input_envelope",
+      "passed": 12,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 12,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:admin_secret_import",
+      "passed": 9,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 9,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:admin_sigint_cleanup_boundaries",
+      "passed": 3,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:admin_sigint_exit",
+      "passed": 4,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:agent_help",
+      "passed": 2,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:agent_proxy_parity",
+      "passed": 4,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:astra_cleanup_publication_order",
+      "passed": 1,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:astra_cli_runtime_round2",
+      "passed": 4,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:astra_cli_runtime_round3",
+      "passed": 5,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 5,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:astra_cli_runtime_round4",
+      "passed": 5,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 5,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:astra_projects_final",
+      "passed": 2,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:astra_pty_portability",
+      "passed": 2,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:astra_response_acceptance",
+      "passed": 1,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:astra_response_final",
+      "passed": 1,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:astra_response_final_recheck",
+      "passed": 1,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:astra_response_review",
+      "passed": 6,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 6,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:astra_response_round2",
+      "passed": 5,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 5,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:astra_response_round3",
+      "passed": 3,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:astra_response_round4",
+      "passed": 2,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:astra_run_context_lease",
+      "passed": 1,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:astra_runtime_final",
+      "passed": 2,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:astra_runtime_review",
+      "passed": 6,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 6,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:astra_sigint_cleanup",
+      "passed": 2,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:astra_sigint_cleanup_final",
+      "passed": 3,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:astra_team_fact_catchup",
+      "passed": 1,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:astra_team_fact_duplicate_diagnostic",
+      "passed": 1,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:astra_team_reconnect_diagnostic",
+      "passed": 1,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:astra_team_review",
+      "passed": 5,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 5,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:astra_team_round2",
+      "passed": 8,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 8,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:astra_team_round3",
+      "passed": 9,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 9,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:astra_team_round4",
+      "passed": 2,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:base_cli_error_parity",
+      "passed": 5,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 5,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:canonical_helpers",
+      "passed": 4,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:cli_commands",
+      "passed": 10,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 10,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:cli_grant_limits_parity",
+      "passed": 2,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:cli_parity",
+      "passed": 1,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:democli_parity",
+      "passed": 4,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:escaped_builtin_http_parity",
+      "passed": 2,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:fake_upstream",
+      "passed": 20,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 20,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:gateway",
+      "passed": 149,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 149,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:gateway_oracle",
+      "passed": 3,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:gateway_replay_status_parity",
+      "passed": 2,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:gateway_tls_parity",
+      "passed": 8,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 8,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:gateway_x1_credential_e2e",
+      "passed": 1,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:ledger_float_parity",
+      "passed": 2,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:native_admin_cli",
+      "passed": 26,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 26,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:native_admin_cli_more",
+      "passed": 26,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 26,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:native_agent_cli",
+      "passed": 8,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 8,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:native_atomic_cli",
+      "passed": 1,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:native_cli_e2e",
+      "passed": 6,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 6,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:native_response_cli",
+      "passed": 17,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 17,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:native_team_cli",
+      "passed": 20,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 20,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:native_team_e2e",
+      "passed": 3,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:policy_oracle",
+      "passed": 26,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 26,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:policy_parity_close",
+      "passed": 1,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:python_numeric_comparison_parity",
+      "passed": 1,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:relay_escape_parity",
+      "passed": 4,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:response",
+      "passed": 32,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 32,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:response_contract",
+      "passed": 8,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 8,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:response_integer_boundaries",
+      "passed": 2,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:response_parity_gaps",
+      "passed": 9,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 9,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:runs",
+      "passed": 21,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 21,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:runtime_fix_boundaries",
+      "passed": 2,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:runtime_parity_gaps",
+      "passed": 15,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 15,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:serve_request_log",
+      "passed": 2,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:server_accept_resilience",
+      "passed": 1,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:signer_e2e",
+      "passed": 6,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 6,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:signer_oracle",
+      "passed": 4,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:sshwire",
+      "passed": 86,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 86,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:state_dir_cross_language",
+      "passed": 6,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 6,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:store_cross_process_lock",
+      "passed": 3,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:store_oracle",
+      "passed": 2,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:team_checkpoint_admission",
+      "passed": 17,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 17,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:team_checkpoint_authority_oracle",
+      "passed": 3,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 1,
+      "ignored_test_names": [
+        "generate_required_generation_fixtures"
+      ],
+      "name": "test:team_checkpoint_generation_oracle",
+      "passed": 6,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 1,
+          "measured": 0,
+          "passed": 6,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:team_checkpoint_legacy_parser_regression",
+      "passed": 1,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:team_checkpoint_manifest",
+      "passed": 10,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 10,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:team_checkpoint_payload",
+      "passed": 13,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 13,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:team_checkpoint_provenance",
+      "passed": 4,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:team_checkpoint_removal_oracle",
+      "passed": 1,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:team_checkpoint_required_generations",
+      "passed": 22,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 22,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:team_checkpoint_semantic_cut",
+      "passed": 17,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 17,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:team_derive_lazy_parity",
+      "passed": 1,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:team_envelope_parity_edges",
+      "passed": 1,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:team_fold",
+      "passed": 31,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 31,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:team_fold_lazy_parity",
+      "passed": 1,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:team_invite_link",
+      "passed": 19,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 19,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:team_link_transport",
+      "passed": 12,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 12,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:team_membership_sync",
+      "passed": 10,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 10,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:team_oracle",
+      "passed": 35,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 35,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:team_pairing_approval",
+      "passed": 13,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 13,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:team_parity_gaps",
+      "passed": 16,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 16,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:team_remaining_contract",
+      "passed": 26,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 26,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:team_secret_import",
+      "passed": 3,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:team_share_policy_version_parity",
+      "passed": 1,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:team_snapshot_total_parity",
+      "passed": 1,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:team_snapshot_version_order_parity",
+      "passed": 3,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:team_sync_status",
+      "passed": 8,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 8,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:team_transport",
+      "passed": 3,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:team_uncaught_scope_parity",
+      "passed": 3,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:tools_server",
+      "passed": 27,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 27,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:vault_context",
+      "passed": 46,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 46,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:vault_context_oracle",
+      "passed": 32,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 32,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:vault_public_parity",
+      "passed": 1,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "test:whole_secret_tombstone",
+      "passed": 9,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 9,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 703,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "signer-probes",
+      "passed": 4,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 703,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "exit": 0,
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "ignored_test_names": [],
+      "name": "doc-tests",
+      "passed": 48,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 48,
+          "status": "ok"
+        }
+      ]
+    }
+  ],
+  "steps": 111,
+  "summary_count": 114,
+  "totals_full_matrix_only": {
+    "failed": 0,
+    "filtered": 703,
+    "ignored": 5,
+    "measured": 0,
+    "passed": 1816
+  }
+}

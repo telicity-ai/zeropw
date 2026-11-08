@@ -1,0 +1,22 @@
+{
+  "all_own_direct_transports_joined": true,
+  "all_product_service_review_release_holds": "unchanged",
+  "entire_VM": "Root-owned; no VM idle/stop/release or physical erasure claim",
+  "evidence_handoff": "HOLD post-SSH host DATA errors retained; this is resource release only",
+  "host_supervisor_exit": 0,
+  "host_supervisor_session_id": 76969,
+  "no_runtime_calls_after_release": true,
+  "no_transport_uncertainty_timeout_or_termination": true,
+  "original_deadline_epoch": 1794113145.546906,
+  "own_direct_transports": 5,
+  "own_product_children": 2,
+  "own_product_children_waited": true,
+  "released_at_epoch": 1794106142.2201338,
+  "report_sha256": "b882793d9a134e3eec65eb5cdedfc1c019e49c15b031d6e30cb85d5c421df5a6",
+  "root_prior_three_children_and_five_transports": "Root actor; prior partial release unchanged",
+  "saved_assigned_UID_residuals": [],
+  "scope": "OWN UID2000 remaining33/34 job and five direct restricted SSH transports only",
+  "state": "RELEASED",
+  "whole_clock_elapsed_seconds": 3796.673227787018,
+  "whole_clock_first_ssh_epoch": 1794102345.546906
+}

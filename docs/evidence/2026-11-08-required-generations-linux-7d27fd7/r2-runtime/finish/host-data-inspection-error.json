@@ -1,0 +1,11 @@
+{
+  "operation": "read-only exploratory schema display of original R1 fixture-hashes-after.json",
+  "actual_exit": 1,
+  "exception": "AttributeError: list object has no attribute items",
+  "occurred_after_ssh_start": true,
+  "security_hash_source_ssh_product_mismatch": false,
+  "transport_supervisor_affected": false,
+  "executed_or_changed_submitted_code": false,
+  "failed_script_retry_or_rewrite": false,
+  "preservation": "Tool transcript retains failed command/output; this receipt preserves the error. Required independent bundle analysis remains separate."
+}
