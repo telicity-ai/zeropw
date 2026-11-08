@@ -2852,12 +2852,18 @@ mod compaction_heads_tests {
             normalized[field] = json!([normalized[field].clone()]);
         }
         normalized["ignored_extra"] = json!("public");
+        let matching_env = format!("{fp}-0123456789abcdef0123456789abcdef");
+        let wrap = crate::team::envelope::wrap_dek(
+            &[7; 32], &matching_env, "0123456789abcdef", &equal,
+        ).unwrap();
         for op in [
-            json!({"op":"env.init","owner_device":normalized}),
-            json!({"op":"member.add","device":normalized}),
+            json!({"op":"env.init","owner_device":normalized,
+                "owner_name":"synthetic-record","generation_id":"0123456789abcdef","wraps":{fp.clone():wrap}}),
+            json!({"op":"member.add","device":normalized,
+                "name":"synthetic-record","role":"user","wraps":{}}),
         ] {
             let original =
-                sign_commit(&author, &env, 1, "1-0000", &BTreeMap::new(), vec![op]).unwrap();
+                sign_commit(&expected_key, &matching_env, 1, "1-0000", &BTreeMap::new(), vec![op]).unwrap();
             let signed = original.canonical_json(false).unwrap();
             let hashed = original.canonical_json(true).unwrap();
             assert_eq!(
@@ -2868,15 +2874,18 @@ mod compaction_heads_tests {
             assert_eq!(original.canonical_json(false).unwrap(), signed);
             assert_eq!(original.canonical_json(true).unwrap(), hashed);
         }
-        let mut bad = equal.to_dict();
-        bad["sig"] = json!("AAAA");
+        let mut bad_record = equal.clone();
+        bad_record.sig[0] ^= 1;
+        let bad = bad_record.to_dict();
         for record in [
             other.to_dict(),
             bad,
             unrelated.record().unwrap().to_dict(),
             json!({}),
         ] {
-            let original = announcement(&author, &env, 1.into(), "1-0000", vec![record]);
+            let mut original = announcement(&author, &env, 1.into(), "1-0000", vec![equal.to_dict()]);
+            // Malformed retained op DATA is tested independently of admission.
+            original.ops[0]["device"] = record;
             assert_eq!(
                 matching_device_records(&[original], &expected),
                 HashSet::new()
