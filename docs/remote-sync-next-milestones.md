@@ -261,6 +261,19 @@ native trial timed out at1800seconds; the final distributed-commit probe is
 different input and does not resolve that inherited cost. No M2,
 review, physical-device, deployment or release gate is closed by this stage.
 
+### Next prerequisite: original signed compaction heads, 2026-11-08
+
+The actual Astra [decision](decisions/compaction-heads-2026-11-08/decision.md)
+and [bounded task](decisions/compaction-heads-2026-11-08/implementation-task.md)
+are ready only for later implementation. Actual compact can prune a final
+data-only original whose exact signature/hash/HLC a future checkpoint needs.
+The next four-file slice must preserve exact heads in a bounded local cache
+and finish durable snapshot/record/cache publication before pruning, with fresh
+locked compaction inputs. This supplies evidence for future export and does not
+make gapped histories or runtime onboarding valid. See the
+[controller binding](decisions/compaction-heads-2026-11-08/controller-binding.md)
+for exact code-base equivalence and dated execution-state corrections.
+
 ### Decision and exact trust boundary
 
 Astra decision, 2026-11-07: implement **administrator-attested bootstrap** for a
