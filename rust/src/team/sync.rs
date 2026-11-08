@@ -10415,7 +10415,9 @@ mod compaction_heads_tests {
     struct ScopedGateResume(Option<mpsc::SyncSender<()>>);
     impl ScopedGateResume {
         fn release(&mut self) -> bool {
-            self.0.take().is_some_and(|sender| sender.try_send(()).is_ok())
+            self.0
+                .take()
+                .is_some_and(|sender| sender.try_send(()).is_ok())
         }
     }
     impl Drop for ScopedGateResume {
@@ -10437,7 +10439,11 @@ mod compaction_heads_tests {
             metadata.permissions().mode() & 0o777
         };
         #[cfg(not(unix))]
-        let mode = if metadata.permissions().readonly() { 0o444 } else { 0o666 };
+        let mode = if metadata.permissions().readonly() {
+            0o444
+        } else {
+            0o666
+        };
         Some((std::fs::read(path).unwrap(), mode))
     }
     fn scoped_gate_files(f: &Fixture) -> ScopedGateFiles {
@@ -10452,7 +10458,12 @@ mod compaction_heads_tests {
                     pending.push(path);
                 } else {
                     assert!(kind.is_file());
-                    let name = path.strip_prefix(&root).unwrap().to_str().unwrap().replace('\\', "/");
+                    let name = path
+                        .strip_prefix(&root)
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                        .replace('\\', "/");
                     files.insert(name, scoped_gate_file(&path).unwrap());
                 }
             }
@@ -10467,30 +10478,58 @@ mod compaction_heads_tests {
             hlc,
             &CommitStore::new(f.ctx.state, &f.env).vector().unwrap(),
             vec![json!({"op":"settings.update","sync_interval_seconds":interval})],
-        ).unwrap()
+        )
+        .unwrap()
     }
     fn scoped_gate_same_commit(actual: &Commit, expected: &Commit) {
         assert_eq!(actual.to_dict(), expected.to_dict());
-        assert_eq!(actual.canonical_json(false).unwrap(), expected.canonical_json(false).unwrap());
-        assert_eq!(actual.canonical_json(true).unwrap(), expected.canonical_json(true).unwrap());
+        assert_eq!(
+            actual.canonical_json(false).unwrap(),
+            expected.canonical_json(false).unwrap()
+        );
+        assert_eq!(
+            actual.canonical_json(true).unwrap(),
+            expected.canonical_json(true).unwrap()
+        );
         assert_eq!(actual.hash().unwrap(), expected.hash().unwrap());
         assert_eq!(actual.sig, expected.sig);
     }
     fn scoped_gate_cache_head(f: &Fixture, expected: &Commit) {
-        let cache = f.ctx.state.read_json(&format!("team/{}/compaction_heads.json", f.env), Value::Null).unwrap();
-        assert_eq!(cache["vector"], json!({f.fp.clone():expected.author_seq.value()}));
+        let cache = f
+            .ctx
+            .state
+            .read_json(
+                &format!("team/{}/compaction_heads.json", f.env),
+                Value::Null,
+            )
+            .unwrap();
+        assert_eq!(
+            cache["vector"],
+            json!({f.fp.clone():expected.author_seq.value()})
+        );
         let heads = cache["heads"].as_array().unwrap();
         assert_eq!(heads.len(), 1);
         let original = Commit::from_dict(&heads[0]["commit"]).unwrap();
         scoped_gate_same_commit(&original, expected);
         assert_eq!(heads[0]["hlc"], expected.hlc);
         assert_eq!(heads[0]["commit_hash"], expected.hash().unwrap());
-        assert!(commit::verify_commit(&original, &f.team.device.record().unwrap()));
+        assert!(commit::verify_commit(
+            &original,
+            &f.team.device.record().unwrap()
+        ));
     }
     fn scoped_gate_env_view(env: &EnvState) -> Value {
-        let removals: BTreeMap<_, _> = env.facts.removal_facts.iter().map(|(hash, fact)| {
-            (hash.clone(), json!({"author":fact.author,"target":fact.target,"hlc":fact.hlc}))
-        }).collect();
+        let removals: BTreeMap<_, _> = env
+            .facts
+            .removal_facts
+            .iter()
+            .map(|(hash, fact)| {
+                (
+                    hash.clone(),
+                    json!({"author":fact.author,"target":fact.target,"hlc":fact.hlc}),
+                )
+            })
+            .collect();
         json!({
             "document":env.document,
             "disabled":env.facts.disabled_connections.iter().collect::<BTreeSet<_>>(),
@@ -10507,20 +10546,34 @@ mod compaction_heads_tests {
 
     #[test]
     fn compaction_heads_deferred_prefilter_stale_forward_receipt_uses_locked_sequence() {
-        for row in ["matching", "conflicting", "pruned", "next-good", "next-equal", "next-lower", "next-local-error", "still-gap"] {
+        for row in [
+            "matching",
+            "conflicting",
+            "pruned",
+            "next-good",
+            "next-equal",
+            "next-lower",
+            "next-local-error",
+            "still-gap",
+        ] {
             let f = Fixture::new();
             let store = CommitStore::new(f.ctx.state, &f.env);
-            let originals: Vec<_> = (1..=3).map(|seq| {
-                let entry = store.get(&f.fp, seq).unwrap().unwrap();
-                let physical = std::fs::read(f.path(seq)).unwrap();
-                let signed = entry.canonical_json(false).unwrap();
-                let hashed = entry.canonical_json(true).unwrap();
-                let hash = entry.hash().unwrap();
-                (entry, physical, signed, hashed, hash)
-            }).collect();
+            let originals: Vec<_> = (1..=3)
+                .map(|seq| {
+                    let entry = store.get(&f.fp, seq).unwrap().unwrap();
+                    let physical = std::fs::read(f.path(seq)).unwrap();
+                    let signed = entry.canonical_json(false).unwrap();
+                    let hashed = entry.canonical_json(true).unwrap();
+                    let hash = entry.hash().unwrap();
+                    (entry, physical, signed, hashed, hash)
+                })
+                .collect();
             assert_eq!(f.team.compact(&f.env).unwrap()["removed"], 2);
             scoped_gate_cache_head(&f, &originals[2].0);
-            assert_eq!(store.vector().unwrap(), BTreeMap::from([(f.fp.clone(), 3.into())]));
+            assert_eq!(
+                store.vector().unwrap(),
+                BTreeMap::from([(f.fp.clone(), 3.into())])
+            );
             let hlc = match row {
                 "next-equal" => "1000003-0007",
                 "next-lower" => "1000002-0009",
@@ -10531,21 +10584,45 @@ mod compaction_heads_tests {
             let hashed = deferred.canonical_json(true).unwrap();
             let deferred_hash = deferred.hash().unwrap();
             let signature = deferred.sig.clone();
-            assert_eq!(commit::receive_commit(&store, &deferred, 0, Some(f.ctx.audit)).unwrap(), "deferred");
+            assert_eq!(
+                commit::receive_commit(&store, &deferred, 0, Some(f.ctx.audit)).unwrap(),
+                "deferred"
+            );
             let deferred_name = format!("deferred/{}-0000000005.json", f.fp);
-            let deferred_path = f.ctx.state.path.join(format!("team/{}/{}", f.env, deferred_name));
+            let deferred_path = f
+                .ctx
+                .state
+                .path
+                .join(format!("team/{}/{}", f.env, deferred_name));
             let saved_deferred = scoped_gate_file(&deferred_path).unwrap();
             if row != "still-gap" {
                 let fourth = scoped_gate_settings(&f, 4, "1000003-0007", 31);
-                assert_eq!(commit::receive_commit(&store, &fourth, 1_000_010, Some(f.ctx.audit)).unwrap(), "accepted");
+                assert_eq!(
+                    commit::receive_commit(&store, &fourth, 1_000_010, Some(f.ctx.audit)).unwrap(),
+                    "accepted"
+                );
                 assert_eq!(f.team.compact(&f.env).unwrap()["removed"], 1);
                 assert!(!f.path(4).exists());
                 scoped_gate_cache_head(&f, &fourth);
-                assert_eq!(store.vector().unwrap(), BTreeMap::from([(f.fp.clone(), 4.into())]));
+                assert_eq!(
+                    store.vector().unwrap(),
+                    BTreeMap::from([(f.fp.clone(), 4.into())])
+                );
             }
             assert_eq!(scoped_gate_file(&deferred_path).unwrap(), saved_deferred);
-            assert!(f.ctx.audit.iter_records().unwrap().iter().all(|e| e["event"] != "team_commit_rejected"));
-            assert!(scoped_gate_files(&f).keys().all(|name| !name.starts_with("rejected/")));
+            assert!(
+                f.ctx
+                    .audit
+                    .iter_records()
+                    .unwrap()
+                    .iter()
+                    .all(|e| e["event"] != "team_commit_rejected")
+            );
+            assert!(
+                scoped_gate_files(&f)
+                    .keys()
+                    .all(|name| !name.starts_with("rejected/"))
+            );
             let (entered_tx, entered_rx) = mpsc::sync_channel(1);
             let (resume_tx, resume_rx) = mpsc::sync_channel(1);
             if row == "still-gap" {
@@ -10556,7 +10633,13 @@ mod compaction_heads_tests {
                 thread::scope(|scope| {
                     let worker = scope.spawn(|| {
                         let _reset = ScopedGateReset::new();
-                        testing::scoped_pause(Boundary::DeferredPrefilterPassed, f.ctx.state.path.clone(), f.env.clone(), entered_tx, resume_rx);
+                        testing::scoped_pause(
+                            Boundary::DeferredPrefilterPassed,
+                            f.ctx.state.path.clone(),
+                            f.env.clone(),
+                            entered_tx,
+                            resume_rx,
+                        );
                         let outcome = store.release_deferred(1_000_010, Some(f.ctx.audit));
                         let events = testing::events();
                         let held = f.ctx.state.locked_by_current_thread();
@@ -10572,7 +10655,10 @@ mod compaction_heads_tests {
                     assert!(outcome.unwrap().is_empty());
                     assert!(events.is_empty());
                     assert!(!held);
-                    assert!(matches!(entered_rx.try_recv(), Err(mpsc::TryRecvError::Disconnected)));
+                    assert!(matches!(
+                        entered_rx.try_recv(),
+                        Err(mpsc::TryRecvError::Disconnected)
+                    ));
                 });
                 assert_eq!(scoped_gate_files(&f), before);
                 assert_eq!(f.ctx.audit.iter_records().unwrap(), audit_before);
@@ -10581,9 +10667,19 @@ mod compaction_heads_tests {
             thread::scope(|scope| {
                 let worker = scope.spawn(|| {
                     let _reset = ScopedGateReset::new();
-                    testing::scoped_pause(Boundary::DeferredPrefilterPassed, f.ctx.state.path.clone(), f.env.clone(), entered_tx, resume_rx);
+                    testing::scoped_pause(
+                        Boundary::DeferredPrefilterPassed,
+                        f.ctx.state.path.clone(),
+                        f.env.clone(),
+                        entered_tx,
+                        resume_rx,
+                    );
                     let outcome = store.release_deferred(1_000_010, Some(f.ctx.audit));
-                    (outcome, testing::events(), f.ctx.state.locked_by_current_thread())
+                    (
+                        outcome,
+                        testing::events(),
+                        f.ctx.state.locked_by_current_thread(),
+                    )
                 });
                 let mut resume = ScopedGateResume(Some(resume_tx));
                 let entered = entered_rx.recv_timeout(Duration::from_secs(5));
@@ -10593,8 +10689,14 @@ mod compaction_heads_tests {
                     if matches!(row, "matching" | "conflicting" | "pruned") {
                         let entry = if row == "conflicting" {
                             scoped_gate_settings(&f, 5, "1000003-0008", 41)
-                        } else { deferred.clone() };
-                        assert_eq!(commit::receive_commit(&store, &entry, 1_000_010, Some(f.ctx.audit)).unwrap(), "accepted");
+                        } else {
+                            deferred.clone()
+                        };
+                        assert_eq!(
+                            commit::receive_commit(&store, &entry, 1_000_010, Some(f.ctx.audit))
+                                .unwrap(),
+                            "accepted"
+                        );
                         if row == "pruned" {
                             assert_eq!(f.team.compact(&f.env).unwrap()["removed"], 1);
                             assert!(!f.path(5).exists());
@@ -10602,9 +10704,18 @@ mod compaction_heads_tests {
                         }
                         competing = Some(entry);
                     }
-                    if matches!(row, "matching" | "conflicting" | "pruned" | "next-local-error") {
+                    if matches!(
+                        row,
+                        "matching" | "conflicting" | "pruned" | "next-local-error"
+                    ) {
                         let _lock = f.ctx.state.lock().unwrap();
-                        f.ctx.state.write_bytes(&format!("team/{}/compaction_heads.json", f.env), b"{synthetic-malformed-cache").unwrap();
+                        f.ctx
+                            .state
+                            .write_bytes(
+                                &format!("team/{}/compaction_heads.json", f.env),
+                                b"{synthetic-malformed-cache",
+                            )
+                            .unwrap();
                     }
                 }
                 let before_release = scoped_gate_files(&f);
@@ -10632,22 +10743,35 @@ mod compaction_heads_tests {
                         assert_eq!(released.len(), 1);
                         scoped_gate_same_commit(&released[0], &deferred);
                         let name = format!("commits/{}/5.json", f.fp);
-                        let bytes = pyjson::dumps(&deferred.to_dict(), DumpOptions::pretty_sorted()).unwrap().into_bytes();
+                        let bytes =
+                            pyjson::dumps(&deferred.to_dict(), DumpOptions::pretty_sorted())
+                                .unwrap()
+                                .into_bytes();
                         expected.insert(name, (bytes, saved_deferred.1));
-                    } else { assert!(released.is_empty()); }
+                    } else {
+                        assert!(released.is_empty());
+                    }
                     expected.remove(&deferred_name).unwrap();
                 }
                 if let Some(reason) = reason {
-                    let name = format!("rejected/{}-0000000005-{}.json", f.fp, &deferred_hash[..12]);
+                    let name =
+                        format!("rejected/{}-0000000005-{}.json", f.fp, &deferred_hash[..12]);
                     let actual = scoped_gate_files(&f).get(&name).unwrap().clone();
                     let mut value = pyjson::loads(std::str::from_utf8(&actual.0).unwrap()).unwrap();
-                    assert_eq!(value.as_object_mut().unwrap().remove("rejected_reason"), Some(json!(reason)));
+                    assert_eq!(
+                        value.as_object_mut().unwrap().remove("rejected_reason"),
+                        Some(json!(reason))
+                    );
                     assert_eq!(value, deferred.to_dict());
                     scoped_gate_same_commit(&Commit::from_dict(&value).unwrap(), &deferred);
                     assert_eq!(actual.1, saved_deferred.1);
                     expected.insert(name, actual);
                 }
-                assert_eq!(scoped_gate_files(&f), expected, "exact release inventory {row}");
+                assert_eq!(
+                    scoped_gate_files(&f),
+                    expected,
+                    "exact release inventory {row}"
+                );
                 let audit_after = f.ctx.audit.iter_records().unwrap();
                 assert_eq!(&audit_after[..audit_before.len()], audit_before.as_slice());
                 let suffix = &audit_after[audit_before.len()..];
@@ -10660,12 +10784,27 @@ mod compaction_heads_tests {
                     assert_eq!(event["env_id"], f.env);
                     assert_eq!(event["fingerprint"], f.fp);
                     assert_eq!(event["author_seq"], 5);
-                } else { assert!(suffix.is_empty()); }
-                let last = if matches!(row, "matching" | "conflicting" | "pruned" | "next-good") { 5 } else { 4 };
-                assert_eq!(store.vector().unwrap(), BTreeMap::from([(f.fp.clone(), last.into())]));
-                let live_names: Vec<_> = scoped_gate_files(&f).keys().filter(|name| name.starts_with("commits/")).cloned().collect();
+                } else {
+                    assert!(suffix.is_empty());
+                }
+                let last = if matches!(row, "matching" | "conflicting" | "pruned" | "next-good") {
+                    5
+                } else {
+                    4
+                };
+                assert_eq!(
+                    store.vector().unwrap(),
+                    BTreeMap::from([(f.fp.clone(), last.into())])
+                );
+                let live_names: Vec<_> = scoped_gate_files(&f)
+                    .keys()
+                    .filter(|name| name.starts_with("commits/"))
+                    .cloned()
+                    .collect();
                 let mut expected_live = vec![format!("commits/{}/1.json", f.fp)];
-                if matches!(row, "matching" | "conflicting" | "next-good") { expected_live.push(format!("commits/{}/5.json", f.fp)); }
+                if matches!(row, "matching" | "conflicting" | "next-good") {
+                    expected_live.push(format!("commits/{}/5.json", f.fp));
+                }
                 assert_eq!(live_names, expected_live);
                 if let Some(entry) = competing.filter(|_| row != "pruned") {
                     scoped_gate_same_commit(&store.get(&f.fp, 5).unwrap().unwrap(), &entry);
@@ -10682,15 +10821,34 @@ mod compaction_heads_tests {
                 }
                 let loaded = crate::team::membership::load_environment(&f.ctx, &f.env).unwrap();
                 assert_eq!(loaded.version_order["gone"], json!([VERSION]));
-                assert_eq!(loaded.document["secrets"]["gone"]["versions"][VERSION]["status"], "staged");
-                assert_eq!(loaded.document["settings"]["sync_interval_seconds"], if row == "conflicting" { 41 } else if matches!(row, "matching" | "pruned" | "next-good") { 37 } else { 31 });
+                assert_eq!(
+                    loaded.document["secrets"]["gone"]["versions"][VERSION]["status"],
+                    "staged"
+                );
+                assert_eq!(
+                    loaded.document["settings"]["sync_interval_seconds"],
+                    if row == "conflicting" {
+                        41
+                    } else if matches!(row, "matching" | "pruned" | "next-good") {
+                        37
+                    } else {
+                        31
+                    }
+                );
                 if row != "next-local-error" {
                     let before_repeat = scoped_gate_files(&f);
                     let audit_before_repeat = f.ctx.audit.iter_records().unwrap();
-                    assert!(store.release_deferred(1_000_010, Some(f.ctx.audit)).unwrap().is_empty());
+                    assert!(
+                        store
+                            .release_deferred(1_000_010, Some(f.ctx.audit))
+                            .unwrap()
+                            .is_empty()
+                    );
                     assert_eq!(scoped_gate_files(&f), before_repeat);
                     assert_eq!(f.ctx.audit.iter_records().unwrap(), audit_before_repeat);
-                } else { assert_eq!(scoped_gate_file(&deferred_path).unwrap(), saved_deferred); }
+                } else {
+                    assert_eq!(scoped_gate_file(&deferred_path).unwrap(), saved_deferred);
+                }
             });
         }
     }
@@ -10705,14 +10863,21 @@ mod compaction_heads_tests {
                 let mut envs = f.team.envs.lock().unwrap();
                 let env = envs.get_mut(&f.env).unwrap();
                 env.hlc = Hlc::new(1, 0);
-                env.sessions.insert(observer.peer.fingerprint(), observer.clone());
+                env.sessions
+                    .insert(observer.peer.fingerprint(), observer.clone());
                 assert!(env.fact_hashes.is_empty() && env.known_fact_lines == 0);
                 scoped_gate_env_view(env)
             };
             assert!(f.team.deferred_sends.lock().unwrap().is_empty());
             if row == "corrupt" {
                 let _lock = f.ctx.state.lock().unwrap();
-                f.ctx.state.write_bytes(&format!("team/{}/compaction_heads.json", f.env), b"{synthetic-malformed-cache").unwrap();
+                f.ctx
+                    .state
+                    .write_bytes(
+                        &format!("team/{}/compaction_heads.json", f.env),
+                        b"{synthetic-malformed-cache",
+                    )
+                    .unwrap();
             }
             let disk = scoped_gate_files(&f);
             let audit_path = f.ctx.state.path.join(crate::audit::AUDIT_FILE);
@@ -10726,19 +10891,41 @@ mod compaction_heads_tests {
                 let worker = scope.spawn(|| {
                     let _reset = ScopedGateReset::new();
                     testing::set_author_wall(Some(1));
-                    testing::scoped_pause(Boundary::CacheOpenedBeforeRead, f.ctx.state.path.clone(), f.env.clone(), entered_tx, resume_rx);
-                    let first = f.team.sign_authorized_fact(&f.env, "secret_deleted", json!({"secret_id":"gone"}));
+                    testing::scoped_pause(
+                        Boundary::CacheOpenedBeforeRead,
+                        f.ctx.state.path.clone(),
+                        f.env.clone(),
+                        entered_tx,
+                        resume_rx,
+                    );
+                    let first = f.team.sign_authorized_fact(
+                        &f.env,
+                        "secret_deleted",
+                        json!({"secret_id":"gone"}),
+                    );
                     let held_first = f.ctx.state.locked_by_current_thread();
                     let second = if first.is_ok() {
-                        Some(f.team.sign_authorized_fact(&f.env, "secret_deleted", json!({"secret_id":"gone"})))
-                    } else { None };
+                        Some(f.team.sign_authorized_fact(
+                            &f.env,
+                            "secret_deleted",
+                            json!({"secret_id":"gone"}),
+                        ))
+                    } else {
+                        None
+                    };
                     let held_second = f.ctx.state.locked_by_current_thread();
                     let events = testing::events();
                     // Rearming proves the first one-shot scope AND pause were
                     // consumed. Reset guard clears this unused new arm on exit.
                     let (check_tx, _check_rx) = mpsc::sync_channel(1);
                     let (_check_resume_tx, check_resume_rx) = mpsc::sync_channel(1);
-                    testing::scoped_pause(Boundary::CacheOpenedBeforeRead, f.ctx.state.path.clone(), f.env.clone(), check_tx, check_resume_rx);
+                    testing::scoped_pause(
+                        Boundary::CacheOpenedBeforeRead,
+                        f.ctx.state.path.clone(),
+                        f.env.clone(),
+                        check_tx,
+                        check_resume_rx,
+                    );
                     done_tx.send(()).unwrap();
                     (first, second, held_first, held_second, events)
                 });
@@ -10753,7 +10940,9 @@ mod compaction_heads_tests {
                         let env = envs.get_mut(&f.env).unwrap();
                         paused_view = Some(scoped_gate_env_view(env));
                         paused_clock = Some(env.hlc.render());
-                        if row == "remembered-advances" { env.hlc.observe("1000003-0041").unwrap(); }
+                        if row == "remembered-advances" {
+                            env.hlc.observe("1000003-0041").unwrap();
+                        }
                     }
                 }
                 let disk_during = scoped_gate_files(&f);
@@ -10785,7 +10974,11 @@ mod compaction_heads_tests {
                 } else {
                     let first = first.unwrap();
                     let second = second.unwrap().unwrap();
-                    let clocks = if row == "remembered-advances" { ["1000003-0042", "1000003-0043"] } else { ["1000002-0008", "1000002-0009"] };
+                    let clocks = if row == "remembered-advances" {
+                        ["1000003-0042", "1000003-0043"]
+                    } else {
+                        ["1000002-0008", "1000002-0009"]
+                    };
                     for (fact, expected_hlc) in [&first, &second].into_iter().zip(clocks) {
                         assert_eq!(fact.format, FACT_FORMAT);
                         assert_eq!(fact.env_id, f.env);
@@ -10812,5 +11005,4 @@ mod compaction_heads_tests {
             });
         }
     }
-
 }

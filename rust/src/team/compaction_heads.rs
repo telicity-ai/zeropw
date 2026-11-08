@@ -789,7 +789,10 @@ pub(super) mod testing {
     pub(crate) fn hit_scoped(boundary: Boundary, state: &StateDir, env_id: &str) -> Result<()> {
         let armed = TRACE.with(|trace| {
             let mut trace = trace.borrow_mut();
-            if trace.pause.as_ref().is_some_and(|(at, _, _)| *at == boundary)
+            if trace
+                .pause
+                .as_ref()
+                .is_some_and(|(at, _, _)| *at == boundary)
                 && trace
                     .scoped
                     .as_ref()
