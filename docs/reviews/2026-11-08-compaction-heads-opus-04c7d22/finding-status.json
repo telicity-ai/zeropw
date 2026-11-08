@@ -39,5 +39,13 @@
     }
   ],
   "all_global_holds": "unchanged OPEN; no service-review continuation or release/acceptance",
-  "scope_stop": "01requires change to frozen identity-source decision;02requires protected receipt contract decision;03Root can implement small in-scope preflight after selected compatibility policy. No source edit yet."
+  "scope_stop": "Bounded actual Astra decision now supplies01/02 contract; Root03 frozen as implemented/unvalidated. Separate exact-base source-only01/02 task permitted. No runtime grant or finding resolution.",
+  "controller_followup_2026_11_08": {
+    "Astra_decision_sha256": "59d17e08875b8a3f844f579c22a1f37926ef8e162c9f1152be4db768f81aeab1",
+    "Root03_commit": "10aac8748c472180d8dc59f9c362d525d610dedb",
+    "Root03_status": "IMPLEMENTED_UNVALIDATED_OPEN; all product execution/re-review NOTRUN",
+    "Sol01_02": "READY SOURCE_ONLY bounded five paths; not yet delegated at this record",
+    "runtime": "fresh Linux/macOS assignments not yet issued; native original HOLD retained",
+    "original_scope_stop_preserved": "01requires change to frozen identity-source decision;02requires protected receipt contract decision;03Root can implement small in-scope preflight after selected compatibility policy. No source edit yet."
+  }
 }
