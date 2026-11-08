@@ -1,0 +1,533 @@
+{
+  "archive": {
+    "all_entries_match_local_bytes_modes": true,
+    "regular_files": 261,
+    "sha256": "59e912b608c554f3f85bae61ab6942d2975baa173f2ec61c1a6b4af29dabda25",
+    "uncompressed_bytes": 28821211
+  },
+  "cache": {
+    "Cargo_lock_package_checksums_match_public_setup_DATA": true,
+    "generated_checksum_documents": 172,
+    "independent_live_cache_rehash": false,
+    "pinned_packages": 172,
+    "saved_forced_route_audits": "MATCH before/after; counts/UID/privileges and source observations verified",
+    "upstream_files": 8194
+  },
+  "catalogue": {
+    "all_hash_length_modes_match": true,
+    "bytes": 28770532,
+    "files": 260
+  },
+  "collector": "gpt-6.1-sol / ultra",
+  "collector_only_corrections": [
+    "Initial metadata reader assumed catalogue.files dictionary; actual list. Corrected DATA parser only; no source/evidence mutation."
+  ],
+  "failure_disposition": {
+    "account_unavailable_explicit_failures": 3,
+    "bound_setup_shell": "/usr/sbin/nologin",
+    "fourth_failure": "SSH-client status assertion, blank stderr",
+    "inference": "Consistent with runner-account prerequisite only. No live account query, causal diagnosis, product clearance or rerun performed. Original FAIL retained."
+  },
+  "features": {
+    "after": "NOTRUN",
+    "before_sha256": "84f9ca7320bd9beb87d293ea74b3b268339709acb1ff05c6c916d7a4c2dc4308",
+    "comparison": "NOTRUN",
+    "raw_value_before": false
+  },
+  "fixtures": {
+    "team_checkpoint_m2b2_v1": {
+      "catalogue_sha256": "950e7bc521197d24dc9d86ae60438fba3beb5901c4627f34c70926887bae1fcf",
+      "entries": 97
+    },
+    "team_checkpoint_required_generations_v1": {
+      "catalogue_sha256": "76deb4be8ad0d9cca38cf623e8a98ee008302bc328d4b19bd6e28628bd0b8e19",
+      "entries": 57
+    },
+    "team_checkpoint_semantics_v1": {
+      "catalogue_sha256": "74877c9b8a930aa21a0c3a8fc5cf3519e11c97c6cd13ba1e3a6107235e19a199",
+      "entries": 149
+    },
+    "team_checkpoint_v1": {
+      "catalogue_sha256": "a5981856f26e687352a97836372816eaba0f98c285f8a8a41645678c8f8ebc88",
+      "entries": 145
+    }
+  },
+  "full_matrix": {
+    "explicit_signer_probes_all_pass": true,
+    "failed": 4,
+    "failed_steps": [
+      {
+        "exit": 101,
+        "step": "test:native_cli_e2e"
+      },
+      {
+        "exit": 101,
+        "step": "test:signer_e2e"
+      }
+    ],
+    "failed_tests": [
+      "test_ssh_connection_through_admin_serve_agent_processes_and_real_sshd",
+      "test_ssh_connection_without_its_ssh_is_repaired_in_place",
+      "exec_tool_runs_two_remote_commands_on_one_connection",
+      "real_ssh_client_authenticates_through_signer_without_private_key"
+    ],
+    "ignored": 5,
+    "ordered_steps": 111,
+    "passed": 1812,
+    "raw_stdout_sha256": "c48fa00eda0ad47516c2f183de9a784568eea514b195c6f0a4d2d0d04c2e7f25",
+    "successful_steps": 109,
+    "summaries": 114,
+    "targets": 106
+  },
+  "own_lifecycle": {
+    "all_28_saved_UID_residual_checks_empty": true,
+    "joined_transports": 31,
+    "own_job_state": "RELEASED",
+    "product_children": 28,
+    "receipt_sha256": "699116124e9d52e591edbe60ad7a085773de4aa166131fbce3465e1902684ac7",
+    "scope": "Saved own-job receipts only; no live query, whole-VM stop/idle or physical-erasure assertion",
+    "timestamp": "2026-11-08T01:17:54.623061+00:00",
+    "transports": [
+      {
+        "exit": 0,
+        "file": "00-features-before.transport.json",
+        "joined": true,
+        "sha256": "fc2edf991aa428d170f7223a671f0f833896de333410b8e48ef01ba39123d14e"
+      },
+      {
+        "exit": 0,
+        "file": "01-new-debug-compile.transport.json",
+        "joined": true,
+        "sha256": "f90b841f23c6b20c7264e064c5a0ff874e209eb85628b1fd3fa9785ee612e105"
+      },
+      {
+        "exit": 0,
+        "file": "02-new-release-compile.transport.json",
+        "joined": true,
+        "sha256": "1ab9f5165ba3a2b1839a7974a073b0a844b38d6166cb5a0523b64fbe1971b799"
+      },
+      {
+        "exit": 0,
+        "file": "03-required-debug.transport.json",
+        "joined": true,
+        "sha256": "d9426a13b6e5a6853c7b08ba13a35956e2983502f1b578a3775c86edc735c97b"
+      },
+      {
+        "exit": 0,
+        "file": "04-oracle-debug.transport.json",
+        "joined": true,
+        "sha256": "51948f14bdd42352cdcf4bb384d645951ffa12c6e00a6943475135b9ceb0cc79"
+      },
+      {
+        "exit": 0,
+        "file": "05-new-release.transport.json",
+        "joined": true,
+        "sha256": "46bdc8af81cc495a1b9d6b775dcd09cf98d30680d92756138481d4f318c4e9c9"
+      },
+      {
+        "exit": 0,
+        "file": "06-envelope-debug.transport.json",
+        "joined": true,
+        "sha256": "0ef63ccb51765e48d3a1060e8a697e796b2c28ae3bcacbcb9b653c0156b7c2ce"
+      },
+      {
+        "exit": 0,
+        "file": "07-checkpoint-debug.transport.json",
+        "joined": true,
+        "sha256": "7659b5fe9c5e3e0bef3b1149d67ba2103c2c5b33b6b8d44e75f1eab7549d2277"
+      },
+      {
+        "exit": 0,
+        "file": "08-checkpoint-release.transport.json",
+        "joined": true,
+        "sha256": "0b6883d2741083fabe8c412ca061b309902772c3e389ba2c24fb4c8daca315b1"
+      },
+      {
+        "exit": 0,
+        "file": "09-old-semantics.transport.json",
+        "joined": true,
+        "sha256": "7f30912dc8ef4ae05e10004900c4af60384547a670a18aea4a3878b815aea047"
+      },
+      {
+        "exit": 0,
+        "file": "10-old-authority.transport.json",
+        "joined": true,
+        "sha256": "ac208c738776ff8069ea3506c47bc3b531ec7e9d15cb9f2dadb72184b936b00f"
+      },
+      {
+        "exit": 0,
+        "file": "11-old-parser.transport.json",
+        "joined": true,
+        "sha256": "f65ee2b6293e12459f072dfeaabdda438cce1f61806847b789a6941abd842398"
+      },
+      {
+        "exit": 0,
+        "file": "12-m1-tombstone.transport.json",
+        "joined": true,
+        "sha256": "efd4e06d8c95683d94e8315adabaffb6996c80d6c085e1bfe68988c8008fce78"
+      },
+      {
+        "exit": 0,
+        "file": "13-debug-exact-1.transport.json",
+        "joined": true,
+        "sha256": "a4a41e41aa89d424b0c30420c3cb19c9f2cbaf5c2c8dee9a698af0966be9936c"
+      },
+      {
+        "exit": 0,
+        "file": "14-debug-exact-2.transport.json",
+        "joined": true,
+        "sha256": "8c1e37081163d22f74e76931593734f0e1e6033c9f610252526163f3f6a21570"
+      },
+      {
+        "exit": 0,
+        "file": "15-debug-exact-3.transport.json",
+        "joined": true,
+        "sha256": "890f797e4de6d27f8dc2e0c0942e9b299ef32e2514b9a235076bd719350698e3"
+      },
+      {
+        "exit": 0,
+        "file": "16-debug-exact-4.transport.json",
+        "joined": true,
+        "sha256": "32a78f0921e6d750b7e9731bb075ce996faab71b4f044e78333af2fc758b628d"
+      },
+      {
+        "exit": 0,
+        "file": "17-debug-exact-5.transport.json",
+        "joined": true,
+        "sha256": "282c6816c540b84ffb45146720d5b50399ba3a440734856cc1e6c518d3a79713"
+      },
+      {
+        "exit": 0,
+        "file": "18-debug-exact-6.transport.json",
+        "joined": true,
+        "sha256": "3b63c728d07b26d2653882cc113fbe96623961bfeccf0756757c73c578ea9746"
+      },
+      {
+        "exit": 0,
+        "file": "19-debug-exact-7.transport.json",
+        "joined": true,
+        "sha256": "d1acf832a7eed6fd5e4bd2ea7e9ac2376ea03c2ab3b28ac6afac30e96d58b5ea"
+      },
+      {
+        "exit": 0,
+        "file": "20-release-exact-1.transport.json",
+        "joined": true,
+        "sha256": "18296e31b8b05f509f16d750735f6809800707a8a3414ee460ebce615594418c"
+      },
+      {
+        "exit": 0,
+        "file": "21-release-exact-2.transport.json",
+        "joined": true,
+        "sha256": "9ae6b2e474cc97685b6e26a239754a4ba367188e33a413d268336614c264b131"
+      },
+      {
+        "exit": 0,
+        "file": "22-release-exact-3.transport.json",
+        "joined": true,
+        "sha256": "8e4a7452325f71b8fae6bd42b34b92093a09eb551f458e13c63314c9c8f19d2a"
+      },
+      {
+        "exit": 0,
+        "file": "23-release-exact-4.transport.json",
+        "joined": true,
+        "sha256": "8c8324128be2d19fbf2e949792f00a278b6007f44c2c37563316b65c30663f05"
+      },
+      {
+        "exit": 0,
+        "file": "24-release-exact-5.transport.json",
+        "joined": true,
+        "sha256": "4f951be793d0e2e344a8c2f6899f1e80976ed570a8a9bfb761eb3002efdff523"
+      },
+      {
+        "exit": 0,
+        "file": "25-release-exact-6.transport.json",
+        "joined": true,
+        "sha256": "07c6f6d9d3b4dc4bf6b9a015c9f678e8f243c596871aaf81490b3705f98f0c29"
+      },
+      {
+        "exit": 0,
+        "file": "26-release-exact-7.transport.json",
+        "joined": true,
+        "sha256": "d5fa4c78a016ce3152883fea4354f1690c6ffe0dca031048c65a7f9cfd817dd2"
+      },
+      {
+        "exit": 125,
+        "file": "27-full-matrix.transport.json",
+        "joined": true,
+        "sha256": "a6cd20863fa7cdf5d68aabd5f94a10d61fc03d67498d585e7a04fa289a96a456"
+      },
+      {
+        "exit": 0,
+        "file": "audit-after.transport.json",
+        "joined": true,
+        "sha256": "07818906ee8f5a23e853c4177f64d4286726f05c3cc6b4cd4b7c598c56186ce6"
+      },
+      {
+        "exit": 0,
+        "file": "audit-before.transport.json",
+        "joined": true,
+        "sha256": "dff802b7d1ba9412470ab9432198b9afd88bdbb33be5f1d566a3b84c006f8d5f"
+      },
+      {
+        "exit": 0,
+        "file": "collect-bundle.transport.json",
+        "joined": true,
+        "sha256": "e060708c26bac62beb6ff3b0b4dfe75e43291ae7670fa9a49c43df94193bd27e"
+      }
+    ]
+  },
+  "phases": {
+    "all_28_source_and_wait_receipts_match": true,
+    "all_exact_actual_one_pass": true,
+    "exact_selectors": 14,
+    "failed": 1,
+    "notrun": 1,
+    "notrun_phase": "28-features-after",
+    "passed": 27,
+    "receipts": [
+      {
+        "driver_exit": 0,
+        "kind": "features",
+        "own_wait_and_residual_check": true,
+        "phase": "00-features-before",
+        "sha256": "eb8373e0142a4639de9dae150d3583e87149735b98103155534927c335d115b7",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "kind": "compile",
+        "own_wait_and_residual_check": true,
+        "phase": "01-new-debug-compile",
+        "sha256": "60156e3acbeb787f54669493a463ac9b0289dbd3e7ba28aedb5c3661907087f9",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "kind": "compile",
+        "own_wait_and_residual_check": true,
+        "phase": "02-new-release-compile",
+        "sha256": "4bb83d80bbc0ae3d33bfb24d8a25a44010b16c78f071538bea72af58645c2834",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "kind": "tests",
+        "own_wait_and_residual_check": true,
+        "phase": "03-required-debug",
+        "sha256": "b882fa3ee36512a2d74a15b2edf91fb23d46aee49005ffc8fdd7b80b4b8da4a8",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "kind": "tests",
+        "own_wait_and_residual_check": true,
+        "phase": "04-oracle-debug",
+        "sha256": "15261d70befb5a5b50debd78226cf5b52269d9e851cb982c107a80e529a3d8dc",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "kind": "tests",
+        "own_wait_and_residual_check": true,
+        "phase": "05-new-release",
+        "sha256": "f61533d6ff1fedb9db1386a03539ac62c95dd973a9b6645a4d0429a2c8d27a7e",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "kind": "tests",
+        "own_wait_and_residual_check": true,
+        "phase": "06-envelope-debug",
+        "sha256": "c1ec124eaf34159148550c8b1f5ffa2a37258032d4ad59d51289b7baab417e3e",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "kind": "tests",
+        "own_wait_and_residual_check": true,
+        "phase": "07-checkpoint-debug",
+        "sha256": "eae74a1a7f9c7070aaa36ee83a97c881e15ffca4f896773d844d25ce3a2a1fae",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "kind": "tests",
+        "own_wait_and_residual_check": true,
+        "phase": "08-checkpoint-release",
+        "sha256": "39b78f63c2e127010b8ed4055e9359b0d4e7263ca346c2ff7541e04a8e802717",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "kind": "tests",
+        "own_wait_and_residual_check": true,
+        "phase": "09-old-semantics",
+        "sha256": "196c3f60c0f79116de1add23a8adb90225f4bf446edd30c508732f150518e283",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "kind": "tests",
+        "own_wait_and_residual_check": true,
+        "phase": "10-old-authority",
+        "sha256": "1b9a6aad6d62b59b22b8a35396c787c4ec67c660ba1745103b7d85615e463487",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "kind": "tests",
+        "own_wait_and_residual_check": true,
+        "phase": "11-old-parser",
+        "sha256": "2bfd60a78f17f06f5add40d5c13b69aa17e4f766e01985073148b40d4b1f29c5",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "kind": "tests",
+        "own_wait_and_residual_check": true,
+        "phase": "12-m1-tombstone",
+        "sha256": "66ad3aad155a3ce17a7646c655c4b5d811486864fee28b739cf09c675ed9d554",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "kind": "exact",
+        "own_wait_and_residual_check": true,
+        "phase": "13-debug-exact-1",
+        "sha256": "d1f397a539d65abf2ce6609b3c6d836d011877cff388b50898f65300d027cc5f",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "kind": "exact",
+        "own_wait_and_residual_check": true,
+        "phase": "14-debug-exact-2",
+        "sha256": "50fe33fb7d8efc2b1986f533a12758eae329d0bea33feb5fd4744b26d1a3f3ca",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "kind": "exact",
+        "own_wait_and_residual_check": true,
+        "phase": "15-debug-exact-3",
+        "sha256": "fb446cb55c60ca4b5961729c63174d150f999eb044c34c9027ed7dd8362f6b9a",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "kind": "exact",
+        "own_wait_and_residual_check": true,
+        "phase": "16-debug-exact-4",
+        "sha256": "247b1b67735be1fdcc9734c6cdb639cd36507afeb2887fa27e4c4034bced4db3",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "kind": "exact",
+        "own_wait_and_residual_check": true,
+        "phase": "17-debug-exact-5",
+        "sha256": "5fa1273bb16f40160eaf50fca9b5be93479e101ea6285ac78fe9fbdb9f426085",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "kind": "exact",
+        "own_wait_and_residual_check": true,
+        "phase": "18-debug-exact-6",
+        "sha256": "3e5bd67121428f609f16211d1959432518fbe06fe431e0571c6c10c60b7e5333",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "kind": "exact",
+        "own_wait_and_residual_check": true,
+        "phase": "19-debug-exact-7",
+        "sha256": "5ba4f3caaa3253bb6764ad2ca35cb3b766d951e9b38ea69a129c35c50baa84d9",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "kind": "exact",
+        "own_wait_and_residual_check": true,
+        "phase": "20-release-exact-1",
+        "sha256": "08b9964be66c02ff03356e8a11499fdaa8b33649714eaf12e9580c55ff7f680a",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "kind": "exact",
+        "own_wait_and_residual_check": true,
+        "phase": "21-release-exact-2",
+        "sha256": "53c4e95fe825122070cd44aae1ebdc6775f7a1b20d7e994e36b48e2e540b399f",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "kind": "exact",
+        "own_wait_and_residual_check": true,
+        "phase": "22-release-exact-3",
+        "sha256": "2881aa7b11b80264633ca30ca887137090dbdba2f4502907211a0688f0f42762",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "kind": "exact",
+        "own_wait_and_residual_check": true,
+        "phase": "23-release-exact-4",
+        "sha256": "080d333554e3677f1d9c7a47239e7c4c67e43a20e3351d99f313853591f3519f",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "kind": "exact",
+        "own_wait_and_residual_check": true,
+        "phase": "24-release-exact-5",
+        "sha256": "0f852108b46723bfdc0b9e578c3becc793885b20754a5bf40dbd3fad00ed52d2",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "kind": "exact",
+        "own_wait_and_residual_check": true,
+        "phase": "25-release-exact-6",
+        "sha256": "94741507065922bec5fd166a87e8d4f95956786a7de9d24e7c6d86b48d9a491a",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "kind": "exact",
+        "own_wait_and_residual_check": true,
+        "phase": "26-release-exact-7",
+        "sha256": "343e5767e87441b4b5cde2a91fe8ffeab20eb47f58cb347339428c012c8e2b1a",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 125,
+        "kind": "full",
+        "own_wait_and_residual_check": true,
+        "phase": "27-full-matrix",
+        "sha256": "f4557b27d021f23ecb4bf4fbfbdbdc26a37a189ffd10c2f8400daa1cb20240c9",
+        "test_exit": 1
+      }
+    ]
+  },
+  "privacy": {
+    "collector_variant_count": 66,
+    "limit": "Explicit synthetic fixture samples/encoding variants only; not universal secrecy, short/empty/arbitrary transformations excluded. No environment or production credential scan.",
+    "matches": 0,
+    "raw_bytes": 271199,
+    "raw_streams": 117,
+    "sample_values_or_plaintext_hashes_output": false,
+    "samples": 10
+  },
+  "rust_tree": "4352ebbd0fa84bde0fb444c4d0902ef2510d0620",
+  "scope": "Independent stdlib DATA/hash/archive/Git-read collection only; no VM/runtime/source execution or review/acceptance",
+  "source": {
+    "archive_git_manifest_host_and_all_receipts_match": true,
+    "files": 1338,
+    "prep_frozen_files": 54
+  },
+  "source_head": "7d27fd7ec500e36f0e5cc548325e1ae5b34864d8",
+  "unchanged_holds": "Native wide-single-commit TIMEOUT1800s stays incomplete. Linux FAIL; feature-after NOTRUN. DOS-1 HIGH and all M2/runtime/review/physical/Oracle/release gates remain OPEN; old Go case12 custody/cancellation hold unchanged.",
+  "worker_result": "FAIL / stopped / incomplete"
+}

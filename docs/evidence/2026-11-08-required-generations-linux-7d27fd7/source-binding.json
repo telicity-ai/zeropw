@@ -1,0 +1,17 @@
+{
+  "all_28_executed_guest_source_before_after_exact": true,
+  "before_after_fixture_catalogues_exact": true,
+  "desktop_tree": "2413844c89265a3e239be2372d34b1e6e1b2d4bb",
+  "feature_after": "NOTRUN",
+  "feature_before_raw_value_present": false,
+  "feature_comparison": "NOTRUN",
+  "full_tree": "329404aa15163928d9c61c43020b5e3764eac9ad",
+  "head": "7d27fd7ec500e36f0e5cc548325e1ae5b34864d8",
+  "host_before_after_exact": true,
+  "public_cache_audits_before_after_match": true,
+  "rust_tree": "4352ebbd0fa84bde0fb444c4d0902ef2510d0620",
+  "source_archive_sha256": "17e95b2c58bcdc0baadcc6e2f547692baa8c872e641dd4beaba338c9850243f4",
+  "source_files": 1338,
+  "source_manifest_sha256": "7e6387f6709cd8cf8ab01a17b6fb0d9468fa509d71e74df4a87066f5f76c1cca",
+  "source_ref_index_edits": false
+}

@@ -1,0 +1,103 @@
+{
+  "archive": {
+    "all_member_bytes_modes_match_local": true,
+    "bytes": 29915,
+    "regular_entries": 44,
+    "sha256": "09e03c0ed8001f157af35a935eed36c8d27e66237fa52d5a4492518603143258"
+  },
+  "catalogue": {
+    "all_hashes_lengths_modes_match": true,
+    "bytes": 80019,
+    "files": 43,
+    "sha256": "c1a1b5864b584daa55e858afa379c9154c2a2a4763533005eab3b1fb98dd71ea",
+    "sha256sums_entries_verified": 45
+  },
+  "collector": {
+    "kind": "independent read-only DATA/Git/hash/archive audit",
+    "model": "gpt-6.1-sol",
+    "reasoning_effort": "ultra",
+    "runtime": "T3 Code through Codex"
+  },
+  "collector_errors": [],
+  "collector_limitations": [
+    "No VM/account/process/SSH/cache/target/runtime query",
+    "No submitted source/helper/dependency/test/build execution",
+    "No private-key byte access or production credential inspection",
+    "No checkout/ref/index/source mutation",
+    "No adversarial review or acceptance",
+    "No new R2 runtime/feature/privacy/resource result; saved claims are not live state"
+  ],
+  "failure": {
+    "exception": "ModuleNotFoundError: No module named tomllib",
+    "failed_script_executed_by_collector": false,
+    "first_statement": "import hashlib,json,os,stat,subprocess,tarfile,tomllib",
+    "later_statements_executed": false,
+    "process_exit": 1,
+    "python_executable": "/Applications/Xcode.app/Contents/Developer/usr/bin/python3",
+    "python_version": "3.9.6",
+    "raw_stderr_sha256": "92ab57b90f7b833f753013f303bb1a122ba5a298b0036c85db1364c8e6ce6ffe",
+    "scope": "host DATA preflight only"
+  },
+  "holds": "All existing M2/runtime/review/physical/Oracle/release holds, native wide-commit1800s timeout, DOS-1 HIGH and old Go custody/cancellation/quarantine remain unchanged",
+  "input_bindings": {
+    "account_correction": {
+      "entries_verified": 15,
+      "sha256": "ff0d1d6937cb9435b227ad22fcc969203086be6f49cde986de97a2c96de50fdc"
+    },
+    "brief_sha256": "9c3035af54a677c639187ed1e92ae781dc17cd14bb3f4c541c338d58925eae34",
+    "entries_verified": 19,
+    "r2_preparation": {
+      "entries_verified": 14,
+      "sha256": "7df19c9fb35ddaae30af773e74fc866c8f933e120050d631f7be2dd828c9c4bd"
+    }
+  },
+  "own_release": {
+    "not_a_fresh_assigned_uid_census": true,
+    "saved_no_own_children_or_ssh_created": true,
+    "scope": "worker own runtime resources only",
+    "state": "RELEASED / NOT_STARTED",
+    "timestamp_utc": "2026-11-08T01:40:52.639171+00:00",
+    "whole_vm_stopped_released_or_idle_claim": false
+  },
+  "prior_linux": {
+    "archive_hash_still_matches": true,
+    "archive_sha256": "59e912b608c554f3f85bae61ab6942d2975baa173f2ec61c1a6b4af29dabda25",
+    "failed": 4,
+    "feature_after": "NOTRUN unchanged",
+    "ignored": 5,
+    "passed": 1812,
+    "result": "FAIL unchanged"
+  },
+  "runtime_evidence": {
+    "features_before_after": "NOTRUN",
+    "fresh_guest_audits": 0,
+    "new_privacy_scan": "NOTRUN",
+    "new_resource_measurements": "NOTRUN",
+    "phases_notrun": [
+      "30-features-before",
+      "31-native-cli-e2e",
+      "32-signer-e2e",
+      "33-full-matrix",
+      "34-features-after"
+    ],
+    "product_tests": 0,
+    "saved_phase_transport_release_records_internally_consistent": true,
+    "ssh_transports": 0
+  },
+  "schema": "zeropw-r2-host-preflight-static-collection-v1",
+  "source": {
+    "archive_sha256": "17e95b2c58bcdc0baadcc6e2f547692baa8c872e641dd4beaba338c9850243f4",
+    "assigned_guest_source_head": "7d27fd7ec500e36f0e5cc548325e1ae5b34864d8",
+    "assigned_source_tree": "329404aa15163928d9c61c43020b5e3764eac9ad",
+    "checkout_head": "06ab4784d9ac387307f96bc976df1bbc20de2bb1",
+    "checkout_tree": "006a9879da19ec21424e9a12d160a97f20b369b8",
+    "collector_data_comparison_is_not_worker_completed_preflight_or_guest_observation": true,
+    "desktop_tree": "2413844c89265a3e239be2372d34b1e6e1b2d4bb",
+    "documentation_only_diff_paths": 16,
+    "manifest_sha256": "7e6387f6709cd8cf8ab01a17b6fb0d9468fa509d71e74df4a87066f5f76c1cca",
+    "rust_tree": "4352ebbd0fa84bde0fb444c4d0902ef2510d0620",
+    "saved_source_manifest_archive_git_entries_independently_verified": 1338,
+    "worker_checkout_currently_clean": true
+  },
+  "worker_source_directory": "/Users/ys/Code/zeropw-mlp-evidence/required-generation-linux-shell-r2-sol-20261108/t3-b2a0ab8c"
+}

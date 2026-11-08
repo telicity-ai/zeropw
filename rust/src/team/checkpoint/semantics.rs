@@ -1,4 +1,8 @@
-//! Complete supplied cut analysis. No runtime authority is accepted or returned.
+//! Complete supplied cut analysis and a separate trusted-memory ciphertext stage.
+//! Neither stage grants runtime admission or credential-use authority.
+mod required_generations;
+pub use required_generations::{RequiredGenerationCandidate, verify_required_generations};
+
 use std::collections::BTreeMap;
 
 use serde_json::Value;

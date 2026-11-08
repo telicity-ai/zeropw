@@ -1,0 +1,19 @@
+{
+  "all_assigned_uid_idle_claim": false,
+  "all_own_runtime_handles_ended": true,
+  "execution_was_never_started": true,
+  "fresh_assigned_uid_census": "NOTRUN; no live SSH/UID query",
+  "hold_scope": "Validation prerequisite remains blocked; all product/service/review/release holds unchanged.",
+  "known_own_residuals": [],
+  "no_remote_calls_after_release": true,
+  "own_direct_ssh": "RELEASED / NONE_CREATED",
+  "own_open_runtime_handles": 0,
+  "own_product_children": 0,
+  "own_remote_processes_created": 0,
+  "own_ssh_transports": 0,
+  "own_worker_execution_job": "RELEASED / NOT_STARTED",
+  "physical_erasure_claim": false,
+  "timestamp_utc": "2026-11-08T01:40:52.639171+00:00",
+  "whole_vm": "coordinator/Root-owned; NOT_RELEASED or stopped by worker",
+  "whole_vm_stop_authority": "coordinator only"
+}

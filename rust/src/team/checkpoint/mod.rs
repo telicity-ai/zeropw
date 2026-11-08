@@ -1,8 +1,12 @@
-//! Pure bounded checkpoint attestation and integrity checks.
+//! Bounded checkpoint attestation, public semantics and trusted-memory
+//! ciphertext authentication.
 //!
 //! Attestation/integrity and retained-authority results have limited assurance.
 //! The complete-supplied-cut sibling additionally checks its finite semantic
-//! class and final overlay, with administrator-attested historical completeness. Snapshot onboarding remains unsupported; there is no runtime
+//! class and final overlay, with administrator-attested historical completeness.
+//! The separate required-generation stage checks ciphertext authentication in
+//! trusted key-bearing memory; it confers no credential-use or install authority.
+//! Snapshot onboarding remains unsupported; there is no runtime
 //! caller, installer, receipt, or credential authority in this module.
 //!
 //! Proof fields are private and JSON inspection cannot manufacture authority.
@@ -56,7 +60,10 @@ mod document;
 mod originals;
 mod removal;
 mod semantics;
-pub use semantics::{CompleteCutSemanticCandidate, verify_complete_cut_semantics};
+pub use semantics::{
+    CompleteCutSemanticCandidate, RequiredGenerationCandidate, verify_complete_cut_semantics,
+    verify_required_generations,
+};
 mod manifest;
 mod payload;
 mod provenance;

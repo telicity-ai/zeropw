@@ -1,0 +1,3 @@
+# Required-generation v1 synthetic fixtures
+
+Generated only in assigned Mac501 isolation. Eight finite cases independently check literal status/required inventories, exact original source positions, primitive DEK/plaintext bytes and ordinary complete folds before freezing. crypto-oracle.json intentionally contains synthetic keys and values. It is not a runtime output surface. The new stage authenticates retrieval bytes only, with no provider/SSH readiness, freshness, installation or runtime acceptance. Unselected history is not cryptographically assessed; identical DEKs under distinct generation labels share the unchanged secret AAD limitation. Linux NOTRUN; full M2/reviews/release OPEN.

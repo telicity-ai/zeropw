@@ -1,0 +1,11 @@
+
+running 6 tests
+test native_e2e::leakcheck_finds_raw_encoded_and_embedded_secrets ... ok
+test native_e2e::parse_message_decodes_encoded_subject_and_base64_body ... ok
+test test_http_connection_through_admin_serve_and_agent_processes ... ok
+test test_auto_lockdown_exposure_assessment_email_and_recovery ... ok
+test test_ssh_connection_without_its_ssh_is_repaired_in_place ... ok
+test test_ssh_connection_through_admin_serve_agent_processes_and_real_sshd ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.89s
+

@@ -1,0 +1,35 @@
+{
+  "artifacts": {
+    "changed-paths.json": {
+      "bytes": 6046,
+      "sha256": "ff3842ad1be94516d135c1c24dffe25d466790acdf8240a63c0438f53177a3e9"
+    },
+    "fixture-hashes-final.json": {
+      "bytes": 121482,
+      "sha256": "248515572ff0d725cc79203ce74817fd3c602ef2c620ee1308646ea30c69e6bc"
+    },
+    "full-source.tar.gz": {
+      "bytes": 7410148,
+      "sha256": "4835beb9e5889a20f2532ade0f5f27183937cb21fff3da9bba077a1e1d884e1c"
+    },
+    "source-final.json": {
+      "bytes": 354254,
+      "sha256": "81eef219b1adc03f1c450a4ffa7a5bf6a8f1c99f5c5c40235acefb177ed69018"
+    },
+    "source-final.tsv": {
+      "bytes": 238715,
+      "sha256": "d1c34c1b46705ead84c6a3d719eb6c74487c55aef59f43cc3085a693a05d5235"
+    },
+    "uncommitted.patch": {
+      "bytes": 422786,
+      "sha256": "def8afb05cc9861774bc13eea192c312deebc28e9af97362c41b85bee429c200"
+    }
+  },
+  "base_head_unchanged": "8ca2cf0163bc7b3c9681d9a0df4e9f4b81e820e0",
+  "changed_files": 65,
+  "computed_full_git_tree": "a9670b198e985c98d0247be749d6e08d89748bdc",
+  "computed_rust_git_tree": "4352ebbd0fa84bde0fb444c4d0902ef2510d0620",
+  "desktop_tree_unchanged": "2413844c89265a3e239be2372d34b1e6e1b2d4bb",
+  "final_is_uncommitted": true,
+  "source_files": 1328
+}

@@ -236,6 +236,47 @@ interactions, generation usability, runtime budgets and all M2 gates remain open
 Measured release process peaks include fixture/parser/prior-test state and reach
 1,050,672 KiB; this is not a transfer budget or Oracle capacity guarantee.
 
+### Required-generation source status, 2026-11-08
+
+The separate [required-generation stage](evidence/2026-11-08-required-generations-ee26e36/README.md)
+is collected at exact source `ee26e36997797fe9893ed9a8314ea497963961e2`, Rust tree
+`4352ebbd0fa84bde0fb444c4d0902ef2510d0620`. It checks required original DEKs and
+all final active/staged ciphertexts of nondeleted secrets, with exact full
+recipient binding and privately zeroizing keys. It is noninstallable and has no
+runtime caller, provider/SSH readiness, receipt/ACK or freshness authority.
+Virtual macOS passed unchanged111 steps/106 targets/1819 tests,0 failures,
+5 ignored (four signer probes separately passed; one fixture generator).
+All14 actual256KiB exact selectors each ran one passing test. Source/modes and
+protected fixtures matched; the assigned own native resource was released.
+The later [Linux attempt](evidence/2026-11-08-required-generations-linux-7d27fd7/README.md)
+ran111 steps/106 targets:1812 passed/4 failed/5 ignored, with two SSH targets
+failing under the coordinator-created nologin account. All14 exact selectors
+passed; feature-after is NOTRUN. The account was corrected with management-login
+denial and a preserved privilege boundary. A separate R2 worker stopped beforeSSH
+with missing hosttomllib (all five phasesNOTRUN); after a Python3.9 DATA fix,
+coordinator R2 targeted suites eachpassed6tests. The later unchanged R2 full
+verification passed111steps/106targets/1816tests,0failures,5ignored; feature bytes
+match exactly. The [independent collection](evidence/2026-11-08-required-generations-linux-7d27fd7/r2-runtime/finish/README.md)
+found no unresolved integrity gap, while retaining the worker handoff HOLD for
+post-SSH host DATA errors. The original FAIL and early R2 NOTRUN remain unchanged;
+acceptance is still INCOMPLETE. A valid wide single-commit
+native trial timed out at1800seconds; the final distributed-commit probe is
+different input and does not resolve that inherited cost. No M2,
+review, physical-device, deployment or release gate is closed by this stage.
+
+### Next prerequisite: original signed compaction heads, 2026-11-08
+
+The actual Astra [decision](decisions/compaction-heads-2026-11-08/decision.md)
+and [bounded task](decisions/compaction-heads-2026-11-08/implementation-task.md)
+are ready only for later implementation. Actual compact can prune a final
+data-only original whose exact signature/hash/HLC a future checkpoint needs.
+The next four-file slice must preserve exact heads in a bounded local cache
+and finish durable snapshot/record/cache publication before pruning, with fresh
+locked compaction inputs. This supplies evidence for future export and does not
+make gapped histories or runtime onboarding valid. See the
+[controller binding](decisions/compaction-heads-2026-11-08/controller-binding.md)
+for exact code-base equivalence and dated execution-state corrections.
+
 ### Decision and exact trust boundary
 
 Astra decision, 2026-11-07: implement **administrator-attested bootstrap** for a

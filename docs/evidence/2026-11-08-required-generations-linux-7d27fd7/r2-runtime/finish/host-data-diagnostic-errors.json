@@ -1,0 +1,25 @@
+{
+  "H_control_expected_values_source_test_criteria_changes": false,
+  "errors": [
+    {
+      "actual_exit": 1,
+      "actual_message": "'list' object has no attribute 'items'",
+      "exception_type": "AttributeError",
+      "failed_expression": "f['families'].items()",
+      "operation": "read-only historical fixture catalogue schema display",
+      "source_security_or_hash_mismatch": false
+    },
+    {
+      "actual_exit": 1,
+      "actual_message": "filename 'src/rust/tests/fixtures/team_checkpoint_required_generations_v1/crypto-oracle.json' not found",
+      "exception_type": "KeyError",
+      "failed_operation": "tarfile.extractfile on assumed root oracle path; actual manifest places oracle DATA under eight case directories",
+      "operation": "read-only source archive display after verify.sh text was read",
+      "source_security_or_hash_mismatch": false
+    }
+  ],
+  "pre_ssh_host_program_corrections": 0,
+  "preserved_transcript": "The tool transcript contains exact failed commands/stdout/tracebacks; this external receipt retains their outcomes.",
+  "product_or_SSH_retry": false,
+  "timeline": "Both exploratory display errors occurred after restricted SSH began. They were not transport/preflight/product scripts and neither failed command was replayed. Subsequent required independent DATA analysis is separate."
+}

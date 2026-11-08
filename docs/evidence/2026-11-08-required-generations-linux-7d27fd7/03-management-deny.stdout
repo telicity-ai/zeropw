@@ -1,0 +1,16 @@
+{
+  "management_policy_file": "/etc/ssh/sshd_config.d/99-zeropw-rgrun-deny.conf",
+  "file_sha256": "b609000cf4ab6925faa4c39786342a74633311fad04e4633bdd1b6eeb87d8a6d",
+  "owner_uid": 0,
+  "mode": "0o644",
+  "effective_denyusers": [
+    "denyusers rgrun"
+  ],
+  "syntax_check_exit": 0,
+  "reload_exit": 0,
+  "rgrun_shell": "/bin/bash",
+  "assigned_uid_processes_before_policy": [],
+  "source_execution_since_shell_change": "NONE; trusted OS probes only",
+  "test_sshd_configs": "unchanged explicit -f configs, assessed statically separately",
+  "scope": "management daemon only in coordinator-owned freshrg01"
+}

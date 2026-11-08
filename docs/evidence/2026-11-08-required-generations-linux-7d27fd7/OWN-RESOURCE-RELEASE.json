@@ -1,0 +1,32 @@
+{
+  "actual_product_children": 28,
+  "all_direct_ssh_transports_joined": true,
+  "all_product_children_waited": true,
+  "all_product_review_runtime_release_holds": "unchanged OPEN",
+  "all_saved_assigned_uid_residual_checks_empty": true,
+  "collection_supervisor_exec_session": {
+    "exit": 0,
+    "id": 56633
+  },
+  "direct_ssh_transports": 31,
+  "feature_after": "NOTRUN",
+  "full_matrix_state": "FAIL; no retry",
+  "last_product_receipt_sha256": "f4557b27d021f23ecb4bf4fbfbdbdc26a37a189ffd10c2f8400daa1cb20240c9",
+  "last_product_residual_receipt": "collected/evidence/27-full-matrix.json",
+  "no_further_worker_remote_calls": true,
+  "old_resources": "Old Go case12 UNRELEASED / authority and cancellation evidence NOTREADY, unqueried. Mac501 released/unassigned, unused.",
+  "phase_supervisor_exec_session": {
+    "exit": 0,
+    "id": 68494
+  },
+  "post_product_DATA_helpers_ended": true,
+  "released_at_utc": "2026-11-08T01:17:54.623061+00:00",
+  "rust_tree": "4352ebbd0fa84bde0fb444c4d0902ef2510d0620",
+  "scope": "OWN exclusive UID/GID2000 /opt/rgjob job and direct restricted SSH transports only",
+  "source_head": "7d27fd7ec500e36f0e5cc548325e1ae5b34864d8",
+  "state": "RELEASED",
+  "uncertain_transports": false,
+  "whole_assignment_cap_seconds": 21600,
+  "whole_assignment_observed_seconds": 4914.876183,
+  "whole_vm": "coordinator-owned; not stopped/released by worker; no idle/physical-erasure assertion"
+}

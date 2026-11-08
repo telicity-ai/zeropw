@@ -1,0 +1,86 @@
+{
+  "collector": {
+    "effort": "ultra",
+    "model": "gpt-6.1-sol",
+    "runtime": "T3 Code through Codex",
+    "scope": "stdlib DATA/text/hash/Git read only; no code review or acceptance"
+  },
+  "collector_corrections": [],
+  "combined_bytes": 32217,
+  "combined_limit_bytes": 32768,
+  "dated_attribution_notes": [
+    {
+      "current_facts": "6da ended beforeSSH with all5NOTRUN; Rootlaterpassed30features+31nativecli6+32signer6; current0e1 assigned remaining33full/34after.",
+      "current_facts_source": "parent NEW_TASK handoff, not independently queried",
+      "file": "decision.md",
+      "line": 72,
+      "text": "R2 task6da68e8e outcomes PENDING/NOTRUN here; exclusive UID2000 attribution is dated planning input.",
+      "treatment": "preserve original Astra bytes; add coordinator dated context before later implementation assignment"
+    },
+    {
+      "file": "implementation-task.md",
+      "line": 154,
+      "text": "R2 PENDING until coordinator supplies completed evidence.",
+      "treatment": "planning-time caveat, not current live status or new test result"
+    },
+    {
+      "file": "implementation-task.md",
+      "line": 146,
+      "text": "original Linux NOTRUN immutable",
+      "treatment": "ambiguous shorthand alongside line154 explicitly retaining original Linux FAIL1812/4/5; never reclassify R1 FAIL as NOTRUN. Parent should clarify which historical NOTRUN record is meant in its handoff without altering Astra artifact hashes."
+    }
+  ],
+  "documents": {
+    "decision.md": {
+      "bytes": 12039,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/m2-next-runtime-slice-astra-ultra-20261108/decision.md",
+      "sha256": "f9c6c1d19d7cca852d58d79eee4bd2712b550d0944dc9bd3bb4d3c47b51f16d6"
+    },
+    "implementation-task.md": {
+      "bytes": 20178,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/m2-next-runtime-slice-astra-ultra-20261108/implementation-task.md",
+      "sha256": "942a6a5cec0b28c2b186e7b33e496dd9203625c26d1eff1566061207a332bf1a"
+    }
+  },
+  "external_directory_entries": [
+    "decision.md",
+    "implementation-task.md"
+  ],
+  "gates": "Planning READY only for bounded Sol implementation; snapshot onboarding unsupported; all M2-G01-G10/runtime/review/physical/Oracle/release and canonical DOS-1 HIGH/old Go custody holds unchanged",
+  "not_performed": [
+    "VM/SSH/account/process/cache/target query or execution",
+    "submitted source/helper/dependency/build/test/generator/Cargo execution",
+    "private-key/production-vault/model/admin/deployment/recovery inspection",
+    "source/ref/index/checkout/instructions/CI/harness mutation",
+    "Opus/Astra review or acceptance",
+    "subagents/workflows"
+  ],
+  "own_processes": "all owned DATA commands finished; no runtime process/transport created",
+  "read_scope": {
+    "documents": "whole bytes read/hashed, selected model/source/readiness/runtime-status/gate lines inspected as text",
+    "other_source_semantics": "none",
+    "raw_runtime_logs": "not revalidated",
+    "runtime_state": "not queried",
+    "source_inventory": "every1352file content/mode read and hash/blob compared; not semantic review"
+  },
+  "recorded_at_utc": "2026-11-08T02:10:31.900355+00:00",
+  "schema": "zeropw-compaction-heads-plan-data-collection-v1",
+  "source": {
+    "all_actual_bytes_lengths_sha256_git_blobs_git_modes_posix_modes_match": true,
+    "checkout": "/Users/ys/.t3/worktrees/zeropw/t3-94fa787b",
+    "clean_before_after": true,
+    "desktop_tree": "2413844c89265a3e239be2372d34b1e6e1b2d4bb",
+    "exact_path_set_match": true,
+    "files": 1352,
+    "full_tree": "006a9879da19ec21424e9a12d160a97f20b369b8",
+    "git_optional_locks": false,
+    "head": "06ab4784d9ac387307f96bc976df1bbc20de2bb1",
+    "inventory": "/Users/ys/Code/zeropw-mlp-evidence/required-generation-next-slice-preparation-20261108/source-manifest.json",
+    "inventory_sha256": "070cd8b861adf274391e3bfeb550cfb5ee377d45f01066625a43242b4fe62ded",
+    "repeat_integrity_after_output_preparation": true,
+    "rust_tree": "4352ebbd0fa84bde0fb444c4d0902ef2510d0620"
+  },
+  "verdict": "DATA_COLLECTION_MATCH_ONLY"
+}
