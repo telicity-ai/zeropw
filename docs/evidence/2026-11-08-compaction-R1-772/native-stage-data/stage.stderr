@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "<string>", line 17, in <module>
+    stdout,stderr=child.communicate(timeout=10);assert child.returncode==0
+                                                       ^^^^^^^^^^^^^^^^^^^
+AssertionError

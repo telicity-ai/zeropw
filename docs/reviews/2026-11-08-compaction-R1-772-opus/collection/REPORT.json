@@ -1,0 +1,185 @@
+{
+  "schema": "Sol-independent-Opus772-DATA-collection-v1",
+  "collector": {
+    "model": "gpt-6.1-sol",
+    "reasoning_effort": "ultra",
+    "service_tier": "not independently exposed",
+    "role": "native child DATA collection only, personally/no subagents"
+  },
+  "nature": "hash/Git/schema/document collection, not an independent adversarial review, runtime replay, policy decision or acceptance",
+  "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+  "source_rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+  "source_full_tree": "43ccc017c0336a9d1d90d494705ec40ab4865c6d",
+  "source_files": 1519,
+  "source_bytes": 25919548,
+  "unique_actual_git_blobs": 1348,
+  "source_all_bytes_modes_git_index": "MATCH",
+  "input_pins": {
+    "brief.txt": "c43b1dbbb9c0963a84b92494b5f73f43c91ec1781b705309bf586727b3f48aab",
+    "input-bindings.json": "cad005fa58fbd0a5d1ca8f329b266c18dcbfd48c989188bbebcebd231574c907",
+    "source-manifest.json": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef"
+  },
+  "bound_files": [
+    {
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/compaction-conflicting-record-decision-astra-20261108/decision.md",
+      "bytes": 13214,
+      "sha256": "f691999d0c84ccb89f2f1590075dbba2f51549573a14d916ddecfdd7fb5b01e1",
+      "source": "bound immutable DATA file"
+    },
+    {
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/compaction-conflicting-record-decision-astra-20261108/implementation-task.md",
+      "bytes": 19148,
+      "sha256": "ef0a06a85cfd695ad4b7f89afbe71eee856d30c0096cf5d4b425687dbfadc292",
+      "source": "bound immutable DATA file"
+    },
+    {
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/compaction-conflicting-decision-independent-20261108/REPORT.md",
+      "bytes": 3498,
+      "sha256": "123c0b7cad050ec9a83f26514533d95c505de5d848eb008ee8ca7864a97d73c0",
+      "source": "bound immutable DATA file"
+    },
+    {
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/compaction-conflicting-decision-independent-20261108/REPORT.json",
+      "bytes": 7126,
+      "sha256": "b4bb6e69c4a64ffab1c99fc31cd83eb219f13fbc9b39ec42852fd254f91d0372",
+      "source": "bound immutable DATA file"
+    },
+    {
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/compaction-R1-scope-772-independent-20261108/REPORT.md",
+      "bytes": 3403,
+      "sha256": "e3faa69e0405cef4e980bd47d1953e6587831460694d707e58add6a83dfef744",
+      "source": "bound immutable DATA file"
+    },
+    {
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/compaction-R1-scope-772-independent-20261108/REPORT.json",
+      "bytes": 7783,
+      "sha256": "0907922f8e555f6d9c0a1e89a4d59f964eee47decd86d5eea6ee4c4358884b9b",
+      "source": "bound immutable DATA file"
+    },
+    {
+      "path": "/Users/ys/.t3/worktrees/zeropw/t3-e26a33fa/docs/reviews/2026-11-08-compaction-fixes-opus-a63c800/report.json",
+      "bytes": 12988,
+      "sha256": "58a8193538739d7d2f41ca09bd49ac2036f148e2e312156a96a2844ee790ad7e",
+      "source": "fixed reviewer source"
+    },
+    {
+      "path": "/Users/ys/.t3/worktrees/zeropw/t3-e26a33fa/docs/reviews/2026-11-08-compaction-fixes-opus-a63c800/report.md",
+      "bytes": 11610,
+      "sha256": "a83d6e1d4b06f54c91da0e169cd0cd2ddebcaf2147a082451ab3715486080f75",
+      "source": "fixed reviewer source"
+    },
+    {
+      "path": "/Users/ys/.t3/worktrees/zeropw/t3-e26a33fa/docs/reviews/2026-11-08-compaction-heads-opus-04c7d22/report.json",
+      "bytes": 7399,
+      "sha256": "4e7296a50f281a3e066eb91998a7c3e79f6767b8ee8d17fcd60d77219bcb8ec0",
+      "source": "fixed reviewer source"
+    },
+    {
+      "path": "/Users/ys/.t3/worktrees/zeropw/t3-e26a33fa/docs/reviews/2026-11-08-compaction-heads-opus-04c7d22/finding-status.json",
+      "bytes": 20948,
+      "sha256": "7f6c6869fc9d207c5cd1e13e2de52e1e85ebb2d83c64c866674e2053e79000ac",
+      "source": "fixed reviewer source"
+    },
+    {
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/compaction-R1-linux-r3-20261108/test-plan.json",
+      "bytes": 5314,
+      "sha256": "710a0b4422b42e6c442a0fafd98bd3311eeee9163dcb1e99a1e663c16de131fd",
+      "source": "bound immutable DATA file"
+    },
+    {
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/compaction-R1-native-diagnostic-20261108/command-plan.json",
+      "bytes": 5242,
+      "sha256": "86180debe6219bf3a312c1a1f9a2bac36d2d0f1e23948cc484ed850e651cf154",
+      "source": "bound immutable DATA file"
+    },
+    {
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/compaction-R1-linux-final-20261108/command-plan.json",
+      "bytes": 10166,
+      "sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+      "source": "bound immutable DATA file"
+    },
+    {
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/compaction-R1-native-final-20261108/command-plan.json",
+      "bytes": 10072,
+      "sha256": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+      "source": "bound immutable DATA file"
+    }
+  ],
+  "artifacts": {
+    "report.json": {
+      "bytes": 13881,
+      "sha256": "53433563cbbcbbe4790a3183d1d8df47831575e4438d70e29508e83bd43d075d"
+    },
+    "report.md": {
+      "bytes": 18428,
+      "sha256": "ed5a385a71e4ab7e82c0baa5c837d07db14d53f3fa6c6891cd6df04ea446e5b8"
+    },
+    "COVERAGE.md": {
+      "bytes": 5178,
+      "sha256": "e7ac5bf9e62333b49fdddef763d4f30a5912b45ff85f079bdf1f7561bb6bc999"
+    },
+    "input-verification.json": {
+      "bytes": 10086,
+      "sha256": "eb0ba85139274a3eff2b5073590106f0f2cec90fdb90f767e55e8e56e5550b20"
+    }
+  },
+  "schema_sha256": "1bf6caf7edf8548ea2c653937cd130c5e2db7a217f7fa1dadd0ce7696e9be5a0",
+  "schema_data_conformance": "PASS using own stdlib structural recursion only, no project validator executed",
+  "original_four_JSON_values": "EXACT full dict/list equality; no new IDs",
+  "new_finding_count": 0,
+  "original_statuses": "OPEN in unchanged ledger; static-source dispositions in reportMD do not close validation/acceptance",
+  "review_verdict": "BLOCKED",
+  "before_after_record_consistency": "MATCH, identical except status; after snapshot lists3 outputs before writing input-verification; current4untracked outputs are expected",
+  "current_untracked_files": [
+    "?? review-output/compaction-R1-772-opus-20261108/COVERAGE.md",
+    "?? review-output/compaction-R1-772-opus-20261108/input-verification.json",
+    "?? review-output/compaction-R1-772-opus-20261108/report.json",
+    "?? review-output/compaction-R1-772-opus-20261108/report.md"
+  ],
+  "index_bytes_sha256": "878021bb1ac8285102d5448910c520eb2c6f9ef792d6857c52ad0b6cfc6886c1",
+  "diff_scope": {
+    "rust/src/team/commit.rs": "+293/-0",
+    "rust/src/team/compaction_heads.rs": "+24/-4",
+    "rust/src/team/sync.rs": "+1390/-0",
+    "rust/tests/team_compaction_heads.rs": "+230/-10"
+  },
+  "reviewer_declared": {
+    "model": "claude-opus-5-5",
+    "runtime": "Claude Code (Claude Agent SDK harness) inside T3 Code",
+    "exposed_options": "none exposed",
+    "reasoning_effort": "unexposed",
+    "thinking_budget": "unexposed",
+    "service_tier": "unexposed",
+    "subagents_workflows_delegates": "none"
+  },
+  "collection_data_note": "One read-only rg included absent harness/review.py and returned2; actual zeropw_harness.py policy text then read. No original/output source write was affected.",
+  "schema_policy_clarification": "JSON schema has no cross-field PASS/findings conditional; harness/zeropw_harness.py432-433 supplies the extra PASS-with-findings rejection. Actual BLOCKED remains valid; original report wording is preserved unchanged.",
+  "source_disposition_attribution": {
+    "ZPCHEAD-OPUS-R1-01_HIGH": "Opus says RESOLVED_IN_SOURCE_STATIC under actualAstra policy(b); validation/acceptance remain OPEN",
+    "ZPCHEAD-OPUS-01_MEDIUM": "Opus says remains sourcefixed/no regression; OPEN",
+    "ZPCHEAD-OPUS-02_MEDIUM": "Opus says remains sourcefixed/newadmissions/no regression; OPEN",
+    "ZPCHEAD-OPUS-03_LOW": "Opus says remains sourcefixed/no regression; OPEN",
+    "NEW_findings": "zero additional IDs; not proof of absence of defects"
+  },
+  "observations_without_finding_or_severity": {
+    "O1": "Removed equal/lower deferred rows use live A:4 predecessor; current-Y rows carry cache-specific HLC evidence.",
+    "O2": "deferred-equal reuses the same filename and replaces fixture D; count alone does not identify which D. Reviewer regards releasing own D-prime as valid retained-evidence negative.",
+    "O3": "Y authority tail runs without a compaction cache; tests ordinary unchanged authorization, not the new matcher under conflict. Some literal fold/fact reasons were not fully re-derived by reviewer.",
+    "O4": "Huge sparse-PyInt traversal guard detects a traversal via hang/timeout.",
+    "O5": "No new concurrency schedules; existing scoped gates unchanged, new retained walk under same lock. Reviewer sees no new race statically."
+  },
+  "runtime_and_acceptance": {
+    "no_runtime_action_by_collector": true,
+    "no_completed_same_source_bothOS_full_PASS_established": true,
+    "no_actual_Astra_acceptance_established": true,
+    "moving_observations": "Reviewer cites unboundpr-body and moving coordinator diagnostics; these are not frozen runtime evidence. Bound four plan files establish only plan hashes, not execution outcomes. Parent current Linuxfinal23ACTIVE/native diagnostic13ACTIVE is a later supplied state and was not queried.",
+    "original_all_four_statuses": "OPEN; source-fixed disposition is separate from validation/acceptance",
+    "global_holds": "all remain unchanged OPEN, including DOS-1 HIGH, Goquarantine/custody/lease/interrupted3eb, oldnativeHOLD, M2/runtime/onboarding, physicaltwoMac/sleepwake/GUI/ACL/packaging/Oracle/capacity/release"
+  },
+  "coverage_limits": [
+    "Four review artifacts read completely as DATA; report.json strict parsed and structural schema validated with own stdlib only.",
+    "All1519 tracked source files compared twice by bytes/hashes/modes; all1348 unique actual Git blob contents independently read and compared raw, not semantic source re-review.",
+    "Historical before/after verification records checked for internal consistency and matched to present fixed inputs/source/index; no cryptographic historical execution or model attestation.",
+    "No source/ref/index/control mutation, project helper/compiler/formatter/test/dependency/harness-validator execution, runtime/process/VM/cache/network/credential query, resource action or PR operation."
+  ]
+}

@@ -1,0 +1,42 @@
+
+running 37 tests
+test team::commit::compaction_heads_tests::compaction_heads_r1_exact_announcements_include_nonfirst_ops ... ok
+test team::commit::compaction_heads_tests::compaction_heads_direct_receipt_holds_entry_lock_through_rejection_audit ... ok
+test team::commit::compaction_heads_tests::compaction_heads_registry_literal_numeric_author_stable_sequence_and_op_order ... ok
+test team::commit::compaction_heads_tests::compaction_heads_r1_retained_matches_use_canonical_sparse_files ... ok
+test team::commit::compaction_heads_tests::compaction_heads_retained_registry_sparse_huge_and_alternate_stems_use_only_canonical_files ... ok
+test team::compaction_heads::tests::compaction_heads_clock_helpers_lock_absence_and_atomic_observation ... ok
+test team::compaction_heads::tests::compaction_heads_exact_huge_pyint_slots_hlc_monotonicity_and_vector_regression ... ok
+test team::compaction_heads::tests::compaction_heads_helpers_require_real_lock_and_bind_snapshot_plan ... ok
+test team::compaction_heads::tests::compaction_heads_layout_refuses_non_directory_and_nonregular_destinations ... ok
+test team::compaction_heads::tests::compaction_heads_layout_rejects_dangling_links_but_allows_trusted_parent_alias ... ok
+test team::compaction_heads::tests::compaction_heads_layout_requires_lock_and_creates_no_prospective_paths ... ok
+test team::compaction_heads::tests::compaction_heads_reserved_number_normalization_refuses_before_publication ... ok
+test team::compaction_heads::tests::compaction_heads_at_256_and_over_256_are_exact_without_sequence_enumeration ... ok
+test team::membership::compaction_heads_tests::compaction_heads_both_authorized_fact_clocks_and_remembered_team_clock ... ok
+test team::membership::compaction_heads_tests::compaction_heads_cached_public_keys_do_not_bypass_roles_or_generation_checks ... ok
+test team::membership::compaction_heads_tests::compaction_heads_local_author_clock_reset_after_reopen_observes_all_cached_authors ... ok
+test team::membership::compaction_heads_tests::compaction_heads_local_signing_errors_precede_candidate_storage_and_keep_vault_reads ... ok
+test team::compaction_heads::tests::compaction_heads_serialized_16_mib_boundary_and_bounded_disk_read ... ok
+test team::sync::compaction_heads_tests::compaction_heads_actual_corrupt_readback_refuses_and_ordinary_load_ignores_cache ... ok
+test team::sync::compaction_heads_tests::compaction_heads_authorized_fact_cache_read_pause_keeps_envs_available ... ok
+test team::sync::compaction_heads_tests::compaction_heads_compact_serializes_direct_receipt_deferred_release_and_author_clock ... ok
+test team::sync::compaction_heads_tests::compaction_heads_dangling_root_team_and_env_refuse_before_publication ... ok
+test team::sync::compaction_heads_tests::compaction_heads_each_snapshot_readback_rejects_nonregular_identical_content ... ok
+test team::sync::compaction_heads_tests::compaction_heads_every_successful_unlink_follows_both_durable_images_and_readback ... ok
+test team::sync::compaction_heads_tests::compaction_heads_fresh_admitted_facts_override_stale_env_cache ... ok
+test team::sync::compaction_heads_tests::compaction_heads_lagging_peer_blocks_until_exact_original_vector_coverage ... ok
+test team::sync::compaction_heads_tests::compaction_heads_deferred_prefilter_stale_forward_receipt_uses_locked_sequence ... ok
+test team::sync::compaction_heads_tests::compaction_heads_nonregular_prospective_paths_refuse_before_publication ... ok
+test team::sync::compaction_heads_tests::compaction_heads_r1_deferred_release_preserves_clock_and_evidence ... ok
+test team::sync::compaction_heads_tests::compaction_heads_r1_other_author_receipt_handle_and_compaction ... ok
+test team::sync::compaction_heads_tests::compaction_heads_r1_owner_data_removal_and_both_fact_paths ... ok
+test team::sync::compaction_heads_tests::compaction_heads_real_compactor_fault_prefixes_reopen_without_losing_data ... ok
+test team::sync::compaction_heads_tests::compaction_heads_real_snapshot_record_and_cache_rename_failures_precede_unlink ... ok
+test team::sync::compaction_heads_tests::compaction_heads_real_state_holders_and_two_compactors_serialize_without_lost_heads ... ok
+test team::sync::compaction_heads_tests::compaction_heads_rotation_and_self_removal_witnesses_and_fact_records_stay_live ... ok
+test team::sync::compaction_heads_tests::compaction_heads_submit_and_actual_handle_commit_share_receipt_clocks_and_local_errors ... ok
+test team::sync::compaction_heads_tests::compaction_heads_r1_local_failures_and_authority_remain_closed ... ok
+
+test result: ok. 37 passed; 0 failed; 0 ignored; 0 measured; 708 filtered out; finished in 41.60s
+

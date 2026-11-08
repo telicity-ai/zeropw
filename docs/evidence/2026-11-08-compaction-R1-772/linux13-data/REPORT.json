@@ -1,0 +1,183 @@
+{
+  "actual_model": "gpt-6.1-sol / ultra, T3 Code through Codex; effective service tier unexposed",
+  "as_of_utc": "2026-11-08T12:35:05.038180+00:00",
+  "bindings": {
+    "archive_bytes": 11776000,
+    "archive_sha256": "ab8711915f04e96e9f348c92264e968c79973a3f27789943a6271ede1d236f6f",
+    "driver_sha256": "64a772e4df8353a9e238b5113ee489c2c8e0a4a84a67e0195f8f8d39b317f7a8",
+    "host_summary_sha256": "645fd511e42e874f530f11dead47a145948e60e068826d314635b50cdf4de648",
+    "manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+    "plan_sha256": "710a0b4422b42e6c442a0fafd98bd3311eeee9163dcb1e99a1e663c16de131fd",
+    "test_grant_sha256": "fdb1686f2bcee4e079e92a8e167ce9c5439e6655c83edb07a6f9ad5fb7bf4ff6"
+  },
+  "checks": {
+    "13_host_transport_waits_zero_exits": true,
+    "13_recorded_own_child_waits_empty_assigned_UID": true,
+    "13_started_and_completed_bindings": true,
+    "13_zero_exits_no_timeouts_cancel_failure": true,
+    "1519_fixed_Git_bytes_blobs_hashes_modes": true,
+    "26_raw_log_hashes_lengths": true,
+    "26_source_maps_39494entries": true,
+    "3controls0644_52evidence0600": true,
+    "55_unique_safe_regular_exact_members": true,
+    "7_exact_selections1each": true,
+    "focused37library28integration_bothprofiles": true,
+    "format_all_check": true,
+    "recorded2100_NNP1_capabilities0_no_groups": true,
+    "strictClippy_alltargets_Dwarnings": true
+  },
+  "collector_correction": "First own DATA attempt assumed test-grant had a source key and stopped with KeyError before any output writing. The diagnostic grant intentionally lacks it; CWD was then bound to SOURCE literal parsed as DATA from hash-pinned archived driver. No controls/source/runtime/test were altered or retried.",
+  "coverage": "Complete55-member archive; correct test-grant/test-plan/test-driver/source-manifest; all fixed772 Git1519objects/modes and completed13host summary. Formatter-only grant is distinct historical DATA.",
+  "final_recorded_assigned_UID2100_processes": [],
+  "full_tree": "43ccc017c0336a9d1d90d494705ec40ab4865c6d",
+  "head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+  "limits": [
+    "Recorded test/lifecycle/isolation facts only; no independent replay or cryptographic execution attestation.",
+    "Archived POSIX modes match fixed Git expectations; no live guest filesystem/process inquiry.",
+    "Only completed diagnostic13: no full unchanged matrix or active final23campaign observation, no new native/physical/Oracle/capacity result.",
+    "R1HIGH and all original/global holds remain OPEN; no security/acceptance verdict.",
+    "Earlier R1/R2 failures untouched, not replaced or rewritten; no resource release/cancel."
+  ],
+  "phases": [
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 1.029323332999411,
+      "kind": "formatcheck",
+      "own_child_waited": true,
+      "phase": "01-format",
+      "receipt_sha256": "032dbfed0b9eb09874793436001a670b61cf55930db66d92ac50fbc654b9393b",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 17.454554044999895,
+      "kind": "clippy",
+      "own_child_waited": true,
+      "phase": "02-clippy",
+      "receipt_sha256": "59dc13e736a5c80181de1969a5d65742b3f3fecb832c5e324849ba46669e9365",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 12.387918469999931,
+      "exact_test": "team::commit::compaction_heads_tests::compaction_heads_r1_exact_announcements_include_nonfirst_ops",
+      "kind": "exact",
+      "own_child_waited": true,
+      "passed": 1,
+      "phase": "03-new-exact",
+      "receipt_sha256": "718b2197418d68fde440aee91c35fcf787a70c2c64cbd28b91823865ee4c6e85",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 0.12517777899847715,
+      "exact_test": "team::commit::compaction_heads_tests::compaction_heads_r1_retained_matches_use_canonical_sparse_files",
+      "kind": "exact",
+      "own_child_waited": true,
+      "passed": 1,
+      "phase": "04-new-exact",
+      "receipt_sha256": "0ce329ef6dd4743f98042532d99719fcc9f5e81e9ec716fa151c8dd3bf61ec9c",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 26.541148905998853,
+      "exact_test": "team::sync::compaction_heads_tests::compaction_heads_r1_other_author_receipt_handle_and_compaction",
+      "kind": "exact",
+      "own_child_waited": true,
+      "passed": 1,
+      "phase": "05-new-exact",
+      "receipt_sha256": "93b25f88dd85cc097a3bb92252e3c830f81a8c651d46f8dd9b720d1348526ae2",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 59.639153762000205,
+      "exact_test": "team::sync::compaction_heads_tests::compaction_heads_r1_deferred_release_preserves_clock_and_evidence",
+      "kind": "exact",
+      "own_child_waited": true,
+      "passed": 1,
+      "phase": "06-new-exact",
+      "receipt_sha256": "9b17e3543234410bd0d00a8e2778f62fb2b0fd755ec6b7de39b5403232e34b9c",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 132.57143979000102,
+      "exact_test": "team::sync::compaction_heads_tests::compaction_heads_r1_owner_data_removal_and_both_fact_paths",
+      "kind": "exact",
+      "own_child_waited": true,
+      "passed": 1,
+      "phase": "07-new-exact",
+      "receipt_sha256": "c3d3ad21bc6b1edeca0add6c3cf32c46af6cd3abdd2399e3ec996c08eae029d6",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 482.30438832899927,
+      "exact_test": "team::sync::compaction_heads_tests::compaction_heads_r1_local_failures_and_authority_remain_closed",
+      "kind": "exact",
+      "own_child_waited": true,
+      "passed": 1,
+      "phase": "08-new-exact",
+      "receipt_sha256": "013be16ec6e2196b206158702d110fc4adbd1cb56f442b89889f04c55c21078a",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 24.469643667000128,
+      "exact_test": "compaction_heads_r1_prior_conflicts_identical_and_absence_controls",
+      "kind": "exact",
+      "own_child_waited": true,
+      "passed": 1,
+      "phase": "09-new-exact",
+      "receipt_sha256": "1e0a074acb27c55f6b856ee3c04294fca0f27e263bf83b946a4a7da4cf870db7",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 545.548920049001,
+      "kind": "tests",
+      "own_child_waited": true,
+      "passed": 37,
+      "phase": "10-lib-debug",
+      "receipt_sha256": "8ef5185914e9d378940f1c86c468c6cc03344306996c38e1a4bf419a3c219816",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 47.017472453000664,
+      "kind": "tests",
+      "own_child_waited": true,
+      "passed": 28,
+      "phase": "11-integration-debug",
+      "receipt_sha256": "de41e40d79e4d7bcd5e3faae662a3b491c305c7b0aa1ac8e15366b61fb0f6cf2",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 93.53839231599886,
+      "kind": "tests",
+      "own_child_waited": true,
+      "passed": 37,
+      "phase": "12-lib-release",
+      "receipt_sha256": "2761599be07429b3a9250dc528abbaaebc4e4a1636836c12695cad6e82f3b609",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 65.86302264000005,
+      "kind": "tests",
+      "own_child_waited": true,
+      "passed": 28,
+      "phase": "13-integration-release",
+      "receipt_sha256": "df7d61dfb5e4086a5c7795d5a72e2ffe9d6a0d5050a8c89a5398cb4fc5a99897",
+      "test_exit": 0
+    }
+  ],
+  "recorded_source_path": "/opt/cgjob/r1-r3-src",
+  "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+  "schema": "Sol-independent-Linux-R1-diagnostic13-DATA-v1",
+  "scope": "Completed immutable DATA audit only, no execution/replay/security/acceptance",
+  "source_files": 1519
+}

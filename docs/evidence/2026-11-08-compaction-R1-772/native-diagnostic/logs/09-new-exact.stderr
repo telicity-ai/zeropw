@@ -1,0 +1,3 @@
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/r1-src/rust)
+    Finished `test` profile [unoptimized] target(s) in 14.44s
+     Running tests/team_compaction_heads.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_compaction_heads-628e011bdcafe387)

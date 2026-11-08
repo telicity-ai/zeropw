@@ -1,0 +1,33 @@
+{
+  "state": "PRESERVED; no failures erased or marked PASS",
+  "f649": {
+    "head": "f6491692e85119ddb65a4af3aced055d3173b74d",
+    "phase": "03-new-exact",
+    "result": "FAIL invalid_member_name in new unit fixture",
+    "raw_archive": "/Users/ys/Code/zeropw-mlp-evidence/compaction-R1-linux-diagnostic-20261108/diagnostic-1-evidence.tar",
+    "archive_sha256": "edde061eff51e100aa0dfff51be9e43691785c46e6122adeab90ef5da3d40dd5",
+    "fix": "requiredmetadata/wraps added only to new test fixture; no production/old helper edits",
+    "later": "NOTRUN afterfirstfailure"
+  },
+  "f80": {
+    "head": "f80baa0e6a1fe94a46cc0b7228f61e32f944333d",
+    "phase": "08-new-exact",
+    "result": "FAIL new negative audit expected1 event, got0 after absent mutation removes every Y announcement including sole op",
+    "raw_archive": "/Users/ys/Code/zeropw-mlp-evidence/compaction-R1-linux-r2-20261108/test-diagnostic-evidence.tar",
+    "archive_sha256": "d87c04dfddb3e0ab6cccd2f7b86d04ba8484ba2a6b9b2a96c92db02287b5c509",
+    "fix": "only absent row expects0 ordinary events, explicit row context and all other literal audit/clock/file assertions retained",
+    "later": "NOTRUN afterfirstfailure"
+  },
+  "native_stage": {
+    "state": "DATApreexecutionFailure;productNOTRUN",
+    "failure": "Darwin ps rc1 for empty selected UID failed original rc==0 preflight before path creation",
+    "correction": "Acceptrc1 only with empty stdout+stderr, every nonempty row still strict and refused; rootstageR2 recorded502empty before setup"
+  },
+  "final_transport": {
+    "state": "DATAdesigncorrection BEFOREanyfinalexecution",
+    "failure": "original21600 check only before phase did not reserve that phase duration",
+    "correction": "reserve phase timeout+240sec transport/fetch/cleanup before launch; grant states execution admission envelope, not external hard whole-machine deadline",
+    "host_sha256": "f11d5291de16403acdb30627427b42c418c72db166a62ea8d761bc6fd5a95357",
+    "independent": "plan-data reports preserve correction"
+  }
+}

@@ -1,0 +1,154 @@
+{
+  "actual_model": "gpt-6.1-sol / ultra; effective service tier unexposed",
+  "all_gates": "OPEN, including actual Opus/Astra acceptance, native/physical/Oracle/release; no resource action or acceptance granted",
+  "as_of_utc": "2026-11-08T12:25:03.916240+00:00",
+  "both_manifests_identical_to_diagnostics": true,
+  "coverage": "Read complete host transport, both grants/plans/payloads/stage texts/symbol-check scripts; full Linux driver plus all native differences; parsed syntax as DATA; fixed Git1519 bytes and modes. Diagnostic manifests and available completed host summaries checked, but not all diagnostic raw logs/receipts independently replayed in this task. No code semantic/adversarial review.",
+  "execution_dependency_disposition": {
+    "coordinator_confirmation": "Parent confirms diagnostics are intentionally still active and no final execution attempted. This is the intended dependency guard, not a setup failure.",
+    "required_before_execution": "Each platform must finish all13 diagnostic phases with its expected complete state and own transport/child joins, then the frozen stage verifies all13 guest receipts/source maps/exclusivity.",
+    "single_DATA_read": "Both literal prior host-summary paths were absent; their expected ALL13 states were not claimed independently verified.",
+    "state": "CONDITIONAL_NOTREADY_EXPECTED_PENDING_GUARD"
+  },
+  "fixed_Git_all_bytes_blobs_modes_match": true,
+  "head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+  "issues": [
+    {
+      "correction": "Corrected transport rejects if elapsed+phase.timeout_seconds+240>21600. Grants bind corrected transport hash and describe an execution-admission envelope, not an externally enforced whole-machine deadline.",
+      "id": "DATA-P1",
+      "original": "Whole21600 was checked only before starting a phase, with no reservation for the phase/transport/fetch/cleanup duration.",
+      "status": "CORRECTED_BEFORE_EXECUTION",
+      "verification": "Read corrected code and grants, matched hash, syntax/AST checked; no execution."
+    }
+  ],
+  "nonblocking_limits": [
+    {
+      "id": "DATA-N1",
+      "location": "r1_run_final.py receipt json.loads and field accesses",
+      "observation": "Malformed/missing fetched JSON or unexpected field shape raises rather than writing the usual final host summary. Raw call/fetch files remain; this fails closed and must be dispositioned as incomplete DATA, never PASS."
+    },
+    {
+      "id": "DATA-N2",
+      "observation": "Host receipt checks validate bound driver flags and selector/full markers; full raw log hashes, source maps and artifact/feature facts still need final archive DATA collection. These plans are not an executed result or cryptographic execution attestation."
+    }
+  ],
+  "phase_contract": "23 each:2features+4 oldexact debug/release+1full+1build+1absence+14stackexact;107targets112fullsteps4namedprobes",
+  "platforms": {
+    "linux": {
+      "budget_contract": "full7200sec other1800/small180;21600sec execution admission budget, reserve whole next phase timeout+240sec transport/fetch/cleanup before launch (not external hard whole-machine deadline);host2GiB/Linuxguest512MiB/nativeguest2GiB",
+      "control_hashes": {
+        "command-plan.json": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+        "linux_verify_driver.py": "001c03838061c192669661c68e5e15d7342b56085f5efc807fc08f098968bcfb",
+        "non_test_symbols.py": "06243311e1579c045db9f7991e0dae752b4495979d0a6e5ab0e21ab729ccb125",
+        "source-manifest.json": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef"
+      },
+      "diagnostic_dependency": {
+        "guest13_receipts_gated_by_stage_source": true,
+        "manifest_identical": true,
+        "state": "NOT_READY_UNTIL_COMPLETED_SUMMARY_EXISTS",
+        "summary_exists": false,
+        "summary_path": "/Users/ys/Code/zeropw-mlp-evidence/compaction-R1-linux-r3-20261108/test-host-run-summary.json"
+      },
+      "driver_sha256": "001c03838061c192669661c68e5e15d7342b56085f5efc807fc08f098968bcfb",
+      "env_scope": {
+        "control": "/opt/r1-final-control",
+        "evidence": "/opt/cgjob/r1-final-evidence",
+        "source": "/opt/cgjob/r1-r3-src",
+        "tmp_bytes": 57
+      },
+      "grant_sha256": "1f1cdc76bbbd36292ea0181f06d01784820bd0ef62519430224adc43ac2fe503",
+      "head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "payload_sha256": "b0928da4442334960ebea5b3f482cddd432eb8b18dc1235db8c3d98dbfbcdda5",
+      "phases": [
+        "01-features-before",
+        "02-scoped-exact-debug",
+        "03-scoped-exact-debug",
+        "04-scoped-exact-release",
+        "05-scoped-exact-release",
+        "06-full-matrix",
+        "07-non-test-release-build",
+        "08-non-test-gate-absence",
+        "09-stack-exact-debug",
+        "10-stack-exact-debug",
+        "11-stack-exact-debug",
+        "12-stack-exact-debug",
+        "13-stack-exact-debug",
+        "14-stack-exact-debug",
+        "15-stack-exact-debug",
+        "16-stack-exact-release",
+        "17-stack-exact-release",
+        "18-stack-exact-release",
+        "19-stack-exact-release",
+        "20-stack-exact-release",
+        "21-stack-exact-release",
+        "22-stack-exact-release",
+        "23-features-after"
+      ],
+      "plan_sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+      "source_files": 1519,
+      "stage_sha256": "2d37cb6a2fad7da2a8ff4fb0f4d66c5cfd1181d5053120fbd0d98d5a8668901a"
+    },
+    "native": {
+      "budget_contract": "full7200sec other1800/small180;21600sec execution admission budget, reserve whole next phase timeout+240sec transport/fetch/cleanup before launch (not external hard whole-machine deadline);host2GiB/Linuxguest512MiB/nativeguest2GiB",
+      "control_hashes": {
+        "command-plan.json": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+        "launch_phase.py": "0657ff243c3f9bf7669eb5dbf577081057f229b02b8b08ff25b6f1a568edd793",
+        "native_verify_driver.py": "ab2211e15fe8ba4db17086c257523557a8dcb360af01256140845b21eccb6112",
+        "non_test_symbols.py": "1137760f9fc8730ebc31fa0de3af93f268dda08735b8f1b68698aa3377d798c0",
+        "source-manifest.json": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef"
+      },
+      "diagnostic_dependency": {
+        "guest13_receipts_gated_by_stage_source": true,
+        "manifest_identical": true,
+        "state": "NOT_READY_UNTIL_COMPLETED_SUMMARY_EXISTS",
+        "summary_exists": false,
+        "summary_path": "/Users/ys/Code/zeropw-mlp-evidence/compaction-R1-native-diagnostic-20261108/host-run-summary.json"
+      },
+      "driver_sha256": "ab2211e15fe8ba4db17086c257523557a8dcb360af01256140845b21eccb6112",
+      "env_scope": {
+        "control": "/private/var/zeropw-R1-native-final-control",
+        "evidence": "/Volumes/ZeroPWBuild/cg-native-r1/r1-final-evidence",
+        "source": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+        "tmp_bytes": 57
+      },
+      "grant_sha256": "3efa70c984867cb611179b2c9c8549e8f867ba55d89113eb2cb4c25c5bce014a",
+      "head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "payload_sha256": "3fb04d87e88a37c8bfa7c8794ff8d5f070be15d90a0bbb0283f29d0209f3e226",
+      "phases": [
+        "01-features-before",
+        "02-scoped-exact-debug",
+        "03-scoped-exact-debug",
+        "04-scoped-exact-release",
+        "05-scoped-exact-release",
+        "06-full-matrix",
+        "07-non-test-release-build",
+        "08-non-test-gate-absence",
+        "09-stack-exact-debug",
+        "10-stack-exact-debug",
+        "11-stack-exact-debug",
+        "12-stack-exact-debug",
+        "13-stack-exact-debug",
+        "14-stack-exact-debug",
+        "15-stack-exact-debug",
+        "16-stack-exact-release",
+        "17-stack-exact-release",
+        "18-stack-exact-release",
+        "19-stack-exact-release",
+        "20-stack-exact-release",
+        "21-stack-exact-release",
+        "22-stack-exact-release",
+        "23-features-after"
+      ],
+      "plan_sha256": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+      "source_files": 1519,
+      "stage_sha256": "5d9053303c1e398926bccfd978bfb0e1108b721a5ac144003c1ed28d63c6a9b9"
+    }
+  },
+  "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+  "schema": "Sol-bounded-final-continuation-DATA-plan-audit-v1",
+  "scope": "STATIC DATA ONLY, no helper/product/transport/VM/runtime execution or active-delegate query",
+  "source_files": 1519,
+  "transport_sha256": "f11d5291de16403acdb30627427b42c418c72db166a62ea8d761bc6fd5a95357"
+}
