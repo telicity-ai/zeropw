@@ -1,0 +1,261 @@
+{
+  "archive_sha256": "5645de1fd84061d93b3d868efff25198944001dd40bf3c03b8e350a9436e4894",
+  "overall": "IN_PROGRESS; no current fullPASS claimed",
+  "phases": [
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "tree",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "-e",
+        "features"
+      ],
+      "command_plan_sha256": "e106d85e541a218299b9f6f4f2b95fd811316d5e03ae92b770d973b862a40ade",
+      "driver_exit": 0,
+      "driver_sha256": "e8b101722278b3c15cefeea8c8f09f2b6353149e73f4cc178a790abb392fe6be",
+      "failure_class": null,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_waited": true,
+      "phase": "01-features-before",
+      "remaining_assigned_uid_processes": [],
+      "rust_tree": "7cfa2b85d103b50bc5d941f3b6165fe38b51cbd5",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_head": "563de18b61b87b00e33faed955c43f14db43f681",
+      "source_manifest_sha256": "496ba2d16c7ba33300af3329babce07e16503c4492c64c1790945a8710e65b66",
+      "test_exit": 0,
+      "test_summaries": []
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "fmt",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--all",
+        "--check"
+      ],
+      "command_plan_sha256": "e106d85e541a218299b9f6f4f2b95fd811316d5e03ae92b770d973b862a40ade",
+      "driver_exit": 0,
+      "driver_sha256": "e8b101722278b3c15cefeea8c8f09f2b6353149e73f4cc178a790abb392fe6be",
+      "failure_class": null,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_waited": true,
+      "phase": "02-format",
+      "remaining_assigned_uid_processes": [],
+      "rust_tree": "7cfa2b85d103b50bc5d941f3b6165fe38b51cbd5",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_head": "563de18b61b87b00e33faed955c43f14db43f681",
+      "source_manifest_sha256": "496ba2d16c7ba33300af3329babce07e16503c4492c64c1790945a8710e65b66",
+      "test_exit": 0,
+      "test_summaries": []
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "clippy",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "command_plan_sha256": "e106d85e541a218299b9f6f4f2b95fd811316d5e03ae92b770d973b862a40ade",
+      "driver_exit": 0,
+      "driver_sha256": "e8b101722278b3c15cefeea8c8f09f2b6353149e73f4cc178a790abb392fe6be",
+      "failure_class": null,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_waited": true,
+      "phase": "02-clippy-preflight",
+      "remaining_assigned_uid_processes": [],
+      "rust_tree": "7cfa2b85d103b50bc5d941f3b6165fe38b51cbd5",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_head": "563de18b61b87b00e33faed955c43f14db43f681",
+      "source_manifest_sha256": "496ba2d16c7ba33300af3329babce07e16503c4492c64c1790945a8710e65b66",
+      "test_exit": 0,
+      "test_summaries": []
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "team::sync::compaction_heads_tests::compaction_heads_deferred_prefilter_stale_forward_receipt_uses_locked_sequence",
+        "--",
+        "--exact"
+      ],
+      "command_plan_sha256": "e106d85e541a218299b9f6f4f2b95fd811316d5e03ae92b770d973b862a40ade",
+      "driver_exit": 0,
+      "driver_sha256": "e8b101722278b3c15cefeea8c8f09f2b6353149e73f4cc178a790abb392fe6be",
+      "failure_class": null,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_waited": true,
+      "phase": "03-new-exact",
+      "remaining_assigned_uid_processes": [],
+      "rust_tree": "7cfa2b85d103b50bc5d941f3b6165fe38b51cbd5",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_head": "563de18b61b87b00e33faed955c43f14db43f681",
+      "source_manifest_sha256": "496ba2d16c7ba33300af3329babce07e16503c4492c64c1790945a8710e65b66",
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 737,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ]
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "team::sync::compaction_heads_tests::compaction_heads_authorized_fact_cache_read_pause_keeps_envs_available",
+        "--",
+        "--exact"
+      ],
+      "command_plan_sha256": "e106d85e541a218299b9f6f4f2b95fd811316d5e03ae92b770d973b862a40ade",
+      "driver_exit": 0,
+      "driver_sha256": "e8b101722278b3c15cefeea8c8f09f2b6353149e73f4cc178a790abb392fe6be",
+      "failure_class": null,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_waited": true,
+      "phase": "04-new-exact",
+      "remaining_assigned_uid_processes": [],
+      "rust_tree": "7cfa2b85d103b50bc5d941f3b6165fe38b51cbd5",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_head": "563de18b61b87b00e33faed955c43f14db43f681",
+      "source_manifest_sha256": "496ba2d16c7ba33300af3329babce07e16503c4492c64c1790945a8710e65b66",
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 737,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ]
+    }
+  ],
+  "scope": "completed immutable five-phase snapshot, not full verification",
+  "source": "563de18b61b87b00e33faed955c43f14db43f681"
+}

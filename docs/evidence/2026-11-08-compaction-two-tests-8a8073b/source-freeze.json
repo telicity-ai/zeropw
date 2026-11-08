@@ -1,0 +1,46 @@
+{
+  "schema": "Root-two-test-canonical-source-freeze-v1",
+  "as_of_utc": "2026-11-08T09:40:10.401910+00:00",
+  "base": "5f4d045f289c53c41178f3f062f6c6f74fb561e2",
+  "head": "8a8073b3d876bb3f83a628a7fdbd2902e8b40851",
+  "tree": "a43f60ea5438355879c90f9bf4bb6c63cd0e6679",
+  "rust_tree": "d63be7c07896e271bb48610463f4a6e027581f59",
+  "source_files": 1464,
+  "allowed_paths": [
+    "rust/src/team/commit.rs",
+    "rust/src/team/compaction_heads.rs",
+    "rust/src/team/sync.rs"
+  ],
+  "protected_paths": 1461,
+  "model": "actual gpt-6.1-sol/ultra Root personally implemented; effective service tier unexposed",
+  "implementation_commits": [
+    "cc0d754c2f449b7aaafbe380204158239acbc42d",
+    "bee3478fc4260addddfc17f76dc71019afda198d",
+    "8a8073b3d876bb3f83a628a7fdbd2902e8b40851"
+  ],
+  "behavior": "only2cfgtest production-body statements plus private scoped test support and2new unit tests; no production release behavior/dependency/CI/schema/old tests modified",
+  "validation": "Linux and native newexact tests passed1each plus fmt/focused running; both full matrices in progress, no fullPASS/review/acceptance claimed here",
+  "all_findings": "OPEN",
+  "artifacts": {
+    "preservation.json": {
+      "bytes": 802,
+      "sha256": "856c829a52fde0d998fb06f3dc32aa7ec62ce9faa886e4255ca795d387be410f"
+    },
+    "canonical-source-manifest.json": {
+      "bytes": 394159,
+      "sha256": "c453a1c337c0870a96c1ca51e21785b313a317d13c892225bb8e97feefcfd4cd"
+    },
+    "canonical-source.tar": {
+      "bytes": 24954880,
+      "sha256": "5379b134fc5e2bd50aa14d802b7990d9962366144efe2c76ab41f80c6d6b3b38"
+    },
+    "canonical.patch": {
+      "bytes": 33028,
+      "sha256": "fb7d333caa8493c491cc8f0e3cc29aeaff81ac501eb27e1fdc5b2b46128927d8"
+    },
+    "implementation-unformatted.patch": {
+      "bytes": 28758,
+      "sha256": "4bc3d86d1c1c53f75cbcc32f9e034b1bdf33db06567e29db7b62cbdd7f580965"
+    }
+  }
+}

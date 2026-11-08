@@ -15,9 +15,10 @@
       "description": "Static reasoning, not executed. prepare() resolves each required author's public DeviceRecord only from identity_document.members, which compact builds with the fact-free fold::fold over live commits (sync.rs:9257). Receipt admits commits using commit.rs device_registry (commit.rs:2263-2290). That registry takes the device of EVERY verified env.init/member.add op, whether or not fold accepted the op. fold computes FoldResult.vector over every ordered commit, including skipped ones (fold.rs:2048-2056). Consider an author Y whose member.add was skipped by fold: for example a non-admin author (op_member_add returns not_admin, fold.rs:990-992), or a legitimate race where the adding admin's role was removed earlier in HLC order. Y's own signed commits are accepted and stored and enter snapshot.vector. They then become a required slot, local_record(Y) returns team_compaction_head_unavailable, and every later compact of the environment refuses. Before this change those commits would simply have been compacted. Y cannot be removed from the vector and its member.add can never be pruned, so the refusal has no recovery path. It is fail-closed (no data loss, no unlink), but it is a permanent compaction denial that any member able to author commits can trigger, and an ordinary concurrent role change can trigger it by accident. No test covers a stored author outside the fold member map.",
       "required_change": "Decide and implement one bounded semantics inside the allowed files. Recommended: source signature-verification material for required heads with the same rule receipt used. Take the first self-verifying env.init owner_device/member.add device with a matching fingerprint from the retained live commits, re-implemented privately in compaction_heads.rs because commit.rs is protected. Still require record.verify(), fingerprint==author, full-record equality for cached slots and verify_commit. State in a comment that this is public signature material, not membership authority. Alternatively, keep such authors' commits live and document why they are not cut evidence. Either way, add a real-compactor test: a non-admin member.add of Y, then Y's commit, all older than the age cutoff, with literal expected slot/cache/deletion outcomes. Also add the reopen/second-compact case.",
       "status": "OPEN",
-      "resolution_evidence": "Implemented source and targeted Linux debug observations at9679097/Rust915528 only. Still OPEN: two deterministic tests, full both-OS/release/exact validation, actual Opus re-review and Astra acceptance missing. Original severity/criteria retained.",
+      "resolution_evidence": "Two scoped tests at8a: bothOS exact/focused debug+release pass. Linux8a1874testsPASS but overallFAIL strictClippy; separate equal-zero octal563 correction passes Linux strictClippy/newexact, fullnewLinux and oldnative active. OPEN pending complete source-bound validation, actual Opus re-review and Astra acceptance.",
       "historical_resolution_evidence": [
-        "NONE; no fix implemented/tested/reviewed"
+        "NONE; no fix implemented/tested/reviewed",
+        "Implemented source and targeted Linux debug observations at9679097/Rust915528 only. Still OPEN: two deterministic tests, full both-OS/release/exact validation, actual Opus re-review and Astra acceptance missing. Original severity/criteria retained."
       ]
     },
     {
@@ -28,9 +29,10 @@
       "description": "Static reasoning, not executed. The new rule refuses when a higher required slot's HLC is <= the cached head's HLC (compaction_heads.rs:320-325). Receipt enforces per-author HLC monotonicity only against the immediately previous sequence when the store still holds it: hlc_not_above_previous returns false when get(author, seq-1) is None (commit.rs:2149-2156). The protected receipt path never consults the cache. After a compaction deletes author A's data head n-1, which is now only in the cache, a commit A:n with any HLC <= the deleted head's HLC passes receipt, the past-wall check and the store. It is not future-skewed, so no deferral occurs. Once A:n is older than COMPACT_MIN_AGE_MS and is the required slot, prepare returns team_compaction_head_invalid on every attempt. The refusal clears only if A later produces a higher, monotone, aged head; if A is idle or removed it never clears. The cache therefore imposes an invariant that the existing admission path does not guarantee after compaction. A malicious or clock-reset member device can turn that gap into a persistent compaction denial. It is fail-closed (no data loss), but no test exercises a regressed HLC arriving through real receipt after compaction; the unit test only constructs prepare() inputs directly.",
       "required_change": "Escalate to the coordinator/Astra for a bounded decision, because closing this at admission needs protected commit.rs/sync receipt changes; that is a STOP under the task. Options: (a) a separately scoped change so receipt compares seq n against the cached head when seq n-1 is absent (fail closed); (b) keep the refusal but document it as a known permanent-refusal mode with a defined, authority-free operator outcome. Do not silently drop the old evidence. Add a real-path test that compacts, receives A:n with a regressed old HLC through receive_commit, ages it, then compacts, and asserts the literal decided outcome.",
       "status": "OPEN",
-      "resolution_evidence": "Implemented source and targeted Linux debug observations at9679097/Rust915528 only. Still OPEN: two deterministic tests, full both-OS/release/exact validation, actual Opus re-review and Astra acceptance missing. Original severity/criteria retained.",
+      "resolution_evidence": "Two scoped tests at8a: bothOS exact/focused debug+release pass. Linux8a1874testsPASS but overallFAIL strictClippy; separate equal-zero octal563 correction passes Linux strictClippy/newexact, fullnewLinux and oldnative active. OPEN pending complete source-bound validation, actual Opus re-review and Astra acceptance.",
       "historical_resolution_evidence": [
-        "NONE; no fix implemented/tested/reviewed"
+        "NONE; no fix implemented/tested/reviewed",
+        "Implemented source and targeted Linux debug observations at9679097/Rust915528 only. Still OPEN: two deterministic tests, full both-OS/release/exact validation, actual Opus re-review and Astra acceptance missing. Original severity/criteria retained."
       ]
     },
     {
@@ -41,9 +43,10 @@
       "description": "Static reasoning, not executed. sync_directories requires symlink_metadata(current).is_dir() for every directory from the child up to and including StateDir.path. Existing StateDir::require uses is_dir(), which follows symlinks, so a symlinked state root (or a symlinked team/ or team/{env} directory) is otherwise accepted. With such a layout, every compaction fails with team_compaction_head_persist_failed. The failure comes only after fold::save_snapshot and save_snapshot_record have already written new metadata (sync.rs:9262-9285). It is fail-closed (no unlink), but compaction becomes permanently unavailable for that layout, and the refusal is not a prospective check made before mutation. check_snapshot likewise uses the symlink-following read_json without the regular-file check that read_record applies.",
       "required_change": "Before any snapshot/record write, validate the durability-barrier preconditions (directory chain type and containment). Then either explicitly and fixed-reason refuse a symlinked root/ancestor before mutation, documented as unsupported, or canonicalize StateDir.path once and then require no symlinks below it. Apply the same regular-file check to the snapshot readback. Add a test with a symlinked state root or team directory that asserts the decided outcome and that no new snapshot/record/cache files exist.",
       "status": "OPEN",
-      "resolution_evidence": "Implemented source and targeted Linux debug observations at9679097/Rust915528 only. Still OPEN: two deterministic tests, full both-OS/release/exact validation, actual Opus re-review and Astra acceptance missing. Original severity/criteria retained.",
+      "resolution_evidence": "Two scoped tests at8a: bothOS exact/focused debug+release pass. Linux8a1874testsPASS but overallFAIL strictClippy; separate equal-zero octal563 correction passes Linux strictClippy/newexact, fullnewLinux and oldnative active. OPEN pending complete source-bound validation, actual Opus re-review and Astra acceptance.",
       "historical_resolution_evidence": [
-        "NONE; no fix implemented/tested/reviewed"
+        "NONE; no fix implemented/tested/reviewed",
+        "Implemented source and targeted Linux debug observations at9679097/Rust915528 only. Still OPEN: two deterministic tests, full both-OS/release/exact validation, actual Opus re-review and Astra acceptance missing. Original severity/criteria retained."
       ]
     }
   ],
@@ -72,5 +75,17 @@
     "unrun": "fullunchangedverify/strictClippy/allotherintegration/signer/docs/release/exact14/macOS/re-review/acceptance",
     "authority": "Root retains exclusive fresh cf01/no active runner. No otherworker grant; oldMacstopped/HOLD and Goquarantine unchanged",
     "scope_stop": "Request finite actualAstra testhook scope; Root will personally implement small tests. No extra implementation delegate."
+  },
+  "controller_two_test_followup_2026_11_08": {
+    "slice_head": "8a8073b3d876bb3f83a628a7fdbd2902e8b40851",
+    "slice_rust_tree": "d63be7c07896e271bb48610463f4a6e027581f59",
+    "paths": "exact3/1461protected at8a, alloldtestbodies protected",
+    "separate_style_head": "563de18b61b87b00e33faed955c43f14db43f681",
+    "style_change": "test-only from_mode(0) to from_mode(0o0), equalzero; original8a binding preserved",
+    "Linux8a": "FAILstrictClippy;112steps107targets1874passed0failed5ignored;17laterNOTRUN",
+    "native8a": "8phasesPASS; fullactive, laterNOTRUN at snapshot",
+    "Linux563": "fmt/strictClippy/newexact1eachPASS;27phasecampaignACTIVE",
+    "review_acceptance": "NOTRUN/OPEN",
+    "global_holds": "unchangedOPEN"
   }
 }
