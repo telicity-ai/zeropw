@@ -472,9 +472,7 @@ pub(super) fn observe_cached_hlcs(
         .map(|entry| (&entry.author, &entry.author_seq))
         .collect();
     for (author, seq) in &vector {
-        if *seq > 0
-            && !live_slots.contains(&(author, seq))
-            && image.vector.get(author) != Some(seq)
+        if *seq > 0 && !live_slots.contains(&(author, seq)) && image.vector.get(author) != Some(seq)
         {
             return Err(unavailable());
         }
@@ -872,8 +870,7 @@ mod tests {
         .unwrap()
     }
     fn identity(keys: &[DeviceKey]) -> HashMap<String, DeviceRecord> {
-        keys
-            .iter()
+        keys.iter()
             .map(|key| (key.fingerprint().unwrap(), key.record().unwrap()))
             .collect()
     }
@@ -894,7 +891,9 @@ mod tests {
         state.create().unwrap();
         let env = env(&key(1));
         assert_eq!(
-            preflight_layout(&state, &env, &1.into()).unwrap_err().reason,
+            preflight_layout(&state, &env, &1.into())
+                .unwrap_err()
+                .reason,
             "team_compaction_lock_required"
         );
         let _lock = state.lock().unwrap();
@@ -980,7 +979,9 @@ mod tests {
         fs::write(directory.join("compaction_heads.json"), b"synthetic-cache").unwrap();
         preflight_layout(&state, &env, &1.into()).unwrap();
         assert_eq!(
-            fs::read(directory.join("snapshots/1.json")).unwrap().as_slice(),
+            fs::read(directory.join("snapshots/1.json"))
+                .unwrap()
+                .as_slice(),
             b"synthetic-regular-file"
         );
     }
@@ -1214,8 +1215,18 @@ mod tests {
         let store = CommitStore::new(&state, &env);
         let candidate = signed(&key, &env, 3.into(), "1000001-0007", Value::Null);
         let mut clock = Hlc::default();
-        assert_eq!(observe_cached_hlcs(&store, &[], &mut clock).unwrap_err().reason, "team_compaction_lock_required");
-        assert_eq!(cached_hlc_not_above_previous(&store, &candidate, None).unwrap_err().reason, "team_compaction_lock_required");
+        assert_eq!(
+            observe_cached_hlcs(&store, &[], &mut clock)
+                .unwrap_err()
+                .reason,
+            "team_compaction_lock_required"
+        );
+        assert_eq!(
+            cached_hlc_not_above_previous(&store, &candidate, None)
+                .unwrap_err()
+                .reason,
+            "team_compaction_lock_required"
+        );
         let _lock = state.lock().unwrap();
         let legacy = CommitStore::new(&state, "legacy-not-a-new-env-id");
         observe_cached_hlcs(&legacy, &[], &mut clock).unwrap();
@@ -1228,9 +1239,18 @@ mod tests {
         store.append(&head).unwrap();
         let live = store.all_commits().unwrap();
         let snapshot = snapshot(&env, &live);
-        let prepared = prepare(&state, &env, &snapshot, &live, &commit::device_registry(&live)).unwrap();
+        let prepared = prepare(
+            &state,
+            &env,
+            &snapshot,
+            &live,
+            &commit::device_registry(&live),
+        )
+        .unwrap();
         fold::save_snapshot(&state, &env, &2.into(), &snapshot).unwrap();
-        state.write_json(&cache_path(&env), &prepared.image).unwrap();
+        state
+            .write_json(&cache_path(&env), &prepared.image)
+            .unwrap();
         fs::remove_file(state.path.join(format!("team/{env}/commits/{fp}/2.json"))).unwrap();
         let retained = store.all_commits().unwrap();
         assert!(cached_hlc_not_above_previous(&store, &candidate, Some(&retained)).unwrap());
@@ -1239,7 +1259,9 @@ mod tests {
         assert_eq!(clock.render(), "1000001-0007");
         let initial = Hlc::new(7, 8);
         for failure in ["missing_head", "record", "coverage", "json"] {
-            state.write_json(&cache_path(&env), &prepared.image).unwrap();
+            state
+                .write_json(&cache_path(&env), &prepared.image)
+                .unwrap();
             fold::save_snapshot(&state, &env, &2.into(), &snapshot).unwrap();
             let mut current = initial.clone();
             match failure {
@@ -1249,7 +1271,10 @@ mod tests {
                     fold::save_snapshot(&state, &env, &2.into(), &later).unwrap();
                 }
                 "record" => {
-                    let alternative = DeviceKey { sign_seed: key.sign_seed.clone(), agree_private: SecretBytes::new(vec![99; 32]) };
+                    let alternative = DeviceKey {
+                        sign_seed: key.sign_seed.clone(),
+                        agree_private: SecretBytes::new(vec![99; 32]),
+                    };
                     let mut image = prepared.image.clone();
                     image["heads"][0]["device"] = alternative.record().unwrap().to_dict();
                     state.write_json(&cache_path(&env), &image).unwrap();
@@ -1263,11 +1288,20 @@ mod tests {
                 _ => unreachable!(),
             }
             let error = observe_cached_hlcs(&store, &retained, &mut current).unwrap_err();
-            assert_eq!(error.reason, if failure == "missing_head" { "team_compaction_head_unavailable" } else { "team_compaction_head_invalid" });
+            assert_eq!(
+                error.reason,
+                if failure == "missing_head" {
+                    "team_compaction_head_unavailable"
+                } else {
+                    "team_compaction_head_invalid"
+                }
+            );
             assert!(error.detail.is_empty());
             assert_eq!(current, initial);
         }
-        state.write_json(&cache_path(&env), &prepared.image).unwrap();
+        state
+            .write_json(&cache_path(&env), &prepared.image)
+            .unwrap();
         fold::save_snapshot(&state, &env, &2.into(), &snapshot).unwrap();
         fs::remove_file(state.path.join(format!("team/{env}/commits/{fp}/1.json"))).unwrap();
         let error = observe_cached_hlcs(&store, &[], &mut clock).unwrap_err();

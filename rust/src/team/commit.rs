@@ -2295,7 +2295,9 @@ pub(super) fn digit_stems(directory: &std::path::Path) -> Result<Vec<PyInt>> {
 /// full normalized record wins in the supplied total order, then original op
 /// order; fold-skipped and removed authors still supply signature material.
 /// Port of `_device_registry`.
-pub(super) fn device_registry(commits: &[Commit]) -> std::collections::HashMap<String, DeviceRecord> {
+pub(super) fn device_registry(
+    commits: &[Commit],
+) -> std::collections::HashMap<String, DeviceRecord> {
     let mut registry = std::collections::HashMap::new();
     for commit in commits {
         for op in &commit.ops {
@@ -2513,16 +2515,28 @@ mod compaction_heads_tests {
         }
     }
 
-    fn announcement(author: &DeviceKey, env: &str, seq: PyInt, hlc: &str, records: Vec<Value>) -> Commit {
+    fn announcement(
+        author: &DeviceKey,
+        env: &str,
+        seq: PyInt,
+        hlc: &str,
+        records: Vec<Value>,
+    ) -> Commit {
         sign_commit(
             author,
             env,
             seq,
             hlc,
             &BTreeMap::new(),
-            records.into_iter().map(|device| json!({"op":"member.add","device":device,
-                "name":"synthetic-record","role":"user","wraps":{}})).collect(),
-        ).unwrap()
+            records
+                .into_iter()
+                .map(|device| {
+                    json!({"op":"member.add","device":device,
+                "name":"synthetic-record","role":"user","wraps":{}})
+                })
+                .collect(),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -2533,7 +2547,10 @@ mod compaction_heads_tests {
         let _lock = state.lock().unwrap();
         let mut authors = [key(11, 12), key(13, 14)];
         authors.sort_by_key(|device| device.fingerprint().unwrap());
-        let env = format!("{}-0123456789abcdef0123456789abcdef", authors[0].fingerprint().unwrap());
+        let env = format!(
+            "{}-0123456789abcdef0123456789abcdef",
+            authors[0].fingerprint().unwrap()
+        );
         let first = key(15, 16);
         let other = key(15, 17);
         let fp = first.fingerprint().unwrap();
@@ -2543,19 +2560,59 @@ mod compaction_heads_tests {
             raw[field] = json!([raw[field].clone()]);
         }
         raw["extra"] = json!(["public-ignored-field"]);
-        let a1 = announcement(&authors[0], &env, 1.into(), "1000-0000", vec![raw, other.record().unwrap().to_dict()]);
-        let a2 = announcement(&authors[0], &env, 2.into(), "1000-0000", vec![other.record().unwrap().to_dict()]);
-        let b1 = announcement(&authors[1], &env, 1.into(), "1000-0000", vec![other.record().unwrap().to_dict()]);
+        let a1 = announcement(
+            &authors[0],
+            &env,
+            1.into(),
+            "1000-0000",
+            vec![raw, other.record().unwrap().to_dict()],
+        );
+        let a2 = announcement(
+            &authors[0],
+            &env,
+            2.into(),
+            "1000-0000",
+            vec![other.record().unwrap().to_dict()],
+        );
+        let b1 = announcement(
+            &authors[1],
+            &env,
+            1.into(),
+            "1000-0000",
+            vec![other.record().unwrap().to_dict()],
+        );
         let store = CommitStore::new(&state, &env);
-        for entry in [&b1, &a1, &a2] { store.append(entry).unwrap(); }
+        for entry in [&b1, &a1, &a2] {
+            store.append(entry).unwrap();
+        }
         // Literal first record: numeric HLC tie -> author -> stable ascending
         // sequence traversal -> original op order. Not a fold/member rule.
-        assert_eq!(store.retained_device_registry().unwrap()[&fp], first.record().unwrap());
-        let earlier = announcement(&authors[1], &env, 1.into(), "999-9999", vec![other.record().unwrap().to_dict()]);
-        state.write_json(&store.commit_path(&earlier.author, &1.into()), &earlier.to_dict()).unwrap();
-        assert_eq!(store.retained_device_registry().unwrap()[&fp], other.record().unwrap());
+        assert_eq!(
+            store.retained_device_registry().unwrap()[&fp],
+            first.record().unwrap()
+        );
+        let earlier = announcement(
+            &authors[1],
+            &env,
+            1.into(),
+            "999-9999",
+            vec![other.record().unwrap().to_dict()],
+        );
+        state
+            .write_json(
+                &store.commit_path(&earlier.author, &1.into()),
+                &earlier.to_dict(),
+            )
+            .unwrap();
+        assert_eq!(
+            store.retained_device_registry().unwrap()[&fp],
+            other.record().unwrap()
+        );
         // Finite-history parity is secondary to the literal expectations.
-        assert_eq!(store.retained_device_registry().unwrap(), device_registry(&store.all_commits().unwrap()));
+        assert_eq!(
+            store.retained_device_registry().unwrap(),
+            device_registry(&store.all_commits().unwrap())
+        );
     }
 
     #[test]
@@ -2567,8 +2624,17 @@ mod compaction_heads_tests {
         let state = Arc::new(StateDir::new(tmp.path().join("state")));
         state.create().unwrap();
         let author = key(27, 28);
-        let env = format!("{}-0123456789abcdef0123456789abcdef", author.fingerprint().unwrap());
-        let mut incoming = announcement(&author, &env, 1.into(), "1000-0000", vec![author.record().unwrap().to_dict()]);
+        let env = format!(
+            "{}-0123456789abcdef0123456789abcdef",
+            author.fingerprint().unwrap()
+        );
+        let mut incoming = announcement(
+            &author,
+            &env,
+            1.into(),
+            "1000-0000",
+            vec![author.record().unwrap().to_dict()],
+        );
         incoming.format = "synthetic-unknown-format".into();
         let audit = Audit::new(&state, crate::clock::system());
         let held = Arc::new(AtomicBool::new(false));
@@ -2579,13 +2645,23 @@ mod compaction_heads_tests {
                 listener_held.store(listener_state.locked_by_current_thread(), Ordering::SeqCst);
             }
         });
-        assert_eq!(receive_commit(&CommitStore::new(&state, &env), &incoming, 1000, Some(&audit)).unwrap(), "rejected");
+        assert_eq!(
+            receive_commit(
+                &CommitStore::new(&state, &env),
+                &incoming,
+                1000,
+                Some(&audit)
+            )
+            .unwrap(),
+            "rejected"
+        );
         assert!(held.load(Ordering::SeqCst));
         assert!(!state.locked_by_current_thread());
     }
 
     #[test]
-    fn compaction_heads_retained_registry_sparse_huge_and_alternate_stems_use_only_canonical_files() {
+    fn compaction_heads_retained_registry_sparse_huge_and_alternate_stems_use_only_canonical_files()
+    {
         let tmp = TempDir::new().unwrap();
         let state = StateDir::new(tmp.path().join("state"));
         state.create().unwrap();
@@ -2599,22 +2675,57 @@ mod compaction_heads_tests {
         let store = CommitStore::new(&state, &env);
         let huge = PyInt::from_json_integer(
             &pyjson::loads("1844674407370955161600000000000000000001").unwrap(),
-        ).unwrap();
-        let original = announcement(&author, &env, huge.clone(), "1000-0000", vec![target.record().unwrap().to_dict()]);
+        )
+        .unwrap();
+        let original = announcement(
+            &author,
+            &env,
+            huge.clone(),
+            "1000-0000",
+            vec![target.record().unwrap().to_dict()],
+        );
         // Synthetic sparse retained history: never call legacy all_commits on
         // this vector, and never construct 1..huge as part of the new walker.
-        state.write_json(&store.commit_path(&fp, &huge), &original.to_dict()).unwrap();
-        let ignored = announcement(&author, &env, 1.into(), "1-0000", vec![alternate.record().unwrap().to_dict()]);
+        state
+            .write_json(&store.commit_path(&fp, &huge), &original.to_dict())
+            .unwrap();
+        let ignored = announcement(
+            &author,
+            &env,
+            1.into(),
+            "1-0000",
+            vec![alternate.record().unwrap().to_dict()],
+        );
         for stem in ["01", "١", "0"] {
-            state.write_json(&format!("{}/commits/{fp}/{stem}.json", store.root), &ignored.to_dict()).unwrap();
+            state
+                .write_json(
+                    &format!("{}/commits/{fp}/{stem}.json", store.root),
+                    &ignored.to_dict(),
+                )
+                .unwrap();
         }
-        state.write_json(&format!("{}/commits/{fp}/2.json", store.root), &Value::Null).unwrap();
-        assert_eq!(store.retained_device_registry().unwrap()[&target_fp], target.record().unwrap());
+        state
+            .write_json(&format!("{}/commits/{fp}/2.json", store.root), &Value::Null)
+            .unwrap();
+        assert_eq!(
+            store.retained_device_registry().unwrap()[&target_fp],
+            target.record().unwrap()
+        );
         // A padded alias cannot override an existing canonical slot either.
-        state.write_json(&store.commit_path(&fp, &1.into()), &original.to_dict()).unwrap();
-        assert_eq!(store.retained_device_registry().unwrap()[&target_fp], target.record().unwrap());
-        state.write_json(&format!("{}/commits/{fp}/².json", store.root), &Value::Null).unwrap();
-        assert_eq!(store.retained_device_registry().unwrap_err().reason, "state_corrupt");
+        state
+            .write_json(&store.commit_path(&fp, &1.into()), &original.to_dict())
+            .unwrap();
+        assert_eq!(
+            store.retained_device_registry().unwrap()[&target_fp],
+            target.record().unwrap()
+        );
+        state
+            .write_json(&format!("{}/commits/{fp}/².json", store.root), &Value::Null)
+            .unwrap();
+        assert_eq!(
+            store.retained_device_registry().unwrap_err().reason,
+            "state_corrupt"
+        );
     }
 }
 
