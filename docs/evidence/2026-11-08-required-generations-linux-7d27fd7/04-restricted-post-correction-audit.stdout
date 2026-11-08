@@ -1,0 +1,1 @@
+{"state": "DATA_AUDIT_MATCH", "uid": 2000, "groups": [], "privileges": {"CapInh": "0000000000000000", "CapPrm": "0000000000000000", "CapEff": "0000000000000000", "CapBnd": "0000000000000000", "CapAmb": "0000000000000000", "NoNewPrivs": "1"}, "source_files": 1338, "public_crates": 172, "upstream_files": 8194, "control_root_owned_readonly": true, "product_phases_executed": 28}

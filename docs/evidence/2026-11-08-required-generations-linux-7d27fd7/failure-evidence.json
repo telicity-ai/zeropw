@@ -1,0 +1,159 @@
+{
+  "observations": [
+    {
+      "step": "test:native_cli_e2e",
+      "exit": 101,
+      "raw_file": "collected/evidence/27-full-matrix.stdout",
+      "raw_file_sha256": "c48fa00eda0ad47516c2f183de9a784568eea514b195c6f0a4d2d0d04c2e7f25",
+      "failure_section": "\nfailures:\n\n---- test_ssh_connection_through_admin_serve_agent_processes_and_real_sshd stdout ----\n\nthread 'test_ssh_connection_through_admin_serve_agent_processes_and_real_sshd' (27555) panicked at tests/native_cli_e2e.rs:608:5:\nassertion `left == right` failed: {\"connection\":\"box\",\"exit_code\":1,\"finished_at\":\"2026-11-08T00:37:39Z\",\"reason\":null,\"run_id\":\"r-7b638563479c92bc\",\"started_at\":\"2026-11-08T00:37:39Z\",\"state\":\"completed\",\"stderr\":\"\",\"stderr_truncated\":false,\"stdout\":\"This account is currently not available.\\n\",\"stdout_truncated\":false,\"truncated\":false}\n  left: (Some(\"completed\"), Some(1), Some(\"This account is currently not available.\"))\n right: (Some(\"completed\"), Some(0), Some(\"cli-e2e-ssh-first\"))\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n---- test_ssh_connection_without_its_ssh_is_repaired_in_place stdout ----\n\nthread 'test_ssh_connection_without_its_ssh_is_repaired_in_place' (27576) panicked at tests/native_cli_e2e.rs:868:5:\nassertion `left == right` failed: {\"connection\":\"box\",\"exit_code\":1,\"finished_at\":\"2026-11-08T00:37:39Z\",\"reason\":null,\"run_id\":\"r-4b84d15730d799c5\",\"started_at\":\"2026-11-08T00:37:39Z\",\"state\":\"completed\",\"stderr\":\"\",\"stderr_truncated\":false,\"stdout\":\"This account is currently not available.\\n\",\"stdout_truncated\":false,\"truncated\":false}\n  left: (Some(\"completed\"), Some(1), Some(\"This account is currently not available.\"))\n right: (Some(\"completed\"), Some(0), Some(\"cli-e2e-repaired\"))\n\n\nfailures:\n    test_ssh_connection_through_admin_serve_agent_processes_and_real_sshd\n    test_ssh_connection_without_its_ssh_is_repaired_in_place\n\ntest result: FAILED. 4 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.30s\n\n"
+    },
+    {
+      "step": "test:signer_e2e",
+      "exit": 101,
+      "raw_file": "collected/evidence/27-full-matrix.stdout",
+      "raw_file_sha256": "c48fa00eda0ad47516c2f183de9a784568eea514b195c6f0a4d2d0d04c2e7f25",
+      "failure_section": "\nfailures:\n\n---- exec_tool_runs_two_remote_commands_on_one_connection stdout ----\n\nthread 'exec_tool_runs_two_remote_commands_on_one_connection' (29696) panicked at tests/signer_e2e.rs:1068:5:\nassertion `left == right` failed: {\"run_id\":\"r-d1f947b68d3aa24b\",\"connection\":\"box\",\"state\":\"completed\",\"reason\":null,\"exit_code\":1,\"stdout\":\"This account is currently not available.\\n\",\"stderr\":\"\",\"started_at\":\"2026-11-08T00:41:22Z\",\"finished_at\":\"2026-11-08T00:41:22Z\",\"truncated\":false,\"stdout_truncated\":false,\"stderr_truncated\":false}\n  left: (Some(\"completed\"), Some(1))\n right: (Some(\"completed\"), Some(0))\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n\n---- real_ssh_client_authenticates_through_signer_without_private_key stdout ----\n\nthread 'real_ssh_client_authenticates_through_signer_without_private_key' (29701) panicked at tests/signer_e2e.rs:473:5:\n\n\n\nfailures:\n    exec_tool_runs_two_remote_commands_on_one_connection\n    real_ssh_client_authenticates_through_signer_without_private_key\n\ntest result: FAILED. 4 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.65s\n\n"
+    },
+    {
+      "preparation_file": "04-os-setup.sh.txt",
+      "sha256": "3d0cb872293e179fc92fe4dbd16068d4a7ff8c9d3888a5f6366ef9085ffc9b77",
+      "matched_setup_lines": [
+        {
+          "line": 6,
+          "text": "/usr/sbin/useradd --uid 2000 --gid 2000 --home-dir /opt/rgjob/home --no-create-home --shell /usr/sbin/nologin --password '!' rgrun"
+        },
+        {
+          "line": 8,
+          "text": "/usr/bin/install -d -m 0700 -o rgrun -g rgrun /opt/rgjob"
+        },
+        {
+          "line": 9,
+          "text": "/usr/bin/install -d -m 0700 -o rgrun -g rgrun /opt/rgjob/home /opt/rgjob/cargo-home /opt/rgjob/target /opt/rgjob/evidence /opt/rgjob/control /opt/rgjob/src"
+        }
+      ]
+    },
+    {
+      "preparation_file": "05-public-setup.py.txt",
+      "sha256": "319000f7056f038ba4a69a1f0b4598fc730e66be5188abff5f3f2fd15a63217c",
+      "matched_setup_lines": [
+        {
+          "line": 45,
+          "text": "config=Path('/opt/rgjob/cargo-home/config.toml');config.write_text('[net]\\noffline = true\\n[source.crates-io]\\nreplace-with = \"rg-vendored\"\\n[source.rg-vendored]\\ndirectory = \"/opt/rg-vendor\"\\n');os.chown(config,2000,2000);os.chmod(config,0o600)"
+        }
+      ]
+    },
+    {
+      "source_file": "rust/tests/native_cli_e2e.rs",
+      "sha256": "8f87714fb531814c33ed7b86ce461608d6e5b11ed69d0bb28daae9c6a48f1741",
+      "setup_contexts": [
+        {
+          "line": 31,
+          "context": "\nuse native_e2e::{\n    DEMOCLI_BIN, FakeSmtp, Processes, SMTP_PASSWORD, Sshd, assert_exec_children_held_no_key,\n    find_secret, find_secret_in_tree, inspector_reports, parse_message, pid_alive, until, username,\n    write_notify_config, write_ssh_inspector,\n};\nuse serde_json::{Value, json};\n"
+        },
+        {
+          "line": 189,
+          "context": "        (issue[\"status\"].clone(), issue_body[\"title\"].clone()),\n        (json!(201), json!(\"from agent\"))\n    );\n    let (_code, run) = p.agent(&[\"exec\", \"--connection\", \"gh\", \"--\", \"whoami\"], Some(0));\n    let whoami = p.wait_run(run[\"run_id\"].as_str().unwrap(), RUN_TIMEOUT);\n    assert_eq!(\n        (whoami[\"state\"].clone(), whoami[\"exit_code\"].clone()),\n        (json!(\"completed\"), json!(0)),"
+        },
+        {
+          "line": 190,
+          "context": "        (json!(201), json!(\"from agent\"))\n    );\n    let (_code, run) = p.agent(&[\"exec\", \"--connection\", \"gh\", \"--\", \"whoami\"], Some(0));\n    let whoami = p.wait_run(run[\"run_id\"].as_str().unwrap(), RUN_TIMEOUT);\n    assert_eq!(\n        (whoami[\"state\"].clone(), whoami[\"exit_code\"].clone()),\n        (json!(\"completed\"), json!(0)),\n        \"{whoami}\""
+        },
+        {
+          "line": 192,
+          "context": "    let (_code, run) = p.agent(&[\"exec\", \"--connection\", \"gh\", \"--\", \"whoami\"], Some(0));\n    let whoami = p.wait_run(run[\"run_id\"].as_str().unwrap(), RUN_TIMEOUT);\n    assert_eq!(\n        (whoami[\"state\"].clone(), whoami[\"exit_code\"].clone()),\n        (json!(\"completed\"), json!(0)),\n        \"{whoami}\"\n    );\n    let whoami_stdout: Value = serde_json::from_str(whoami[\"stdout\"].as_str().unwrap()).unwrap();"
+        },
+        {
+          "line": 194,
+          "context": "    assert_eq!(\n        (whoami[\"state\"].clone(), whoami[\"exit_code\"].clone()),\n        (json!(\"completed\"), json!(0)),\n        \"{whoami}\"\n    );\n    let whoami_stdout: Value = serde_json::from_str(whoami[\"stdout\"].as_str().unwrap()).unwrap();\n    assert_eq!(whoami_stdout[\"body\"], json!({\"login\": \"synthetic-user\"}));\n"
+        },
+        {
+          "line": 196,
+          "context": "        (json!(\"completed\"), json!(0)),\n        \"{whoami}\"\n    );\n    let whoami_stdout: Value = serde_json::from_str(whoami[\"stdout\"].as_str().unwrap()).unwrap();\n    assert_eq!(whoami_stdout[\"body\"], json!({\"login\": \"synthetic-user\"}));\n\n    // The CLI child holds nothing but the opaque base URL.\n    let (_code, run) = p.agent(&[\"exec\", \"--connection\", \"gh\", \"--\", \"steal\"], Some(0));"
+        },
+        {
+          "line": 197,
+          "context": "        \"{whoami}\"\n    );\n    let whoami_stdout: Value = serde_json::from_str(whoami[\"stdout\"].as_str().unwrap()).unwrap();\n    assert_eq!(whoami_stdout[\"body\"], json!({\"login\": \"synthetic-user\"}));\n\n    // The CLI child holds nothing but the opaque base URL.\n    let (_code, run) = p.agent(&[\"exec\", \"--connection\", \"gh\", \"--\", \"steal\"], Some(0));\n    let steal = p.wait_run(run[\"run_id\"].as_str().unwrap(), RUN_TIMEOUT);"
+        },
+        {
+          "line": 297,
+          "context": "        None,\n    );\n    assert_eq!((code != 0, reason(&revoked)), (true, \"grant_revoked\"));\n    let (code, refused) = p.agent(&[\"exec\", \"--connection\", \"gh\", \"--\", \"whoami\"], None);\n    assert_eq!((code != 0, reason(&refused)), (true, \"grant_revoked\"));\n    // Only the blocked /echo-headers call was added.\n    assert_eq!(p.upstream.requests().len(), 4);\n"
+        },
+        {
+          "line": 549,
+          "context": "    // The only plaintext copy lived in the administrator's own directory.\n    std::fs::remove_file(&key_file).unwrap();\n    let port = sshd.port.to_string();\n    let user = username();\n    p.admin(\n        &[\n            \"connection\",\n            \"create-ssh\","
+        },
+        {
+          "line": 568,
+          "context": "            \"127.0.0.1\",\n            \"--port\",\n            &port,\n            \"--username\",\n            &user,\n            \"--host-key\",\n            &sshd.host_key_line,\n            \"--cli-program\","
+        },
+        {
+          "line": 765,
+          "context": "        0,\n    );\n    let port = sshd.port.to_string();\n    let user = username();\n    let created = p.admin(\n        &[\n            \"connection\",\n            \"create-ssh\","
+        },
+        {
+          "line": 784,
+          "context": "            \"127.0.0.1\",\n            \"--port\",\n            &port,\n            \"--username\",\n            &user,\n            \"--host-key\",\n            &sshd.host_key_line,\n        ],"
+        }
+      ]
+    },
+    {
+      "source_file": "rust/tests/signer_e2e.rs",
+      "sha256": "e84e2e4a44b7e194f1bcaed915905dc6bd3f7657958d42bf01a77fecd50287ed",
+      "setup_contexts": [
+        {
+          "line": 52,
+          "context": "\nfn sshd_path() -> Option<PathBuf> {\n    which(\"sshd\").or_else(|| {\n        let fallback = PathBuf::from(\"/usr/sbin/sshd\");\n        fallback.is_file().then_some(fallback)\n    })\n}\n"
+        },
+        {
+          "line": 186,
+          "context": "        socket_path: &Path,\n        known_host_line: &str,\n        run_dir: &Path,\n        username: &str,\n        user_public_key: &str,\n        remote: &[&str],\n    ) -> std::process::Output {\n        std::fs::create_dir_all(run_dir).unwrap();"
+        },
+        {
+          "line": 220,
+          "context": "                \"-p\",\n            ])\n            .arg(self.port.to_string())\n            .arg(format!(\"{username}@127.0.0.1\"))\n            .arg(\"--\")\n            .args(remote)\n            .env_clear()\n            .env(\"PATH\", std::env::var(\"PATH\").unwrap_or_default())"
+        },
+        {
+          "line": 291,
+          "context": "    manager: std::sync::Arc<signer::SignerManager>,\n    user_key: sshwire::Ed25519PrivateKey,\n    sshd: Sshd,\n    username: String,\n    ssh_bin: PathBuf,\n}\n\nfn build_fixture() -> Fixture {"
+        },
+        {
+          "line": 333,
+          "context": "        )\n        .unwrap();\n    ctx.policy.create_principal(\"agent-1\", \"default\").unwrap();\n    let username = whoami();\n    let sshd = Sshd::new(\n        &sshd_bin,\n        &keygen_bin,\n        &root,"
+        },
+        {
+          "line": 354,
+          "context": "        manager,\n        user_key,\n        sshd,\n        username,\n        ssh_bin,\n    }\n}\n"
+        },
+        {
+          "line": 384,
+          "context": "    }\n}\n\nfn whoami() -> String {\n    std::env::var(\"USER\")\n        .or_else(|_| std::env::var(\"LOGNAME\"))\n        .unwrap_or_else(|_| {\n            let out = Command::new(\"id\").arg(\"-un\").output().expect(\"run id -un\");"
+        },
+        {
+          "line": 414,
+          "context": "                        P::SshTarget::new(\n                            \"127.0.0.1\",\n                            self.sshd.port as i64,\n                            &self.username,\n                            vec![host_key_line.to_string()],\n                        )\n                        .unwrap(),\n                    ),"
+        },
+        {
+          "line": 469,
+          "context": "        &binding.socket_path,\n        &f.sshd.host_key_line,\n        &run_dir,\n        &f.username,\n        &user_pub,\n        &[\"echo\", \"hello-from-sshd\"],\n    );\n    assert!("
+        },
+        {
+          "line": 489,
+          "context": "        &binding.socket_path,\n        &f.sshd.host_key_line,\n        &run_dir,\n        &f.username,\n        &user_pub,\n        &[\"printf\", \"second-%s\", \"command\"],\n    );\n    assert!("
+        },
+        {
+          "line": 546,
+          "context": "        &binding.socket_path,\n        &f.sshd.host_key_line,\n        &run_dir,\n        &f.username,\n        &user_pub,\n        &[\"echo\", \"should-not-run\"],\n    );\n    assert!(!result.status.success());"
+        },
+        {
+          "line": 585,
+          "context": "        &binding.socket_path,\n        &f.sshd.host_key_line,\n        &run_dir,\n        &f.username,\n        &user_pub,\n        &[\"echo\", \"should-not-run\"],\n    );\n    assert!(!result.status.success());"
+        },
+        {
+          "line": 996,
+          "context": "                    P::SshTarget::new(\n                        \"127.0.0.1\",\n                        i64::from(f.sshd.port),\n                        &f.username,\n                        vec![f.sshd.host_key_line.clone()],\n                    )\n                    .unwrap(),\n                ),"
+        }
+      ]
+    }
+  ],
+  "disposition": "Preserve FAIL. No OS/account query/change, test/source fix, retry, waiver, resource increase or feature-after substitute. Setup nologin DATA is consistent with observed unavailable account; runtime account state was not independently queried."
+}

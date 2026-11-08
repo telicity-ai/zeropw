@@ -248,9 +248,14 @@ Virtual macOS passed unchanged111 steps/106 targets/1819 tests,0 failures,
 5 ignored (four signer probes separately passed; one fixture generator).
 All14 actual256KiB exact selectors each ran one passing test. Source/modes and
 protected fixtures matched; the assigned own native resource was released.
-Linux remains NOTRUN and validation INCOMPLETE. A valid wide single-commit trial
-timed out at1800seconds and remains incomplete; the final distributed-commit
-probe is different input and does not resolve that inherited cost. No M2,
+The later [Linux attempt](evidence/2026-11-08-required-generations-linux-7d27fd7/README.md)
+ran111 steps/106 targets:1812 passed/4 failed/5 ignored, with two SSH targets
+failing under the coordinator-created nologin account. All14 exact selectors
+passed; feature-after is NOTRUN. The account was corrected with management-login
+denial and a preserved privilege boundary; product revalidation is still pending.
+The original FAIL remains and validation is INCOMPLETE. A valid wide single-commit
+native trial timed out at1800seconds; the final distributed-commit probe is
+different input and does not resolve that inherited cost. No M2,
 review, physical-device, deployment or release gate is closed by this stage.
 
 ### Decision and exact trust boundary

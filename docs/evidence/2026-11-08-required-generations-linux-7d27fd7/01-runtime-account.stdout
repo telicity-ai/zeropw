@@ -1,0 +1,10 @@
+{
+  "uid": 2000,
+  "gid": 2000,
+  "name": "rgrun",
+  "home": "/opt/rgjob/home",
+  "shell": "/usr/sbin/nologin",
+  "assigned_uid_processes": [],
+  "boot_id": "b30c3752-ca6e-44f1-abcc-4830a0333f35",
+  "product_execution": "NOTRUN; public passwd/kernel DATA only"
+}

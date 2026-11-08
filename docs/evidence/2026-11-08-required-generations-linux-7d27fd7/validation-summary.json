@@ -1,0 +1,97 @@
+{
+  "actual_model": "gpt-6.1-sol",
+  "exact_selectors": {
+    "commands": 14,
+    "each_actually_ran_one_passing_test": true
+  },
+  "exposed_service_tier": "not exposed in session runtime",
+  "full_matrix": {
+    "all_step_exits_zero": false,
+    "begin_order_matches": true,
+    "end_order_matches": true,
+    "expected_integration_targets": 106,
+    "expected_steps": 111,
+    "explicit_signer_probes": {
+      "signer::tests::idle_cpu_with_one_and_nine_live_bindings": true,
+      "signer::tests::per_binding_fd_cost_matches_python_ratio_of_one": true,
+      "signer::tests::per_client_fd_cost_matches_python_ratio_of_one": true,
+      "signer::tests::rlimit_probe_served_clients_and_accept_loop_survival": true
+    },
+    "failed": 4,
+    "failed_test_names": [
+      "test_ssh_connection_through_admin_serve_agent_processes_and_real_sshd",
+      "test_ssh_connection_without_its_ssh_is_repaired_in_place",
+      "exec_tool_runs_two_remote_commands_on_one_connection",
+      "real_ssh_client_authenticates_through_signer_without_private_key"
+    ],
+    "ignored": 5,
+    "ignored_test_names": [
+      "signer::tests::idle_cpu_with_one_and_nine_live_bindings",
+      "signer::tests::per_binding_fd_cost_matches_python_ratio_of_one",
+      "signer::tests::per_client_fd_cost_matches_python_ratio_of_one",
+      "signer::tests::rlimit_probe_served_clients_and_accept_loop_survival",
+      "generate_required_generation_fixtures"
+    ],
+    "nonzero_steps": [
+      {
+        "exit": 101,
+        "step": "test:native_cli_e2e"
+      },
+      {
+        "exit": 101,
+        "step": "test:signer_e2e"
+      }
+    ],
+    "observed_integration_targets": 106,
+    "observed_steps": 111,
+    "passed": 1812,
+    "test_summary_count": 114,
+    "verify_failed_lines": [
+      "test:native_cli_e2e test:signer_e2e"
+    ]
+  },
+  "holds": "All requested M2/runtime/review/physical/Oracle/deployment/release and canonical DOS-1 HIGH holds unchanged. Native wide-single-commit1800s TIMEOUT unchanged. Old Go case12 UNRELEASED/AUTHORITY_NOTREADY/CANCELLATION_EVIDENCE_NOTREADY; no query.",
+  "phase_results": {
+    "actual_attempts": 28,
+    "fail": 1,
+    "notrun": 1,
+    "pass": 27,
+    "product_phase_timeouts": 0
+  },
+  "privacy": {
+    "bounded_encoding_variants": 55,
+    "explicit_synthetic_samples": 10,
+    "matches": 0,
+    "raw_streams": 117
+  },
+  "reasoning_effort": "ultra",
+  "resources": {
+    "first_ssh_start_utc": "2026-11-07T23:55:59.746878+00:00",
+    "first_to_last_ssh_span_seconds": 4547.884387,
+    "guest_min_free_bytes_before_phase": 2199924736,
+    "host_min_free_bytes_before_transport": 5129396224,
+    "last_ssh_end_utc": "2026-11-08T01:11:47.631265+00:00",
+    "max_waited_child_ru_maxrss_kib": 1336912,
+    "whole_assignment_observed_seconds_at_release": 4914.876183,
+    "whole_cap_seconds": 21600
+  },
+  "runtime": "T3 Code through Codex harness",
+  "source": {
+    "all_28_executed_guest_source_before_after_exact": true,
+    "before_after_fixture_catalogues_exact": true,
+    "desktop_tree": "2413844c89265a3e239be2372d34b1e6e1b2d4bb",
+    "feature_after": "NOTRUN",
+    "feature_before_raw_value_present": false,
+    "feature_comparison": "NOTRUN",
+    "full_tree": "329404aa15163928d9c61c43020b5e3764eac9ad",
+    "head": "7d27fd7ec500e36f0e5cc548325e1ae5b34864d8",
+    "host_before_after_exact": true,
+    "public_cache_audits_before_after_match": true,
+    "rust_tree": "4352ebbd0fa84bde0fb444c4d0902ef2510d0620",
+    "source_archive_sha256": "17e95b2c58bcdc0baadcc6e2f547692baa8c872e641dd4beaba338c9850243f4",
+    "source_files": 1338,
+    "source_manifest_sha256": "7e6387f6709cd8cf8ab01a17b6fb0d9468fa509d71e74df4a87066f5f76c1cca",
+    "source_ref_index_edits": false
+  },
+  "verdict": "FAIL / stopped; validation incomplete"
+}

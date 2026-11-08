@@ -1,0 +1,25 @@
+{
+  "exact_change": "rgrun UID2000 login shell /usr/sbin/nologin -> /bin/bash only",
+  "uid": 2000,
+  "gid": 2000,
+  "home": "/opt/rgjob/home",
+  "password_remains_locked": true,
+  "group_file_unchanged": true,
+  "unavailable_shell_probe_exit": 1,
+  "unavailable_shell_probe_stdout": "This account is currently not available.\n",
+  "bash_shell_probe_exit": 0,
+  "bash_shell_probe_stdout": "zpw-account-shell-probe",
+  "privilege_drop_flags": [
+    "--reuid=2000",
+    "--regid=2000",
+    "--clear-groups",
+    "--no-new-privs",
+    "--bounding-set=-all",
+    "--inh-caps=-all",
+    "--ambient-caps=-all",
+    "/usr/bin/env"
+  ],
+  "product_source_or_tests_changed": false,
+  "product_test_execution": "NOTRUN; trusted OS shell probe only",
+  "original_matrix_result": "FAIL remains unchanged; new focused/full validation required"
+}

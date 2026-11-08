@@ -1,6 +1,6 @@
 # Required-generation and ciphertext authentication evidence
 
-Collected 2026-11-08 by actual **gpt-6.1-sol / ultra**, T3 Code through Codex. This is source and test collection, not Opus review or Astra acceptance. Overall validation is **INCOMPLETE**: Linux is NOTRUN and a valid wide-single-commit trial timed out.
+Collected 2026-11-08 by actual **gpt-6.1-sol / ultra**, T3 Code through Codex. This is source and test collection, not Opus review or Astra acceptance. Overall validation is **INCOMPLETE**. Linux was NOTRUN at this native handoff; the later [Linux attempt](../2026-11-08-required-generations-linux-7d27fd7/README.md) failed four SSH tests and retains that result. A valid wide-single-commit native trial also timed out.
 
 The exact worker source is now controller commit `ee26e36997797fe9893ed9a8314ea497963961e2`, parent `8ca2cf0163bc7b3c9681d9a0df4e9f4b81e820e0`, full tree `a9670b198e985c98d0247be749d6e08d89748bdc`, Rust tree `4352ebbd0fa84bde0fb444c4d0902ef2510d0620`, Desktop tree `2413844c89265a3e239be2372d34b1e6e1b2d4bb`. Before collection the worker HEAD was unchanged8ca with an uncommitted artifact; the base HEAD alone was never the tested source. Later evidence-only commits preserve this Rust tree and do not constitute new whole-head execution.
 
@@ -25,7 +25,7 @@ Assigned virtual macOS26.6.2 arm64,2vCPU/4GiB,SIPdisabled,UID501; clean task HOM
 
 ## Reproduction and remaining scope
 
-Use the exact product source above with the unchanged `rust/verify.sh` and the focused/exact selector commands in the [bounded task](../../decisions/required-generations-2026-11-08/implementation-task.md) and [worker report](REPORT.md), only in a separately assigned credential-free isolated runner. No source/test/build/generator code was executed on the coordinator. Linux was not assigned to this worker and remains NOTRUN; its absence is not a waiver or a macOS release claim.
+Use the exact product source above with the unchanged `rust/verify.sh` and the focused/exact selector commands in the [bounded task](../../decisions/required-generations-2026-11-08/implementation-task.md) and [worker report](REPORT.md), only in a separately assigned credential-free isolated runner. No source/test/build/generator code was executed on the coordinator. Linux was not assigned to this native worker; the separately recorded Linux failure is not a waiver or a macOS release claim.
 
 All M2-G01–G10 remain OPEN: general/gapped and interacting-removal/compaction semantics, stronger claimed credential assurance, full runtime integration, approvals/transport/budgets/deadlines, fresh locked READY, journal/fsync/recovery/coherent epochs, committed provenance before receipts/ACK, crash/concurrency/physical/network validation and actual reviews. Snapshot onboarding remains unsupported. Packaging, macOS ACL residuals, Oracle HTTPS/TURN deployment and combined capacity measurements remain open. DOS-1 HIGH and the canonical service findings retain their exact prior statuses; interrupted actual Opus3eb was not retried or substituted. The separate Go case12 quarantine/lease and custody/cancellation NOTREADY hold were not queried or altered.
 
