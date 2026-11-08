@@ -2853,17 +2853,24 @@ mod compaction_heads_tests {
         }
         normalized["ignored_extra"] = json!("public");
         let matching_env = format!("{fp}-0123456789abcdef0123456789abcdef");
-        let wrap = crate::team::envelope::wrap_dek(
-            &[7; 32], &matching_env, "0123456789abcdef", &equal,
-        ).unwrap();
+        let wrap =
+            crate::team::envelope::wrap_dek(&[7; 32], &matching_env, "0123456789abcdef", &equal)
+                .unwrap();
         for op in [
             json!({"op":"env.init","owner_device":normalized,
                 "owner_name":"synthetic-record","generation_id":"0123456789abcdef","wraps":{fp.clone():wrap}}),
             json!({"op":"member.add","device":normalized,
                 "name":"synthetic-record","role":"user","wraps":{}}),
         ] {
-            let original =
-                sign_commit(&expected_key, &matching_env, 1, "1-0000", &BTreeMap::new(), vec![op]).unwrap();
+            let original = sign_commit(
+                &expected_key,
+                &matching_env,
+                1,
+                "1-0000",
+                &BTreeMap::new(),
+                vec![op],
+            )
+            .unwrap();
             let signed = original.canonical_json(false).unwrap();
             let hashed = original.canonical_json(true).unwrap();
             assert_eq!(
@@ -2883,7 +2890,8 @@ mod compaction_heads_tests {
             unrelated.record().unwrap().to_dict(),
             json!({}),
         ] {
-            let mut original = announcement(&author, &env, 1.into(), "1-0000", vec![equal.to_dict()]);
+            let mut original =
+                announcement(&author, &env, 1.into(), "1-0000", vec![equal.to_dict()]);
             // Malformed retained op DATA is tested independently of admission.
             original.ops[0]["device"] = record;
             assert_eq!(
