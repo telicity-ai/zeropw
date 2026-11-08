@@ -10642,6 +10642,7 @@ mod compaction_heads_tests {
                     let actual = scoped_gate_files(&f).get(&name).unwrap().clone();
                     let mut value = pyjson::loads(std::str::from_utf8(&actual.0).unwrap()).unwrap();
                     assert_eq!(value.as_object_mut().unwrap().remove("rejected_reason"), Some(json!(reason)));
+                    assert_eq!(value, deferred.to_dict());
                     scoped_gate_same_commit(&Commit::from_dict(&value).unwrap(), &deferred);
                     assert_eq!(actual.1, saved_deferred.1);
                     expected.insert(name, actual);
