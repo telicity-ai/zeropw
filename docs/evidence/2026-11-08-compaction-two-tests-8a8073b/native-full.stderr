@@ -1,0 +1,449 @@
+    Checking libc v0.2.189
+    Checking cfg-if v1.0.4
+    Checking getrandom v0.2.17
+    Checking typenum v1.20.1
+    Checking generic-array v0.14.7
+    Checking rand_core v0.6.4
+    Checking crypto-common v0.1.7
+    Checking zeroize v1.9.0
+    Checking subtle v2.6.1
+    Checking block-buffer v0.10.4
+    Checking digest v0.10.7
+    Checking bitflags v2.13.2
+    Checking core-foundation-sys v0.8.7
+    Checking memchr v2.8.3
+    Checking rustls-pki-types v1.15.1
+    Checking inout v0.1.4
+    Checking cipher v0.4.4
+    Checking serde_core v1.0.229
+    Checking errno v0.3.14
+    Checking deranged v0.5.8
+    Checking time-core v0.1.9
+    Checking powerfmt v0.2.0
+    Checking num-conv v0.2.2
+    Checking untrusted v0.9.0
+    Checking ring v0.17.14
+    Checking time v0.3.55
+    Checking zerocopy v0.8.57
+    Checking core-foundation v0.10.1
+    Checking cpufeatures v0.2.17
+    Checking hashbrown v0.17.1
+    Checking equivalent v1.0.2
+    Checking indexmap v2.14.2
+    Checking sha2 v0.10.9
+    Checking ppv-lite86 v0.2.21
+    Checking num-traits v0.2.19
+    Checking curve25519-dalek v4.1.3
+    Checking serde v1.0.229
+    Checking getrandom v0.4.3
+    Checking aho-corasick v1.1.5
+    Checking security-framework-sys v2.17.0
+    Checking hmac v0.12.1
+    Checking universal-hash v0.5.1
+    Checking regex-syntax v0.8.11
+    Checking base64 v0.22.1
+    Checking signature v2.2.0
+    Checking foreign-types-shared v0.1.1
+    Checking tinyvec v1.13.3
+    Checking opaque-debug v0.3.1
+    Checking once_cell v1.21.4
+    Checking poly1305 v0.8.0
+    Checking unicode-normalization v0.1.25
+    Checking foreign-types v0.3.2
+    Checking ed25519 v2.2.3
+    Checking regex-automata v0.4.18
+    Checking pbkdf2 v0.12.2
+    Checking security-framework v3.7.0
+    Checking num-integer v0.1.47
+    Checking rand_chacha v0.3.1
+    Checking system-configuration-sys v0.6.0
+    Checking zmij v1.0.23
+    Checking rustix v1.1.4
+    Checking openssl-sys v0.9.117
+    Checking rustls-webpki v0.103.15
+    Checking signal-hook-registry v1.4.8
+    Checking chacha20 v0.9.1
+    Checking salsa20 v0.10.2
+    Checking quick-xml v0.42.0
+    Checking aead v0.5.2
+    Checking socket2 v0.6.5
+    Checking rtoolbox v0.0.6
+    Checking unicode-bidi v0.3.18
+    Checking itoa v1.0.18
+    Checking log v0.4.34
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Checking unicode-properties v0.1.4
+    Checking fastrand v2.5.0
+    Checking base64 v0.23.1
+    Checking plist v1.10.1
+    Checking tempfile v3.27.0
+    Checking stringprep v0.1.5
+    Checking rustls v0.23.45
+    Checking serde_json v1.0.151
+    Checking rpassword v7.5.4
+    Checking dns-lookup v3.0.1
+    Checking openssl v0.10.81
+    Checking chacha20poly1305 v0.10.1
+    Checking scrypt v0.11.0
+    Checking signal-hook v0.3.18
+    Checking nix v0.30.1
+    Checking system-configuration v0.8.0
+    Checking rand v0.8.8
+    Checking num-bigint v0.5.1
+    Checking rustls-native-certs v0.8.4
+    Checking regex v1.13.1
+    Checking ed25519-dalek v2.2.0
+    Checking uuid v1.26.1
+    Checking x25519-dalek v2.0.1
+    Checking rustls-pemfile v2.2.0
+    Checking md-5 v0.10.6
+    Checking close_fds v0.3.2
+    Checking socket2 v0.5.10
+    Checking hex v0.4.3
+    Checking punycode v0.4.1
+    Checking percent-encoding v2.3.2
+    Checking pem v3.0.6
+    Checking yasna v0.5.2
+    Checking rcgen v0.13.2
+error: using a non-octal value to set unix file permissions
+    --> tests/team_compaction_heads.rs:1926:59
+     |
+1926 |     fs::set_permissions(&path, fs::Permissions::from_mode(0)).unwrap();
+     |                                                           ^ help: consider using an octal literal instead: `0o0`
+     |
+     = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#non_octal_unix_permissions
+     = note: `#[deny(clippy::non_octal_unix_permissions)]` on by default
+
+error: could not compile `zeropw` (test "team_compaction_heads") due to 1 previous error
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.33s
+     Running unittests src/lib.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/zeropw-bf0ef77044d9afd9)
+     Running unittests src/bin/zeropw-admin.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/zeropw_admin-a5c5671df36c44cf)
+     Running unittests src/bin/zeropw-agent.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/zeropw_agent-24946c304a1bb5fa)
+     Running unittests src/bin/zeropw-demo.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/zeropw_demo-75df72005968411c)
+     Running unittests src/bin/zeropw-democli.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/zeropw_democli-8c1d198a1b28696f)
+     Running unittests src/bin/zeropw_session.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/zeropw_session-160e9fa28354423a)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.60s
+     Running tests/admin_expanduser_parity.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/admin_expanduser_parity-3e8a0983446a0ee5)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.80s
+     Running tests/admin_input_envelope.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/admin_input_envelope-9c8645b0455e738f)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.11s
+     Running tests/admin_secret_import.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/admin_secret_import-40bb39e662f9e17b)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.80s
+     Running tests/admin_sigint_cleanup_boundaries.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/admin_sigint_cleanup_boundaries-cffa470655d72712)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.51s
+     Running tests/admin_sigint_exit.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/admin_sigint_exit-ae66eb4bb1b6dffc)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.44s
+     Running tests/agent_help.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/agent_help-91ae7bc2534610de)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.35s
+     Running tests/agent_proxy_parity.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/agent_proxy_parity-99eba1b99df55845)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.43s
+     Running tests/astra_cleanup_publication_order.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/astra_cleanup_publication_order-7d8aa9c8ed21680b)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.47s
+     Running tests/astra_cli_runtime_round2.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/astra_cli_runtime_round2-fb6382e8ed9d137b)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.47s
+     Running tests/astra_cli_runtime_round3.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/astra_cli_runtime_round3-3d9a28e94485135d)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.58s
+     Running tests/astra_cli_runtime_round4.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/astra_cli_runtime_round4-fbae91ea623b03a5)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.52s
+     Running tests/astra_projects_final.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/astra_projects_final-77d1abaa0e274fca)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.38s
+     Running tests/astra_pty_portability.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/astra_pty_portability-a82e2fa83ed43ea3)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.42s
+     Running tests/astra_response_acceptance.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/astra_response_acceptance-5b04a6105071798c)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.34s
+     Running tests/astra_response_final.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/astra_response_final-2ce6e68978753878)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.35s
+     Running tests/astra_response_final_recheck.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/astra_response_final_recheck-afcb57a9ebdb0529)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.46s
+     Running tests/astra_response_review.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/astra_response_review-bd439c1322301c1e)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.58s
+     Running tests/astra_response_round2.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/astra_response_round2-02361c0aefe8d7e7)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.39s
+     Running tests/astra_response_round3.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/astra_response_round3-15318e2271741f11)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.53s
+     Running tests/astra_response_round4.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/astra_response_round4-e76a8403811b976c)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.34s
+     Running tests/astra_run_context_lease.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/astra_run_context_lease-2798639e666d4faa)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.48s
+     Running tests/astra_runtime_final.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/astra_runtime_final-a56b3bde15968eee)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.43s
+     Running tests/astra_runtime_review.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/astra_runtime_review-dc79ec60a729ed46)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.36s
+     Running tests/astra_sigint_cleanup.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/astra_sigint_cleanup-91ebfcfc9768eb44)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.36s
+     Running tests/astra_sigint_cleanup_final.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/astra_sigint_cleanup_final-e3641990dc141c91)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.48s
+     Running tests/astra_team_fact_catchup.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/astra_team_fact_catchup-bdb6802bf9f7d100)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.51s
+     Running tests/astra_team_fact_duplicate_diagnostic.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/astra_team_fact_duplicate_diagnostic-cc42679a6b257d2f)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.62s
+     Running tests/astra_team_reconnect_diagnostic.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/astra_team_reconnect_diagnostic-5632e655c1c12487)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.45s
+     Running tests/astra_team_review.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/astra_team_review-fbffd81bfa6618b5)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.74s
+     Running tests/astra_team_round2.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/astra_team_round2-d3b2ddc8eb7df9a7)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.57s
+     Running tests/astra_team_round3.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/astra_team_round3-603c8f033b021ce5)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.56s
+     Running tests/astra_team_round4.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/astra_team_round4-3042a7baaaa20df8)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.29s
+     Running tests/base_cli_error_parity.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/base_cli_error_parity-82583a945601f7e5)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.44s
+     Running tests/canonical_helpers.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/canonical_helpers-4480f7a0a516df5b)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.32s
+     Running tests/cli_commands.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/cli_commands-15f08022a5b80a4d)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.40s
+     Running tests/cli_grant_limits_parity.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/cli_grant_limits_parity-2bc67964a5adff6f)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.36s
+     Running tests/cli_parity.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/cli_parity-9c6423f795587c0a)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.72s
+     Running tests/democli_parity.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/democli_parity-bd0b98c07b7bbf9b)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.50s
+     Running tests/escaped_builtin_http_parity.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/escaped_builtin_http_parity-04b76bc4a738b7f9)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.50s
+     Running tests/fake_upstream.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/fake_upstream-5d6e6c0350afb4a5)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.19s
+     Running tests/gateway.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/gateway-5247bd35a69417dd)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.80s
+     Running tests/gateway_oracle.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/gateway_oracle-737217626ebb0a99)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.53s
+     Running tests/gateway_replay_status_parity.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/gateway_replay_status_parity-e110916e7023e3dd)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.71s
+     Running tests/gateway_tls_parity.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/gateway_tls_parity-4370ab208396bc27)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.60s
+     Running tests/gateway_x1_credential_e2e.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/gateway_x1_credential_e2e-7de329965043d87b)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.41s
+     Running tests/ledger_float_parity.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/ledger_float_parity-b3b001a73c3ccedd)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.95s
+     Running tests/native_admin_cli.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/native_admin_cli-1a50cc19e07b9d0c)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.32s
+     Running tests/native_admin_cli_more.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/native_admin_cli_more-a58ac826546023ce)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.77s
+     Running tests/native_agent_cli.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/native_agent_cli-d1d5b48a6276569a)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.35s
+     Running tests/native_atomic_cli.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/native_atomic_cli-6e109bde0b566d46)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.84s
+     Running tests/native_cli_e2e.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/native_cli_e2e-6c58ec06fb22a064)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.72s
+     Running tests/native_response_cli.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/native_response_cli-a20c0cdedada753a)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.79s
+     Running tests/native_team_cli.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/native_team_cli-8b1fdb487bdb3bbd)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.91s
+     Running tests/native_team_e2e.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/native_team_e2e-ddf19c095c4b1f85)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.70s
+     Running tests/policy_oracle.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/policy_oracle-3a3cfe06af0b3fdd)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.40s
+     Running tests/policy_parity_close.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/policy_parity_close-4b23dae0acc2978b)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.36s
+     Running tests/python_numeric_comparison_parity.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/python_numeric_comparison_parity-83dd1cf45e77737f)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.53s
+     Running tests/relay_escape_parity.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/relay_escape_parity-365f7fd28afd4115)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.20s
+     Running tests/response.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/response-f1c9058783a5f3c2)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.77s
+     Running tests/response_contract.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/response_contract-2f5db7ae00dda716)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.40s
+     Running tests/response_integer_boundaries.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/response_integer_boundaries-33e2282a29cd98c5)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.70s
+     Running tests/response_parity_gaps.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/response_parity_gaps-6690c28f6a0c6f5c)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.52s
+     Running tests/runs.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/runs-7e1218bc6b101f49)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.64s
+     Running tests/runtime_fix_boundaries.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/runtime_fix_boundaries-c64fbc1bcd0d38e7)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.60s
+     Running tests/runtime_parity_gaps.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/runtime_parity_gaps-35bc13b3dee8f42e)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.40s
+     Running tests/serve_request_log.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/serve_request_log-44cad95d16f8db69)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.53s
+     Running tests/server_accept_resilience.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/server_accept_resilience-dac57b4c1043b7d4)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.70s
+     Running tests/signer_e2e.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/signer_e2e-d497e006bffc2898)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.50s
+     Running tests/signer_oracle.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/signer_oracle-40bf63d269a84c83)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.71s
+     Running tests/sshwire.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/sshwire-b830161a72e3094b)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.38s
+     Running tests/state_dir_cross_language.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/state_dir_cross_language-c6889c61a25a8567)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.34s
+     Running tests/store_cross_process_lock.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/store_cross_process_lock-d6e4c016838c7569)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.36s
+     Running tests/store_oracle.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/store_oracle-86c02d371ee34e80)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.73s
+     Running tests/team_checkpoint_admission.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_checkpoint_admission-e40c5dc10e666777)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.66s
+     Running tests/team_checkpoint_authority_oracle.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_checkpoint_authority_oracle-4e5133f2eac3e2f3)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.83s
+     Running tests/team_checkpoint_generation_oracle.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_checkpoint_generation_oracle-bd40b57e125fd460)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.59s
+     Running tests/team_checkpoint_legacy_parser_regression.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_checkpoint_legacy_parser_regression-6bc5d9e566bd9f1b)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.91s
+     Running tests/team_checkpoint_manifest.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_checkpoint_manifest-a664de2d371a54c4)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.53s
+     Running tests/team_checkpoint_payload.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_checkpoint_payload-9f64067f436f9667)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.35s
+     Running tests/team_checkpoint_provenance.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_checkpoint_provenance-3c20072bd426d386)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.84s
+     Running tests/team_checkpoint_removal_oracle.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_checkpoint_removal_oracle-53856274af765877)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.99s
+     Running tests/team_checkpoint_required_generations.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_checkpoint_required_generations-932f4446a5179439)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 2.89s
+     Running tests/team_checkpoint_semantic_cut.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_checkpoint_semantic_cut-1c3e5cfc942d02ed)
+    Finished `test` profile [unoptimized] target(s) in 0.30s
+     Running tests/team_compaction_heads.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_compaction_heads-628e011bdcafe387)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 2.19s
+     Running tests/team_derive_lazy_parity.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_derive_lazy_parity-8c6efb2511264986)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.44s
+     Running tests/team_envelope_parity_edges.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_envelope_parity_edges-17b75ca8e4aba623)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.88s
+     Running tests/team_fold.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_fold-a457552e0a07575e)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.66s
+     Running tests/team_fold_lazy_parity.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_fold_lazy_parity-8a995f65475e0c31)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.26s
+     Running tests/team_invite_link.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_invite_link-4b2d8ad76ca8497e)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.21s
+     Running tests/team_link_transport.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_link_transport-a6e9f881ae85c227)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.95s
+     Running tests/team_membership_sync.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_membership_sync-5f7893142726d77b)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.39s
+     Running tests/team_oracle.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_oracle-b5ad92f6590c0a91)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.81s
+     Running tests/team_pairing_approval.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_pairing_approval-4fd5466d439c2d12)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.94s
+     Running tests/team_parity_gaps.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_parity_gaps-e52c51b43f4c0430)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.15s
+     Running tests/team_remaining_contract.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_remaining_contract-b6893ae0b12d1dc4)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.15s
+     Running tests/team_secret_import.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_secret_import-984ad45602ebd619)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.44s
+     Running tests/team_share_policy_version_parity.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_share_policy_version_parity-7475df1e7550d4cb)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.49s
+     Running tests/team_snapshot_total_parity.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_snapshot_total_parity-67a4e406d85b9e18)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.61s
+     Running tests/team_snapshot_version_order_parity.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_snapshot_version_order_parity-7b92053d1f63e9aa)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.81s
+     Running tests/team_sync_status.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_sync_status-c005638ea68a07d3)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.54s
+     Running tests/team_transport.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_transport-789f3aa490b3ce66)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.76s
+     Running tests/team_uncaught_scope_parity.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/team_uncaught_scope_parity-ed42e3118f927394)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.03s
+     Running tests/tools_server.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/tools_server-05d765e1348a80c0)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.88s
+     Running tests/vault_context.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/vault_context-66b966828ebe95fd)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.88s
+     Running tests/vault_context_oracle.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/vault_context_oracle-5bed33ba24822b3a)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.54s
+     Running tests/vault_public_parity.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/vault_public_parity-be6c2f584603ccf7)
+   Compiling zeropw v0.2.0 (/Volumes/ZeroPWBuild/cg-native-r1/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.52s
+     Running tests/whole_secret_tombstone.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/whole_secret_tombstone-0b74edbec41d4e4d)
+    Finished `test` profile [unoptimized] target(s) in 0.06s
+     Running unittests src/lib.rs (/Volumes/ZeroPWBuild/cg-native-r1/target/debug/deps/zeropw-bf0ef77044d9afd9)
+    Finished `test` profile [unoptimized] target(s) in 0.06s
+   Doc-tests zeropw

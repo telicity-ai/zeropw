@@ -137,5 +137,15 @@
     "original_static_dispositions": "01/02/03sourcefixed,butOPENpendingvalidationacceptance",
     "new_HIGH": "ZPCHEAD-OPUS-R1-01 OPEN; no policy/source changeyet",
     "all_global_holds": "unchangedOPEN"
+  },
+  "runtime_followup_native8a_final": {
+    "full": "FAILstrictClippy;112steps107targets1877passed0failed5ignored;4signerprobes48docsPASS",
+    "source": "8a8073b3d876bb3f83a628a7fdbd2902e8b40851",
+    "remaining17": "NOTRUN",
+    "archive_sha256": "908ee2301c9a947c97a55cba514bf2788c02e7b46af1f5abb660894c7d83a5fe",
+    "own_scope": "all own phase/launcher/hostSSH children waited;last502empty;RootVMsoleallocation retainedidle;oldHOLDunchanged",
+    "native563": "NOTASSIGNED/NOTRUN, unissued DATA plan superseded pending R1 HIGH fix",
+    "Linux563": "existing fullcampaignACTIVE, no finalPASS yet",
+    "new_HIGH": "OPEN, no policy/source fixyet"
   }
 }
