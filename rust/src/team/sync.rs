@@ -11016,7 +11016,6 @@ mod compaction_heads_tests {
         team: Arc<TeamSync>,
         y: DeviceKey,
         x: DeviceKey,
-        alternative: DeviceKey,
         env: String,
         fp: String,
         yfp: String,
@@ -11198,7 +11197,7 @@ mod compaction_heads_tests {
             assert_eq!(loaded.version_order["s"],json!([VERSION]));
             assert_eq!(loaded.document["secrets"]["s"]["versions"][VERSION]["status"],"staged");
             assert_eq!(std::fs::read(path).unwrap(),initial_cache);
-            Self {_root:root,_reset:reset,ctx,y_ctx,team,y,x,alternative,env,fp,yfp,
+            Self {_root:root,_reset:reset,ctx,y_ctx,team,y,x,env,fp,yfp,
                 removed,adds_x,n,originals,deferred,initial_cache}
         }
         fn store(&self) -> CommitStore<'_> {CommitStore::new(self.ctx.state,&self.env)}
