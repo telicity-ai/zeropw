@@ -1,7 +1,7 @@
 //! Local original-signature evidence for the latest compaction cut only.
 //! This cache is never a live vector, authority, receipt or import capability.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
@@ -9,7 +9,7 @@ use std::path::{Component, Path, PathBuf};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-use super::commit::{self, Commit, Hlc};
+use super::commit::{self, Commit, CommitStore, Hlc};
 use super::fold::FoldResult;
 use super::identity::DeviceRecord;
 use crate::errors::{Error, Result};
@@ -256,7 +256,7 @@ pub(super) fn prepare(
     env_id: &str,
     snapshot: &FoldResult,
     live: &[Commit],
-    identity_document: &Value,
+    records: &HashMap<String, DeviceRecord>,
 ) -> Result<PreparedHeads> {
     require_lock(state)?;
     if !commit::valid_env_id(env_id)
@@ -278,12 +278,11 @@ pub(super) fn prepare(
     }
     let old = load(state, env_id)?.map(|(_, image)| image);
     let local_record = |author: &str| -> Result<DeviceRecord> {
-        let value = identity_document
-            .get("members")
-            .and_then(|members| members.get(author))
-            .and_then(|member| member.get("device"))
-            .ok_or_else(unavailable)?;
-        record(value, author)
+        let device = records.get(author).ok_or_else(unavailable)?;
+        if !device.verify() || device.fingerprint() != author {
+            return Err(invalid());
+        }
+        Ok(device.clone())
     };
     if let Some(old) = &old {
         for (author, seq) in &old.vector {
@@ -364,6 +363,129 @@ pub(super) fn prepare(
         snapshot_sha256,
         vector: required,
     })
+}
+
+// Public signature material follows receipt's first-record rule, including
+// fold-skipped and removed authors. It conveys no membership or wrap authority.
+// This private image never crosses a helper's lock epoch.
+fn checked_cache(store: &CommitStore<'_>, live: Option<&[Commit]>) -> Result<Option<Image>> {
+    require_lock(store.state)?;
+    let Some((_, image)) = load(store.state, &store.env_id)? else {
+        return Ok(None);
+    };
+    if !commit::valid_env_id(&store.env_id) || store.root != format!("team/{}", store.env_id) {
+        return Err(invalid());
+    }
+    let records = match live {
+        Some(live) => commit::device_registry(live),
+        None => store.retained_device_registry().map_err(|_| invalid())?,
+    };
+    let floor = store.snapshot_floor().map_err(|_| invalid())?;
+    let vector = store.vector().map_err(|_| invalid())?;
+    for (author, seq) in &image.vector {
+        if floor.get(author).is_none_or(|covered| covered < seq)
+            || vector.get(author).is_none_or(|covered| covered < seq)
+        {
+            return Err(invalid());
+        }
+        let head = image.heads.get(author).ok_or_else(invalid)?;
+        let device = records.get(author).ok_or_else(unavailable)?;
+        if device != &head.device {
+            return Err(invalid());
+        }
+        Hlc::parse(&head.commit.hlc).map_err(|_| invalid())?;
+        // One exact lookup per cached author, never a cache-derived range.
+        if let Some(original) = store.get(author, seq).map_err(|_| invalid())? {
+            let original = Head::checked(original, device.clone(), &store.env_id)?;
+            if !head.same_original(&original)? {
+                return Err(invalid());
+            }
+        }
+    }
+    if let Some(live) = live {
+        for entry in live {
+            if image.vector.get(&entry.author) != Some(&entry.author_seq) {
+                continue;
+            }
+            let head = image.heads.get(&entry.author).ok_or_else(invalid)?;
+            let original = Head::checked(entry.clone(), head.device.clone(), &store.env_id)?;
+            if !head.same_original(&original)? {
+                return Err(invalid());
+            }
+        }
+    }
+    Ok(Some(image))
+}
+
+pub(super) fn cached_hlc_not_above_previous(
+    store: &CommitStore<'_>,
+    candidate: &Commit,
+    live: Option<&[Commit]>,
+) -> Result<bool> {
+    require_lock(store.state)?;
+    if candidate.author_seq <= 1 || candidate.author_seq != &store.last_seq(&candidate.author)? + 1
+    {
+        return Ok(false);
+    }
+    let image = checked_cache(store, live)?;
+    let previous_seq = &candidate.author_seq - 1;
+    // Absent cache preserves the legacy live-predecessor-only behavior.
+    let Some(image) = image else {
+        return Ok(match store.get(&candidate.author, previous_seq)? {
+            Some(previous) => Hlc::parse(&candidate.hlc)? <= Hlc::parse(&previous.hlc)?,
+            None => false,
+        });
+    };
+    if candidate.env_id != store.env_id {
+        return Err(invalid());
+    }
+    let previous = store
+        .get(&candidate.author, &previous_seq)
+        .map_err(|_| invalid())?;
+    let cached = image.heads.get(&candidate.author);
+    if previous.is_none() && cached.is_none_or(|head| head.commit.author_seq != previous_seq) {
+        return Err(unavailable());
+    }
+    let candidate_hlc = Hlc::parse(&candidate.hlc)?;
+    let live_failure = match previous {
+        Some(previous) => candidate_hlc <= Hlc::parse(&previous.hlc).map_err(|_| invalid())?,
+        None => false,
+    };
+    let cached_failure = match cached {
+        Some(head) => candidate_hlc <= Hlc::parse(&head.commit.hlc).map_err(|_| invalid())?,
+        None => false,
+    };
+    Ok(live_failure || cached_failure)
+}
+
+pub(super) fn observe_cached_hlcs(
+    store: &CommitStore<'_>,
+    live: &[Commit],
+    clock: &mut Hlc,
+) -> Result<()> {
+    let Some(image) = checked_cache(store, Some(live))? else {
+        return Ok(());
+    };
+    let vector = store.vector().map_err(|_| invalid())?;
+    let live_slots: std::collections::BTreeSet<_> = live
+        .iter()
+        .map(|entry| (&entry.author, &entry.author_seq))
+        .collect();
+    for (author, seq) in &vector {
+        if *seq > 0
+            && !live_slots.contains(&(author, seq))
+            && image.vector.get(author) != Some(seq)
+        {
+            return Err(unavailable());
+        }
+    }
+    // Validate everything before touching the caller's remembered clock.
+    let mut observed = clock.clone();
+    for head in image.heads.values() {
+        observed.observe(&head.commit.hlc).map_err(|_| invalid())?;
+    }
+    *clock = observed;
+    Ok(())
 }
 
 // Only descendants generated here are inspected. Trusted ancestors above the
@@ -611,6 +733,13 @@ pub(super) mod testing {
     }
     thread_local! {
         static TRACE: RefCell<Trace> = RefCell::new(Trace::default());
+        static AUTHOR_WALL: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
+    }
+    pub(crate) fn author_wall() -> Option<i64> {
+        AUTHOR_WALL.with(std::cell::Cell::get)
+    }
+    pub(crate) fn set_author_wall(wall: Option<i64>) {
+        AUTHOR_WALL.with(|value| value.set(wall));
     }
     pub(crate) fn reset(fail: Option<Boundary>) {
         TRACE.with(|trace| {
@@ -742,17 +871,11 @@ mod tests {
         )
         .unwrap()
     }
-    fn identity(keys: &[DeviceKey]) -> Value {
-        let members: Map<String, Value> = keys
+    fn identity(keys: &[DeviceKey]) -> HashMap<String, DeviceRecord> {
+        keys
             .iter()
-            .map(|key| {
-                (
-                    key.fingerprint().unwrap(),
-                    json!({"device":key.record().unwrap().to_dict()}),
-                )
-            })
-            .collect();
-        json!({"members":members})
+            .map(|key| (key.fingerprint().unwrap(), key.record().unwrap()))
+            .collect()
     }
     fn snapshot(env: &str, live: &[Commit]) -> FoldResult {
         fold::fold(env, live.to_vec(), None, None, None, None).unwrap()
@@ -1078,6 +1201,78 @@ mod tests {
             load(&state, &env).err().unwrap().reason,
             "team_compaction_head_invalid"
         );
+    }
+
+    #[test]
+    fn compaction_heads_clock_helpers_lock_absence_and_atomic_observation() {
+        let tmp = TempDir::new().unwrap();
+        let state = StateDir::new(tmp.path().join("state"));
+        state.create().unwrap();
+        let key = key(31);
+        let env = env(&key);
+        let fp = key.fingerprint().unwrap();
+        let store = CommitStore::new(&state, &env);
+        let candidate = signed(&key, &env, 3.into(), "1000001-0007", Value::Null);
+        let mut clock = Hlc::default();
+        assert_eq!(observe_cached_hlcs(&store, &[], &mut clock).unwrap_err().reason, "team_compaction_lock_required");
+        assert_eq!(cached_hlc_not_above_previous(&store, &candidate, None).unwrap_err().reason, "team_compaction_lock_required");
+        let _lock = state.lock().unwrap();
+        let legacy = CommitStore::new(&state, "legacy-not-a-new-env-id");
+        observe_cached_hlcs(&legacy, &[], &mut clock).unwrap();
+        assert_eq!(clock, Hlc::default());
+        let init = commit::sign_commit(&key, &env, 1, "1000000-0000", &BTreeMap::new(), vec![json!({
+            "op":"env.init","owner_device":key.record().unwrap().to_dict(),"owner_name":"synthetic-owner",
+            "generation_id":"0123456789abcdef","wraps":{}})]).unwrap();
+        let head = signed(&key, &env, 2.into(), "1000001-0007", Value::Null);
+        store.append(&init).unwrap();
+        store.append(&head).unwrap();
+        let live = store.all_commits().unwrap();
+        let snapshot = snapshot(&env, &live);
+        let prepared = prepare(&state, &env, &snapshot, &live, &commit::device_registry(&live)).unwrap();
+        fold::save_snapshot(&state, &env, &2.into(), &snapshot).unwrap();
+        state.write_json(&cache_path(&env), &prepared.image).unwrap();
+        fs::remove_file(state.path.join(format!("team/{env}/commits/{fp}/2.json"))).unwrap();
+        let retained = store.all_commits().unwrap();
+        assert!(cached_hlc_not_above_previous(&store, &candidate, Some(&retained)).unwrap());
+        assert!(cached_hlc_not_above_previous(&store, &candidate, None).unwrap());
+        observe_cached_hlcs(&store, &retained, &mut clock).unwrap();
+        assert_eq!(clock.render(), "1000001-0007");
+        let initial = Hlc::new(7, 8);
+        for failure in ["missing_head", "record", "coverage", "json"] {
+            state.write_json(&cache_path(&env), &prepared.image).unwrap();
+            fold::save_snapshot(&state, &env, &2.into(), &snapshot).unwrap();
+            let mut current = initial.clone();
+            match failure {
+                "missing_head" => {
+                    let mut later = snapshot.clone();
+                    later.vector.insert(fp.clone(), 3.into());
+                    fold::save_snapshot(&state, &env, &2.into(), &later).unwrap();
+                }
+                "record" => {
+                    let alternative = DeviceKey { sign_seed: key.sign_seed.clone(), agree_private: SecretBytes::new(vec![99; 32]) };
+                    let mut image = prepared.image.clone();
+                    image["heads"][0]["device"] = alternative.record().unwrap().to_dict();
+                    state.write_json(&cache_path(&env), &image).unwrap();
+                }
+                "coverage" => {
+                    let mut lower = snapshot.clone();
+                    lower.vector.insert(fp.clone(), 1.into());
+                    fold::save_snapshot(&state, &env, &2.into(), &lower).unwrap();
+                }
+                "json" => fs::write(state.path.join(cache_path(&env)), b"{invalid").unwrap(),
+                _ => unreachable!(),
+            }
+            let error = observe_cached_hlcs(&store, &retained, &mut current).unwrap_err();
+            assert_eq!(error.reason, if failure == "missing_head" { "team_compaction_head_unavailable" } else { "team_compaction_head_invalid" });
+            assert!(error.detail.is_empty());
+            assert_eq!(current, initial);
+        }
+        state.write_json(&cache_path(&env), &prepared.image).unwrap();
+        fold::save_snapshot(&state, &env, &2.into(), &snapshot).unwrap();
+        fs::remove_file(state.path.join(format!("team/{env}/commits/{fp}/1.json"))).unwrap();
+        let error = observe_cached_hlcs(&store, &[], &mut clock).unwrap_err();
+        assert_eq!(error.reason, "team_compaction_head_unavailable");
+        assert!(error.detail.is_empty());
     }
 
     #[test]
