@@ -2224,6 +2224,12 @@ impl<'a> CommitStore<'a> {
             if commit.author_seq > &last + 1 {
                 continue; // waits for the sequence before it
             }
+            #[cfg(test)]
+            super::compaction_heads::testing::hit_scoped(
+                super::compaction_heads::testing::Boundary::DeferredPrefilterPassed,
+                self.state,
+                &self.env_id,
+            )?;
             let _lock = self.state.lock()?;
             let fresh_last = self.last_seq(&commit.author)?;
             if commit.author_seq > &fresh_last + 1 {

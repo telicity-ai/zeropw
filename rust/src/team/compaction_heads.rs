@@ -231,6 +231,8 @@ fn load(state: &StateDir, env_id: &str) -> Result<Option<(Vec<u8>, Image)>> {
     if !file.metadata().map_err(|_| invalid())?.is_file() {
         return Err(invalid());
     }
+    #[cfg(test)]
+    testing::hit_scoped(testing::Boundary::CacheOpenedBeforeRead, state, env_id)?;
     let mut bytes = Vec::new();
     file.take(MAX_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
@@ -688,6 +690,8 @@ pub(super) mod testing {
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub(crate) enum Boundary {
+        DeferredPrefilterPassed,
+        CacheOpenedBeforeRead,
         BeforeLayout,
         BeforeSnapshot,
         AfterSnapshot,
@@ -727,6 +731,7 @@ pub(super) mod testing {
         events: Vec<Boundary>,
         action: Option<(Boundary, PathBuf, Option<Vec<u8>>)>,
         pause: Option<Pause>,
+        scoped: Option<(PathBuf, String)>,
         snapshot_mutation: Option<SnapshotMutation>,
     }
     thread_local! {
@@ -759,6 +764,51 @@ pub(super) mod testing {
     }
     pub(crate) fn events() -> Vec<Boundary> {
         TRACE.with(|trace| trace.borrow().events.clone())
+    }
+    pub(crate) fn scoped_pause(
+        boundary: Boundary,
+        root: PathBuf,
+        env_id: String,
+        entered: std::sync::mpsc::SyncSender<()>,
+        resume: std::sync::mpsc::Receiver<()>,
+    ) {
+        assert!(matches!(
+            boundary,
+            Boundary::DeferredPrefilterPassed | Boundary::CacheOpenedBeforeRead
+        ));
+        assert!(root.is_absolute());
+        assert!(!root.components().any(|part| part == Component::ParentDir));
+        assert!(commit::valid_env_id(&env_id));
+        TRACE.with(|trace| {
+            let mut trace = trace.borrow_mut();
+            assert!(trace.scoped.is_none() && trace.pause.is_none());
+            trace.scoped = Some((root, env_id));
+            trace.pause = Some((boundary, entered, resume));
+        });
+    }
+    pub(crate) fn hit_scoped(boundary: Boundary, state: &StateDir, env_id: &str) -> Result<()> {
+        let armed = TRACE.with(|trace| {
+            let mut trace = trace.borrow_mut();
+            if trace.pause.as_ref().is_some_and(|(at, _, _)| *at == boundary)
+                && trace
+                    .scoped
+                    .as_ref()
+                    .is_some_and(|(root, env)| root == &state.path && env == env_id)
+            {
+                trace.scoped = None;
+                true
+            } else {
+                false
+            }
+        });
+        if !armed {
+            return Ok(());
+        }
+        assert_eq!(
+            state.locked_by_current_thread(),
+            boundary == Boundary::CacheOpenedBeforeRead
+        );
+        hit(boundary)
     }
     pub(crate) fn replace_snapshot(
         at: Boundary,
