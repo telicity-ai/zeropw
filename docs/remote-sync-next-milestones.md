@@ -653,3 +653,6 @@ Both OS matrix evidence exists; acceptance and resource release remain INCOMPLET
 is HOLD for ten unexplained identities without birth/custody evidence; no further
 Mac execution/cleanup is assigned. All M2/runtime/review/physical/Oracle/release
 and old Go custody holds remain unchanged.
+
+
+Actual compaction Opus review at04c7d22/Rustafc is [REVISE](reviews/2026-11-08-compaction-heads-opus-04c7d22/README.md), with01/02medium and03low OPEN. The findings concern missing folded identity evidence, receipt HLC after predecessor pruning, and prospective path validation. Protected receipt changes require a bounded Astra decision; no silent scope expansion or finding resolution is claimed.

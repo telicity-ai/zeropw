@@ -1,0 +1,43 @@
+{
+ "reviewer": "Claude Opus claude-opus-5-5 (actual), Claude Code harness in T3 Code; effort/thinking/tier not exposed; no subagents/workflow/alternate model",
+ "nature": "static only; no product/helper/compiler/build/test/formatter/generator execution; no SSH/VM/network/secret/admin/PR/commit",
+ "brief": {
+  "path": "/tmp/zeropw-compaction-heads-opus-review-20261108.md",
+  "sha256": "638b4210e06d994c57963fb6426e38af2dfc3e8b82540ae36133ae4fbb7a9b90",
+  "expected": "638b4210e06d994c57963fb6426e38af2dfc3e8b82540ae36133ae4fbb7a9b90"
+ },
+ "manifest": {
+  "path": "/Users/ys/Code/zeropw-mlp-evidence/compaction-heads-opus-preparation-20261108/review-input-manifest.json",
+  "sha256": "9c319540f14a443e1ad275749956e93c3781639124d054bf227db972577b230a",
+  "expected": "9c319540f14a443e1ad275749956e93c3781639124d054bf227db972577b230a"
+ },
+ "checks": "per file: bytes length, sha256, independently computed git blob, git index mode/blob, filesystem mode; tracked set equality; HEAD and HEAD:rust",
+ "before": {
+  "manifest_files": 1426,
+  "tracked": 1426,
+  "head": "04c7d22ae3f4317e9f203e5d7ca703974f8f1f69",
+  "head_tree": "07136533e9ec885ec414ffd44f7db18f7aac8de5",
+  "rust_tree": "afc41fcb5d55aaec2bc2fead7c7d8a94f312cc9f",
+  "status_porcelain": "",
+  "ok": true,
+  "mismatch_count": 0
+ },
+ "after": {
+  "manifest_files": 1426,
+  "tracked": 1426,
+  "head": "04c7d22ae3f4317e9f203e5d7ca703974f8f1f69",
+  "head_tree": "07136533e9ec885ec414ffd44f7db18f7aac8de5",
+  "rust_tree": "afc41fcb5d55aaec2bc2fead7c7d8a94f312cc9f",
+  "status_porcelain": "",
+  "ok": true,
+  "mismatch_count": 0
+ },
+ "product_diff": "git diff c413c92..0d3fdc5 = exactly 4 paths; git diff 0d3fdc5..HEAD -- rust empty",
+ "outputs": {
+  "report.json": "4e7296a50f281a3e066eb91998a7c3e79f6767b8ee8d17fcd60d77219bcb8ec0",
+  "report.md": "fd53253fe211a80c2debc87ac6893d617e638a85cd295cf3fb4529b97da419b1",
+  "COVERAGE.md": "a55f63c7c8cb99e5c4b9209bf9c23ae362ec671be6dbdc1bdd3bd0e0ccd658fb"
+ },
+ "freeze": "outputs frozen after this file is written; this file's own hash is reported out-of-band",
+ "execution_claims": "no execution performed by reviewer; native/Linux counts are external evidence, not reviewer runtime"
+}
