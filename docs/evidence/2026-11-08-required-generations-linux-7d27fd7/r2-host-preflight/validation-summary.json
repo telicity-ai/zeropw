@@ -1,0 +1,46 @@
+{
+  "actual_model": "gpt-6.1-sol",
+  "blocker": "Host standard-library DATA preflight: ModuleNotFoundError for tomllib; Python process exit1",
+  "feature_after": "NOTRUN",
+  "feature_before": "NOTRUN",
+  "feature_comparison": "NOTRUN",
+  "fixture_before_after": "NOTRUN: no new guest execution inventory",
+  "fresh_runtime_audits": 0,
+  "full_matrix": {
+    "expected_integration_targets": 106,
+    "expected_steps": 111,
+    "failed": null,
+    "ignored": null,
+    "observed_steps": 0,
+    "observed_targets": 0,
+    "passed": null,
+    "state": "NOTRUN"
+  },
+  "personally_executed": true,
+  "phases": {
+    "FAIL": 0,
+    "NOTRUN": 5,
+    "PASS": 0
+  },
+  "prior_14_exact_selectors": "PASS saved previous execution; not repeated and not R2 results",
+  "prior_linux": {
+    "failed": 4,
+    "feature_after": "NOTRUN",
+    "ignored": 5,
+    "passed": 1812,
+    "state": "FAIL",
+    "unchanged": true
+  },
+  "prior_native_wide_commit": "1800s TIMEOUT / INCOMPLETE unchanged",
+  "privacy_scan": "NOTRUN: no collected runtime stdout/stderr",
+  "product_tests_executed": 0,
+  "reasoning": "ultra inherited",
+  "resource_measurements": "NOTRUN: no runtime or transport; whole cap not started",
+  "result": "BLOCKED / STOPPED / VALIDATION NOTRUN",
+  "runtime": "T3 Code through Codex harness",
+  "runtime_review_acceptance_release": "ALL HOLDS UNCHANGED",
+  "service_tier": "not exposed as an actual selected runtime setting",
+  "source_cache_live": "NOTRUN",
+  "ssh_transports": 0,
+  "subagents_workflows_substitutions": false
+}

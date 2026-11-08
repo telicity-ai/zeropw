@@ -252,7 +252,10 @@ The later [Linux attempt](evidence/2026-11-08-required-generations-linux-7d27fd7
 ran111 steps/106 targets:1812 passed/4 failed/5 ignored, with two SSH targets
 failing under the coordinator-created nologin account. All14 exact selectors
 passed; feature-after is NOTRUN. The account was corrected with management-login
-denial and a preserved privilege boundary; product revalidation is still pending.
+denial and a preserved privilege boundary. A separate R2 worker stopped beforeSSH
+with missing hosttomllib (all five phasesNOTRUN); after a Python3.9 DATA fix,
+coordinator R2 targeted suites eachpassed6tests. Full verification and after-feature
+comparison remain pending; these partial results are recorded separately.
 The original FAIL remains and validation is INCOMPLETE. A valid wide single-commit
 native trial timed out at1800seconds; the final distributed-commit probe is
 different input and does not resolve that inherited cost. No M2,

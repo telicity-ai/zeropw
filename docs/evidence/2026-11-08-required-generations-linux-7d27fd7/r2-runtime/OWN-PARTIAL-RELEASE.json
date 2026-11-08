@@ -1,0 +1,10 @@
+{
+  "state": "Root first3phases ownjob/directtransports RELEASED_TO_REASSIGNMENT",
+  "scope": "5Root-owned joined restrictedSSH calls (audit+3phases+bundle),3retainedproductchildrenwaited; no wholeVMidle/releaseclaim",
+  "all_direct_transports_joined": true,
+  "all_direct_product_children_waited": true,
+  "saved_assigned_UID_residuals": [],
+  "wholeVM": "Root-ownedrg01 remainsrunning; nextworkeronlyremaining2phases",
+  "released_at_epoch": 1794102482.675327,
+  "no_runtime_calls_after_handoff": "Rootwillnotqueryactiveassignedjob"
+}

@@ -14,7 +14,7 @@ The coordinator setup was incompatible with those remote-command tests. Without 
 
 The actual restricted route was checked again afterward: UID2000/groups[]/NNP1/allcaps0,1338 exact source files,172 pinned archives/8194 upstream files and root-owned read-only controls all matched ([post-correction DATA audit](04-restricted-post-correction-audit.stdout)). Host mounts/agent forwarding, private management files and external networking remain outside worker access. A runnable account shell alone would not establish that boundary; the management login denial and forced privilege-drop route are separate prerequisites. These probes are OS/DATA setup evidence, not successful product retests.
 
-A separate bounded follow-up must run the two failed targets, one unchanged full verifier and before/after feature observations against the same executed source, under the corrected account and unchanged privilege/network/size boundaries. That follow-up is not run in this report. It must retain this original FAIL and stop on any new failure; no skipping/loosening/reclassification or source change is authorized by this evidence.
+The later [R2 host preflight](r2-host-preflight/REPORT.md) stopped before SSH with missing tomllib and all five phases NOTRUN. After a Python3.9-compatible DATA preflight, the coordinator ran [three R2 phases](r2-runtime/README.md): before-features and both corrected-account SSH suites, each6tests passing. The full verifier and after-feature observation remain pending under the same source/privilege/network/size boundaries. It must retain this original FAIL and stop on any new failure; no skipping/loosening/reclassification or source change is authorized by this evidence.
 
 ## Unchanged limits and raw inputs
 

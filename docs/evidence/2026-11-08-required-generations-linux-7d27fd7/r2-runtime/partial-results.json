@@ -1,0 +1,57 @@
+{
+  "state": "3newphasePASS; overallR2fullNOTRUN",
+  "actor": "Root/coordinator actualgpt-6.1-solultra",
+  "phases": [
+    {
+      "phase": "30-features-before",
+      "test_summaries": [],
+      "source_exact": true,
+      "own_child_waited": true,
+      "residuals": [],
+      "receipt_sha256": "9b396e73864fe444f2b8d2b1e6cb3fa2a3ad394425803bd7c59bee687f67dc1b"
+    },
+    {
+      "phase": "31-native-cli-e2e",
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 6,
+          "status": "ok"
+        }
+      ],
+      "source_exact": true,
+      "own_child_waited": true,
+      "residuals": [],
+      "receipt_sha256": "24c502a5679a9200f9c48eca56eebdcfbcb08a8fb1c60398a1c609b93b4052ff"
+    },
+    {
+      "phase": "32-signer-e2e",
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 6,
+          "status": "ok"
+        }
+      ],
+      "source_exact": true,
+      "own_child_waited": true,
+      "residuals": [],
+      "receipt_sha256": "355595a754dd02be05e3732bcb13b3dce6690dcf6cd1d3c1917eb7634fde4307"
+    }
+  ],
+  "remaining": [
+    "33-full-matrix",
+    "34-features-after"
+  ],
+  "originalLinux": "FAIL1812/4/5unchanged",
+  "earlierR2hostattempt": "NOTRUNall5unchanged",
+  "source": "7d27fd7/Rust4352",
+  "guestfiles": 12,
+  "archive_bytes": 2311654
+}

@@ -1,0 +1,11 @@
+
+running 6 tests
+test exec_tool_after_revocation_is_denied_before_ssh_starts ... ok
+test exec_tool_runs_two_remote_commands_on_one_connection ... ok
+test real_ssh_client_authenticates_through_signer_without_private_key ... ok
+test revoked_grant_cannot_authenticate ... ok
+test teardown_leaves_no_socket_file_or_signer_created_directory ... ok
+test wrong_destination_host_key_is_refused ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.99s
+

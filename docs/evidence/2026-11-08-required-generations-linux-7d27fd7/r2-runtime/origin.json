@@ -1,0 +1,10 @@
+{
+  "actor": "coordinator actualgpt-6.1-sol/ultra",
+  "scope": "restricted R2 UID2000 audit+first3 namedphases only; source never executesonhost",
+  "executed_source": "7d27fd7ec500e36f0e5cc548325e1ae5b34864d8",
+  "rust_tree": "4352ebbd0fa84bde0fb444c4d0902ef2510d0620",
+  "first_ssh_epoch": 1794102345.546906,
+  "whole_cap_seconds": 10800,
+  "oldR2worker": "6da68e8e ended beforeSSH; all5NOTRUN retained, new explicitcoordinator runtime assignment",
+  "new5phaseplan": "unchanged3756f8f2facdda7e801aa60abf3a804a97054fba5de9f4acce728d44eea17a37"
+}
