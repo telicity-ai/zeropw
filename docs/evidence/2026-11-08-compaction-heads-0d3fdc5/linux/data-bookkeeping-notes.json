@@ -1,0 +1,24 @@
+{
+  "events": [
+    {
+      "classification": "DATA_OUTPUT_TRUNCATION",
+      "detail": "Two initial batched DATA reads exceeded tool output limits. Corrected by bounded subsequent reads; no runtime call or product retry occurred."
+    },
+    {
+      "classification": "HOST_DATA_SYNTAX_ERROR",
+      "detail": "Nested triple-quote delimiter in report-writer preparation. Host parser refused all statements before execution. No report-writer file was created; no runtime transport/test/control/source was retried or changed. Corrected by preparing the report directly after collection.",
+      "epoch": 1794114178.299138,
+      "runtime_campaign_affected": false,
+      "stderr_file": "analysis/host-data-error-01.stderr",
+      "tool_exit": 1
+    }
+  ],
+  "resolution": {
+    "all_data_issues_preserved": true,
+    "bounded_full_reads_completed": true,
+    "final_independent_data_checks": "PASS",
+    "report_generated_directly_after_collection": true,
+    "runtime_retries": 0,
+    "source_control_test_cap_criteria_changes": false
+  }
+}

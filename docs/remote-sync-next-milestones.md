@@ -647,7 +647,9 @@ is collected at product0d3fdc54, Rustafc41fcb. Native unchanged verification
 passed112steps/107targets/1843tests with0failures and5ignored; focused debug/release
 and14 exact selectors passed. Independent DATA collection matched source, patch,
 logs and protected inputs. This is no Opus/Astra acceptance. Linux remains NOTRUN
-in the original worker handoff and overall validation INCOMPLETE. Resource release
+in the original worker handoff; a separate exact-source21-phase run passed
+112steps/107targets/1840tests,0failures,5ignored plus focused/14exact checks.
+Both OS matrix evidence exists; acceptance and resource release remain INCOMPLETE. Resource release
 is HOLD for ten unexplained identities without birth/custody evidence; no further
 Mac execution/cleanup is assigned. All M2/runtime/review/physical/Oracle/release
 and old Go custody holds remain unchanged.

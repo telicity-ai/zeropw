@@ -1,0 +1,2113 @@
+{
+  "actual_collector": "gpt-6.1-sol / ultra; native same-provider child, stdlib DATA only",
+  "bundle_members": [
+    {
+      "bytes": 776507,
+      "mode": 384,
+      "path": "evidence/10-features-before.json",
+      "sha256": "be63b5391fbf38b45605b3c1cdd989c359c511153f4c5d2eb6db6f73952881bf"
+    },
+    {
+      "bytes": 1928,
+      "mode": 384,
+      "path": "evidence/10-features-before.started.json",
+      "sha256": "9049f9e2761fe998e38f7ebeda2c8a746def7d3fe2953249781d81aa607de71f"
+    },
+    {
+      "bytes": 0,
+      "mode": 384,
+      "path": "evidence/10-features-before.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 41358,
+      "mode": 384,
+      "path": "evidence/10-features-before.stdout",
+      "sha256": "16c0a21abe1313c25e288c99ac7f401661847e5e4aa315b74c72d306155a8c93"
+    },
+    {
+      "bytes": 776603,
+      "mode": 384,
+      "path": "evidence/11-lib-debug.json",
+      "sha256": "adf0fb3457e94755b69ddbdbee03a5ac451902ab3587d91c0a58198c4f0fedad"
+    },
+    {
+      "bytes": 1933,
+      "mode": 384,
+      "path": "evidence/11-lib-debug.started.json",
+      "sha256": "52afb1e4ab89a26becb7523026bb43475b763f63f4e92a1c9bdb41879eaac171"
+    },
+    {
+      "bytes": 3781,
+      "mode": 384,
+      "path": "evidence/11-lib-debug.stderr",
+      "sha256": "cb41d74a2dee88b27ddc6a69e5204b6040a55d2a13152755c0f05a091afbd4f3"
+    },
+    {
+      "bytes": 1695,
+      "mode": 384,
+      "path": "evidence/11-lib-debug.stdout",
+      "sha256": "8d6dafdd3be04066a2e9be59a8c7a1244c6358622983c2dfb7b4ed01db5c898e"
+    },
+    {
+      "bytes": 776631,
+      "mode": 384,
+      "path": "evidence/12-integration-debug.json",
+      "sha256": "6dc83036026ecaa51e22382776eefc1820b0ae5a2abb516738d50246b23192df"
+    },
+    {
+      "bytes": 1947,
+      "mode": 384,
+      "path": "evidence/12-integration-debug.started.json",
+      "sha256": "f95f18c57e4a48ea3a7ed8c45228fddec9195c3f7399bf1236e7ab541f6555a0"
+    },
+    {
+      "bytes": 225,
+      "mode": 384,
+      "path": "evidence/12-integration-debug.stderr",
+      "sha256": "db3d991845cdbe2a81ec82e74519bcc805eb5d84f5389a1e4479877dc2385d18"
+    },
+    {
+      "bytes": 1072,
+      "mode": 384,
+      "path": "evidence/12-integration-debug.stdout",
+      "sha256": "880b54f2e9486c0457dbd35ad6db79aa63366151ec2c12e1c98bd2f861f614ff"
+    },
+    {
+      "bytes": 776629,
+      "mode": 384,
+      "path": "evidence/13-lib-release.json",
+      "sha256": "db8469dbf115372ad02103d04e7cdd45a4a42a2f9b4cfa530b99dba9e842f08b"
+    },
+    {
+      "bytes": 1952,
+      "mode": 384,
+      "path": "evidence/13-lib-release.started.json",
+      "sha256": "4fe4903d9335acf334cb70619be9c8d860cdb72b0381614c64062e4e0674a49b"
+    },
+    {
+      "bytes": 3784,
+      "mode": 384,
+      "path": "evidence/13-lib-release.stderr",
+      "sha256": "f4c60e65d02dd3f9af1faec3957c3af661f60e6cb9b27d07fcbcf442bb6f58f1"
+    },
+    {
+      "bytes": 1694,
+      "mode": 384,
+      "path": "evidence/13-lib-release.stdout",
+      "sha256": "572f25d33503586c7ff8bddbce68544d9a3dddf5b883bc3f48a704861f09f886"
+    },
+    {
+      "bytes": 776655,
+      "mode": 384,
+      "path": "evidence/14-integration-release.json",
+      "sha256": "498fccc815f45ad328470bf6d5bc0037f2baa840d1a41614c5e99dc0f9341e24"
+    },
+    {
+      "bytes": 1966,
+      "mode": 384,
+      "path": "evidence/14-integration-release.started.json",
+      "sha256": "5b5ef7dd78e00cbd2728a46f4c11e4fe6d3244e3ed22f2d872cc06a214d33392"
+    },
+    {
+      "bytes": 228,
+      "mode": 384,
+      "path": "evidence/14-integration-release.stderr",
+      "sha256": "86fe75e4e14e775aafb1fb5d32e5eb58aa91cb978136b30b9f3effc38f843b8b"
+    },
+    {
+      "bytes": 1071,
+      "mode": 384,
+      "path": "evidence/14-integration-release.stdout",
+      "sha256": "037185f715ac4314c8b820ef4a77c4ffc88c11885ddb1c7b05f266cc88602ddd"
+    },
+    {
+      "bytes": 792356,
+      "mode": 384,
+      "path": "evidence/15-full-matrix.json",
+      "sha256": "13f0ad11ceb74120c7a27c0f50a77edce4c053bc3f542e4e78b756350156b49d"
+    },
+    {
+      "bytes": 1826,
+      "mode": 384,
+      "path": "evidence/15-full-matrix.started.json",
+      "sha256": "3fd007805221b659efa32f657b176469a7f63fb1d3c65fed8f807e628c02426f"
+    },
+    {
+      "bytes": 27924,
+      "mode": 384,
+      "path": "evidence/15-full-matrix.stderr",
+      "sha256": "110baf2b267b8e3dc56e2cefa69964f662f06991ef3aa2495e5feb96ee52d45d"
+    },
+    {
+      "bytes": 157229,
+      "mode": 384,
+      "path": "evidence/15-full-matrix.stdout",
+      "sha256": "774845766286681cf02a58b41414e1e8c175fcd85e4b950564267c0e906f3688"
+    },
+    {
+      "bytes": 776760,
+      "mode": 384,
+      "path": "evidence/16-exact-debug-1.json",
+      "sha256": "88cc223550f2ab68f860b9e36e8debe20f03d9778843d3a9117d3d8da058b612"
+    },
+    {
+      "bytes": 2049,
+      "mode": 384,
+      "path": "evidence/16-exact-debug-1.started.json",
+      "sha256": "9555d7a756c4aa2b9c77008b3694c607748f04718c47ff1b16af816bda18bd54"
+    },
+    {
+      "bytes": 179,
+      "mode": 384,
+      "path": "evidence/16-exact-debug-1.stderr",
+      "sha256": "4120238253a2401c97f6fe423494c24f986ad4ac5334f67955c8f7b125dd5360"
+    },
+    {
+      "bytes": 197,
+      "mode": 384,
+      "path": "evidence/16-exact-debug-1.stdout",
+      "sha256": "3abcb743fb10cdc3852fa0772e516dd6bae3cb5d61f3c7eac089770c32105f03"
+    },
+    {
+      "bytes": 776758,
+      "mode": 384,
+      "path": "evidence/17-exact-debug-2.json",
+      "sha256": "88298bfeb5f8cce4a501f9dd6e29b7a76ef18ce4e341272dd761a71563d906aa"
+    },
+    {
+      "bytes": 2048,
+      "mode": 384,
+      "path": "evidence/17-exact-debug-2.started.json",
+      "sha256": "3182732b1bae23f90490f656112cbca0dd44c34a05ccf2b24c947ce7d8756410"
+    },
+    {
+      "bytes": 183,
+      "mode": 384,
+      "path": "evidence/17-exact-debug-2.stderr",
+      "sha256": "e1c40fee398d5976d0d9f7146dac64ca44507cae5da5dd7ec9dc765969c3be17"
+    },
+    {
+      "bytes": 194,
+      "mode": 384,
+      "path": "evidence/17-exact-debug-2.stdout",
+      "sha256": "437fd03823017dd3eab0085060f0fc30e6a06cfdea056201a543eabf18b3db7a"
+    },
+    {
+      "bytes": 776777,
+      "mode": 384,
+      "path": "evidence/18-exact-debug-3.json",
+      "sha256": "04f01968c678175e01f5e3c04d73b1dfa1dbb13a7c4868cf87313566cef68462"
+    },
+    {
+      "bytes": 2066,
+      "mode": 384,
+      "path": "evidence/18-exact-debug-3.started.json",
+      "sha256": "fa66c98e3943b34bf3345459009ab8941cba13eb56e15be2c4c13aae01ba76db"
+    },
+    {
+      "bytes": 189,
+      "mode": 384,
+      "path": "evidence/18-exact-debug-3.stderr",
+      "sha256": "b6d26c57fd02237675ab241f8372e503f1670a26bf4a04e8c9e45e1780027b96"
+    },
+    {
+      "bytes": 209,
+      "mode": 384,
+      "path": "evidence/18-exact-debug-3.stdout",
+      "sha256": "92b1833bf67ac4de592e480b99b4064b1b626ed9aa2e36f7a478cf510170de84"
+    },
+    {
+      "bytes": 776737,
+      "mode": 384,
+      "path": "evidence/19-exact-debug-4.json",
+      "sha256": "4ba15407557b975c11d450a23bb0324ca1ea6bb6f47c7acc1e01bd392cdfe0b4"
+    },
+    {
+      "bytes": 2028,
+      "mode": 384,
+      "path": "evidence/19-exact-debug-4.started.json",
+      "sha256": "5d4532d3ec19ce837a9ec1f97f68f68a516f14f98c30f15020472e70690b0cf4"
+    },
+    {
+      "bytes": 189,
+      "mode": 384,
+      "path": "evidence/19-exact-debug-4.stderr",
+      "sha256": "b6d26c57fd02237675ab241f8372e503f1670a26bf4a04e8c9e45e1780027b96"
+    },
+    {
+      "bytes": 171,
+      "mode": 384,
+      "path": "evidence/19-exact-debug-4.stdout",
+      "sha256": "67b2746c8ea478b65311ddb85e483565a2753c23a3d4fb42bd450797d550cca7"
+    },
+    {
+      "bytes": 776777,
+      "mode": 384,
+      "path": "evidence/20-exact-debug-5.json",
+      "sha256": "e8f9083e497812eeb889d1d00062d548529912426eceeaa758af0d1cd1ae759c"
+    },
+    {
+      "bytes": 2067,
+      "mode": 384,
+      "path": "evidence/20-exact-debug-5.started.json",
+      "sha256": "feffec9422c333159786c6f71d6424d73c382b909448ae1f905b8b26c167e32d"
+    },
+    {
+      "bytes": 205,
+      "mode": 384,
+      "path": "evidence/20-exact-debug-5.stderr",
+      "sha256": "67b93f91d5dbfe3e7fc4f7ff3766b4d55798528d02d2f89240813032186f0369"
+    },
+    {
+      "bytes": 202,
+      "mode": 384,
+      "path": "evidence/20-exact-debug-5.stdout",
+      "sha256": "82a7f80862b3a02241bb2e6e841e2b5ab495ad97c8cd771e26e364b8ab19ef37"
+    },
+    {
+      "bytes": 776768,
+      "mode": 384,
+      "path": "evidence/21-exact-debug-6.json",
+      "sha256": "ae8bc3bfbffceaf57be9268a8bd7e5e7c2fa3c97e525c3951b40d367caad8cc1"
+    },
+    {
+      "bytes": 2058,
+      "mode": 384,
+      "path": "evidence/21-exact-debug-6.started.json",
+      "sha256": "daf101aaa823c511fdf7122df24078e86049c290ec5b368f6ea64e20430fb3e8"
+    },
+    {
+      "bytes": 205,
+      "mode": 384,
+      "path": "evidence/21-exact-debug-6.stderr",
+      "sha256": "67b93f91d5dbfe3e7fc4f7ff3766b4d55798528d02d2f89240813032186f0369"
+    },
+    {
+      "bytes": 193,
+      "mode": 384,
+      "path": "evidence/21-exact-debug-6.stdout",
+      "sha256": "c4c20da409f49f06b97d008d27b1ff405efb31ba7ba776b7acac9dd7907bed2c"
+    },
+    {
+      "bytes": 776766,
+      "mode": 384,
+      "path": "evidence/22-exact-debug-7.json",
+      "sha256": "34832055f2157c36328b69cd7f8915049fb774ccb2aa9a8277bf1e5b8a5361c3"
+    },
+    {
+      "bytes": 2056,
+      "mode": 384,
+      "path": "evidence/22-exact-debug-7.started.json",
+      "sha256": "f441d77c68de0dfb36c93aab2bf50e015bee1deb460e4b5b0d63777ed21ca9a0"
+    },
+    {
+      "bytes": 205,
+      "mode": 384,
+      "path": "evidence/22-exact-debug-7.stderr",
+      "sha256": "67b93f91d5dbfe3e7fc4f7ff3766b4d55798528d02d2f89240813032186f0369"
+    },
+    {
+      "bytes": 191,
+      "mode": 384,
+      "path": "evidence/22-exact-debug-7.stdout",
+      "sha256": "58577c49c967714af343e70e384cf7ca90164bc0e0ef827e8f7666961946b7ce"
+    },
+    {
+      "bytes": 776783,
+      "mode": 384,
+      "path": "evidence/23-exact-release-1.json",
+      "sha256": "4c96f560fec3c23059b83ad3128e8f45a1063cc9b4ca072c018ec1f0133e9178"
+    },
+    {
+      "bytes": 2068,
+      "mode": 384,
+      "path": "evidence/23-exact-release-1.started.json",
+      "sha256": "00fa1d7a601f447750f4dd16ee1a4eedc5c7fb677b98da64162fa64bea089c0e"
+    },
+    {
+      "bytes": 231,
+      "mode": 384,
+      "path": "evidence/23-exact-release-1.stderr",
+      "sha256": "585b6c658ee13ee602e68661bb2aa3d0a0b1dcfdf5658cff12d582c48ffb6e3e"
+    },
+    {
+      "bytes": 197,
+      "mode": 384,
+      "path": "evidence/23-exact-release-1.stdout",
+      "sha256": "56c051b13f82686fb5fd08d32cc52f11bde85a0157eee0f6766404abadbd5816"
+    },
+    {
+      "bytes": 776781,
+      "mode": 384,
+      "path": "evidence/24-exact-release-2.json",
+      "sha256": "7e68f65f2b4929f4adf4c8ef3b89e5a07a56e10b21f6ca2af7764e580b080af9"
+    },
+    {
+      "bytes": 2067,
+      "mode": 384,
+      "path": "evidence/24-exact-release-2.started.json",
+      "sha256": "20fb0856c4ccc3cdac6ffa6d1f2f31999eec0df75a1a65184704b6a65b1693da"
+    },
+    {
+      "bytes": 235,
+      "mode": 384,
+      "path": "evidence/24-exact-release-2.stderr",
+      "sha256": "ff1dcf62e0785cf1172c8a13c7247ddb3fe29609171a1e1b72dd23cb6e8ba0d8"
+    },
+    {
+      "bytes": 194,
+      "mode": 384,
+      "path": "evidence/24-exact-release-2.stdout",
+      "sha256": "3b7e3cb224e7a690a44f1040699ad02b2253a71ae5729ed1b52c37e5440b1205"
+    },
+    {
+      "bytes": 776799,
+      "mode": 384,
+      "path": "evidence/25-exact-release-3.json",
+      "sha256": "e588ebf250ef494c6d928eb169518631275dc4321387ac2b2cb5a8a292005f1c"
+    },
+    {
+      "bytes": 2085,
+      "mode": 384,
+      "path": "evidence/25-exact-release-3.started.json",
+      "sha256": "629201b155e1b18dd793dc5b69f6ce08f106c38888acb2c496b03c76435176ae"
+    },
+    {
+      "bytes": 241,
+      "mode": 384,
+      "path": "evidence/25-exact-release-3.stderr",
+      "sha256": "9b808cc51266b3cb917c08a29749a27a527f39720298ddc3cbbe0c570d1b1772"
+    },
+    {
+      "bytes": 209,
+      "mode": 384,
+      "path": "evidence/25-exact-release-3.stdout",
+      "sha256": "36046cfb2e08b78119e7e3c9055c2cd3dbefd14032e7808793d647b5f5876880"
+    },
+    {
+      "bytes": 776762,
+      "mode": 384,
+      "path": "evidence/26-exact-release-4.json",
+      "sha256": "6b813c59a1ecd74a2d076efb6003b70a90da8ee97f06189fe440dd2915b55b24"
+    },
+    {
+      "bytes": 2047,
+      "mode": 384,
+      "path": "evidence/26-exact-release-4.started.json",
+      "sha256": "004dc2b3f3bae0996b7effe0bfc7efecf62959e07f4ff9cf6237858936c9cf52"
+    },
+    {
+      "bytes": 192,
+      "mode": 384,
+      "path": "evidence/26-exact-release-4.stderr",
+      "sha256": "628123e1098a577f622798e1d5148fd2d3c88107be91e2984a0825ea14b7b5e7"
+    },
+    {
+      "bytes": 171,
+      "mode": 384,
+      "path": "evidence/26-exact-release-4.stdout",
+      "sha256": "c32651ca5191b442f5fee38543a475015a433b10ef28207b8932778cad49e001"
+    },
+    {
+      "bytes": 776801,
+      "mode": 384,
+      "path": "evidence/27-exact-release-5.json",
+      "sha256": "2a331e0bb2b07d7b68bc78b262234314322ff62459e4b168fe2dbe488e590023"
+    },
+    {
+      "bytes": 2086,
+      "mode": 384,
+      "path": "evidence/27-exact-release-5.started.json",
+      "sha256": "4a982b5e5b64e8ee6ead76c6a4aacd13bd56be9a731bcaba6d0b3ab7375bde07"
+    },
+    {
+      "bytes": 257,
+      "mode": 384,
+      "path": "evidence/27-exact-release-5.stderr",
+      "sha256": "1ad464d9972909d7929f41193f44ac705d340f19fe4e3cc80db925f4ae0c9d0a"
+    },
+    {
+      "bytes": 202,
+      "mode": 384,
+      "path": "evidence/27-exact-release-5.stdout",
+      "sha256": "e449fe764873c7a5dbbed8463cb779575edbbd915bcbcd18b951ca720d49f817"
+    },
+    {
+      "bytes": 776792,
+      "mode": 384,
+      "path": "evidence/28-exact-release-6.json",
+      "sha256": "c76fb2097d1622c2842e76055f063f512ed32113ed1dc1277e0703093c0b1b6f"
+    },
+    {
+      "bytes": 2077,
+      "mode": 384,
+      "path": "evidence/28-exact-release-6.started.json",
+      "sha256": "ae32dfea45f8f0c8af209a0111f39849bad32391ba4f277fea27c2d1dff7ff8f"
+    },
+    {
+      "bytes": 208,
+      "mode": 384,
+      "path": "evidence/28-exact-release-6.stderr",
+      "sha256": "a96a600ab69601d20da4f9f980c850ad0e11974c3158731f24c0b7a2bcdc95bd"
+    },
+    {
+      "bytes": 193,
+      "mode": 384,
+      "path": "evidence/28-exact-release-6.stdout",
+      "sha256": "76bc7e94daba28d36e9c35c23d16a0c01846d5664c72cb303f0d599970f7603c"
+    },
+    {
+      "bytes": 776790,
+      "mode": 384,
+      "path": "evidence/29-exact-release-7.json",
+      "sha256": "915f85c20d581981508ba3a1623be562b7680d6942a5f6e2cfd17fa39e8e16d3"
+    },
+    {
+      "bytes": 2075,
+      "mode": 384,
+      "path": "evidence/29-exact-release-7.started.json",
+      "sha256": "c79e50607306175e2c2d0e271738a6a4798a2247ba98585d87126793271ae7df"
+    },
+    {
+      "bytes": 208,
+      "mode": 384,
+      "path": "evidence/29-exact-release-7.stderr",
+      "sha256": "a96a600ab69601d20da4f9f980c850ad0e11974c3158731f24c0b7a2bcdc95bd"
+    },
+    {
+      "bytes": 191,
+      "mode": 384,
+      "path": "evidence/29-exact-release-7.stdout",
+      "sha256": "59a9cb3906e36f858854bad61e2868f144d4cf41945e63e595e9c6cc58c3de98"
+    },
+    {
+      "bytes": 776507,
+      "mode": 384,
+      "path": "evidence/30-features-after.json",
+      "sha256": "c59c42aa9d7343e3ed5be18dd9321606fe4b2386f2c1161b6cd74159a5e4865a"
+    },
+    {
+      "bytes": 1927,
+      "mode": 384,
+      "path": "evidence/30-features-after.started.json",
+      "sha256": "c145a9b55f2cfb1d5e2f639915fcaad2340a31cd467b4ee1392f4f6e105fb520"
+    },
+    {
+      "bytes": 0,
+      "mode": 384,
+      "path": "evidence/30-features-after.stderr",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "bytes": 41358,
+      "mode": 384,
+      "path": "evidence/30-features-after.stdout",
+      "sha256": "16c0a21abe1313c25e288c99ac7f401661847e5e4aa315b74c72d306155a8c93"
+    }
+  ],
+  "bundle_uncompressed_bytes": 16656155,
+  "collector_DATA_errors_preserved": [
+    {
+      "cause": "collector expected generic release.state RELEASED; actual honest narrower schema is RELEASED_OWN_KNOWN_HANDLES_ONLY",
+      "correction": "require exact actual qualified state plus all24SSH/21guest known waits and saved residual evidence; no expected file hash/source/control/runtime/criterion changes",
+      "error": "AssertionError before output writes",
+      "operation": "first independent DATA audit"
+    },
+    {
+      "correction": "subsequent bounded raw-log and selector data parsing independently matched; no runtime retry",
+      "error": "tool output truncation",
+      "operation": "diagnostic phase-summary display"
+    }
+  ],
+  "counts": {
+    "Python_fixture_paths": 79,
+    "all_fixture_paths": 537,
+    "bundle_regular_entries": 84,
+    "catalogue_records": 241,
+    "changed_paths": 4,
+    "checksum_records": 243,
+    "exact_selectors": 14,
+    "external_regular_files": 244,
+    "freeze_records": 242,
+    "full_steps": 112,
+    "full_summary_records": 115,
+    "integration_targets": 107,
+    "known_guest_children_waited": 21,
+    "own_SSH_joined": 24,
+    "phases": 21,
+    "prep_records": 37,
+    "protected_existing": 1370,
+    "protected_record_comparisons": 57540,
+    "rust_fixture_paths": 536,
+    "source_files": 1374,
+    "source_inventories": 42,
+    "source_record_comparisons": 57708
+  },
+  "exact_selectors": [
+    {
+      "phase": "16-exact-debug-1",
+      "selector": "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+      "target": "team_checkpoint_payload"
+    },
+    {
+      "phase": "17-exact-debug-2",
+      "selector": "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+      "target": "team_checkpoint_admission"
+    },
+    {
+      "phase": "18-exact-debug-3",
+      "selector": "complete_candidate_depth64_success_late_error_repeat_drop_and_65_refusal_on_256_kib",
+      "target": "team_checkpoint_semantic_cut"
+    },
+    {
+      "phase": "19-exact-debug-4",
+      "selector": "complete_fold_depth64_on_actual_256_kib_stack",
+      "target": "team_checkpoint_semantic_cut"
+    },
+    {
+      "phase": "20-exact-debug-5",
+      "selector": "required_generation_depth64_success_late_error_repeat_drop_on_actual_256_kib",
+      "target": "team_checkpoint_required_generations"
+    },
+    {
+      "phase": "21-exact-debug-6",
+      "selector": "required_generation_depth65_refuses_before_crypto_on_actual_256_kib",
+      "target": "team_checkpoint_required_generations"
+    },
+    {
+      "phase": "22-exact-debug-7",
+      "selector": "required_wrap_depth64_success_error_repeat_drop_on_actual_256_kib",
+      "target": "team_checkpoint_required_generations"
+    },
+    {
+      "phase": "23-exact-release-1",
+      "selector": "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+      "target": "team_checkpoint_payload"
+    },
+    {
+      "phase": "24-exact-release-2",
+      "selector": "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+      "target": "team_checkpoint_admission"
+    },
+    {
+      "phase": "25-exact-release-3",
+      "selector": "complete_candidate_depth64_success_late_error_repeat_drop_and_65_refusal_on_256_kib",
+      "target": "team_checkpoint_semantic_cut"
+    },
+    {
+      "phase": "26-exact-release-4",
+      "selector": "complete_fold_depth64_on_actual_256_kib_stack",
+      "target": "team_checkpoint_semantic_cut"
+    },
+    {
+      "phase": "27-exact-release-5",
+      "selector": "required_generation_depth64_success_late_error_repeat_drop_on_actual_256_kib",
+      "target": "team_checkpoint_required_generations"
+    },
+    {
+      "phase": "28-exact-release-6",
+      "selector": "required_generation_depth65_refuses_before_crypto_on_actual_256_kib",
+      "target": "team_checkpoint_required_generations"
+    },
+    {
+      "phase": "29-exact-release-7",
+      "selector": "required_wrap_depth64_success_error_repeat_drop_on_actual_256_kib",
+      "target": "team_checkpoint_required_generations"
+    }
+  ],
+  "feature_bytes": 41358,
+  "fixture_count_reconciliation": {
+    "Linux537": "all paths containing /fixtures/",
+    "difference": [
+      "desktop/core/tests/fixtures/fake-zeropw-admin.sh"
+    ],
+    "native536": "rust/tests/fixtures/",
+    "source_drift": false
+  },
+  "full_step_order": [
+    "fmt",
+    "clippy",
+    "lib-and-bins",
+    "test:admin_expanduser_parity",
+    "test:admin_input_envelope",
+    "test:admin_secret_import",
+    "test:admin_sigint_cleanup_boundaries",
+    "test:admin_sigint_exit",
+    "test:agent_help",
+    "test:agent_proxy_parity",
+    "test:astra_cleanup_publication_order",
+    "test:astra_cli_runtime_round2",
+    "test:astra_cli_runtime_round3",
+    "test:astra_cli_runtime_round4",
+    "test:astra_projects_final",
+    "test:astra_pty_portability",
+    "test:astra_response_acceptance",
+    "test:astra_response_final",
+    "test:astra_response_final_recheck",
+    "test:astra_response_review",
+    "test:astra_response_round2",
+    "test:astra_response_round3",
+    "test:astra_response_round4",
+    "test:astra_run_context_lease",
+    "test:astra_runtime_final",
+    "test:astra_runtime_review",
+    "test:astra_sigint_cleanup",
+    "test:astra_sigint_cleanup_final",
+    "test:astra_team_fact_catchup",
+    "test:astra_team_fact_duplicate_diagnostic",
+    "test:astra_team_reconnect_diagnostic",
+    "test:astra_team_review",
+    "test:astra_team_round2",
+    "test:astra_team_round3",
+    "test:astra_team_round4",
+    "test:base_cli_error_parity",
+    "test:canonical_helpers",
+    "test:cli_commands",
+    "test:cli_grant_limits_parity",
+    "test:cli_parity",
+    "test:democli_parity",
+    "test:escaped_builtin_http_parity",
+    "test:fake_upstream",
+    "test:gateway",
+    "test:gateway_oracle",
+    "test:gateway_replay_status_parity",
+    "test:gateway_tls_parity",
+    "test:gateway_x1_credential_e2e",
+    "test:ledger_float_parity",
+    "test:native_admin_cli",
+    "test:native_admin_cli_more",
+    "test:native_agent_cli",
+    "test:native_atomic_cli",
+    "test:native_cli_e2e",
+    "test:native_response_cli",
+    "test:native_team_cli",
+    "test:native_team_e2e",
+    "test:policy_oracle",
+    "test:policy_parity_close",
+    "test:python_numeric_comparison_parity",
+    "test:relay_escape_parity",
+    "test:response",
+    "test:response_contract",
+    "test:response_integer_boundaries",
+    "test:response_parity_gaps",
+    "test:runs",
+    "test:runtime_fix_boundaries",
+    "test:runtime_parity_gaps",
+    "test:serve_request_log",
+    "test:server_accept_resilience",
+    "test:signer_e2e",
+    "test:signer_oracle",
+    "test:sshwire",
+    "test:state_dir_cross_language",
+    "test:store_cross_process_lock",
+    "test:store_oracle",
+    "test:team_checkpoint_admission",
+    "test:team_checkpoint_authority_oracle",
+    "test:team_checkpoint_generation_oracle",
+    "test:team_checkpoint_legacy_parser_regression",
+    "test:team_checkpoint_manifest",
+    "test:team_checkpoint_payload",
+    "test:team_checkpoint_provenance",
+    "test:team_checkpoint_removal_oracle",
+    "test:team_checkpoint_required_generations",
+    "test:team_checkpoint_semantic_cut",
+    "test:team_compaction_heads",
+    "test:team_derive_lazy_parity",
+    "test:team_envelope_parity_edges",
+    "test:team_fold",
+    "test:team_fold_lazy_parity",
+    "test:team_invite_link",
+    "test:team_link_transport",
+    "test:team_membership_sync",
+    "test:team_oracle",
+    "test:team_pairing_approval",
+    "test:team_parity_gaps",
+    "test:team_remaining_contract",
+    "test:team_secret_import",
+    "test:team_share_policy_version_parity",
+    "test:team_snapshot_total_parity",
+    "test:team_snapshot_version_order_parity",
+    "test:team_sync_status",
+    "test:team_transport",
+    "test:team_uncaught_scope_parity",
+    "test:tools_server",
+    "test:vault_context",
+    "test:vault_context_oracle",
+    "test:vault_public_parity",
+    "test:whole_secret_tombstone",
+    "signer-probes",
+    "doc-tests"
+  ],
+  "full_totals": {
+    "failed": 0,
+    "filtered": 716,
+    "ignored": 5,
+    "measured": 0,
+    "passed": 1840
+  },
+  "hashes": {
+    "command_plan": "ac41f28769f8854d797aaa4088c15390c205ffe1aed0522e569a576db6e59bed",
+    "driver": "3ab9b1528fa5d184c0d42dd56bc262a8afa6fcc45984a4910faafdcfbd803f15",
+    "feature_before_after": "16c0a21abe1313c25e288c99ac7f401661847e5e4aa315b74c72d306155a8c93",
+    "native_source_archive": "8e4cb2530cc274f5c6f9d4dfda150e58411d34260ea901e85ca82f97952b0915",
+    "raw_guest_bundle": "84ec34950b716ed533162771b50dbbe84ba6b98be92ae62bcfd77affaedf7676",
+    "release": "97819d6c8b41c8bd33688c2d5c7f134530a7f31e0cd6de6a483ab151870efffb",
+    "source_manifest": "6d671db58e54fa2d31b13c010942b251032a484d0c782329db84ae6ff97b05f1",
+    "worker_catalogue": "7978d2d787b0778355e6185fac4221fa18fc9fd70f488ae22246130aa88d176b",
+    "worker_freeze": "0349fbe6fb5a3df747a45cb62831fdf4bea379d844f88b5013adb310b08d8540"
+  },
+  "input": "/Users/ys/Code/zeropw-mlp-evidence/compaction-heads-linux-sol-20261108/t3-f9592cb5",
+  "lifecycle": {
+    "Mac_native_HOLD": "ten unexplained identities unchanged; no query/signal/adoption",
+    "absolute_deadline_epoch": 1794134679.664181,
+    "all_saved_uid_residuals_empty": true,
+    "exact_release_state": "RELEASED_OWN_KNOWN_HANDLES_ONLY",
+    "first_transport_epoch": 1794113355.923174,
+    "known_direct_SSH_joined": 24,
+    "known_guest_children_waited": 21,
+    "last_transport_epoch": 1794116460.5497532,
+    "whole_ch01": "Root-owned, no current query or VM-idle/cleanup/physical-erasure claim"
+  },
+  "limits": [
+    "No runtime rerun/SSH/VM/process query, source/ref/index mutation, review or acceptance",
+    "Saved same-UID observations are not cryptographic execution attestation",
+    "Worker bounded privacy analysis frozen bytes checked, marker transformations not fully recreated",
+    "Original failed tool transcript not independently fetched",
+    "NativeHOLD/oldGoquarantine/DOS1HIGH/Opus3eb/M2/runtime/physical/Oracle/release and historical FAIL/NOTRUN/nativewideTIMEOUT unchanged"
+  ],
+  "phase_results": [
+    {
+      "driver_exit": 0,
+      "kind": "features",
+      "own_child_waited": true,
+      "phase": "10-features-before",
+      "saved_uid_residuals": [],
+      "source_before_after_exact": true,
+      "summaries": [],
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "kind": "tests",
+      "own_child_waited": true,
+      "phase": "11-lib-debug",
+      "saved_uid_residuals": [],
+      "source_before_after_exact": true,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 707,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 13,
+          "status": "ok"
+        }
+      ],
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "kind": "tests",
+      "own_child_waited": true,
+      "phase": "12-integration-debug",
+      "saved_uid_residuals": [],
+      "source_before_after_exact": true,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 11,
+          "status": "ok"
+        }
+      ],
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "kind": "tests",
+      "own_child_waited": true,
+      "phase": "13-lib-release",
+      "saved_uid_residuals": [],
+      "source_before_after_exact": true,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 707,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 13,
+          "status": "ok"
+        }
+      ],
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "kind": "tests",
+      "own_child_waited": true,
+      "phase": "14-integration-release",
+      "saved_uid_residuals": [],
+      "source_before_after_exact": true,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 11,
+          "status": "ok"
+        }
+      ],
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "kind": "full",
+      "own_child_waited": true,
+      "phase": "15-full-matrix",
+      "saved_uid_residuals": [],
+      "source_before_after_exact": true,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 4,
+          "measured": 0,
+          "passed": 716,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 0,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 0,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 0,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 0,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 0,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 12,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 9,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 5,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 5,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 6,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 5,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 6,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 5,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 8,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 9,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 5,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 10,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 20,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 149,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 8,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 26,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 26,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 8,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 6,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 17,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 20,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 26,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 32,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 8,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 9,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 21,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 15,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 6,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 86,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 6,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 17,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 1,
+          "measured": 0,
+          "passed": 6,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 10,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 13,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 22,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 17,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 11,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 31,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 19,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 12,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 10,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 35,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 13,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 16,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 26,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 8,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 27,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 46,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 32,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 9,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 716,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 48,
+          "status": "ok"
+        }
+      ],
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "16-exact-debug-1",
+      "saved_uid_residuals": [],
+      "source_before_after_exact": true,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 12,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "17-exact-debug-2",
+      "saved_uid_residuals": [],
+      "source_before_after_exact": true,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 16,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "18-exact-debug-3",
+      "saved_uid_residuals": [],
+      "source_before_after_exact": true,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 16,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "19-exact-debug-4",
+      "saved_uid_residuals": [],
+      "source_before_after_exact": true,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 16,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "20-exact-debug-5",
+      "saved_uid_residuals": [],
+      "source_before_after_exact": true,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 21,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "21-exact-debug-6",
+      "saved_uid_residuals": [],
+      "source_before_after_exact": true,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 21,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "22-exact-debug-7",
+      "saved_uid_residuals": [],
+      "source_before_after_exact": true,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 21,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "23-exact-release-1",
+      "saved_uid_residuals": [],
+      "source_before_after_exact": true,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 12,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "24-exact-release-2",
+      "saved_uid_residuals": [],
+      "source_before_after_exact": true,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 16,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "25-exact-release-3",
+      "saved_uid_residuals": [],
+      "source_before_after_exact": true,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 16,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "26-exact-release-4",
+      "saved_uid_residuals": [],
+      "source_before_after_exact": true,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 16,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "27-exact-release-5",
+      "saved_uid_residuals": [],
+      "source_before_after_exact": true,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 21,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "28-exact-release-6",
+      "saved_uid_residuals": [],
+      "source_before_after_exact": true,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 21,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "29-exact-release-7",
+      "saved_uid_residuals": [],
+      "source_before_after_exact": true,
+      "summaries": [
+        {
+          "failed": 0,
+          "filtered": 21,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "kind": "features",
+      "own_child_waited": true,
+      "phase": "30-features-after",
+      "saved_uid_residuals": [],
+      "source_before_after_exact": true,
+      "summaries": [],
+      "test_exit": 0
+    }
+  ],
+  "raw_value_present": false,
+  "resource_observations": {
+    "full_child_elapsed_seconds": 2770.6607191700004,
+    "full_waited_child_ru_maxrss_kib": 1337128,
+    "minimum_saved_guest_free_bytes": 1125715968,
+    "minimum_transport_host_free_bytes": 3704373248,
+    "scope": "process high-water/waited-child accounting, not RSS sum or Oracle capacity"
+  },
+  "schema": "independent-compaction-heads-linux-data-collection-v1",
+  "trees_DATA": {
+    "desktop": "2413844c89265a3e239be2372d34b1e6e1b2d4bb",
+    "full": "fbf13d73d270e441dd574cf592609d7d8b38dc6d",
+    "rust": "afc41fcb5d55aaec2bc2fead7c7d8a94f312cc9f"
+  },
+  "unresolved_integrity_gaps": [],
+  "worker_DATA_notes_preserved": {
+    "events": [
+      {
+        "classification": "DATA_OUTPUT_TRUNCATION",
+        "detail": "Two initial batched DATA reads exceeded tool output limits. Corrected by bounded subsequent reads; no runtime call or product retry occurred."
+      },
+      {
+        "classification": "HOST_DATA_SYNTAX_ERROR",
+        "detail": "Nested triple-quote delimiter in report-writer preparation. Host parser refused all statements before execution. No report-writer file was created; no runtime transport/test/control/source was retried or changed. Corrected by preparing the report directly after collection.",
+        "epoch": 1794114178.299138,
+        "runtime_campaign_affected": false,
+        "stderr_file": "analysis/host-data-error-01.stderr",
+        "tool_exit": 1
+      }
+    ],
+    "resolution": {
+      "all_data_issues_preserved": true,
+      "bounded_full_reads_completed": true,
+      "final_independent_data_checks": "PASS",
+      "report_generated_directly_after_collection": true,
+      "runtime_retries": 0,
+      "source_control_test_cap_criteria_changes": false
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "after_present": true,
+  "before_present": true,
+  "exact_stdout_equal": true,
+  "raw_value_present_after": false,
+  "raw_value_present_before": false
+}

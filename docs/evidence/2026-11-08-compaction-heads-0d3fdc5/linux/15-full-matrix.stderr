@@ -1,0 +1,433 @@
+    Checking libc v0.2.189
+    Checking cfg-if v1.0.4
+    Checking getrandom v0.2.17
+    Checking typenum v1.20.1
+    Checking generic-array v0.14.7
+    Checking rand_core v0.6.4
+    Checking crypto-common v0.1.7
+    Checking zeroize v1.9.0
+    Checking subtle v2.6.1
+    Checking block-buffer v0.10.4
+    Checking digest v0.10.7
+    Checking rustls-pki-types v1.15.1
+    Checking inout v0.1.4
+    Checking cipher v0.4.4
+    Checking bitflags v2.13.2
+    Checking memchr v2.8.3
+    Checking untrusted v0.9.0
+    Checking ring v0.17.14
+    Checking serde_core v1.0.229
+    Checking zerocopy v0.8.57
+    Checking cpufeatures v0.2.17
+    Checking sha2 v0.10.9
+    Checking ppv-lite86 v0.2.21
+    Checking num-traits v0.2.19
+    Checking curve25519-dalek v4.1.3
+    Checking getrandom v0.4.3
+    Checking aho-corasick v1.1.5
+    Checking hmac v0.12.1
+    Checking universal-hash v0.5.1
+    Checking errno v0.3.14
+    Checking hashbrown v0.17.1
+    Checking once_cell v1.21.4
+    Checking linux-raw-sys v0.12.1
+    Checking equivalent v1.0.2
+    Checking tinyvec v1.13.3
+    Checking base64 v0.22.1
+    Checking regex-syntax v0.8.11
+    Checking opaque-debug v0.3.1
+    Checking foreign-types-shared v0.1.1
+    Checking signature v2.2.0
+    Checking ed25519 v2.2.3
+    Checking foreign-types v0.3.2
+    Checking poly1305 v0.8.0
+    Checking regex-automata v0.4.18
+    Checking unicode-normalization v0.1.25
+    Checking indexmap v2.14.2
+    Checking rustix v1.1.4
+    Checking signal-hook-registry v1.4.8
+    Checking pbkdf2 v0.12.2
+    Checking num-integer v0.1.47
+    Checking rand_chacha v0.3.1
+    Checking serde v1.0.229
+    Checking zmij v1.0.23
+    Checking openssl-sys v0.9.117
+    Checking rustls-webpki v0.103.15
+    Checking salsa20 v0.10.2
+    Checking chacha20 v0.9.1
+    Checking aead v0.5.2
+    Checking socket2 v0.6.5
+    Checking rtoolbox v0.0.6
+    Checking unicode-bidi v0.3.18
+    Checking itoa v1.0.18
+    Checking openssl-probe v0.2.1
+    Checking unicode-properties v0.1.4
+    Checking fastrand v2.5.0
+    Checking log v0.4.34
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Checking rustls v0.23.45
+    Checking tempfile v3.27.0
+    Checking stringprep v0.1.5
+    Checking rustls-native-certs v0.8.4
+    Checking serde_json v1.0.151
+    Checking rpassword v7.5.4
+    Checking dns-lookup v3.0.1
+    Checking openssl v0.10.81
+    Checking chacha20poly1305 v0.10.1
+    Checking scrypt v0.11.0
+    Checking nix v0.30.1
+    Checking num-bigint v0.5.1
+    Checking rand v0.8.8
+    Checking signal-hook v0.3.18
+    Checking regex v1.13.1
+    Checking ed25519-dalek v2.2.0
+    Checking uuid v1.26.1
+    Checking x25519-dalek v2.0.1
+    Checking rustls-pemfile v2.2.0
+    Checking md-5 v0.10.6
+    Checking close_fds v0.3.2
+    Checking socket2 v0.5.10
+    Checking hex v0.4.3
+    Checking punycode v0.4.1
+    Checking percent-encoding v2.3.2
+    Checking time-core v0.1.9
+    Checking num-conv v0.2.2
+    Checking deranged v0.5.8
+    Checking powerfmt v0.2.0
+    Checking time v0.3.55
+    Checking yasna v0.5.2
+    Checking pem v3.0.6
+    Checking rcgen v0.13.2
+    Finished `dev` profile [unoptimized] target(s) in 30.71s
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.62s
+     Running unittests src/lib.rs (/opt/chjob/target/debug/deps/zeropw-007970ffd6770fca)
+     Running unittests src/bin/zeropw-admin.rs (/opt/chjob/target/debug/deps/zeropw_admin-6c29d2d59b926320)
+     Running unittests src/bin/zeropw-agent.rs (/opt/chjob/target/debug/deps/zeropw_agent-8994b60dde9a78cb)
+     Running unittests src/bin/zeropw-demo.rs (/opt/chjob/target/debug/deps/zeropw_demo-1c5c6fdd15e4d91f)
+     Running unittests src/bin/zeropw-democli.rs (/opt/chjob/target/debug/deps/zeropw_democli-34a206a4f153e2bf)
+     Running unittests src/bin/zeropw_session.rs (/opt/chjob/target/debug/deps/zeropw_session-0594184ea84dddc2)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.35s
+     Running tests/admin_expanduser_parity.rs (/opt/chjob/target/debug/deps/admin_expanduser_parity-7f6ce46907e06a40)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.39s
+     Running tests/admin_input_envelope.rs (/opt/chjob/target/debug/deps/admin_input_envelope-19161c8ad9b01564)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.76s
+     Running tests/admin_secret_import.rs (/opt/chjob/target/debug/deps/admin_secret_import-97017d3edb664d68)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.93s
+     Running tests/admin_sigint_cleanup_boundaries.rs (/opt/chjob/target/debug/deps/admin_sigint_cleanup_boundaries-b0035c9c7ef2673b)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.06s
+     Running tests/admin_sigint_exit.rs (/opt/chjob/target/debug/deps/admin_sigint_exit-9b12d40b17bd2281)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.18s
+     Running tests/agent_help.rs (/opt/chjob/target/debug/deps/agent_help-7e5b826f71903541)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.20s
+     Running tests/agent_proxy_parity.rs (/opt/chjob/target/debug/deps/agent_proxy_parity-8d5014c078931cb9)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.00s
+     Running tests/astra_cleanup_publication_order.rs (/opt/chjob/target/debug/deps/astra_cleanup_publication_order-dd65c0b866595394)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.03s
+     Running tests/astra_cli_runtime_round2.rs (/opt/chjob/target/debug/deps/astra_cli_runtime_round2-4ea89fc2e57dc85b)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.98s
+     Running tests/astra_cli_runtime_round3.rs (/opt/chjob/target/debug/deps/astra_cli_runtime_round3-5376bb30de2e0615)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.06s
+     Running tests/astra_cli_runtime_round4.rs (/opt/chjob/target/debug/deps/astra_cli_runtime_round4-c38cb023b4b4cdd9)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.83s
+     Running tests/astra_projects_final.rs (/opt/chjob/target/debug/deps/astra_projects_final-3a7040dc41526424)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.81s
+     Running tests/astra_pty_portability.rs (/opt/chjob/target/debug/deps/astra_pty_portability-2bded5c90e845e55)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.87s
+     Running tests/astra_response_acceptance.rs (/opt/chjob/target/debug/deps/astra_response_acceptance-818dd80532486722)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.93s
+     Running tests/astra_response_final.rs (/opt/chjob/target/debug/deps/astra_response_final-48dcb7b52bf52331)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.92s
+     Running tests/astra_response_final_recheck.rs (/opt/chjob/target/debug/deps/astra_response_final_recheck-f4e8179071d7dc26)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.17s
+     Running tests/astra_response_review.rs (/opt/chjob/target/debug/deps/astra_response_review-6d66e4de554ae908)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.35s
+     Running tests/astra_response_round2.rs (/opt/chjob/target/debug/deps/astra_response_round2-316848502c6c646b)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.13s
+     Running tests/astra_response_round3.rs (/opt/chjob/target/debug/deps/astra_response_round3-ca993f4164d4af1a)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.93s
+     Running tests/astra_response_round4.rs (/opt/chjob/target/debug/deps/astra_response_round4-a976ae340fd408e1)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.93s
+     Running tests/astra_run_context_lease.rs (/opt/chjob/target/debug/deps/astra_run_context_lease-6ee51db6f1e6a87f)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.83s
+     Running tests/astra_runtime_final.rs (/opt/chjob/target/debug/deps/astra_runtime_final-15daefe5cd28713d)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.13s
+     Running tests/astra_runtime_review.rs (/opt/chjob/target/debug/deps/astra_runtime_review-c479995014be5151)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.91s
+     Running tests/astra_sigint_cleanup.rs (/opt/chjob/target/debug/deps/astra_sigint_cleanup-86457dca00d0fe74)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.96s
+     Running tests/astra_sigint_cleanup_final.rs (/opt/chjob/target/debug/deps/astra_sigint_cleanup_final-f312aa524c9d9730)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.10s
+     Running tests/astra_team_fact_catchup.rs (/opt/chjob/target/debug/deps/astra_team_fact_catchup-1fe52c8cf7a6928e)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.06s
+     Running tests/astra_team_fact_duplicate_diagnostic.rs (/opt/chjob/target/debug/deps/astra_team_fact_duplicate_diagnostic-1cc1d11505d98dc9)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.04s
+     Running tests/astra_team_reconnect_diagnostic.rs (/opt/chjob/target/debug/deps/astra_team_reconnect_diagnostic-9c577f696f269c6c)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.03s
+     Running tests/astra_team_review.rs (/opt/chjob/target/debug/deps/astra_team_review-ebc3cd1d69b7a0dc)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.24s
+     Running tests/astra_team_round2.rs (/opt/chjob/target/debug/deps/astra_team_round2-5ab2c8dab83c68c5)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.28s
+     Running tests/astra_team_round3.rs (/opt/chjob/target/debug/deps/astra_team_round3-6b4eb0e42cfcb5f4)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.47s
+     Running tests/astra_team_round4.rs (/opt/chjob/target/debug/deps/astra_team_round4-f5d33ac3fbb3b56c)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.27s
+     Running tests/base_cli_error_parity.rs (/opt/chjob/target/debug/deps/base_cli_error_parity-3466f1b228579d0f)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.47s
+     Running tests/canonical_helpers.rs (/opt/chjob/target/debug/deps/canonical_helpers-994914a043bc2a3c)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.32s
+     Running tests/cli_commands.rs (/opt/chjob/target/debug/deps/cli_commands-1c5ca9f547f480dd)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.14s
+     Running tests/cli_grant_limits_parity.rs (/opt/chjob/target/debug/deps/cli_grant_limits_parity-8fc1c8c7aaeb65a0)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.53s
+     Running tests/cli_parity.rs (/opt/chjob/target/debug/deps/cli_parity-475bf9d3fe18855d)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.59s
+     Running tests/democli_parity.rs (/opt/chjob/target/debug/deps/democli_parity-23d1d50508fccab7)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.26s
+     Running tests/escaped_builtin_http_parity.rs (/opt/chjob/target/debug/deps/escaped_builtin_http_parity-9dbbf6769af5127b)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.03s
+     Running tests/fake_upstream.rs (/opt/chjob/target/debug/deps/fake_upstream-58db925a058406aa)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 2.01s
+     Running tests/gateway.rs (/opt/chjob/target/debug/deps/gateway-e9d75a743a56491a)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.52s
+     Running tests/gateway_oracle.rs (/opt/chjob/target/debug/deps/gateway_oracle-59506ab10bae1a6f)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.91s
+     Running tests/gateway_replay_status_parity.rs (/opt/chjob/target/debug/deps/gateway_replay_status_parity-75216791a73f095f)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.24s
+     Running tests/gateway_tls_parity.rs (/opt/chjob/target/debug/deps/gateway_tls_parity-353bad7c0fe44940)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.77s
+     Running tests/gateway_x1_credential_e2e.rs (/opt/chjob/target/debug/deps/gateway_x1_credential_e2e-1fefad47eb3b38b0)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.98s
+     Running tests/ledger_float_parity.rs (/opt/chjob/target/debug/deps/ledger_float_parity-d71409566b418627)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.33s
+     Running tests/native_admin_cli.rs (/opt/chjob/target/debug/deps/native_admin_cli-110b6d095680b925)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.75s
+     Running tests/native_admin_cli_more.rs (/opt/chjob/target/debug/deps/native_admin_cli_more-4003c1639fdb02ef)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.72s
+     Running tests/native_agent_cli.rs (/opt/chjob/target/debug/deps/native_agent_cli-59bbbbb82c6d061c)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.80s
+     Running tests/native_atomic_cli.rs (/opt/chjob/target/debug/deps/native_atomic_cli-51cf69ea9e6c5502)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.42s
+     Running tests/native_cli_e2e.rs (/opt/chjob/target/debug/deps/native_cli_e2e-458c4db9aee0db6f)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.44s
+     Running tests/native_response_cli.rs (/opt/chjob/target/debug/deps/native_response_cli-a72404fe3d97485d)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.45s
+     Running tests/native_team_cli.rs (/opt/chjob/target/debug/deps/native_team_cli-08f2f58d51f49be6)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.50s
+     Running tests/native_team_e2e.rs (/opt/chjob/target/debug/deps/native_team_e2e-83e5cdad061a4215)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.17s
+     Running tests/policy_oracle.rs (/opt/chjob/target/debug/deps/policy_oracle-648e1f516707f54d)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.90s
+     Running tests/policy_parity_close.rs (/opt/chjob/target/debug/deps/policy_parity_close-8c0d1b2bef48b1d3)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.75s
+     Running tests/python_numeric_comparison_parity.rs (/opt/chjob/target/debug/deps/python_numeric_comparison_parity-3c4948e1ce084f46)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.08s
+     Running tests/relay_escape_parity.rs (/opt/chjob/target/debug/deps/relay_escape_parity-c76a79c446ba6d3a)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.78s
+     Running tests/response.rs (/opt/chjob/target/debug/deps/response-c8fa756fabf8c939)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.24s
+     Running tests/response_contract.rs (/opt/chjob/target/debug/deps/response_contract-acc598bcfc91d2ae)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.24s
+     Running tests/response_integer_boundaries.rs (/opt/chjob/target/debug/deps/response_integer_boundaries-b01768dbfa22abef)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.18s
+     Running tests/response_parity_gaps.rs (/opt/chjob/target/debug/deps/response_parity_gaps-a17080c310c20832)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.02s
+     Running tests/runs.rs (/opt/chjob/target/debug/deps/runs-277cd29dae7f45e1)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.31s
+     Running tests/runtime_fix_boundaries.rs (/opt/chjob/target/debug/deps/runtime_fix_boundaries-c12675bf5b37a5d5)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.30s
+     Running tests/runtime_parity_gaps.rs (/opt/chjob/target/debug/deps/runtime_parity_gaps-5f90e33e444cd1a2)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.30s
+     Running tests/serve_request_log.rs (/opt/chjob/target/debug/deps/serve_request_log-86c88d1af03d833b)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.26s
+     Running tests/server_accept_resilience.rs (/opt/chjob/target/debug/deps/server_accept_resilience-b2865c14f3f47eb5)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.18s
+     Running tests/signer_e2e.rs (/opt/chjob/target/debug/deps/signer_e2e-07040f1fb3883c0e)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.06s
+     Running tests/signer_oracle.rs (/opt/chjob/target/debug/deps/signer_oracle-daf87d0da6ae75e3)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.24s
+     Running tests/sshwire.rs (/opt/chjob/target/debug/deps/sshwire-7ea880c45bcbccea)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.90s
+     Running tests/state_dir_cross_language.rs (/opt/chjob/target/debug/deps/state_dir_cross_language-54476c65960d9988)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.82s
+     Running tests/store_cross_process_lock.rs (/opt/chjob/target/debug/deps/store_cross_process_lock-e18e713122cfe011)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.75s
+     Running tests/store_oracle.rs (/opt/chjob/target/debug/deps/store_oracle-64f4637100cec60d)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.37s
+     Running tests/team_checkpoint_admission.rs (/opt/chjob/target/debug/deps/team_checkpoint_admission-2b120637f33eb360)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.25s
+     Running tests/team_checkpoint_authority_oracle.rs (/opt/chjob/target/debug/deps/team_checkpoint_authority_oracle-9ce8ec4638d1cdc1)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.40s
+     Running tests/team_checkpoint_generation_oracle.rs (/opt/chjob/target/debug/deps/team_checkpoint_generation_oracle-83f3d9550d3ee78c)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.62s
+     Running tests/team_checkpoint_legacy_parser_regression.rs (/opt/chjob/target/debug/deps/team_checkpoint_legacy_parser_regression-02ae28da095295f2)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.56s
+     Running tests/team_checkpoint_manifest.rs (/opt/chjob/target/debug/deps/team_checkpoint_manifest-1de6ef8bf0737c71)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.98s
+     Running tests/team_checkpoint_payload.rs (/opt/chjob/target/debug/deps/team_checkpoint_payload-dc0346a8dfc48b78)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.82s
+     Running tests/team_checkpoint_provenance.rs (/opt/chjob/target/debug/deps/team_checkpoint_provenance-ba63eb0a7275b14a)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.39s
+     Running tests/team_checkpoint_removal_oracle.rs (/opt/chjob/target/debug/deps/team_checkpoint_removal_oracle-962e90197b1884ff)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.92s
+     Running tests/team_checkpoint_required_generations.rs (/opt/chjob/target/debug/deps/team_checkpoint_required_generations-895673609244a8a4)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.68s
+     Running tests/team_checkpoint_semantic_cut.rs (/opt/chjob/target/debug/deps/team_checkpoint_semantic_cut-63450a2c47e6d51b)
+    Finished `test` profile [unoptimized] target(s) in 0.05s
+     Running tests/team_compaction_heads.rs (/opt/chjob/target/debug/deps/team_compaction_heads-8a1861c8cfb0147a)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.26s
+     Running tests/team_derive_lazy_parity.rs (/opt/chjob/target/debug/deps/team_derive_lazy_parity-cc97ec1d96383902)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 0.80s
+     Running tests/team_envelope_parity_edges.rs (/opt/chjob/target/debug/deps/team_envelope_parity_edges-33811ffcfe578d6e)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.26s
+     Running tests/team_fold.rs (/opt/chjob/target/debug/deps/team_fold-13d93113cc547a96)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.48s
+     Running tests/team_fold_lazy_parity.rs (/opt/chjob/target/debug/deps/team_fold_lazy_parity-c0327c8251bfa116)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.45s
+     Running tests/team_invite_link.rs (/opt/chjob/target/debug/deps/team_invite_link-8fb542d1539c49e8)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.89s
+     Running tests/team_link_transport.rs (/opt/chjob/target/debug/deps/team_link_transport-a3ff50763971a0d5)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.43s
+     Running tests/team_membership_sync.rs (/opt/chjob/target/debug/deps/team_membership_sync-1fca319ea7ba7c4d)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.33s
+     Running tests/team_oracle.rs (/opt/chjob/target/debug/deps/team_oracle-0de49bb5f3abaeb1)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.47s
+     Running tests/team_pairing_approval.rs (/opt/chjob/target/debug/deps/team_pairing_approval-5316069555d41c24)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.55s
+     Running tests/team_parity_gaps.rs (/opt/chjob/target/debug/deps/team_parity_gaps-a6e6dd9d3e4c992c)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 2.12s
+     Running tests/team_remaining_contract.rs (/opt/chjob/target/debug/deps/team_remaining_contract-79721c21a44aaa9a)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.52s
+     Running tests/team_secret_import.rs (/opt/chjob/target/debug/deps/team_secret_import-3a75a97c955841a8)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.13s
+     Running tests/team_share_policy_version_parity.rs (/opt/chjob/target/debug/deps/team_share_policy_version_parity-1c97e61486d3259c)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.34s
+     Running tests/team_snapshot_total_parity.rs (/opt/chjob/target/debug/deps/team_snapshot_total_parity-0555880164485609)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.23s
+     Running tests/team_snapshot_version_order_parity.rs (/opt/chjob/target/debug/deps/team_snapshot_version_order_parity-b8708f01b94cb692)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.36s
+     Running tests/team_sync_status.rs (/opt/chjob/target/debug/deps/team_sync_status-de7eb0c0ce13cc9a)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.25s
+     Running tests/team_transport.rs (/opt/chjob/target/debug/deps/team_transport-33a0714e05ab7418)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.11s
+     Running tests/team_uncaught_scope_parity.rs (/opt/chjob/target/debug/deps/team_uncaught_scope_parity-4a5aa15549924fcc)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.75s
+     Running tests/tools_server.rs (/opt/chjob/target/debug/deps/tools_server-946054488f5e3fa9)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.66s
+     Running tests/vault_context.rs (/opt/chjob/target/debug/deps/vault_context-6a3bb53ab84a488f)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.38s
+     Running tests/vault_context_oracle.rs (/opt/chjob/target/debug/deps/vault_context_oracle-e73ba19779adaf7b)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.13s
+     Running tests/vault_public_parity.rs (/opt/chjob/target/debug/deps/vault_public_parity-6037d246f5b1f6d2)
+   Compiling zeropw v0.2.0 (/opt/chjob/src/rust)
+    Finished `test` profile [unoptimized] target(s) in 1.19s
+     Running tests/whole_secret_tombstone.rs (/opt/chjob/target/debug/deps/whole_secret_tombstone-a8b6571b1f4aabd4)
+    Finished `test` profile [unoptimized] target(s) in 0.05s
+     Running unittests src/lib.rs (/opt/chjob/target/debug/deps/zeropw-007970ffd6770fca)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+   Doc-tests zeropw
