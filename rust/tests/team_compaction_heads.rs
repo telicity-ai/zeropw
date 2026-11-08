@@ -1664,17 +1664,23 @@ fn compaction_heads_01_later_conflicting_record_cannot_override_and_earlier_arri
                 "1000007-0000",
                 vec![json!({"op":"settings.update","sync_interval_seconds":101})],
             );
-            let error = commit::receive_commit(
+            assert_eq!(commit::receive_commit(
                 &CommitStore::new(f.ctx.state, &f.env),
                 &next,
                 OLD + 10,
                 Some(f.ctx.audit),
-            )
-            .unwrap_err();
-            assert_eq!(error.reason, "team_compaction_head_invalid");
-            assert!(error.detail.is_empty());
+            ).unwrap(), "accepted");
+            let saved = CommitStore::new(f.ctx.state, &f.env).get(&yfp, 2).unwrap().unwrap();
+            assert_eq!(saved.canonical_json(false).unwrap(), next.canonical_json(false).unwrap());
+            assert_eq!(saved.canonical_json(true).unwrap(), next.canonical_json(true).unwrap());
+            assert_eq!(saved.sig, next.sig);
             assert!(rejection_events(&f).is_empty());
-            assert!(!f.path(&yfp, 2).exists());
+            assert!(inventory(&f, "rejected").is_empty());
+            assert!(inventory(&f, "deferred").is_empty());
+            assert_eq!(fs::read(f.ctx.state.path.join(f.cache_name())).unwrap(), first_cache);
+            let loaded = membership::load_environment(&f.ctx, &f.env).unwrap();
+            assert!(loaded.document["members"].get(&yfp).is_none());
+            assert_eq!(loaded.document["settings"]["sync_interval_seconds"], 10);
         } else {
             assert_eq!(team.compact(&f.env).unwrap()["removed"], 0);
             assert_eq!(
@@ -1977,4 +1983,114 @@ fn compaction_heads_02_unreadable_cache_requires_unprivileged_isolated_uid() {
     );
     drop(restore);
     assert_eq!(metadata(&f), before);
+}
+
+
+#[test]
+fn compaction_heads_r1_prior_conflicts_identical_and_absence_controls() {
+    // All retained announcements are real receipts. Y is fold-skipped, so
+    // a lagging active peer cannot conceal the strict compaction outcome.
+    for row in ["earlier-identical", "later-different", "earlier-different", "initial-alternative", "lost-cache"] {
+        let f = received_fixture();
+        let b = DeviceKey::generate();
+        let x = DeviceKey::generate();
+        let y = DeviceKey::generate();
+        let alternative = DeviceKey {
+            sign_seed: y.sign_seed.clone(),
+            agree_private: DeviceKey::generate().agree_private,
+        };
+        let bfp = b.fingerprint().unwrap();
+        let xfp = x.fingerprint().unwrap();
+        let yfp = y.fingerprint().unwrap();
+        assert_eq!(alternative.fingerprint().unwrap(), yfp);
+        assert_ne!(alternative.record().unwrap(), y.record().unwrap());
+        received(&f, &f.device, 2, "1000001-0000",
+            vec![member_op(&f, &b, "user"), member_op(&f, &x, "user")]);
+        received(&f, &b, 1, "1000003-0000",
+            vec![member_op(&f, if row == "initial-alternative" { &alternative } else { &y }, "user")]);
+        let head = received(&f, &y, 1, "1000004-0000", vec![f.put_op("idle", V1)]);
+        let signed = head.canonical_json(false).unwrap();
+        let hashed = head.canonical_json(true).unwrap();
+        received(&f, &f.device, 3, "1000005-0000", vec![
+            json!({"op":"member.remove","fingerprint":bfp}),
+            json!({"op":"member.remove","fingerprint":xfp}),
+        ]);
+        let sync = f.sync();
+        assert_eq!(sync.compact(&f.env).unwrap(),
+            json!({"env_id":f.env,"removed":1,"blocked_by":[]}));
+        assert!(!f.path(&yfp, 1).exists());
+        assert_eq!(f.cache()["vector"], json!({f.fp.clone():3,bfp.clone():1,yfp.clone():1}));
+        let original_device = if row == "initial-alternative" {
+            alternative.record().unwrap()
+        } else {
+            y.record().unwrap()
+        };
+        let cache_bytes = fs::read(f.ctx.state.path.join(f.cache_name())).unwrap();
+        if row == "lost-cache" {
+            // Separate genuine cache-loss/legacy control, never a conflict repair.
+            fs::remove_file(f.ctx.state.path.join(f.cache_name())).unwrap();
+        } else {
+            let announced = if row == "earlier-identical" || row == "initial-alternative" {
+                &y
+            } else {
+                &alternative
+            };
+            let attack = received(&f, &x, 1,
+                if row.starts_with("earlier") { "1000002-0000" } else { "1000006-0000" },
+                vec![member_op(&f, announced, "user")]);
+            assert_eq!(Commit::from_dict(&f.ctx.state.read_json(
+                &format!("team/{}/commits/{xfp}/1.json", f.env), Value::Null).unwrap()).unwrap(),
+                attack);
+        }
+        let next = candidate(&f, &f.device, 4, "1000010-0007",
+            vec![json!({"op":"settings.update","sync_interval_seconds":37})]);
+        let disk_before = inventory(&f, "rejected");
+        let audit_before = f.ctx.audit.iter_records().unwrap();
+        assert_eq!(commit::receive_commit(&CommitStore::new(f.ctx.state,&f.env),
+            &next, OLD+100,Some(f.ctx.audit)).unwrap(), "accepted");
+        assert_eq!(f.ctx.audit.iter_records().unwrap(),audit_before);
+        assert_eq!(inventory(&f,"rejected"),disk_before);
+        assert!(inventory(&f,"deferred").is_empty());
+        let stored = CommitStore::new(f.ctx.state,&f.env).get(&f.fp,4).unwrap().unwrap();
+        assert_eq!(stored.canonical_json(false).unwrap(),next.canonical_json(false).unwrap());
+        assert_eq!(stored.canonical_json(true).unwrap(),next.canonical_json(true).unwrap());
+        assert_eq!(stored.sig,next.sig);
+        let before = metadata(&f);
+        if matches!(row, "earlier-different" | "lost-cache") {
+            let reason = if row == "lost-cache" {
+                "team_compaction_head_unavailable"
+            } else {
+                "team_compaction_head_invalid"
+            };
+            let error=sync.compact(&f.env).unwrap_err();
+            assert_eq!(error.reason,reason);
+            assert!(error.detail.is_empty());
+            assert_eq!(metadata(&f),before);
+            let ctx=Arc::new(Context::open(&f.ctx.state.path,Config::default(),clock::system()).unwrap());
+            let reopened=team(ctx,f.device.clone(),&f.env);
+            assert_eq!(reopened.compact(&f.env).unwrap_err().reason,reason);
+            assert_eq!(metadata(&f),before);
+            if row != "lost-cache" {
+                assert_eq!(fs::read(f.ctx.state.path.join(f.cache_name())).unwrap(),cache_bytes);
+            }
+        } else {
+            assert_eq!(sync.compact(&f.env).unwrap(),
+                json!({"env_id":f.env,"removed":1,"blocked_by":[]}));
+            assert!(!f.path(&f.fp,4).exists());
+            assert_eq!(f.cache()["vector"],
+                json!({f.fp.clone():4,bfp.clone():1,yfp.clone():1,xfp.clone():1}));
+            assert_head(&f.cache(),&head,&signed,&hashed);
+            let cached=f.cache();
+            let slot=cached["heads"].as_array().unwrap().iter()
+                .find(|slot|slot["author"]==yfp).unwrap();
+            assert_eq!(slot["device"],original_device.to_dict());
+        }
+    }
+    let f=received_fixture();
+    let head=received(&f,&f.device,2,"1000001-0007",vec![f.put_op("s",V1)]);
+    assert!(!f.ctx.state.exists(&f.cache_name()));
+    let sync=f.sync();
+    assert_eq!(sync.compact(&f.env).unwrap()["removed"],1);
+    assert_head(&f.cache(),&head,&head.canonical_json(false).unwrap(),
+        &head.canonical_json(true).unwrap());
 }

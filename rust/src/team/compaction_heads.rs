@@ -367,8 +367,9 @@ pub(super) fn prepare(
     })
 }
 
-// Public signature material follows receipt's first-record rule, including
-// fold-skipped and removed authors. It conveys no membership or wrap authority.
+// Receipt/signing require equal retained public signature evidence, including
+// nonfirst, fold-skipped and removed announcements; prepare remains current-first.
+// Neither comparison conveys membership or wrap authority.
 // This private image never crosses a helper's lock epoch.
 fn checked_cache(store: &CommitStore<'_>, live: Option<&[Commit]>) -> Result<Option<Image>> {
     require_lock(store.state)?;
@@ -384,6 +385,20 @@ fn checked_cache(store: &CommitStore<'_>, live: Option<&[Commit]>) -> Result<Opt
     };
     let floor = store.snapshot_floor().map_err(|_| invalid())?;
     let vector = store.vector().map_err(|_| invalid())?;
+    let mut expected = HashMap::new();
+    for (author, head) in &image.heads {
+        if records.get(author).is_some_and(|device| device != &head.device) {
+            expected.insert(author.clone(), head.device.clone());
+        }
+    }
+    let matching = if expected.is_empty() {
+        std::collections::HashSet::new()
+    } else {
+        match live {
+            Some(live) => commit::matching_device_records(live, &expected),
+            None => store.retained_matching_device_records(&expected).map_err(|_| invalid())?,
+        }
+    };
     for (author, seq) in &image.vector {
         if floor.get(author).is_none_or(|covered| covered < seq)
             || vector.get(author).is_none_or(|covered| covered < seq)
@@ -392,13 +407,13 @@ fn checked_cache(store: &CommitStore<'_>, live: Option<&[Commit]>) -> Result<Opt
         }
         let head = image.heads.get(author).ok_or_else(invalid)?;
         let device = records.get(author).ok_or_else(unavailable)?;
-        if device != &head.device {
+        if device != &head.device && !matching.contains(author) {
             return Err(invalid());
         }
         Hlc::parse(&head.commit.hlc).map_err(|_| invalid())?;
         // One exact lookup per cached author, never a cache-derived range.
         if let Some(original) = store.get(author, seq).map_err(|_| invalid())? {
-            let original = Head::checked(original, device.clone(), &store.env_id)?;
+            let original = Head::checked(original, head.device.clone(), &store.env_id)?;
             if !head.same_original(&original)? {
                 return Err(invalid());
             }
