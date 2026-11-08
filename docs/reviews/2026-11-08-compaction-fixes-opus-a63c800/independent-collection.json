@@ -1,0 +1,100 @@
+{
+  "actual_Opus_reported_verdict": "REVISE",
+  "checks": {
+    "HEAD_status_index_bytes_unchanged": true,
+    "all_manifest_bytes_lengths_SHA256_computed_blobs_Git_blobs_Git_modes_POSIX_modes_regular_files_equal": 1483,
+    "closed_schema_own_stdlib_DATA_validation": "PASS",
+    "docs_only_adaptation_paths": 20,
+    "evidence_SHA256SUMS_entries_matched": 15,
+    "exact_four_regular_outputs": true,
+    "full_second_inventory_match": true,
+    "original_report_matches_frozen_SHA_HEAD_and_first_publication": true,
+    "original_three_complete_finding_objects_equal": true,
+    "product563_review_Rust_equal": true,
+    "read_only_Git_optional_locks_disabled": true,
+    "source_parent_directories_not_symlinks": true,
+    "tracked_clean": true
+  },
+  "collector": "actual gpt-6.1-sol / ultra, personally; no subagents",
+  "coverage_limits": [
+    "Collector read all four outputs as DATA and hashed all source; not a semantic source review.",
+    "Opus read changed production diffs/selected bodies; many new tests and most sync/fold/checkpoint code only selectively or not read. COVERAGE.md retains exact omissions.",
+    "Opus did not re-read product-intent/security-design/docs-harness/harness-README in this review; no broader coverage inferred.",
+    "Frozen runtime claims as of review:Linux8a overallFAIL strictClippy despite1874pass; corrected563Linuxfull/native8afullACTIVE; native563NOTRUN; release gate-symbol phaseNOTRUN. Collector queried no live state.",
+    "Actual model/no-execution/first-action/before-review sequencing are reviewer-reported observations, not independent cryptographic execution attestation.",
+    "All original globalholds OPEN; no Go continuation, authority/resource release, acceptance or publishing claim."
+  ],
+  "four_output_artifacts": {
+    "COVERAGE.md": {
+      "bytes": 5300,
+      "mode": 420,
+      "sha256": "daa1c1811488465370c3dd7e9022189d2db757b7187d7407813efd42ec523b2f"
+    },
+    "input-verification.json": {
+      "bytes": 4020,
+      "mode": 420,
+      "sha256": "0a70525e30ca9454b71e7d252ac676fc81fad1b4cb5b1c8a68d42e3dfbc9b7a2"
+    },
+    "report.json": {
+      "bytes": 12988,
+      "mode": 420,
+      "sha256": "58a8193538739d7d2f41ca09bd49ac2036f148e2e312156a96a2844ee790ad7e"
+    },
+    "report.md": {
+      "bytes": 11610,
+      "mode": 420,
+      "sha256": "a83d6e1d4b06f54c91da0e169cd0cd2ddebcaf2147a082451ab3715486080f75"
+    }
+  },
+  "full_tree": "f0f332ffff67ed74a7775074e1dc2da1e7dbd2c6",
+  "head": "a63c800a51a46eea911aa1167f5c978c597e1d74",
+  "input_pins": {
+    "input-bindings.json": "d0efd69c2c548d5ed4ef94b0b9f02cb1397ea34b2cb8bd686aeb062805baa1d6",
+    "review-brief.md": "1c15d823583371340bd6f862514c84e7919e1ea60cee11999d97ad92385bf370",
+    "source-manifest.json": "497a9ee728d5bac84335bf437b8e2cf1ac1832dc99f79727dfe488209e0351ae"
+  },
+  "new_finding": {
+    "disposition": "OPEN; static actual Opus finding, not independently reproduced/adjudicated by collector",
+    "file": "rust/src/team/compaction_heads.rs",
+    "id": "ZPCHEAD-OPUS-R1-01",
+    "line": 395,
+    "severity": "high"
+  },
+  "original_dispositions": [
+    {
+      "Opus_static_disposition": "Original objection RESOLVED IN SOURCE",
+      "id": "ZPCHEAD-OPUS-01",
+      "release_validation_acceptance": "OPEN",
+      "severity": "medium"
+    },
+    {
+      "Opus_static_disposition": "Original objection RESOLVED IN SOURCE",
+      "id": "ZPCHEAD-OPUS-02",
+      "release_validation_acceptance": "OPEN",
+      "severity": "medium"
+    },
+    {
+      "Opus_static_disposition": "Original objection RESOLVED IN SOURCE",
+      "id": "ZPCHEAD-OPUS-03",
+      "release_validation_acceptance": "OPEN",
+      "severity": "low"
+    }
+  ],
+  "original_report_first_publication_commit": "e8fa90e74bab30088761d717f59fe8104ed3d670",
+  "original_report_sha256": "4e7296a50f281a3e066eb91998a7c3e79f6767b8ee8d17fcd60d77219bcb8ec0",
+  "preserved_collector_DATA_failure": "First draft tried git show04c7d22:report.json, but original report was published after its reviewed source. Git128 occurred before any output write. Corrected only provenance to frozenSHA and firstpublicatione8fa90e74bab30088761d717f59fe8104ed3d670. No source/runtime/product action or fabricated pass.",
+  "reviewer_reported_settings": {
+    "actual_model": "claude-opus-5-5",
+    "harness": "Claude Code (Claude Agent SDK) in T3 Code",
+    "provider": "claudeAgent",
+    "settings": "effort/thinking budget/service tier not exposed; none claimed",
+    "subagents_workflows_other_models": "none",
+    "target_options": []
+  },
+  "rust_tree": "7cfa2b85d103b50bc5d941f3b6165fe38b51cbd5",
+  "schema": "Sol-independent-Opus-R1-DATA-collection-v1",
+  "schema_sha256": "1bf6caf7edf8548ea2c653937cd130c5e2db7a217f7fa1dadd0ce7696e9be5a0",
+  "scope": "Own stdlib DATA and trusted read-only Git only. No product/helper/compiler/formatter/test/harness-validator, VM/process/runtime/SSH/network/credential access. Not semantic review/replay/Opus substitution/Astra acceptance.",
+  "time_utc": "2026-11-08T10:36:28.854967+00:00",
+  "tracked_source_files": 1483
+}

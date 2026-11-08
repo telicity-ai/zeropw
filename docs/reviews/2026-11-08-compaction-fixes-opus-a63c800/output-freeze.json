@@ -1,0 +1,28 @@
+{
+  "source_head": "a63c800a51a46eea911aa1167f5c978c597e1d74",
+  "rust_tree": "7cfa2b85d103b50bc5d941f3b6165fe38b51cbd5",
+  "actual_model": "claude-opus-5-5/claudeAgent/options[]",
+  "settings": "effort/thinkingbudget/tier unexposed",
+  "mode": "static only, no own product/runtime tests",
+  "verdict": "REVISE",
+  "new_finding": "ZPCHEAD-OPUS-R1-01 HIGH OPEN",
+  "original_findings": "source objections resolved in staticreview; OPEN until validation/acceptance",
+  "artifacts": {
+    "report.json": {
+      "bytes": 12988,
+      "sha256": "58a8193538739d7d2f41ca09bd49ac2036f148e2e312156a96a2844ee790ad7e"
+    },
+    "report.md": {
+      "bytes": 11610,
+      "sha256": "a83d6e1d4b06f54c91da0e169cd0cd2ddebcaf2147a082451ab3715486080f75"
+    },
+    "COVERAGE.md": {
+      "bytes": 5300,
+      "sha256": "daa1c1811488465370c3dd7e9022189d2db757b7187d7407813efd42ec523b2f"
+    },
+    "input-verification.json": {
+      "bytes": 4020,
+      "sha256": "0a70525e30ca9454b71e7d252ac676fc81fad1b4cb5b1c8a68d42e3dfbc9b7a2"
+    }
+  }
+}
