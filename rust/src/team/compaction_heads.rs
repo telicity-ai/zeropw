@@ -387,7 +387,10 @@ fn checked_cache(store: &CommitStore<'_>, live: Option<&[Commit]>) -> Result<Opt
     let vector = store.vector().map_err(|_| invalid())?;
     let mut expected = HashMap::new();
     for (author, head) in &image.heads {
-        if records.get(author).is_some_and(|device| device != &head.device) {
+        if records
+            .get(author)
+            .is_some_and(|device| device != &head.device)
+        {
             expected.insert(author.clone(), head.device.clone());
         }
     }
@@ -396,7 +399,9 @@ fn checked_cache(store: &CommitStore<'_>, live: Option<&[Commit]>) -> Result<Opt
     } else {
         match live {
             Some(live) => commit::matching_device_records(live, &expected),
-            None => store.retained_matching_device_records(&expected).map_err(|_| invalid())?,
+            None => store
+                .retained_matching_device_records(&expected)
+                .map_err(|_| invalid())?,
         }
     };
     for (author, seq) in &image.vector {

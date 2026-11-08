@@ -2159,7 +2159,10 @@ impl<'a> CommitStore<'a> {
             }
         }
         // Complete the same parsing/HLC validation even after finding a match.
-        Ok(matching_device_records(&sort_total_order(retained)?, expected))
+        Ok(matching_device_records(
+            &sort_total_order(retained)?,
+            expected,
+        ))
     }
 
     // -------------------------------------------------------- reject / defer
@@ -2379,14 +2382,20 @@ pub(super) fn matching_device_records(
     let mut matching = std::collections::HashSet::new();
     for commit in commits {
         for op in &commit.ops {
-            let Some(object) = op.as_object() else { continue };
+            let Some(object) = op.as_object() else {
+                continue;
+            };
             let record_dict = match object.get("op").and_then(Value::as_str) {
                 Some("env.init") => object.get("owner_device"),
                 Some("member.add") => object.get("device"),
                 _ => None,
             };
-            let Some(record_dict) = record_dict.filter(|value| value.is_object()) else { continue };
-            let Ok(record) = DeviceRecord::from_dict(record_dict) else { continue };
+            let Some(record_dict) = record_dict.filter(|value| value.is_object()) else {
+                continue;
+            };
+            let Ok(record) = DeviceRecord::from_dict(record_dict) else {
+                continue;
+            };
             if record.verify() {
                 let fingerprint = record.fingerprint();
                 if expected.get(&fingerprint) == Some(&record) {
@@ -2806,7 +2815,10 @@ mod compaction_heads_tests {
         let different = key(83, 85);
         let unrelated = key(86, 87);
         let fp = expected_key.fingerprint().unwrap();
-        let env = format!("{}-0123456789abcdef0123456789abcdef", author.fingerprint().unwrap());
+        let env = format!(
+            "{}-0123456789abcdef0123456789abcdef",
+            author.fingerprint().unwrap()
+        );
         let equal = expected_key.record().unwrap();
         let other = different.record().unwrap();
         assert_eq!(different.fingerprint().unwrap(), fp);
@@ -2820,9 +2832,14 @@ mod compaction_heads_tests {
         ] {
             let original = announcement(&author, &env, 1.into(), "1-0000", records.clone());
             let before = original.canonical_json(true).unwrap();
-            assert_eq!(matching_device_records(std::slice::from_ref(&original), &expected), wanted);
-            assert_eq!(device_registry(std::slice::from_ref(&original))[&fp],
-                DeviceRecord::from_dict(&records[0]).unwrap());
+            assert_eq!(
+                matching_device_records(std::slice::from_ref(&original), &expected),
+                wanted
+            );
+            assert_eq!(
+                device_registry(std::slice::from_ref(&original))[&fp],
+                DeviceRecord::from_dict(&records[0]).unwrap()
+            );
             assert_eq!(original.canonical_json(true).unwrap(), before);
         }
         let first = announcement(&author, &env, 1.into(), "1-0000", vec![other.to_dict()]);
@@ -2839,19 +2856,31 @@ mod compaction_heads_tests {
             json!({"op":"env.init","owner_device":normalized}),
             json!({"op":"member.add","device":normalized}),
         ] {
-            let original = sign_commit(&author, &env, 1, "1-0000", &BTreeMap::new(), vec![op]).unwrap();
+            let original =
+                sign_commit(&author, &env, 1, "1-0000", &BTreeMap::new(), vec![op]).unwrap();
             let signed = original.canonical_json(false).unwrap();
             let hashed = original.canonical_json(true).unwrap();
-            assert_eq!(matching_device_records(std::slice::from_ref(&original), &expected), wanted);
+            assert_eq!(
+                matching_device_records(std::slice::from_ref(&original), &expected),
+                wanted
+            );
             assert_eq!(device_registry(std::slice::from_ref(&original))[&fp], equal);
             assert_eq!(original.canonical_json(false).unwrap(), signed);
             assert_eq!(original.canonical_json(true).unwrap(), hashed);
         }
         let mut bad = equal.to_dict();
         bad["sig"] = json!("AAAA");
-        for record in [other.to_dict(), bad, unrelated.record().unwrap().to_dict(), json!({})] {
+        for record in [
+            other.to_dict(),
+            bad,
+            unrelated.record().unwrap().to_dict(),
+            json!({}),
+        ] {
             let original = announcement(&author, &env, 1.into(), "1-0000", vec![record]);
-            assert_eq!(matching_device_records(&[original], &expected), HashSet::new());
+            assert_eq!(
+                matching_device_records(&[original], &expected),
+                HashSet::new()
+            );
         }
     }
 
@@ -2869,39 +2898,100 @@ mod compaction_heads_tests {
         let env = format!("{fp}-0123456789abcdef0123456789abcdef");
         let store = CommitStore::new(&state, &env);
         let expected = HashMap::from([(target_fp.clone(), target.record().unwrap())]);
-        assert_eq!(store.retained_matching_device_records(&expected).unwrap_err().reason,
-            "team_compaction_lock_required");
+        assert_eq!(
+            store
+                .retained_matching_device_records(&expected)
+                .unwrap_err()
+                .reason,
+            "team_compaction_lock_required"
+        );
         let _lock = state.lock().unwrap();
-        assert_eq!(store.retained_matching_device_records(&expected).unwrap(), HashSet::new());
+        assert_eq!(
+            store.retained_matching_device_records(&expected).unwrap(),
+            HashSet::new()
+        );
         let huge = PyInt::from_json_integer(
-            &pyjson::loads("1844674407370955161600000000000000000001").unwrap()).unwrap();
-        let original = announcement(&author, &env, huge.clone(), "2-0000",
-            vec![different.record().unwrap().to_dict(), target.record().unwrap().to_dict()]);
+            &pyjson::loads("1844674407370955161600000000000000000001").unwrap(),
+        )
+        .unwrap();
+        let original = announcement(
+            &author,
+            &env,
+            huge.clone(),
+            "2-0000",
+            vec![
+                different.record().unwrap().to_dict(),
+                target.record().unwrap().to_dict(),
+            ],
+        );
         let canonical = store.commit_path(&fp, &huge);
         state.write_json(&canonical, &original.to_dict()).unwrap();
-        let nonmatch = announcement(&author, &env, 1.into(), "1-0000",
-            vec![different.record().unwrap().to_dict()]);
-        state.write_json(&store.commit_path(&fp, &1.into()), &nonmatch.to_dict()).unwrap();
+        let nonmatch = announcement(
+            &author,
+            &env,
+            1.into(),
+            "1-0000",
+            vec![different.record().unwrap().to_dict()],
+        );
+        state
+            .write_json(&store.commit_path(&fp, &1.into()), &nonmatch.to_dict())
+            .unwrap();
         for name in ["01", "١", "0", "-1"] {
-            state.write_json(&format!("{}/commits/{fp}/{name}.json", store.root),
-                &original.to_dict()).unwrap();
+            state
+                .write_json(
+                    &format!("{}/commits/{fp}/{name}.json", store.root),
+                    &original.to_dict(),
+                )
+                .unwrap();
         }
         let wanted = HashSet::from([target_fp]);
-        assert_eq!(store.retained_matching_device_records(&expected).unwrap(), wanted);
-        assert_eq!(matching_device_records(&[nonmatch, original.clone()], &expected), wanted);
+        assert_eq!(
+            store.retained_matching_device_records(&expected).unwrap(),
+            wanted
+        );
+        assert_eq!(
+            matching_device_records(&[nonmatch, original.clone()], &expected),
+            wanted
+        );
         let saved = state.read_bytes(&canonical).unwrap();
         let mut corrupt = original.to_dict();
         corrupt["hlc"] = json!("malformed");
-        state.write_json(&format!("{}/commits/{fp}/9999999999999999999999999999999999999999.json", store.root), &corrupt).unwrap();
-        assert_eq!(store.retained_matching_device_records(&expected).unwrap_err().reason,
-            "hlc_malformed");
-        std::fs::remove_file(state.path.join(format!("{}/commits/{fp}/9999999999999999999999999999999999999999.json", store.root))).unwrap();
-        state.write_bytes(&format!("{}/commits/{fp}/3.json", store.root), b"{bad-owned-json").unwrap();
-        assert_eq!(store.retained_matching_device_records(&expected).unwrap_err().reason,
-            "state_corrupt");
+        state
+            .write_json(
+                &format!(
+                    "{}/commits/{fp}/9999999999999999999999999999999999999999.json",
+                    store.root
+                ),
+                &corrupt,
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .retained_matching_device_records(&expected)
+                .unwrap_err()
+                .reason,
+            "hlc_malformed"
+        );
+        std::fs::remove_file(state.path.join(format!(
+            "{}/commits/{fp}/9999999999999999999999999999999999999999.json",
+            store.root
+        )))
+        .unwrap();
+        state
+            .write_bytes(
+                &format!("{}/commits/{fp}/3.json", store.root),
+                b"{bad-owned-json",
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .retained_matching_device_records(&expected)
+                .unwrap_err()
+                .reason,
+            "state_corrupt"
+        );
         assert_eq!(state.read_bytes(&canonical).unwrap(), saved);
     }
-
 }
 
 #[cfg(test)]
