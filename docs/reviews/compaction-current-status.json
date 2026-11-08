@@ -1,0 +1,17 @@
+{
+  "scope": "compaction four findings only",
+  "current_event": "docs/reviews/2026-11-08-compaction-R1-acceptance-35776/acceptance-event.json",
+  "current_event_sha256": "f61387b2504bc1a139466c1cec91a267a43f1a1360e3358884bf7d69724138a7",
+  "current_disposition": "RESOLVED_ACCEPTED_FOR_THIS_BOUNDED_SLICE",
+  "original_ids_and_severities": {
+    "ZPCHEAD-OPUS-R1-01": "high",
+    "ZPCHEAD-OPUS-01": "medium",
+    "ZPCHEAD-OPUS-02": "medium",
+    "ZPCHEAD-OPUS-03": "low"
+  },
+  "historical_ledger": "docs/reviews/2026-11-08-compaction-heads-opus-04c7d22/finding-status.json",
+  "historical_ledger_untouched": true,
+  "historical_Opus_verdict": "BLOCKED (unchanged)",
+  "global_holds": "OPEN/UNCHANGED",
+  "release": "NOTREADY"
+}

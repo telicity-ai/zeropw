@@ -1,6 +1,6 @@
 f691999d0c84ccb89f2f1590075dbba2f51549573a14d916ddecfdd7fb5b01e1  docs/decisions/compaction-conflicting-record-2026-11-08/decision.md
 ef0a06a85cfd695ad4b7f89afbe71eee856d30c0096cf5d4b425687dbfadc292  docs/decisions/compaction-conflicting-record-2026-11-08/implementation-task.md
-540fa7a8306abbcc6387659c572361b1981cbdc582466e8d434bd7dde04a8bcf  docs/evidence/2026-11-08-compaction-R1-772/README.md
+4ded841206348290426a83b6b6fddd5737e880b866294886e60046ae9a66573d  docs/evidence/2026-11-08-compaction-R1-772/README.md
 c69ae214ace7c2f98eca4df025c0f05b108e52230941849cfac027c96716d77d  docs/evidence/2026-11-08-compaction-R1-772/final-validation-summary.json
 710a0b4422b42e6c442a0fafd98bd3311eeee9163dcb1e99a1e663c16de131fd  docs/evidence/2026-11-08-compaction-R1-772/linux-diagnostic/command-plan.json
 645fd511e42e874f530f11dead47a145948e60e068826d314635b50cdf4de648  docs/evidence/2026-11-08-compaction-R1-772/linux-diagnostic/host-run-summary.json
@@ -191,3 +191,10 @@ e6c9e0f61ba2859e5758991ea34b605b3e979f4cc1c7712964dff09d71e78bc2  docs/reviews/2
 eb0ba85139274a3eff2b5073590106f0f2cec90fdb90f767e55e8e56e5550b20  docs/reviews/2026-11-08-compaction-R1-772-opus/input-verification.json
 53433563cbbcbbe4790a3183d1d8df47831575e4438d70e29508e83bd43d075d  docs/reviews/2026-11-08-compaction-R1-772-opus/report.json
 ed5a385a71e4ab7e82c0baa5c837d07db14d53f3fa6c6891cd6df04ea446e5b8  docs/reviews/2026-11-08-compaction-R1-772-opus/report.md
+e169fa26a59444a4ca05e8b2b478b4ec1dda605642d04d94a41f88c539c9981d  docs/reviews/2026-11-08-compaction-R1-acceptance-35776/README.md
+f61387b2504bc1a139466c1cec91a267a43f1a1360e3358884bf7d69724138a7  docs/reviews/2026-11-08-compaction-R1-acceptance-35776/acceptance-event.json
+b468c7eb79c9cb7ef291e2cf62dcba914bcccb3dd494a82772ffc9e9a25960c8  docs/reviews/2026-11-08-compaction-R1-acceptance-35776/collection/REPORT.json
+f270df3994a321791be92e27fea2a7b0ea4f2470b4e7d4a53a503d9c37d9ccae  docs/reviews/2026-11-08-compaction-R1-acceptance-35776/collection/REPORT.md
+8e09a8f2c5777ed26e426d3844bcd19cf8ee9464f7a8862b35e497dc46f009a0  docs/reviews/2026-11-08-compaction-R1-acceptance-35776/decision.md
+ccc8e6c2b57cc47750256f7abbdf7ee77d197c30275b1bdf90b3320909db7580  docs/reviews/2026-11-08-compaction-R1-acceptance-35776/reconciliation-task.md
+0c19a704ce1a3042b32e1ca556c56daecc9363e5cf48ea103e0f4f250e24da74  docs/reviews/compaction-current-status.json
