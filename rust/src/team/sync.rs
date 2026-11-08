@@ -12265,12 +12265,26 @@ mod compaction_heads_tests {
                             drop(restore);
                         }
                         assert_eq!(r1_files(&f.ctx, &f.env), before);
-                        let rounds = usize::from(
-                            action.starts_with("standalone")
-                                || action == "sign-deleted"
-                                || action == "publish-deleted",
+                        let rounds = if mutation == "absent" {
+                            // This local-corruption row removes every Y
+                            // announcement, including Y:2's sole operation.
+                            // There is no remaining member.add to audit.
+                            assert!(!adds_x);
+                            0
+                        } else {
+                            usize::from(
+                                action.starts_with("standalone")
+                                    || action == "sign-deleted"
+                                    || action == "publish-deleted",
+                            )
+                        };
+                        let expected_audit = r1_skips(&f, rounds);
+                        assert_eq!(
+                            r1_audit(&f.ctx).len(),
+                            audit.len() + expected_audit.len(),
+                            "r1 negative audit: removed={removed} adds_x={adds_x} mutation={mutation} action={action}"
                         );
-                        r1_check_audit(&f, &audit, r1_skips(&f, rounds));
+                        r1_check_audit(&f, &audit, expected_audit);
                         assert_eq!(f.team.envs.lock().unwrap()[&f.env].hlc.render(), "1-0000");
                         assert!(f.store().get(&f.fp, f.n + 1).unwrap().is_none());
                         assert_eq!(f.store().deferred_commits().unwrap().len(), 1);
