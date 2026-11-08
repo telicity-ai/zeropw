@@ -1,0 +1,249 @@
+{
+  "actual_model": "gpt-6.1-sol",
+  "reasoning_effort": "ultra",
+  "tier": "native inheritance; effective tier unexposed",
+  "scope": "DATA only, own stdlib/read-only immutable Git. No project import/execution, product/compiler/formatter/test/VM/runtime/process/SSH/network/key operation, source/ref/index/coordination edit or agents.",
+  "checks": 29315,
+  "errors": [],
+  "freeze_sha256": "fc2b388ae4417052dcc24499749b84675d19d8e82ebcbf8edba71f2b2a2c8e2d",
+  "frozen_files": 117,
+  "Root_report_sha256": "32712fad1d7e19e2339c98bfe1dc179cc916420458dc326ee4b97665152cfb86",
+  "source_variants": [
+    {
+      "commit": "f55676ef53a6fc901fc2feb02214deea671463d4",
+      "full_tree": "1e854e542a69b66a7ba575ad2faae713b54780ca",
+      "rust_tree": "b1208451ac515920c4a749315b0d012b0524c74a"
+    },
+    {
+      "commit": "9ca6bb487c03025b135d7d95db87f8db4ac47405",
+      "full_tree": "b2081ecf356520b5d14f4f84f0c2342d40976d39",
+      "rust_tree": "ef4c5d657f200ce510d04b45674674f1d2e405bd"
+    },
+    {
+      "commit": "99d58c5ad935c560da94eda8b00e84357cf26618",
+      "full_tree": "88a3b7c58ed1f7e8d49c1ce365a117293f046dcb",
+      "rust_tree": "cd547f0d38ac30c2f49c67c2fd04bf4365691a14"
+    },
+    {
+      "commit": "9679097236d9c053c31f2d7f00a38e7945eb6b41",
+      "full_tree": "59efb0c6fe1e66980db7a76bc4b6e79e3b0a85b7",
+      "rust_tree": "915528f2f83a8ce863cb2543cd22858569adea20"
+    }
+  ],
+  "unique_Git_blobs_rehashed": 1287,
+  "manifest_path_comparisons": 5800,
+  "phases": [
+    {
+      "phase": "09-features-before",
+      "variant": "initial",
+      "test_exit": 0,
+      "driver_exit": 0,
+      "summaries": [],
+      "source_files": 1450,
+      "elapsed_seconds": 0.12102142499998081,
+      "assigned_UID_survivors": [],
+      "receipt_sha256": "6e396e3c4b8b51b4358cd24643c7764d9918a0222eadafd86e42e505402a0e8a"
+    },
+    {
+      "phase": "10-format-check",
+      "variant": "initial",
+      "test_exit": 1,
+      "driver_exit": 125,
+      "summaries": [],
+      "source_files": 1450,
+      "elapsed_seconds": 0.9973920479999947,
+      "assigned_UID_survivors": [],
+      "receipt_sha256": "1428b7606b5263521f2ef5512e727c4e8a28b1b27b5cc3c9651b16600e2dd314"
+    },
+    {
+      "phase": "11-library-compile",
+      "variant": "initial",
+      "test_exit": 0,
+      "driver_exit": 0,
+      "summaries": [],
+      "source_files": 1450,
+      "elapsed_seconds": 38.16451916400001,
+      "assigned_UID_survivors": [],
+      "receipt_sha256": "854fb9412cbf0dee2a0b46c17a3327f7eff36b05845f76299d5ddfceebf7316d"
+    },
+    {
+      "phase": "12-integration-compile",
+      "variant": "initial",
+      "test_exit": 0,
+      "driver_exit": 0,
+      "summaries": [],
+      "source_files": 1450,
+      "elapsed_seconds": 13.176194839999994,
+      "assigned_UID_survivors": [],
+      "receipt_sha256": "db60a8997e7d4afc59692833d35a7cf0fa0274ed55835ede9f7e9fd04987e0ba"
+    },
+    {
+      "phase": "21-format-check",
+      "variant": "r2",
+      "test_exit": 0,
+      "driver_exit": 0,
+      "summaries": [],
+      "source_files": 1450,
+      "elapsed_seconds": 1.006634288999976,
+      "assigned_UID_survivors": [],
+      "receipt_sha256": "53ae391a39bdf2e1e6e6df004624664f713b199f04890e495b4552756ad3b396"
+    },
+    {
+      "phase": "22-library-debug",
+      "variant": "r2",
+      "test_exit": 101,
+      "driver_exit": 125,
+      "summaries": [
+        {
+          "status": "FAILED",
+          "passed": 28,
+          "failed": 1,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 707
+        }
+      ],
+      "source_files": 1450,
+      "elapsed_seconds": 64.10296079400007,
+      "assigned_UID_survivors": [],
+      "receipt_sha256": "c7eb06d1b5f7d5b2b72ad2255f53f0310feb73ebe55764e340d8acc7dff40e8a"
+    },
+    {
+      "phase": "31-format-check",
+      "variant": "r3",
+      "test_exit": 1,
+      "driver_exit": 125,
+      "summaries": [],
+      "source_files": 1450,
+      "elapsed_seconds": 1.0165208629999825,
+      "assigned_UID_survivors": [],
+      "receipt_sha256": "149d250529793b59b11abc946bdd6478d0885bfda200d2c23bdc39b4db832190"
+    },
+    {
+      "phase": "41-format-check",
+      "variant": "r4",
+      "test_exit": 0,
+      "driver_exit": 0,
+      "summaries": [],
+      "source_files": 1450,
+      "elapsed_seconds": 0.9838090309999643,
+      "assigned_UID_survivors": [],
+      "receipt_sha256": "f1dd725bf953269eb048c7a0932ecb013ce02381bea0cfd3a8e43e7c444d47f6"
+    },
+    {
+      "phase": "42-library-debug",
+      "variant": "r4",
+      "test_exit": 0,
+      "driver_exit": 0,
+      "summaries": [
+        {
+          "status": "ok",
+          "passed": 29,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 707
+        }
+      ],
+      "source_files": 1450,
+      "elapsed_seconds": 64.68671415199992,
+      "assigned_UID_survivors": [],
+      "receipt_sha256": "bc9a910e57a60c0527bde94614b95357761adeba051e885bb58b4871901813a2"
+    },
+    {
+      "phase": "43-integration-debug",
+      "variant": "r4",
+      "test_exit": 0,
+      "driver_exit": 0,
+      "summaries": [
+        {
+          "status": "ok",
+          "passed": 27,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        }
+      ],
+      "source_files": 1450,
+      "elapsed_seconds": 53.96549533699999,
+      "assigned_UID_survivors": [],
+      "receipt_sha256": "bda4836c864061241083cbf95604e8ca13453081a32ad465a3ae5ca4b4617930"
+    },
+    {
+      "phase": "44-features-after",
+      "variant": "r4",
+      "test_exit": 0,
+      "driver_exit": 0,
+      "summaries": [],
+      "source_files": 1450,
+      "elapsed_seconds": 0.06823845400003847,
+      "assigned_UID_survivors": [],
+      "receipt_sha256": "00ad3e38ee1d77e8182d53edd86b1c370a92a522bd872c6dcb7d99295011d392"
+    }
+  ],
+  "source_before_after_path_comparisons": 31900,
+  "final_dated_UID_observation": {
+    "assigned_uid": 2000,
+    "minimal_identity_processes": [],
+    "scope": "fresh cf01 own runner only; no argv/env/memory",
+    "runner_state": "all frozen own phases ended/no current runner job",
+    "VM": "Root retains exact allocated object, not VM release or whole host/Go/native assurance"
+  },
+  "Git_scope": [
+    {
+      "base": "adb2f3cf2cb9f5371e0e1047e3805c11d65c1f28",
+      "head": "f55676ef53a6fc901fc2feb02214deea671463d4",
+      "paths": [
+        "rust/src/team/commit.rs",
+        "rust/src/team/compaction_heads.rs",
+        "rust/src/team/membership.rs",
+        "rust/src/team/sync.rs",
+        "rust/tests/team_compaction_heads.rs"
+      ]
+    },
+    {
+      "base": "f55676ef53a6fc901fc2feb02214deea671463d4",
+      "head": "9ca6bb487c03025b135d7d95db87f8db4ac47405",
+      "paths": [
+        "rust/src/team/commit.rs",
+        "rust/src/team/compaction_heads.rs",
+        "rust/src/team/membership.rs",
+        "rust/src/team/sync.rs",
+        "rust/tests/team_compaction_heads.rs"
+      ]
+    },
+    {
+      "base": "9ca6bb487c03025b135d7d95db87f8db4ac47405",
+      "head": "99d58c5ad935c560da94eda8b00e84357cf26618",
+      "paths": [
+        "rust/src/team/compaction_heads.rs"
+      ]
+    },
+    {
+      "base": "99d58c5ad935c560da94eda8b00e84357cf26618",
+      "head": "9679097236d9c053c31f2d7f00a38e7945eb6b41",
+      "paths": [
+        "rust/src/team/compaction_heads.rs"
+      ]
+    }
+  ],
+  "status": "INTEGRITY_PASS_WITH_LIMITATIONS",
+  "safe_archive_entry_counts": {
+    "initial-preflight-evidence.tar": 16,
+    "r2-focused-evidence.tar": 8,
+    "r34-focused-evidence.tar": 21,
+    "20-formatted-five.tar": 9,
+    "40-formatted-one.tar": 3,
+    "stage-bundle.tar": 5
+  },
+  "actual_staged_source_entries": 1450,
+  "public_pins_independently_compared": 172,
+  "saved_guest_verified_upstream_file_count": 8194,
+  "dependency_limit": "Individual8194 vendor files/checksum map are absent from exported host bundle. Count and Root guest verification are supported by hash-bound script, exit, stdout and stage assertions; no independent host rehash of those8194 files claimed.",
+  "feature_limit": "Different source path prefixes across variants; no byte-identical before/after pair claim. Frozen Cargo.lock and manifest unchanged, raw_value absent.",
+  "execution_limit": "Saved observations only, not independent execution attestation or current VM/process observation; no Root retained allocation retirement/per-process custody upgrade claimed. Later Root lifecycle outside frozen117 not inspected.",
+  "all_original_findings_and_two_missing_tests": "OPEN",
+  "notrun": "Full rust/verify.sh/Clippy/other integrations/signer/docs/release/exact/macOS/Opus re-review/Astra acceptance remain NOTRUN for this source.",
+  "completed_utc": "2026-11-08T08:21:46.487400+00:00"
+}

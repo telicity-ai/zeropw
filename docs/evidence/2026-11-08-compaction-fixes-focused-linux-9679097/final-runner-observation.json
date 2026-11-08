@@ -1,0 +1,7 @@
+{
+  "assigned_uid": 2000,
+  "minimal_identity_processes": [],
+  "scope": "fresh cf01 own runner only; no argv/env/memory",
+  "runner_state": "all frozen own phases ended/no current runner job",
+  "VM": "Root retains exact allocated object, not VM release or whole host/Go/native assurance"
+}
