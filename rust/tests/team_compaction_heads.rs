@@ -1923,7 +1923,7 @@ fn compaction_heads_02_unreadable_cache_requires_unprivileged_isolated_uid() {
     let before = metadata(&f);
     let path = f.ctx.state.path.join(f.cache_name());
     let restore = RestorePermissions(path.clone(), fs::metadata(&path).unwrap().permissions());
-    fs::set_permissions(&path, fs::Permissions::from_mode(0)).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o0)).unwrap();
     // Fail the resource precondition explicitly, never pass this axis without
     // an unreadable regular file. Root must allocate an unprivileged test UID.
     assert!(
