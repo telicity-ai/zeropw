@@ -12,6 +12,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use super::commit::{self, Commit, CommitStore, Hlc};
+use super::compaction_heads;
 use super::fold::{self, Facts, FoldResult};
 use super::identity::{DeviceKey, DeviceRecord};
 use super::sync_status::PeerState;
@@ -9171,22 +9172,26 @@ impl TeamSync {
     }
 
     pub fn compact(&self, env_id: &str) -> Result<Value> {
-        let (facts, peer_vectors, members) = {
+        // As in refold: StateDir first, then only short in-memory envs access.
+        // Keep writers serialized from fresh input collection through pruning.
+        let state_lock = self.ctx.state.lock()?;
+        let peer_vectors = {
             let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             let env = envs
                 .get(env_id)
                 .ok_or_else(|| Error::not_found("team_env_unknown"))?;
-            (
-                env.facts.clone(),
-                env.peer_vectors.clone(),
-                env.document["members"].clone(),
-            )
+            env.peer_vectors.clone()
         };
+        let (facts, _, _) = load_facts(&self.ctx, env_id)?;
         let store = CommitStore::new(self.ctx.state, env_id);
         let commits = store.all_commits()?;
         if commits.is_empty() {
             return Ok(json!({"env_id":env_id,"removed":0,"blocked_by":[]}));
         }
+        let members =
+            fold::fold_with_snapshot(env_id, commits.clone(), self.ctx.state, Some(&facts), None)?
+                .document["members"]
+                .clone();
         let now = PyInt::from(commit::now_ms());
         let mut cutoff = None;
         for (i, entry) in commits.iter().enumerate() {
@@ -9247,16 +9252,39 @@ impl TeamSync {
             .vector
             .values()
             .fold(PyInt::zero(), |acc, v| PyInt(acc.0 + &v.0));
+        // Fact-free identity history retains inactive/removed public records.
+        // It supplies signature material, never remote membership authority.
+        let identity = fold::fold(env_id, commits.clone(), None, None, None, None)?.document;
+        let prepared =
+            compaction_heads::prepare(self.ctx.state, env_id, &snapshot, &commits, &identity)?;
+        #[cfg(test)]
+        compaction_heads::testing::hit(compaction_heads::testing::Boundary::BeforeSnapshot)?;
         fold::save_snapshot(self.ctx.state, env_id, &total, &snapshot)?;
-        fold::save_snapshot_record(
-            self.ctx.state,
-            env_id,
-            &total,
-            &fold::snapshot_record(Some(&facts), &commits),
-        )?;
+        #[cfg(test)]
+        compaction_heads::testing::hit(compaction_heads::testing::Boundary::AfterSnapshot)?;
+        let record = fold::snapshot_record(Some(&facts), &commits);
+        #[cfg(test)]
+        compaction_heads::testing::hit(compaction_heads::testing::Boundary::BeforeRecord)?;
+        fold::save_snapshot_record(self.ctx.state, env_id, &total, &record)?;
+        #[cfg(test)]
+        compaction_heads::testing::hit(compaction_heads::testing::Boundary::AfterRecord)?;
+        let persisted_record = self
+            .ctx
+            .state
+            .read_json(
+                &format!("team/{env_id}/snapshot_records/{total}.json"),
+                Value::Null,
+            )
+            .map_err(|_| Error::state("team_compaction_head_persist_failed"))?;
+        if canon(&persisted_record)
+            .map_err(|_| Error::state("team_compaction_head_persist_failed"))?
+            != canon(&record).map_err(|_| Error::state("team_compaction_head_persist_failed"))?
+        {
+            return Err(Error::state("team_compaction_head_persist_failed"));
+        }
+        compaction_heads::persist_before_prune(self.ctx.state, env_id, &total, prepared)?;
         let mut removed = 0;
         {
-            let _lock = self.ctx.state.lock()?;
             for entry in &commits[..=cutoff] {
                 if entry.ops.iter().any(|op| {
                     [
@@ -9275,8 +9303,16 @@ impl TeamSync {
                     "team/{env_id}/commits/{}/{}.json",
                     entry.author, entry.author_seq
                 ));
+                #[cfg(test)]
+                compaction_heads::testing::hit(compaction_heads::testing::Boundary::BeforeUnlink)?;
                 if std::fs::remove_file(path).is_ok() {
                     removed += 1;
+                    #[cfg(test)]
+                    if removed == 1 {
+                        compaction_heads::testing::hit(
+                            compaction_heads::testing::Boundary::AfterFirstUnlink,
+                        )?;
+                    }
                 }
             }
         }
@@ -9288,6 +9324,7 @@ impl TeamSync {
         {
             env.last_snapshot_total = PyNumber::Int(total.0);
         }
+        drop(state_lock);
         self.refold(env_id)?;
         let _ = self.ctx.audit.record(
             "team_compact",
@@ -9298,5 +9335,554 @@ impl TeamSync {
             },
         );
         Ok(json!({"env_id":env_id,"removed":removed,"blocked_by":[]}))
+    }
+}
+
+#[cfg(test)]
+mod compaction_heads_tests {
+    use super::compaction_heads::testing::{self, Boundary};
+    use super::*;
+    use crate::context::Config;
+    use crate::team::envelope;
+    use crate::team::transport::{InProcessTransport, MembershipCheck};
+    use tempfile::TempDir;
+
+    const VERSION: &str = "0011223344556677";
+    const GENERATION: &str = "0123456789abcdef";
+
+    struct Fixture {
+        _root: TempDir,
+        ctx: Arc<Context>,
+        team: Arc<TeamSync>,
+        env: String,
+        fp: String,
+    }
+    impl Fixture {
+        fn new() -> Self {
+            let root = TempDir::new().unwrap();
+            let ctx = Arc::new(
+                Context::initialize(
+                    root.path().join("state"),
+                    "synthetic-admin",
+                    "synthetic-recovery",
+                    Config::default(),
+                    crate::clock::system(),
+                )
+                .unwrap(),
+            );
+            let device = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+            let fp = device.fingerprint().unwrap();
+            let env = format!("{fp}-0123456789abcdef0123456789abcdef");
+            let wrap =
+                envelope::wrap_dek(&[7; 32], &env, GENERATION, &device.record().unwrap()).unwrap();
+            let init = commit::sign_commit(&device, &env, 1, "1000000-0000", &BTreeMap::new(), vec![
+                json!({"op":"env.init","owner_device":device.record().unwrap().to_dict(),
+                    "owner_name":"synthetic-owner","generation_id":GENERATION,"wraps":{fp.clone():wrap}}),
+            ]).unwrap();
+            let ciphertext =
+                envelope::encrypt_secret(&[7; 32], &env, "gone", VERSION, b"synthetic-head-value")
+                    .unwrap();
+            let put = commit::sign_commit(&device, &env, 2, "1000001-0007", &BTreeMap::from([(fp.clone(), 1.into())]), vec![
+                json!({"op":"secret.put_version","secret_id":"gone","kind":"api_key",
+                    "version_id":VERSION,"generation_id":GENERATION,"ciphertext":ciphertext,"public":{}}),
+            ]).unwrap();
+            let settings = commit::sign_commit(
+                &device,
+                &env,
+                3,
+                "1000002-0007",
+                &BTreeMap::from([(fp.clone(), 2.into())]),
+                vec![json!({"op":"settings.update","sync_interval_seconds":19})],
+            )
+            .unwrap();
+            let store = CommitStore::new(ctx.state, &env);
+            for entry in [init, put, settings] {
+                store.append(&entry).unwrap();
+            }
+            let empty: MembershipCheck = Arc::new(|_, _| None);
+            let transport = Arc::new(InProcessTransport::new(device.clone(), empty));
+            let team = TeamSync::new(ctx.clone(), transport, device);
+            team.register_env(&env).unwrap();
+            testing::reset(None);
+            Self {
+                _root: root,
+                ctx,
+                team,
+                env,
+                fp,
+            }
+        }
+        fn path(&self, seq: i64) -> std::path::PathBuf {
+            self.ctx
+                .state
+                .path
+                .join(format!("team/{}/commits/{}/{seq}.json", self.env, self.fp))
+        }
+        fn reopen_literal_oracle(&self) {
+            let ctx = Context::open(
+                &self.ctx.state.path,
+                Config::default(),
+                crate::clock::system(),
+            )
+            .unwrap();
+            let loaded = crate::team::membership::load_environment(&ctx, &self.env).unwrap();
+            assert_eq!(loaded.vector, BTreeMap::from([(self.fp.clone(), 3.into())]));
+            assert_eq!(loaded.document["settings"]["sync_interval_seconds"], 19);
+            assert_eq!(loaded.version_order["gone"], json!([VERSION]));
+            assert_eq!(
+                loaded.document["secrets"]["gone"]["versions"][VERSION]["status"],
+                "staged"
+            );
+        }
+    }
+    fn assert_order(events: &[Boundary]) {
+        for unlink in events
+            .iter()
+            .enumerate()
+            .filter_map(|(index, event)| (*event == Boundary::BeforeUnlink).then_some(index))
+        {
+            for required in [
+                Boundary::SnapshotDurable,
+                Boundary::RecordDurable,
+                Boundary::CacheDurable,
+                Boundary::BarrierComplete,
+            ] {
+                assert!(
+                    events[..unlink].contains(&required),
+                    "missing {required:?} before unlink"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn compaction_heads_real_compactor_fault_prefixes_reopen_without_losing_data() {
+        for boundary in [
+            Boundary::BeforeSnapshot,
+            Boundary::AfterSnapshot,
+            Boundary::BeforeRecord,
+            Boundary::AfterRecord,
+            Boundary::DirectorySync,
+            Boundary::SnapshotDurable,
+            Boundary::RecordDurable,
+            Boundary::BeforeCacheWrite,
+            Boundary::AfterCacheWrite,
+            Boundary::CacheDurable,
+            Boundary::BeforeReadback,
+            Boundary::BarrierComplete,
+            Boundary::BeforeUnlink,
+            Boundary::AfterFirstUnlink,
+        ] {
+            let f = Fixture::new();
+            testing::reset(Some(boundary));
+            let error = f.team.compact(&f.env).unwrap_err();
+            let events = testing::events();
+            testing::reset(None);
+            assert_eq!(error.reason, "team_compaction_head_persist_failed");
+            assert!(error.detail.is_empty());
+            assert_order(&events);
+            assert!(f.path(1).is_file());
+            assert_eq!(f.path(2).is_file(), boundary != Boundary::AfterFirstUnlink);
+            assert!(f.path(3).is_file());
+            if boundary == Boundary::AfterFirstUnlink {
+                let cache = f
+                    .ctx
+                    .state
+                    .read_json(
+                        &format!("team/{}/compaction_heads.json", f.env),
+                        Value::Null,
+                    )
+                    .unwrap();
+                assert_eq!(cache["vector"], json!({f.fp.clone():3}));
+                assert_eq!(cache["heads"][0]["hlc"], "1000002-0007");
+                assert_eq!(cache["heads"][0]["author_seq"], 3);
+                assert!(
+                    f.ctx
+                        .state
+                        .exists(&format!("team/{}/snapshots/3.json", f.env))
+                );
+                assert!(
+                    f.ctx
+                        .state
+                        .exists(&format!("team/{}/snapshot_records/3.json", f.env))
+                );
+            }
+            // Deterministic stopped-effect prefixes exercise ordinary recovery;
+            // they do not simulate a physical power failure or fsync hardware.
+            f.reopen_literal_oracle();
+        }
+    }
+
+    #[test]
+    fn compaction_heads_every_successful_unlink_follows_both_durable_images_and_readback() {
+        let f = Fixture::new();
+        assert_eq!(f.team.compact(&f.env).unwrap()["removed"], 2);
+        let events = testing::events();
+        testing::reset(None);
+        assert_order(&events);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| **event == Boundary::BeforeUnlink)
+                .count(),
+            2
+        );
+        assert!(!f.path(2).exists() && !f.path(3).exists());
+        f.reopen_literal_oracle();
+    }
+
+    #[test]
+    fn compaction_heads_real_snapshot_record_and_cache_rename_failures_precede_unlink() {
+        for directory in ["snapshots", "snapshot_records"] {
+            let f = Fixture::new();
+            let parent = f.ctx.state.path.join(format!("team/{}/{directory}", f.env));
+            std::fs::create_dir_all(&parent).unwrap();
+            let boundary = if directory == "snapshots" {
+                Boundary::BeforeSnapshot
+            } else {
+                Boundary::BeforeRecord
+            };
+            testing::action(boundary, parent.join("3.json"), None);
+            assert!(f.team.compact(&f.env).is_err());
+            let events = testing::events();
+            testing::reset(None);
+            assert!(events.contains(&boundary));
+            assert!(!events.contains(&Boundary::BeforeUnlink));
+            assert!(f.path(2).is_file() && f.path(3).is_file());
+        }
+        let f = Fixture::new();
+        testing::action(
+            Boundary::BeforeCacheWrite,
+            f.ctx
+                .state
+                .path
+                .join(format!("team/{}/compaction_heads.json", f.env)),
+            None,
+        );
+        assert_eq!(
+            f.team.compact(&f.env).unwrap_err().reason,
+            "team_compaction_head_persist_failed"
+        );
+        assert!(!testing::events().contains(&Boundary::BeforeUnlink));
+        testing::reset(None);
+        assert!(f.path(2).is_file() && f.path(3).is_file());
+    }
+
+    #[test]
+    fn compaction_heads_actual_corrupt_readback_refuses_and_ordinary_load_ignores_cache() {
+        let f = Fixture::new();
+        testing::action(
+            Boundary::BeforeReadback,
+            f.ctx
+                .state
+                .path
+                .join(format!("team/{}/compaction_heads.json", f.env)),
+            Some(b"synthetic-invalid-cache".to_vec()),
+        );
+        let error = f.team.compact(&f.env).unwrap_err();
+        assert_eq!(error.reason, "team_compaction_head_persist_failed");
+        assert!(!format!("{error:?}").contains("synthetic-invalid-cache"));
+        assert!(!testing::events().contains(&Boundary::BeforeUnlink));
+        testing::reset(None);
+        assert!(f.path(2).is_file() && f.path(3).is_file());
+        f.reopen_literal_oracle();
+    }
+
+    #[test]
+    fn compaction_heads_fresh_admitted_facts_override_stale_env_cache() {
+        let f = Fixture::new();
+        let fact = sign_fact(
+            &f.team.device,
+            &f.env,
+            "secret_deleted",
+            json!({"secret_id":"gone"}),
+            "1000003-0000",
+        )
+        .unwrap();
+        {
+            let _lock = f.ctx.state.lock().unwrap();
+            receipt_fact(&f.ctx, &fact).unwrap();
+            f.ctx
+                .state
+                .append_line(
+                    &format!("team/{}/facts.jsonl", f.env),
+                    &pyjson::dumps(&fact.to_dict(), DumpOptions::compact_sorted()).unwrap(),
+                )
+                .unwrap();
+        }
+        assert!(
+            f.team
+                .envs
+                .lock()
+                .unwrap()
+                .get(&f.env)
+                .unwrap()
+                .facts
+                .deleted_secrets
+                .is_empty()
+        );
+        assert_eq!(f.team.compact(&f.env).unwrap()["removed"], 2);
+        let loaded = crate::team::membership::load_environment(&f.ctx, &f.env).unwrap();
+        assert_eq!(loaded.document["secrets"]["gone"]["deleted"], true);
+        assert_eq!(
+            loaded.document["secrets"]["gone"]["versions"][VERSION]["status"],
+            "revoked"
+        );
+        let (facts, _, _) = load_facts(&f.ctx, &f.env).unwrap();
+        assert!(facts.tombstone_facts.contains_key(&fact.hash().unwrap()));
+    }
+
+    #[test]
+    fn compaction_heads_rotation_and_self_removal_witnesses_and_fact_records_stay_live() {
+        for self_removal in [false, true] {
+            let f = Fixture::new();
+            let peer = DeviceKey::generate();
+            let peer_fp = peer.fingerprint().unwrap();
+            let wrap =
+                envelope::wrap_dek(&[7; 32], &f.env, GENERATION, &peer.record().unwrap()).unwrap();
+            let add = commit::sign_commit(
+                &f.team.device,
+                &f.env,
+                4,
+                "1000003-0000",
+                &BTreeMap::from([(f.fp.clone(), 3.into())]),
+                vec![
+                    json!({"op":"member.add","device":peer.record().unwrap().to_dict(),
+                    "name":"synthetic-peer","role":"admin","wraps":{GENERATION:wrap}}),
+                ],
+            )
+            .unwrap();
+            let ciphertext = envelope::encrypt_secret(
+                &[7; 32],
+                &f.env,
+                "idle",
+                VERSION,
+                b"synthetic-idle-value",
+            )
+            .unwrap();
+            let data = commit::sign_commit(&peer, &f.env, 1, "1000004-0000", &BTreeMap::from([(f.fp.clone(), 4.into())]), vec![
+                json!({"op":"secret.put_version","secret_id":"idle","kind":"api_key",
+                    "generation_id":GENERATION,"version_id":VERSION,"ciphertext":ciphertext,"public":{}}),
+            ]).unwrap();
+            let author = if self_removal { &peer } else { &f.team.device };
+            let fact = sign_fact(
+                author,
+                &f.env,
+                "member_removed",
+                json!({"fingerprint":peer_fp}),
+                "1000006-0000",
+            )
+            .unwrap();
+            let seen = BTreeMap::from([(f.fp.clone(), 4.into()), (peer_fp.clone(), 1.into())]);
+            let witness = if self_removal {
+                commit::sign_commit(
+                    &peer,
+                    &f.env,
+                    2,
+                    "1000005-0000",
+                    &seen,
+                    vec![json!({"op":"member.remove","fingerprint":peer_fp})],
+                )
+                .unwrap()
+            } else {
+                let generation = "fedcba9876543210";
+                let wrap = envelope::wrap_dek(
+                    &[8; 32],
+                    &f.env,
+                    generation,
+                    &f.team.device.record().unwrap(),
+                )
+                .unwrap();
+                commit::sign_commit(&f.team.device, &f.env, 5, "1000005-0000", &seen, vec![json!({"op":"dek.rotate",
+                    "generation_id":generation,"wraps":{f.fp.clone():wrap},"removal_fact_hash":fact.hash().unwrap()})]).unwrap()
+            };
+            let witness_path = f.ctx.state.path.join(format!(
+                "team/{}/commits/{}/{}.json",
+                f.env, witness.author, witness.author_seq
+            ));
+            {
+                let _lock = f.ctx.state.lock().unwrap();
+                let store = CommitStore::new(f.ctx.state, &f.env);
+                for entry in [&add, &data, &witness] {
+                    store.append(entry).unwrap();
+                }
+                receipt_fact(&f.ctx, &fact).unwrap();
+                f.ctx
+                    .state
+                    .append_line(
+                        &format!("team/{}/facts.jsonl", f.env),
+                        &pyjson::dumps(&fact.to_dict(), DumpOptions::compact_sorted()).unwrap(),
+                    )
+                    .unwrap();
+            }
+            let original_witness = std::fs::read(&witness_path).unwrap();
+            let fact_bytes =
+                std::fs::read(f.ctx.state.path.join(format!("team/{}/facts.jsonl", f.env)))
+                    .unwrap();
+            assert_eq!(f.team.compact(&f.env).unwrap()["removed"], 3);
+            assert_eq!(std::fs::read(witness_path).unwrap(), original_witness);
+            assert_eq!(
+                std::fs::read(f.ctx.state.path.join(format!("team/{}/facts.jsonl", f.env)))
+                    .unwrap(),
+                fact_bytes
+            );
+            // owner:4 + peer:2, or owner:5 + peer:1, both total six.
+            let record = f
+                .ctx
+                .state
+                .read_json(
+                    &format!("team/{}/snapshot_records/6.json", f.env),
+                    Value::Null,
+                )
+                .unwrap();
+            assert_eq!(record["bounds"][&peer_fp], if self_removal { 2 } else { 1 });
+            assert_eq!(
+                record["self_placed"],
+                if self_removal {
+                    json!([peer_fp.clone()])
+                } else {
+                    json!([])
+                }
+            );
+            assert_eq!(
+                record["pending"],
+                if self_removal {
+                    json!([])
+                } else {
+                    json!([[1000006, 0, peer_fp.clone()]])
+                }
+            );
+            let loaded = crate::team::membership::load_environment(&f.ctx, &f.env).unwrap();
+            assert_eq!(loaded.version_order["idle"], json!([VERSION]));
+            assert_eq!(loaded.document["members"][&peer_fp]["status"], "removed");
+            let (facts, _, _) = load_facts(&f.ctx, &f.env).unwrap();
+            assert!(facts.removal_facts.contains_key(&fact.hash().unwrap()));
+        }
+    }
+
+    #[test]
+    fn compaction_heads_lagging_peer_blocks_until_exact_original_vector_coverage() {
+        let f = Fixture::new();
+        let peer = DeviceKey::generate();
+        let peer_fp = peer.fingerprint().unwrap();
+        let wrap =
+            envelope::wrap_dek(&[7; 32], &f.env, GENERATION, &peer.record().unwrap()).unwrap();
+        let add = commit::sign_commit(&f.team.device, &f.env, 4, "1000003-0000", &BTreeMap::from([(f.fp.clone(), 3.into())]), vec![json!({
+            "op":"member.add","device":peer.record().unwrap().to_dict(),"name":"peer","role":"user","wraps":{GENERATION:wrap}})]).unwrap();
+        {
+            let _lock = f.ctx.state.lock().unwrap();
+            CommitStore::new(f.ctx.state, &f.env).append(&add).unwrap();
+            f.team
+                .envs
+                .lock()
+                .unwrap()
+                .get_mut(&f.env)
+                .unwrap()
+                .peer_vectors
+                .insert(peer_fp.clone(), BTreeMap::from([(f.fp.clone(), 3.into())]));
+        }
+        assert_eq!(
+            f.team.compact(&f.env).unwrap(),
+            json!({"env_id":f.env,"removed":0,"blocked_by":[peer_fp.clone()]})
+        );
+        assert!(
+            !f.ctx
+                .state
+                .exists(&format!("team/{}/compaction_heads.json", f.env))
+        );
+        assert!(!testing::events().contains(&Boundary::BeforeSnapshot));
+        f.team
+            .envs
+            .lock()
+            .unwrap()
+            .get_mut(&f.env)
+            .unwrap()
+            .peer_vectors
+            .insert(peer_fp, BTreeMap::from([(f.fp.clone(), 4.into())]));
+        assert_eq!(f.team.compact(&f.env).unwrap()["removed"], 2);
+        let cache = f
+            .ctx
+            .state
+            .read_json(
+                &format!("team/{}/compaction_heads.json", f.env),
+                Value::Null,
+            )
+            .unwrap();
+        assert_eq!(cache["vector"], json!({f.fp.clone():4}));
+    }
+
+    #[test]
+    fn compaction_heads_real_state_holders_and_two_compactors_serialize_without_lost_heads() {
+        let f = Fixture::new();
+        let (entered_tx, entered_rx) = mpsc::sync_channel(0);
+        let (resume_tx, resume_rx) = mpsc::sync_channel(0);
+        let (done_tx, done_rx) = mpsc::channel();
+        let team = f.team.clone();
+        let env = f.env.clone();
+        let first = thread::spawn(move || {
+            testing::reset(None);
+            testing::pause(Boundary::BeforeSnapshot, entered_tx, resume_rx);
+            let result = team.compact(&env);
+            done_tx.send(result).unwrap();
+        });
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (attempt_tx, attempt_rx) = mpsc::channel();
+        let (acquired_tx, acquired_rx) = mpsc::channel();
+        let (writer_done_tx, writer_done_rx) = mpsc::channel();
+        let path = f.ctx.state.path.clone();
+        let commit_path = f.path(2);
+        let writer = thread::spawn(move || {
+            let other = StateDir::new(path);
+            attempt_tx.send(()).unwrap();
+            let _lock = other.lock().unwrap();
+            acquired_tx.send(!commit_path.exists()).unwrap();
+            writer_done_tx.send(()).unwrap();
+        });
+        attempt_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        // This assertion is recorded before releasing the deterministic gate;
+        // no time-based sleep is used to infer serialization.
+        let early_acquisition = acquired_rx.try_recv();
+        let held = matches!(early_acquisition, Err(mpsc::TryRecvError::Empty));
+        let envs_available = f.team.envs.try_lock().is_ok();
+        let (second_tx, second_rx) = mpsc::channel();
+        let team = f.team.clone();
+        let env = f.env.clone();
+        let second = thread::spawn(move || {
+            second_tx.send(team.compact(&env)).unwrap();
+        });
+        resume_tx.send(()).unwrap();
+        let first_result = done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        let writer_saw_pruned = match early_acquisition {
+            Ok(pruned) => pruned,
+            Err(mpsc::TryRecvError::Empty) => {
+                acquired_rx.recv_timeout(Duration::from_secs(5)).unwrap()
+            }
+            Err(mpsc::TryRecvError::Disconnected) => false,
+        };
+        writer_done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let second_result = second_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        first.join().unwrap();
+        writer.join().unwrap();
+        second.join().unwrap();
+        assert!(held && envs_available && writer_saw_pruned);
+        assert_eq!(first_result["removed"], 2);
+        assert_eq!(second_result["removed"], 0);
+        let cache = f
+            .ctx
+            .state
+            .read_json(
+                &format!("team/{}/compaction_heads.json", f.env),
+                Value::Null,
+            )
+            .unwrap();
+        assert_eq!(cache["vector"], json!({f.fp.clone():3}));
+        assert_eq!(cache["heads"][0]["author_seq"], 3);
+        f.reopen_literal_oracle();
     }
 }
