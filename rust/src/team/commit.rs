@@ -2883,6 +2883,19 @@ mod compaction_heads_tests {
         }
         let mut bad_record = equal.clone();
         bad_record.sig[0] ^= 1;
+        assert!(!bad_record.verify());
+        let invalid_expected = HashMap::from([(fp.clone(), bad_record.clone())]);
+        let invalid = announcement(
+            &author,
+            &env,
+            1.into(),
+            "1-0000",
+            vec![bad_record.to_dict()],
+        );
+        assert_eq!(
+            matching_device_records(&[invalid], &invalid_expected),
+            HashSet::new()
+        );
         let bad = bad_record.to_dict();
         for record in [
             other.to_dict(),
@@ -2942,7 +2955,6 @@ mod compaction_heads_tests {
             ],
         );
         let canonical = store.commit_path(&fp, &huge);
-        state.write_json(&canonical, &original.to_dict()).unwrap();
         let nonmatch = announcement(
             &author,
             &env,
@@ -2961,6 +2973,11 @@ mod compaction_heads_tests {
                 )
                 .unwrap();
         }
+        assert_eq!(
+            store.retained_matching_device_records(&expected).unwrap(),
+            HashSet::new()
+        );
+        state.write_json(&canonical, &original.to_dict()).unwrap();
         let wanted = HashSet::from([target_fp]);
         assert_eq!(
             store.retained_matching_device_records(&expected).unwrap(),
