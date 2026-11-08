@@ -1231,9 +1231,17 @@ mod tests {
         let legacy = CommitStore::new(&state, "legacy-not-a-new-env-id");
         observe_cached_hlcs(&legacy, &[], &mut clock).unwrap();
         assert_eq!(clock, Hlc::default());
+        let generation = "0123456789abcdef";
+        let wrap = crate::team::envelope::wrap_dek(
+            &[7; 32],
+            &env,
+            generation,
+            &key.record().unwrap(),
+        )
+        .unwrap();
         let init = commit::sign_commit(&key, &env, 1, "1000000-0000", &BTreeMap::new(), vec![json!({
             "op":"env.init","owner_device":key.record().unwrap().to_dict(),"owner_name":"synthetic-owner",
-            "generation_id":"0123456789abcdef","wraps":{}})]).unwrap();
+            "generation_id":generation,"wraps":{fp.clone():wrap}})]).unwrap();
         let head = signed(&key, &env, 2.into(), "1000001-0007", Value::Null);
         store.append(&init).unwrap();
         store.append(&head).unwrap();
