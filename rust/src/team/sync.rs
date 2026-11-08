@@ -9252,6 +9252,9 @@ impl TeamSync {
             .vector
             .values()
             .fold(PyInt::zero(), |acc, v| PyInt(acc.0 + &v.0));
+        #[cfg(test)]
+        compaction_heads::testing::hit(compaction_heads::testing::Boundary::BeforeLayout)?;
+        compaction_heads::preflight_layout(self.ctx.state, env_id, &total)?;
         // Fact-free identity history retains inactive/removed public records.
         // It supplies signature material, never remote membership authority.
         let identity = fold::fold(env_id, commits.clone(), None, None, None, None)?.document;
@@ -9451,6 +9454,207 @@ mod compaction_heads_tests {
                     events[..unlink].contains(&required),
                     "missing {required:?} before unlink"
                 );
+            }
+        }
+    }
+
+    fn publication_files(directory: &std::path::Path) -> BTreeMap<String, Vec<u8>> {
+        let mut files = BTreeMap::new();
+        for name in ["snapshots", "snapshot_records"] {
+            let parent = directory.join(name);
+            if parent.is_dir() {
+                for entry in std::fs::read_dir(parent).unwrap() {
+                    let path = entry.unwrap().path();
+                    if path.is_file() {
+                        files.insert(
+                            format!("{name}/{}", path.file_name().unwrap().to_str().unwrap()),
+                            std::fs::read(path).unwrap(),
+                        );
+                    }
+                }
+            }
+        }
+        let cache = directory.join("compaction_heads.json");
+        if cache.is_file() {
+            files.insert("cache".into(), std::fs::read(cache).unwrap());
+        }
+        files
+    }
+
+    fn change_before_layout(f: &Fixture, change: impl FnOnce()) -> (Result<Value>, Vec<Boundary>) {
+        let (entered_tx, entered_rx) = mpsc::sync_channel(0);
+        let (resume_tx, resume_rx) = mpsc::sync_channel(0);
+        let team = f.team.clone();
+        let env = f.env.clone();
+        thread::scope(|scope| {
+            let child = scope.spawn(move || {
+                testing::reset(None);
+                testing::pause(Boundary::BeforeLayout, entered_tx, resume_rx);
+                let result = team.compact(&env);
+                let events = testing::events();
+                testing::reset(None);
+                (result, events)
+            });
+            entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            change();
+            resume_tx.send(()).unwrap();
+            child.join().unwrap()
+        })
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn compaction_heads_dangling_root_team_and_env_refuse_before_publication() {
+        for level in ["root", "team", "env"] {
+            let f = Fixture::new();
+            let environment = f.ctx.state.path.join(format!("team/{}", f.env));
+            let baseline = publication_files(&environment);
+            let originals: Vec<_> = (1..=3)
+                .map(|seq| std::fs::read(f.path(seq)).unwrap())
+                .collect();
+            let path = match level {
+                "root" => f.ctx.state.path.clone(),
+                "team" => f.ctx.state.path.join("team"),
+                _ => environment.clone(),
+            };
+            let backup = f._root.path().join("retained-layout");
+            let missing = f._root.path().join("missing-target");
+            let retained_environment = match level {
+                "root" => backup.join(format!("team/{}", f.env)),
+                "team" => backup.join(&f.env),
+                _ => backup.clone(),
+            };
+            // The deterministic gate is after reads/cut/no-op gates, while the
+            // real state lock is held. No original is deleted by this mutation.
+            let (result, events) = change_before_layout(&f, || {
+                std::fs::rename(&path, &backup).unwrap();
+                std::os::unix::fs::symlink(&missing, &path).unwrap();
+            });
+            let error = result.unwrap_err();
+            assert_eq!(error.reason, "team_compaction_layout_unsupported");
+            assert!(error.detail.is_empty());
+            assert!(!events.contains(&Boundary::BeforeSnapshot));
+            assert!(!events.contains(&Boundary::BeforeUnlink));
+            assert_eq!(publication_files(&retained_environment), baseline);
+            for (index, bytes) in originals.iter().enumerate() {
+                assert_eq!(
+                    std::fs::read(retained_environment.join(format!(
+                        "commits/{}/{}.json",
+                        f.fp,
+                        index + 1
+                    )))
+                    .unwrap(),
+                    *bytes
+                );
+            }
+            std::fs::remove_file(&path).unwrap();
+            std::fs::rename(backup, path).unwrap();
+            f.reopen_literal_oracle();
+        }
+    }
+
+    #[test]
+    fn compaction_heads_nonregular_prospective_paths_refuse_before_publication() {
+        for relative in [
+            "snapshots",
+            "snapshot_records",
+            "snapshots/3.json",
+            "snapshot_records/3.json",
+            "compaction_heads.json",
+        ] {
+            let f = Fixture::new();
+            let environment = f.ctx.state.path.join(format!("team/{}", f.env));
+            let baseline = publication_files(&environment);
+            let originals: Vec<_> = (1..=3)
+                .map(|seq| std::fs::read(f.path(seq)).unwrap())
+                .collect();
+            let path = environment.join(relative);
+            let backup = f._root.path().join("retained-prospective-path");
+            let existed = path.exists();
+            let destination = relative.ends_with(".json");
+            let (result, events) = change_before_layout(&f, || {
+                if existed {
+                    std::fs::rename(&path, &backup).unwrap();
+                }
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                if destination {
+                    std::fs::create_dir(&path).unwrap();
+                } else {
+                    std::fs::write(&path, b"synthetic-layout-file").unwrap();
+                }
+            });
+            let error = result.unwrap_err();
+            assert_eq!(error.reason, "team_compaction_layout_unsupported");
+            assert!(error.detail.is_empty());
+            assert!(!events.contains(&Boundary::BeforeSnapshot));
+            assert!(!events.contains(&Boundary::BeforeUnlink));
+            if destination {
+                std::fs::remove_dir(&path).unwrap();
+            } else {
+                std::fs::remove_file(&path).unwrap();
+            }
+            if existed {
+                std::fs::rename(backup, path).unwrap();
+            }
+            assert_eq!(publication_files(&environment), baseline);
+            for (index, bytes) in originals.iter().enumerate() {
+                assert_eq!(std::fs::read(f.path(index as i64 + 1)).unwrap(), *bytes);
+            }
+            f.reopen_literal_oracle();
+        }
+    }
+
+    #[test]
+    fn compaction_heads_each_snapshot_readback_rejects_nonregular_identical_content() {
+        use super::compaction_heads::testing::SnapshotReplacement;
+
+        for boundary in [Boundary::AfterRecord, Boundary::BeforeReadback] {
+            for kind in 0..3 {
+                #[cfg(not(unix))]
+                if kind == 2 {
+                    continue;
+                }
+                let f = Fixture::new();
+                let original2 = std::fs::read(f.path(2)).unwrap();
+                let original3 = std::fs::read(f.path(3)).unwrap();
+                let snapshot = f
+                    .ctx
+                    .state
+                    .path
+                    .join(format!("team/{}/snapshots/3.json", f.env));
+                let replacement = match kind {
+                    0 => SnapshotReplacement::Missing,
+                    1 => SnapshotReplacement::Directory,
+                    #[cfg(unix)]
+                    _ => SnapshotReplacement::IdenticalSymlink(
+                        f._root.path().join("identical-snapshot.json"),
+                    ),
+                    #[cfg(not(unix))]
+                    _ => unreachable!(),
+                };
+                testing::replace_snapshot(
+                    boundary,
+                    f._root.path().to_path_buf(),
+                    snapshot.clone(),
+                    replacement,
+                );
+                let error = f.team.compact(&f.env).unwrap_err();
+                let events = testing::events();
+                testing::reset(None);
+                assert_eq!(error.reason, "team_compaction_head_persist_failed");
+                assert!(error.detail.is_empty());
+                assert!(events.contains(&boundary));
+                assert!(!events.contains(&Boundary::BeforeUnlink));
+                assert_eq!(std::fs::read(f.path(2)).unwrap(), original2);
+                assert_eq!(std::fs::read(f.path(3)).unwrap(), original3);
+                #[cfg(unix)]
+                if kind == 2 {
+                    assert!(std::fs::symlink_metadata(&snapshot).unwrap().is_symlink());
+                    assert_eq!(
+                        std::fs::read(&snapshot).unwrap(),
+                        std::fs::read(f._root.path().join("identical-snapshot.json")).unwrap()
+                    );
+                }
             }
         }
     }

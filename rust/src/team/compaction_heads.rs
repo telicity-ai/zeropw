@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -32,6 +32,9 @@ fn limit() -> Error {
 }
 fn persist_failed() -> Error {
     Error::state("team_compaction_head_persist_failed")
+}
+fn layout_unsupported() -> Error {
+    Error::state("team_compaction_layout_unsupported")
 }
 fn require_lock(state: &StateDir) -> Result<()> {
     if !state.locked_by_current_thread() {
@@ -363,12 +366,82 @@ pub(super) fn prepare(
     })
 }
 
+// Only descendants generated here are inspected. Trusted ancestors above the
+// configured root retain their normal resolution (including a platform /tmp
+// alias). Components remove a final slash/dot so a linked root cannot disguise
+// its own type as `state-link/` or `state-link/.`.
+pub(super) fn preflight_layout(state: &StateDir, env_id: &str, total: &PyInt) -> Result<()> {
+    require_lock(state)?;
+    if !commit::valid_env_id(env_id) || *total < 0 {
+        return Err(layout_unsupported());
+    }
+    let root: PathBuf = state.path.components().collect();
+    if !fs::symlink_metadata(&root)
+        .map_err(|_| persist_failed())?
+        .file_type()
+        .is_dir()
+    {
+        return Err(layout_unsupported());
+    }
+    let file = format!("{total}.json");
+    for (directories, destination) in [
+        (vec!["team", env_id, "snapshots"], file.as_str()),
+        (vec!["team", env_id, "snapshot_records"], file.as_str()),
+        (vec!["team", env_id], "compaction_heads.json"),
+    ] {
+        let mut path = root.clone();
+        let mut missing_parent = false;
+        for component in directories {
+            let mut components = Path::new(component).components();
+            if !matches!(components.next(), Some(Component::Normal(_)))
+                || components.next().is_some()
+            {
+                return Err(layout_unsupported());
+            }
+            path.push(component);
+            if !path.starts_with(&root) {
+                return Err(layout_unsupported());
+            }
+            if missing_parent {
+                continue;
+            }
+            match fs::symlink_metadata(&path) {
+                Ok(metadata) if metadata.file_type().is_dir() => {}
+                Ok(_) => return Err(layout_unsupported()),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    missing_parent = true;
+                }
+                Err(_) => return Err(persist_failed()),
+            }
+        }
+        if missing_parent {
+            continue;
+        }
+        path.push(destination);
+        if !path.starts_with(&root) {
+            return Err(layout_unsupported());
+        }
+        match fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.file_type().is_file() => {}
+            Ok(_) => return Err(layout_unsupported()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(persist_failed()),
+        }
+    }
+    Ok(())
+}
+
 fn check_snapshot(state: &StateDir, env_id: &str, prepared: &PreparedHeads) -> Result<()> {
+    let path = format!("team/{env_id}/snapshots/{}.json", prepared.total);
+    if !fs::symlink_metadata(state.path.join(&path))
+        .map_err(|_| persist_failed())?
+        .file_type()
+        .is_file()
+    {
+        return Err(persist_failed());
+    }
     let value = state
-        .read_json(
-            &format!("team/{env_id}/snapshots/{}.json", prepared.total),
-            Value::Null,
-        )
+        .read_json(&path, Value::Null)
         .map_err(|_| persist_failed())?;
     let digest: [u8; 32] = Sha256::digest(pretty(&value).map_err(|_| persist_failed())?).into();
     if digest != prepared.snapshot_sha256 {
@@ -495,6 +568,7 @@ pub(super) mod testing {
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub(crate) enum Boundary {
+        BeforeLayout,
         BeforeSnapshot,
         AfterSnapshot,
         BeforeRecord,
@@ -515,12 +589,25 @@ pub(super) mod testing {
         std::sync::mpsc::SyncSender<()>,
         std::sync::mpsc::Receiver<()>,
     );
+    pub(crate) enum SnapshotReplacement {
+        Missing,
+        Directory,
+        #[cfg(unix)]
+        IdenticalSymlink(PathBuf),
+    }
+    struct SnapshotMutation {
+        at: Boundary,
+        scope: PathBuf,
+        path: PathBuf,
+        replacement: SnapshotReplacement,
+    }
     #[derive(Default)]
     struct Trace {
         fail: Option<Boundary>,
         events: Vec<Boundary>,
         action: Option<(Boundary, PathBuf, Option<Vec<u8>>)>,
         pause: Option<Pause>,
+        snapshot_mutation: Option<SnapshotMutation>,
     }
     thread_local! {
         static TRACE: RefCell<Trace> = RefCell::new(Trace::default());
@@ -546,10 +633,59 @@ pub(super) mod testing {
     pub(crate) fn events() -> Vec<Boundary> {
         TRACE.with(|trace| trace.borrow().events.clone())
     }
+    pub(crate) fn replace_snapshot(
+        at: Boundary,
+        scope: PathBuf,
+        path: PathBuf,
+        replacement: SnapshotReplacement,
+    ) {
+        TRACE.with(|trace| {
+            trace.borrow_mut().snapshot_mutation = Some(SnapshotMutation {
+                at,
+                scope,
+                path,
+                replacement,
+            });
+        });
+    }
     pub(crate) fn hit(boundary: Boundary) -> Result<()> {
         TRACE.with(|trace| {
             let mut trace = trace.borrow_mut();
             trace.events.push(boundary);
+            if trace
+                .snapshot_mutation
+                .as_ref()
+                .is_some_and(|mutation| mutation.at == boundary)
+            {
+                let mutation = trace.snapshot_mutation.take().ok_or_else(persist_failed)?;
+                let owned = |path: &Path| {
+                    path.starts_with(&mutation.scope)
+                        && !path.components().any(|part| part == Component::ParentDir)
+                };
+                if !owned(&mutation.path) {
+                    return Err(persist_failed());
+                }
+                match mutation.replacement {
+                    SnapshotReplacement::Missing => {
+                        fs::remove_file(mutation.path).map_err(|_| persist_failed())?;
+                    }
+                    SnapshotReplacement::Directory => {
+                        fs::remove_file(&mutation.path).map_err(|_| persist_failed())?;
+                        fs::create_dir(mutation.path).map_err(|_| persist_failed())?;
+                    }
+                    #[cfg(unix)]
+                    SnapshotReplacement::IdenticalSymlink(target) => {
+                        if !owned(&target) {
+                            return Err(persist_failed());
+                        }
+                        let bytes = fs::read(&mutation.path).map_err(|_| persist_failed())?;
+                        fs::write(&target, bytes).map_err(|_| persist_failed())?;
+                        fs::remove_file(&mutation.path).map_err(|_| persist_failed())?;
+                        std::os::unix::fs::symlink(target, mutation.path)
+                            .map_err(|_| persist_failed())?;
+                    }
+                }
+            }
             if trace
                 .action
                 .as_ref()
@@ -626,6 +762,104 @@ mod tests {
             "{}-0123456789abcdef0123456789abcdef",
             key.fingerprint().unwrap()
         )
+    }
+
+    #[test]
+    fn compaction_heads_layout_requires_lock_and_creates_no_prospective_paths() {
+        let tmp = TempDir::new().unwrap();
+        let state = StateDir::new(tmp.path().join("state"));
+        state.create().unwrap();
+        let env = env(&key(1));
+        assert_eq!(
+            preflight_layout(&state, &env, &1.into()).unwrap_err().reason,
+            "team_compaction_lock_required"
+        );
+        let _lock = state.lock().unwrap();
+        preflight_layout(&state, &env, &1.into()).unwrap();
+        assert!(!state.path.join("team").exists());
+        for (env, total) in [("../outside", 1.into()), (env.as_str(), (-1).into())] {
+            let error = preflight_layout(&state, env, &total).unwrap_err();
+            assert_eq!(error.reason, "team_compaction_layout_unsupported");
+            assert!(error.detail.is_empty());
+        }
+        let retained = tmp.path().join("retained-state");
+        fs::rename(&state.path, &retained).unwrap();
+        let error = preflight_layout(&state, &env, &1.into()).unwrap_err();
+        fs::rename(retained, &state.path).unwrap();
+        assert_eq!(error.reason, "team_compaction_head_persist_failed");
+        assert!(error.detail.is_empty());
+    }
+
+    #[test]
+    fn compaction_heads_layout_refuses_non_directory_and_nonregular_destinations() {
+        let env = env(&key(2));
+        for relative in [
+            "team".to_owned(),
+            format!("team/{env}"),
+            format!("team/{env}/snapshots"),
+            format!("team/{env}/snapshot_records"),
+            format!("team/{env}/snapshots/1.json"),
+            format!("team/{env}/snapshot_records/1.json"),
+            format!("team/{env}/compaction_heads.json"),
+        ] {
+            let tmp = TempDir::new().unwrap();
+            let state = StateDir::new(tmp.path().join("state"));
+            state.create().unwrap();
+            let path = state.path.join(&relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            if relative.ends_with(".json") {
+                fs::create_dir(&path).unwrap();
+            } else {
+                fs::write(&path, b"synthetic-layout-file").unwrap();
+            }
+            let _lock = state.lock().unwrap();
+            let error = preflight_layout(&state, &env, &1.into()).unwrap_err();
+            assert_eq!(error.reason, "team_compaction_layout_unsupported");
+            assert!(error.detail.is_empty());
+            assert_eq!(path.is_file(), !relative.ends_with(".json"));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn compaction_heads_layout_rejects_dangling_links_but_allows_trusted_parent_alias() {
+        let tmp = TempDir::new().unwrap();
+        let parent = tmp.path().join("real-parent");
+        fs::create_dir(&parent).unwrap();
+        let alias = tmp.path().join("parent-alias");
+        std::os::unix::fs::symlink(&parent, &alias).unwrap();
+        let state = StateDir::new(alias.join("state"));
+        state.create().unwrap();
+        let env = env(&key(3));
+        let _lock = state.lock().unwrap();
+        preflight_layout(&state, &env, &1.into()).unwrap();
+        let directory = state.path.join(format!("team/{env}"));
+        fs::create_dir_all(&directory).unwrap();
+        for name in ["snapshots", "snapshot_records", "compaction_heads.json"] {
+            let path = directory.join(name);
+            std::os::unix::fs::symlink(tmp.path().join("missing-target"), &path).unwrap();
+            let error = preflight_layout(&state, &env, &1.into()).unwrap_err();
+            fs::remove_file(path).unwrap();
+            assert_eq!(error.reason, "team_compaction_layout_unsupported");
+            assert!(error.detail.is_empty());
+        }
+        for name in ["snapshots", "snapshot_records"] {
+            let folder = directory.join(name);
+            fs::create_dir(&folder).unwrap();
+            let path = folder.join("1.json");
+            std::os::unix::fs::symlink(tmp.path().join("missing-target"), &path).unwrap();
+            let error = preflight_layout(&state, &env, &1.into()).unwrap_err();
+            fs::remove_file(&path).unwrap();
+            assert_eq!(error.reason, "team_compaction_layout_unsupported");
+            assert!(error.detail.is_empty());
+            fs::write(folder.join("1.json"), b"synthetic-regular-file").unwrap();
+        }
+        fs::write(directory.join("compaction_heads.json"), b"synthetic-cache").unwrap();
+        preflight_layout(&state, &env, &1.into()).unwrap();
+        assert_eq!(
+            fs::read(directory.join("snapshots/1.json")).unwrap().as_slice(),
+            b"synthetic-regular-file"
+        );
     }
 
     #[test]

@@ -675,6 +675,107 @@ fn reserved_number_legacy_head_refuses_real_compaction_before_new_publication() 
     assert_eq!(metadata(&f), before);
     assert!(f.path(&f.fp, 2).exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn symlinked_state_root_with_plain_slash_and_dot_spellings_refuses_before_publication() {
+    for suffix in ["", "/", "/."] {
+        let f = Fixture::new(OLD);
+        f.put(2, OLD + 1, V1);
+        let alias = f._root.path().join("state-link");
+        std::os::unix::fs::symlink(&f.ctx.state.path, &alias).unwrap();
+        let mut spelling = alias.as_os_str().to_os_string();
+        spelling.push(suffix);
+        let path = std::path::PathBuf::from(spelling);
+        let ctx = Arc::new(Context::open(&path, Config::default(), clock::system()).unwrap());
+        assert_eq!(ctx.state.path.as_os_str(), path.as_os_str());
+        let team = team(ctx, f.device.clone(), &f.env);
+        // Registration/refold is complete before the refusal baseline.
+        let before = metadata(&f);
+        let init = fs::read(f.path(&f.fp, 1)).unwrap();
+        let data = fs::read(f.path(&f.fp, 2)).unwrap();
+        let error = team.compact(&f.env).unwrap_err();
+        assert_eq!(error.reason, "team_compaction_layout_unsupported");
+        assert!(error.detail.is_empty());
+        assert_eq!(metadata(&f), before);
+        assert_eq!(fs::read(f.path(&f.fp, 1)).unwrap(), init);
+        assert_eq!(fs::read(f.path(&f.fp, 2)).unwrap(), data);
+        let loaded = membership::load_environment(&f.ctx, &f.env).unwrap();
+        assert_eq!(loaded.version_order["s"], json!([V1]));
+        assert_eq!(loaded.vector, BTreeMap::from([(f.fp.clone(), 2.into())]));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn symlinked_team_and_environment_directories_refuse_without_new_images_or_unlink() {
+    for level in ["team", "env"] {
+        let f = Fixture::new(OLD);
+        f.put(2, OLD + 1, V1);
+        let team = f.sync();
+        let before = metadata(&f);
+        let init = fs::read(f.path(&f.fp, 1)).unwrap();
+        let data = fs::read(f.path(&f.fp, 2)).unwrap();
+        let directory = if level == "team" {
+            f.ctx.state.path.join("team")
+        } else {
+            f.ctx.state.path.join(format!("team/{}", f.env))
+        };
+        let retained = f._root.path().join("retained-environment-path");
+        fs::rename(&directory, &retained).unwrap();
+        std::os::unix::fs::symlink(&retained, &directory).unwrap();
+        let error = team.compact(&f.env).unwrap_err();
+        assert_eq!(error.reason, "team_compaction_layout_unsupported");
+        assert!(error.detail.is_empty());
+        assert_eq!(metadata(&f), before);
+        assert_eq!(fs::read(f.path(&f.fp, 1)).unwrap(), init);
+        assert_eq!(fs::read(f.path(&f.fp, 2)).unwrap(), data);
+        assert_eq!(
+            membership::load_environment(&f.ctx, &f.env).unwrap().version_order["s"],
+            json!([V1])
+        );
+    }
+}
+
+#[test]
+fn missing_prospective_paths_and_regular_repeat_destinations_compact_normally() {
+    let f = Fixture::new(OLD);
+    let put = f.put(2, OLD + 1, V1);
+    let signed = put.canonical_json(false).unwrap();
+    let hashed = put.canonical_json(true).unwrap();
+    let team = f.sync();
+    let directory = f.ctx.state.path.join(format!("team/{}", f.env));
+    for name in ["snapshots", "snapshot_records"] {
+        let path = directory.join(name);
+        if path.exists() {
+            fs::remove_dir_all(path).unwrap();
+        }
+    }
+    assert!(!directory.join("compaction_heads.json").exists());
+    assert_eq!(
+        team.compact(&f.env).unwrap(),
+        json!({"env_id":f.env,"removed":1,"blocked_by":[]})
+    );
+    assert!(!f.path(&f.fp, 2).exists());
+    assert!(directory.join("snapshots/2.json").is_file());
+    assert!(directory.join("snapshot_records/2.json").is_file());
+    assert_head(&f.cache(), &put, &signed, &hashed);
+    let before = metadata(&f);
+    assert_eq!(
+        team.compact(&f.env).unwrap(),
+        json!({"env_id":f.env,"removed":0,"blocked_by":[]})
+    );
+    assert_eq!(f.cache()["vector"], json!({f.fp.clone():2}));
+    assert_eq!(
+        fs::read(directory.join("compaction_heads.json")).unwrap(),
+        before["cache"]
+    );
+    assert_head(&f.cache(), &put, &signed, &hashed);
+    assert_eq!(
+        membership::load_environment(&f.ctx, &f.env).unwrap().version_order["s"],
+        json!([V1])
+    );
+}
 fn team_with_device(ctx: &Arc<Context>, device: &DeviceKey, env: &str) -> Arc<TeamSync> {
     team(ctx.clone(), device.clone(), env)
 }
