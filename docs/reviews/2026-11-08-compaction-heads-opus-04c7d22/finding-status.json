@@ -147,5 +147,21 @@
     "native563": "NOTASSIGNED/NOTRUN, unissued DATA plan superseded pending R1 HIGH fix",
     "Linux563": "existing fullcampaignACTIVE, no finalPASS yet",
     "new_HIGH": "OPEN, no policy/source fixyet"
+  },
+  "runtime_followup_Linux563_final": {
+    "source": "563de18b61b87b00e33faed955c43f14db43f681",
+    "rust_tree": "7cfa2b85d103b50bc5d941f3b6165fe38b51cbd5",
+    "state": "ALL27PHASES_PASSED_BASELINE_ONLY",
+    "full": "112steps107targets1874passed0failed5ignored;strictClippy/fmt/4signerprobes48docsPASS",
+    "focused": "newexact2x1;31library+27integrationdebugreleasePASS;14stackexact1each;non-testLinuxreleaseartifactgateabsencePASS;featuresidentical/no raw_value",
+    "sourceproof": "all1464paths54sourcebeforeaftermaps match;ownwaits+last2100empty;RootsoleVMretainedidle",
+    "archive_sha256": "567d61decc372ddcee0dd07293e3d2305d1ee154667ffd4d443019a6bc26f609",
+    "full_receipt_sha256": "c6c622f1f573cacb3b2cf82ac329a55f1ba36819d63e92d0171863953de3942a",
+    "new_HIGH": "R1-01 stillOPEN, baselineknownaffected/notpropertyproof",
+    "native563": "NOTASSIGNED/NOTRUN, futurecorrectedsourcebothOSvalidationstillrequired",
+    "actual_Astra": "policytaskfrozenata1e3ACTIVE;newlaterbaselineeventdoesnotchangeitscode/inputsnapshot",
+    "independent_collection": "fixed113members/27receipts/54sourcemaps/1464Gitfiles+modes/rawtests+features+nmMATCH,DATAonly",
+    "independent_report_sha256": "017c15580e1592a9b7ca3b80919d9d766871c4c749d2bd035d1750ef1831caab",
+    "independent_json_sha256": "6374fa69dd8c33acd1bbadb45ea51905579fa85d92892301c60c5bbf6cd3860d"
   }
 }

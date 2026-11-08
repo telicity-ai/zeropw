@@ -1,0 +1,11 @@
+{
+  "platform": "linux",
+  "source_head": "563de18b61b87b00e33faed955c43f14db43f681",
+  "transport_exit": 0,
+  "own_handle_waited": true,
+  "bytes": 23357440,
+  "sha256": "567d61decc372ddcee0dd07293e3d2305d1ee154667ffd4d443019a6bc26f609",
+  "host27commands": "all exit0/waited/no timeout",
+  "scope": "completed own planned regularDATA only; no product/source/runtime rerun; newHIGH stillOPEN",
+  "time_utc": "2026-11-08T10:59:04.384939+00:00"
+}

@@ -1,0 +1,226 @@
+    Finished `dev` profile [unoptimized] target(s) in 0.05s
+    Finished `test` profile [unoptimized] target(s) in 0.04s
+     Running unittests src/lib.rs (/opt/cgjob/target/debug/deps/zeropw-007970ffd6770fca)
+     Running unittests src/bin/zeropw-admin.rs (/opt/cgjob/target/debug/deps/zeropw_admin-6c29d2d59b926320)
+     Running unittests src/bin/zeropw-agent.rs (/opt/cgjob/target/debug/deps/zeropw_agent-8994b60dde9a78cb)
+     Running unittests src/bin/zeropw-demo.rs (/opt/cgjob/target/debug/deps/zeropw_demo-1c5c6fdd15e4d91f)
+     Running unittests src/bin/zeropw-democli.rs (/opt/cgjob/target/debug/deps/zeropw_democli-34a206a4f153e2bf)
+     Running unittests src/bin/zeropw_session.rs (/opt/cgjob/target/debug/deps/zeropw_session-0594184ea84dddc2)
+    Finished `test` profile [unoptimized] target(s) in 0.06s
+     Running tests/admin_expanduser_parity.rs (/opt/cgjob/target/debug/deps/admin_expanduser_parity-7f6ce46907e06a40)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/admin_input_envelope.rs (/opt/cgjob/target/debug/deps/admin_input_envelope-19161c8ad9b01564)
+    Finished `test` profile [unoptimized] target(s) in 0.04s
+     Running tests/admin_secret_import.rs (/opt/cgjob/target/debug/deps/admin_secret_import-97017d3edb664d68)
+    Finished `test` profile [unoptimized] target(s) in 0.05s
+     Running tests/admin_sigint_cleanup_boundaries.rs (/opt/cgjob/target/debug/deps/admin_sigint_cleanup_boundaries-b0035c9c7ef2673b)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/admin_sigint_exit.rs (/opt/cgjob/target/debug/deps/admin_sigint_exit-9b12d40b17bd2281)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/agent_help.rs (/opt/cgjob/target/debug/deps/agent_help-7e5b826f71903541)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/agent_proxy_parity.rs (/opt/cgjob/target/debug/deps/agent_proxy_parity-8d5014c078931cb9)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/astra_cleanup_publication_order.rs (/opt/cgjob/target/debug/deps/astra_cleanup_publication_order-dd65c0b866595394)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/astra_cli_runtime_round2.rs (/opt/cgjob/target/debug/deps/astra_cli_runtime_round2-4ea89fc2e57dc85b)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/astra_cli_runtime_round3.rs (/opt/cgjob/target/debug/deps/astra_cli_runtime_round3-5376bb30de2e0615)
+    Finished `test` profile [unoptimized] target(s) in 0.06s
+     Running tests/astra_cli_runtime_round4.rs (/opt/cgjob/target/debug/deps/astra_cli_runtime_round4-c38cb023b4b4cdd9)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/astra_projects_final.rs (/opt/cgjob/target/debug/deps/astra_projects_final-3a7040dc41526424)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/astra_pty_portability.rs (/opt/cgjob/target/debug/deps/astra_pty_portability-2bded5c90e845e55)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/astra_response_acceptance.rs (/opt/cgjob/target/debug/deps/astra_response_acceptance-818dd80532486722)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/astra_response_final.rs (/opt/cgjob/target/debug/deps/astra_response_final-48dcb7b52bf52331)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/astra_response_final_recheck.rs (/opt/cgjob/target/debug/deps/astra_response_final_recheck-f4e8179071d7dc26)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/astra_response_review.rs (/opt/cgjob/target/debug/deps/astra_response_review-6d66e4de554ae908)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/astra_response_round2.rs (/opt/cgjob/target/debug/deps/astra_response_round2-316848502c6c646b)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/astra_response_round3.rs (/opt/cgjob/target/debug/deps/astra_response_round3-ca993f4164d4af1a)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/astra_response_round4.rs (/opt/cgjob/target/debug/deps/astra_response_round4-a976ae340fd408e1)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/astra_run_context_lease.rs (/opt/cgjob/target/debug/deps/astra_run_context_lease-6ee51db6f1e6a87f)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/astra_runtime_final.rs (/opt/cgjob/target/debug/deps/astra_runtime_final-15daefe5cd28713d)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/astra_runtime_review.rs (/opt/cgjob/target/debug/deps/astra_runtime_review-c479995014be5151)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/astra_sigint_cleanup.rs (/opt/cgjob/target/debug/deps/astra_sigint_cleanup-86457dca00d0fe74)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/astra_sigint_cleanup_final.rs (/opt/cgjob/target/debug/deps/astra_sigint_cleanup_final-f312aa524c9d9730)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/astra_team_fact_catchup.rs (/opt/cgjob/target/debug/deps/astra_team_fact_catchup-1fe52c8cf7a6928e)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/astra_team_fact_duplicate_diagnostic.rs (/opt/cgjob/target/debug/deps/astra_team_fact_duplicate_diagnostic-1cc1d11505d98dc9)
+    Finished `test` profile [unoptimized] target(s) in 0.04s
+     Running tests/astra_team_reconnect_diagnostic.rs (/opt/cgjob/target/debug/deps/astra_team_reconnect_diagnostic-9c577f696f269c6c)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/astra_team_review.rs (/opt/cgjob/target/debug/deps/astra_team_review-ebc3cd1d69b7a0dc)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/astra_team_round2.rs (/opt/cgjob/target/debug/deps/astra_team_round2-5ab2c8dab83c68c5)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/astra_team_round3.rs (/opt/cgjob/target/debug/deps/astra_team_round3-6b4eb0e42cfcb5f4)
+    Finished `test` profile [unoptimized] target(s) in 0.04s
+     Running tests/astra_team_round4.rs (/opt/cgjob/target/debug/deps/astra_team_round4-f5d33ac3fbb3b56c)
+    Finished `test` profile [unoptimized] target(s) in 0.06s
+     Running tests/base_cli_error_parity.rs (/opt/cgjob/target/debug/deps/base_cli_error_parity-3466f1b228579d0f)
+    Finished `test` profile [unoptimized] target(s) in 0.05s
+     Running tests/canonical_helpers.rs (/opt/cgjob/target/debug/deps/canonical_helpers-994914a043bc2a3c)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/cli_commands.rs (/opt/cgjob/target/debug/deps/cli_commands-1c5ca9f547f480dd)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/cli_grant_limits_parity.rs (/opt/cgjob/target/debug/deps/cli_grant_limits_parity-8fc1c8c7aaeb65a0)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/cli_parity.rs (/opt/cgjob/target/debug/deps/cli_parity-475bf9d3fe18855d)
+    Finished `test` profile [unoptimized] target(s) in 0.06s
+     Running tests/democli_parity.rs (/opt/cgjob/target/debug/deps/democli_parity-23d1d50508fccab7)
+    Finished `test` profile [unoptimized] target(s) in 0.04s
+     Running tests/escaped_builtin_http_parity.rs (/opt/cgjob/target/debug/deps/escaped_builtin_http_parity-9dbbf6769af5127b)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/fake_upstream.rs (/opt/cgjob/target/debug/deps/fake_upstream-58db925a058406aa)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/gateway.rs (/opt/cgjob/target/debug/deps/gateway-e9d75a743a56491a)
+    Finished `test` profile [unoptimized] target(s) in 0.08s
+     Running tests/gateway_oracle.rs (/opt/cgjob/target/debug/deps/gateway_oracle-59506ab10bae1a6f)
+    Finished `test` profile [unoptimized] target(s) in 0.06s
+     Running tests/gateway_replay_status_parity.rs (/opt/cgjob/target/debug/deps/gateway_replay_status_parity-75216791a73f095f)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/gateway_tls_parity.rs (/opt/cgjob/target/debug/deps/gateway_tls_parity-353bad7c0fe44940)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/gateway_x1_credential_e2e.rs (/opt/cgjob/target/debug/deps/gateway_x1_credential_e2e-1fefad47eb3b38b0)
+    Finished `test` profile [unoptimized] target(s) in 0.04s
+     Running tests/ledger_float_parity.rs (/opt/cgjob/target/debug/deps/ledger_float_parity-d71409566b418627)
+    Finished `test` profile [unoptimized] target(s) in 0.06s
+     Running tests/native_admin_cli.rs (/opt/cgjob/target/debug/deps/native_admin_cli-110b6d095680b925)
+    Finished `test` profile [unoptimized] target(s) in 0.04s
+     Running tests/native_admin_cli_more.rs (/opt/cgjob/target/debug/deps/native_admin_cli_more-4003c1639fdb02ef)
+    Finished `test` profile [unoptimized] target(s) in 0.06s
+     Running tests/native_agent_cli.rs (/opt/cgjob/target/debug/deps/native_agent_cli-59bbbbb82c6d061c)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/native_atomic_cli.rs (/opt/cgjob/target/debug/deps/native_atomic_cli-51cf69ea9e6c5502)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/native_cli_e2e.rs (/opt/cgjob/target/debug/deps/native_cli_e2e-458c4db9aee0db6f)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/native_response_cli.rs (/opt/cgjob/target/debug/deps/native_response_cli-a72404fe3d97485d)
+    Finished `test` profile [unoptimized] target(s) in 0.06s
+     Running tests/native_team_cli.rs (/opt/cgjob/target/debug/deps/native_team_cli-08f2f58d51f49be6)
+    Finished `test` profile [unoptimized] target(s) in 0.07s
+     Running tests/native_team_e2e.rs (/opt/cgjob/target/debug/deps/native_team_e2e-83e5cdad061a4215)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/policy_oracle.rs (/opt/cgjob/target/debug/deps/policy_oracle-648e1f516707f54d)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/policy_parity_close.rs (/opt/cgjob/target/debug/deps/policy_parity_close-8c0d1b2bef48b1d3)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/python_numeric_comparison_parity.rs (/opt/cgjob/target/debug/deps/python_numeric_comparison_parity-3c4948e1ce084f46)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/relay_escape_parity.rs (/opt/cgjob/target/debug/deps/relay_escape_parity-c76a79c446ba6d3a)
+    Finished `test` profile [unoptimized] target(s) in 0.09s
+     Running tests/response.rs (/opt/cgjob/target/debug/deps/response-c8fa756fabf8c939)
+    Finished `test` profile [unoptimized] target(s) in 0.08s
+     Running tests/response_contract.rs (/opt/cgjob/target/debug/deps/response_contract-acc598bcfc91d2ae)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/response_integer_boundaries.rs (/opt/cgjob/target/debug/deps/response_integer_boundaries-b01768dbfa22abef)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/response_parity_gaps.rs (/opt/cgjob/target/debug/deps/response_parity_gaps-a17080c310c20832)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/runs.rs (/opt/cgjob/target/debug/deps/runs-277cd29dae7f45e1)
+    Finished `test` profile [unoptimized] target(s) in 0.05s
+     Running tests/runtime_fix_boundaries.rs (/opt/cgjob/target/debug/deps/runtime_fix_boundaries-c12675bf5b37a5d5)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/runtime_parity_gaps.rs (/opt/cgjob/target/debug/deps/runtime_parity_gaps-5f90e33e444cd1a2)
+    Finished `test` profile [unoptimized] target(s) in 0.05s
+     Running tests/serve_request_log.rs (/opt/cgjob/target/debug/deps/serve_request_log-86c88d1af03d833b)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/server_accept_resilience.rs (/opt/cgjob/target/debug/deps/server_accept_resilience-b2865c14f3f47eb5)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/signer_e2e.rs (/opt/cgjob/target/debug/deps/signer_e2e-07040f1fb3883c0e)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/signer_oracle.rs (/opt/cgjob/target/debug/deps/signer_oracle-daf87d0da6ae75e3)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/sshwire.rs (/opt/cgjob/target/debug/deps/sshwire-7ea880c45bcbccea)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/state_dir_cross_language.rs (/opt/cgjob/target/debug/deps/state_dir_cross_language-54476c65960d9988)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/store_cross_process_lock.rs (/opt/cgjob/target/debug/deps/store_cross_process_lock-e18e713122cfe011)
+    Finished `test` profile [unoptimized] target(s) in 0.06s
+     Running tests/store_oracle.rs (/opt/cgjob/target/debug/deps/store_oracle-64f4637100cec60d)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/team_checkpoint_admission.rs (/opt/cgjob/target/debug/deps/team_checkpoint_admission-2b120637f33eb360)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/team_checkpoint_authority_oracle.rs (/opt/cgjob/target/debug/deps/team_checkpoint_authority_oracle-9ce8ec4638d1cdc1)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/team_checkpoint_generation_oracle.rs (/opt/cgjob/target/debug/deps/team_checkpoint_generation_oracle-83f3d9550d3ee78c)
+    Finished `test` profile [unoptimized] target(s) in 0.10s
+     Running tests/team_checkpoint_legacy_parser_regression.rs (/opt/cgjob/target/debug/deps/team_checkpoint_legacy_parser_regression-02ae28da095295f2)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/team_checkpoint_manifest.rs (/opt/cgjob/target/debug/deps/team_checkpoint_manifest-1de6ef8bf0737c71)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/team_checkpoint_payload.rs (/opt/cgjob/target/debug/deps/team_checkpoint_payload-dc0346a8dfc48b78)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/team_checkpoint_provenance.rs (/opt/cgjob/target/debug/deps/team_checkpoint_provenance-ba63eb0a7275b14a)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/team_checkpoint_removal_oracle.rs (/opt/cgjob/target/debug/deps/team_checkpoint_removal_oracle-962e90197b1884ff)
+    Finished `test` profile [unoptimized] target(s) in 0.08s
+     Running tests/team_checkpoint_required_generations.rs (/opt/cgjob/target/debug/deps/team_checkpoint_required_generations-895673609244a8a4)
+    Finished `test` profile [unoptimized] target(s) in 0.05s
+     Running tests/team_checkpoint_semantic_cut.rs (/opt/cgjob/target/debug/deps/team_checkpoint_semantic_cut-63450a2c47e6d51b)
+    Finished `test` profile [unoptimized] target(s) in 0.07s
+     Running tests/team_compaction_heads.rs (/opt/cgjob/target/debug/deps/team_compaction_heads-8a1861c8cfb0147a)
+    Finished `test` profile [unoptimized] target(s) in 0.05s
+     Running tests/team_derive_lazy_parity.rs (/opt/cgjob/target/debug/deps/team_derive_lazy_parity-cc97ec1d96383902)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/team_envelope_parity_edges.rs (/opt/cgjob/target/debug/deps/team_envelope_parity_edges-33811ffcfe578d6e)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/team_fold.rs (/opt/cgjob/target/debug/deps/team_fold-13d93113cc547a96)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/team_fold_lazy_parity.rs (/opt/cgjob/target/debug/deps/team_fold_lazy_parity-c0327c8251bfa116)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/team_invite_link.rs (/opt/cgjob/target/debug/deps/team_invite_link-8fb542d1539c49e8)
+    Finished `test` profile [unoptimized] target(s) in 0.06s
+     Running tests/team_link_transport.rs (/opt/cgjob/target/debug/deps/team_link_transport-a3ff50763971a0d5)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/team_membership_sync.rs (/opt/cgjob/target/debug/deps/team_membership_sync-1fca319ea7ba7c4d)
+    Finished `test` profile [unoptimized] target(s) in 0.07s
+     Running tests/team_oracle.rs (/opt/cgjob/target/debug/deps/team_oracle-0de49bb5f3abaeb1)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/team_pairing_approval.rs (/opt/cgjob/target/debug/deps/team_pairing_approval-5316069555d41c24)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/team_parity_gaps.rs (/opt/cgjob/target/debug/deps/team_parity_gaps-a6e6dd9d3e4c992c)
+    Finished `test` profile [unoptimized] target(s) in 0.07s
+     Running tests/team_remaining_contract.rs (/opt/cgjob/target/debug/deps/team_remaining_contract-79721c21a44aaa9a)
+    Finished `test` profile [unoptimized] target(s) in 0.06s
+     Running tests/team_secret_import.rs (/opt/cgjob/target/debug/deps/team_secret_import-3a75a97c955841a8)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/team_share_policy_version_parity.rs (/opt/cgjob/target/debug/deps/team_share_policy_version_parity-1c97e61486d3259c)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/team_snapshot_total_parity.rs (/opt/cgjob/target/debug/deps/team_snapshot_total_parity-0555880164485609)
+    Finished `test` profile [unoptimized] target(s) in 0.04s
+     Running tests/team_snapshot_version_order_parity.rs (/opt/cgjob/target/debug/deps/team_snapshot_version_order_parity-b8708f01b94cb692)
+    Finished `test` profile [unoptimized] target(s) in 0.02s
+     Running tests/team_sync_status.rs (/opt/cgjob/target/debug/deps/team_sync_status-de7eb0c0ce13cc9a)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/team_transport.rs (/opt/cgjob/target/debug/deps/team_transport-33a0714e05ab7418)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/team_uncaught_scope_parity.rs (/opt/cgjob/target/debug/deps/team_uncaught_scope_parity-4a5aa15549924fcc)
+    Finished `test` profile [unoptimized] target(s) in 0.07s
+     Running tests/tools_server.rs (/opt/cgjob/target/debug/deps/tools_server-946054488f5e3fa9)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/vault_context.rs (/opt/cgjob/target/debug/deps/vault_context-6a3bb53ab84a488f)
+    Finished `test` profile [unoptimized] target(s) in 0.10s
+     Running tests/vault_context_oracle.rs (/opt/cgjob/target/debug/deps/vault_context_oracle-e73ba19779adaf7b)
+    Finished `test` profile [unoptimized] target(s) in 0.04s
+     Running tests/vault_public_parity.rs (/opt/cgjob/target/debug/deps/vault_public_parity-6037d246f5b1f6d2)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running tests/whole_secret_tombstone.rs (/opt/cgjob/target/debug/deps/whole_secret_tombstone-a8b6571b1f4aabd4)
+    Finished `test` profile [unoptimized] target(s) in 0.03s
+     Running unittests src/lib.rs (/opt/cgjob/target/debug/deps/zeropw-007970ffd6770fca)
+    Finished `test` profile [unoptimized] target(s) in 0.06s
+   Doc-tests zeropw
