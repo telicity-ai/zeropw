@@ -1,0 +1,236 @@
+{
+  "actual_model": "gpt-6.1-sol",
+  "actual_reviews_or_acceptance": false,
+  "artifacts": {
+    "32-hold-final-collect.stdout": {
+      "bytes": 29286400,
+      "mode": 420,
+      "path": "32-hold-final-collect.stdout",
+      "sha256": "59a69c97dd17cef14321ea8a48260d5e5b0bf88be9e481df1187092c727227fa"
+    },
+    "LINUX-NOTRUN.json": {
+      "bytes": 7939,
+      "mode": 420,
+      "path": "LINUX-NOTRUN.json",
+      "sha256": "98c691f021338958271a7f9dc6eeefba92dd8c5642cd643f06bd110ea65b6d87"
+    },
+    "OWN-RESOURCE-HOLD.json": {
+      "bytes": 15227,
+      "mode": 420,
+      "path": "OWN-RESOURCE-HOLD.json",
+      "sha256": "6d74313d87dd7badb8417c43b70734305d2502c9f20aefd1bdf8ab0e6b659542"
+    },
+    "WORKER-REPORT.md": {
+      "bytes": 13422,
+      "mode": 420,
+      "path": "WORKER-REPORT.md",
+      "sha256": "933bbf29198ae5c44e13c0dfb6cb1f993339416cf28ed873b1a75df2dbda3d78"
+    },
+    "baseline-source.json": {
+      "bytes": 367161,
+      "mode": 420,
+      "path": "baseline-source.json",
+      "sha256": "10ffc557dd7b7738de3d768f46084d43df25b49e48021a8c8fd3987ef515e5a8"
+    },
+    "candidate-source-binding.json": {
+      "bytes": 838,
+      "mode": 420,
+      "path": "candidate-source-binding.json",
+      "sha256": "2633aedcf2cf5fb2417c8630a185534ab872e995f85e769defe855922698924a"
+    },
+    "changed-source-bindings.json": {
+      "bytes": 1594,
+      "mode": 420,
+      "path": "changed-source-bindings.json",
+      "sha256": "a906503161cddb1c02b2747fa6bf07155e298ee278418f0b99b026ca353c9a2f"
+    },
+    "execution-history.json": {
+      "bytes": 67389,
+      "mode": 420,
+      "path": "execution-history.json",
+      "sha256": "5b58013c1ad5b416812d81604f3e74d1d6dbd2a5b2c8f64aa0cdfe94130538b3"
+    },
+    "export-integrity.json": {
+      "bytes": 300,
+      "mode": 420,
+      "path": "export-integrity.json",
+      "sha256": "d8983122e4e6bad8668dc0506d2122861342886a076225f80f700b2d1321e317"
+    },
+    "final-host-source-audit.json": {
+      "bytes": 672,
+      "mode": 420,
+      "path": "final-host-source-audit.json",
+      "sha256": "4e7c91e2a14a1db77e1af0dc1e5d34e2807b3e4d6a3cac764564a07640a76f18"
+    },
+    "final-source.json": {
+      "bytes": 367655,
+      "mode": 420,
+      "path": "final-source.json",
+      "sha256": "6d671db58e54fa2d31b13c010942b251032a484d0c782329db84ae6ff97b05f1"
+    },
+    "full-source.tar.gz": {
+      "bytes": 7574592,
+      "mode": 420,
+      "path": "full-source.tar.gz",
+      "sha256": "8e4cb2530cc274f5c6f9d4dfda150e58411d34260ea901e85ca82f97952b0915"
+    },
+    "implementation.patch": {
+      "bytes": 84352,
+      "mode": 420,
+      "path": "implementation.patch",
+      "sha256": "c3721a7e8cd51aeec8808e48ec5b41c3165132f7e13e0f3c89c5c092d278b23c"
+    },
+    "launch-NOTRUN.json": {
+      "bytes": 333,
+      "mode": 420,
+      "path": "launch-NOTRUN.json",
+      "sha256": "cb354fe422283e3d7327dfcb00db1d7d2fd46ab951a0fc08b535b997d06cbbc7"
+    },
+    "model-and-input-bindings.json": {
+      "bytes": 2464,
+      "mode": 420,
+      "path": "model-and-input-bindings.json",
+      "sha256": "ecf23d5277530791462166728c129b76cf7b7d76731da592be2a4535d2064f65"
+    },
+    "native-final-collection-manifest.json": {
+      "bytes": 27892,
+      "mode": 420,
+      "path": "native-final-collection-manifest.json",
+      "sha256": "99dbd2a7271868b3135d7d96612ad2fff83605260457d15587a84214bd332f5a"
+    },
+    "native-final/control/cache-before.json": {
+      "bytes": 2471594,
+      "mode": 420,
+      "path": "native-final/control/cache-before.json",
+      "sha256": "3cc423d09cbdfc65e25e6111163c61967d48bcc6c9cad4dfb65c486190afa945"
+    },
+    "native-final/evidence/FINAL-NATIVE-SUMMARY.json": {
+      "bytes": 47310,
+      "mode": 420,
+      "path": "native-final/evidence/FINAL-NATIVE-SUMMARY.json",
+      "sha256": "4be73b158c25b67c600b5dcfaa187747310edf5a4689f66ecdb82f428b0931a0"
+    },
+    "native-final/evidence/OWN-GUEST-RESOURCE-HOLD.json": {
+      "bytes": 6614,
+      "mode": 420,
+      "path": "native-final/evidence/OWN-GUEST-RESOURCE-HOLD.json",
+      "sha256": "b61fa6f4ad2b399dde77de9eb70aabf98b390a96cd1113c119e9e675879004a6"
+    },
+    "native-final/evidence/cache-after.json": {
+      "bytes": 2471594,
+      "mode": 420,
+      "path": "native-final/evidence/cache-after.json",
+      "sha256": "3cc423d09cbdfc65e25e6111163c61967d48bcc6c9cad4dfb65c486190afa945"
+    },
+    "oracle-map.json": {
+      "bytes": 13665,
+      "mode": 420,
+      "path": "oracle-map.json",
+      "sha256": "bffbfaa49d41a9c71e107ac9c6f0c0e55ad2057627ac83870cf1843ac2bdebe9"
+    },
+    "protected-audit.json": {
+      "bytes": 800306,
+      "mode": 420,
+      "path": "protected-audit.json",
+      "sha256": "07ea35c26c51700cfa55528fcd931e77575974ae5431242d28c77ef1b3b7f05b"
+    },
+    "remaining-holds.json": {
+      "bytes": 1280,
+      "mode": 420,
+      "path": "remaining-holds.json",
+      "sha256": "35ddc6cb94a7b97c479ed1b6a777753670006ff0acfb91e962e9f9761fee5fb7"
+    },
+    "schema-api-lock-durability-error-map.json": {
+      "bytes": 5505,
+      "mode": 420,
+      "path": "schema-api-lock-durability-error-map.json",
+      "sha256": "ed39da8ddb873aaa27fca35a357886786da883d86802709de461166b7da53701"
+    }
+  },
+  "changed_file_complete_bindings": {
+    "rust/src/team/compaction_heads.rs": {
+      "after": {
+        "blob": "c51693518a49c260e24b90787c71176f2fd293fe",
+        "bytes": 30361,
+        "git_mode": "100644",
+        "mode": 420,
+        "sha256": "706744e75c6f1703a2e10d58a4fa9f199bd1e9d81335cdff971503f90d6e5b9c"
+      },
+      "before": null
+    },
+    "rust/src/team/mod.rs": {
+      "after": {
+        "blob": "b6f3448b02f2f80f96aa67369708958573ba581e",
+        "bytes": 7905,
+        "git_mode": "100644",
+        "mode": 420,
+        "sha256": "3cb4f6fc79e18b76465731841f31b3407256308492c4f97208b5b4bdaf8c0723"
+      },
+      "before": {
+        "blob": "6b2d0fa0dae402c0ec836d1ce21dfa972eccf114",
+        "bytes": 7883,
+        "git_mode": "100644",
+        "mode": 420,
+        "sha256": "1902d781a57a11e63bd75e84422782312cc11d4bbe4e469c77980f19f23292c0"
+      }
+    },
+    "rust/src/team/sync.rs": {
+      "after": {
+        "blob": "cc06f2308aaa40f151f81ce68741f46d0f2bc7e0",
+        "bytes": 389837,
+        "git_mode": "100644",
+        "mode": 420,
+        "sha256": "444bad0d54e74ffde9c4a8aca42374fb511fa7d52d5341d13bb0ad64069bcbb8"
+      },
+      "before": {
+        "blob": "b652cc99e8cd9d8440ac0875f880344905a07e65",
+        "bytes": 365712,
+        "git_mode": "100644",
+        "mode": 420,
+        "sha256": "64582265ed3df0555968a5811b1c49c13e8eefbb1e96454e512782e37061ec4a"
+      }
+    },
+    "rust/tests/team_compaction_heads.rs": {
+      "after": {
+        "blob": "adef2f86af1b1264ee4bdbe4cbbbbbdda8466a7b",
+        "bytes": 23755,
+        "git_mode": "100644",
+        "mode": 420,
+        "sha256": "c72edd798d0e89ba7130532f8014311383b3e4efaae53619a86498ce30108795"
+      },
+      "before": null
+    }
+  },
+  "commit_or_index_or_ref_operations": false,
+  "complete_remaining_file_bindings": "ARTIFACT-CATALOGUE.json + SHA256SUMS, bound by FREEZE.json",
+  "effective_provider_service_tier": "NOT_INDEPENDENTLY_EXPOSED",
+  "linux": "NOT_ASSIGNED / NOTRUN",
+  "native_validation": "112 steps / 107 integration targets / 1843 passed / 0 failed / 5 ignored; focused13+11 each profile;14 exact selectors one each; source/cache/features/privacy audits pass",
+  "no_further_runtime_calls_after_last_collection": true,
+  "overall_two_platform_validation": "INCOMPLETE",
+  "own_resources": "HOLD_UNEXPLAINED_SURVIVOR_RELEASE_NOT_CLAIMED",
+  "published_changes": false,
+  "reasoning_effort": "ultra",
+  "requested_service_tier": "default",
+  "schema": "zeropw-compaction-heads-uncommitted-artifact-bindings-v1",
+  "source": {
+    "base_full_tree": "8c0f2004a5fb8515db392abb30e52606e20402ca",
+    "base_head": "65a3105c1ff4b491a613b2e27631cf9df56727f4",
+    "baseline_files": 1372,
+    "changed": [
+      "rust/src/team/compaction_heads.rs",
+      "rust/src/team/mod.rs",
+      "rust/src/team/sync.rs",
+      "rust/tests/team_compaction_heads.rs"
+    ],
+    "desktop_tree_DATA": "2413844c89265a3e239be2372d34b1e6e1b2d4bb",
+    "final_files": 1374,
+    "final_full_tree_DATA": "fbf13d73d270e441dd574cf592609d7d8b38dc6d",
+    "final_rust_tree_DATA": "afc41fcb5d55aaec2bc2fead7c7d8a94f312cc9f",
+    "mod_rs_change": "EXACT private module declaration only",
+    "not_a_commit": true,
+    "old_sync_prefix_including_existing_tests": "EXACT except authorized import",
+    "protected_existing_exact": 1370,
+    "source_manifest_sha256": "6d671db58e54fa2d31b13c010942b251032a484d0c782329db84ae6ff97b05f1"
+  }
+}

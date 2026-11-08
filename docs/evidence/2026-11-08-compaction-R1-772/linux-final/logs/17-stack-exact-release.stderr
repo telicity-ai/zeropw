@@ -1,0 +1,3 @@
+   Compiling zeropw v0.2.0 (/opt/cgjob/r1-r3-src/rust)
+    Finished `release` profile [optimized] target(s) in 3.85s
+     Running tests/team_checkpoint_admission.rs (/opt/cgjob/target/release/deps/team_checkpoint_admission-5892b3263a07a58d)

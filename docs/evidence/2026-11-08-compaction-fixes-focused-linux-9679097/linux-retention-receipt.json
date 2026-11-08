@@ -1,0 +1,10 @@
+{
+  "ended_utc": "2026-11-08T08:16:26.606597+00:00",
+  "exit_code": 0,
+  "timeout": false,
+  "own_host_child_wait": true,
+  "elapsed_seconds": 1.577,
+  "state": "STOP_COMMAND_COMPLETED_ROOT_RETAINS_INSTANCE_AND_DISKS",
+  "test_proof": "none; no new test/individual historicaljoin/physicalerasure claims",
+  "original_native_Go_HOLD": "UNCHANGED"
+}

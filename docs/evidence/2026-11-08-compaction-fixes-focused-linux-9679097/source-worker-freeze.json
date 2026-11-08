@@ -1,0 +1,99 @@
+{
+  "schema": "Sol0102-source-only-freeze-v1",
+  "frozen_at_utc": "2026-11-08T07:49:42.575017+00:00",
+  "status": "FROZEN_UNCOMMITTED_UNVALIDATED_WITH_TWO_TEST_COVERAGE_GAPS",
+  "worktree": "/Users/ys/.t3/worktrees/zeropw/t3-6a537455",
+  "initial_final_HEAD": "adb2f3cf2cb9f5371e0e1047e3805c11d65c1f28",
+  "HEAD_rust_tree": "edf8e2dff3e1079317d87afc71b89405fdc98774",
+  "frozen_source_tree_DATA": "1e854e542a69b66a7ba575ad2faae713b54780ca",
+  "frozen_rust_tree_DATA": "b1208451ac515920c4a749315b0d012b0524c74a",
+  "desktop_tree": "2413844c89265a3e239be2372d34b1e6e1b2d4bb",
+  "tracked_files": 1450,
+  "protected_files": 1445,
+  "changed_files": [
+    "rust/src/team/commit.rs",
+    "rust/src/team/compaction_heads.rs",
+    "rust/src/team/membership.rs",
+    "rust/src/team/sync.rs",
+    "rust/tests/team_compaction_heads.rs"
+  ],
+  "written_new_tests": {
+    "library": 10,
+    "integration": 13,
+    "execution": "NOTRUN"
+  },
+  "preserved_old_test_bodies": 160,
+  "Root03_test_bodies_preserved": 9,
+  "actual_settings": {
+    "provider": "codex",
+    "runtime": "T3 Code through the Codex harness",
+    "actual_model": "gpt-6.1-sol",
+    "reasoning_effort": "ultra",
+    "requested_service_tier": "default",
+    "effective_service_tier": "not independently exposed",
+    "role": "implementation sub-agent; personally performed source-only edits and own standard-library DATA operations",
+    "delegates": 0,
+    "workflows": 0,
+    "other_models": 0,
+    "review_invocations": 0,
+    "runtime_resources_assigned": [],
+    "Linux": "NOT_ASSIGNED/NOTRUN",
+    "macOS": "NOT_ASSIGNED/NOTRUN"
+  },
+  "all_original_findings_and_holds": "OPEN",
+  "Linux": "NOT_ASSIGNED/NOTRUN",
+  "macOS": "NOT_ASSIGNED/NOTRUN",
+  "review_acceptance_release": "NOTRUN/OPEN",
+  "artifacts": {
+    "source.patch": {
+      "bytes": 88066,
+      "sha256": "4ee471af3a8d9d047066f16b9ec4447a7f0159a9af961eb3f3c31579bb9fd3ba"
+    },
+    "source-before.tar": {
+      "bytes": 24535040,
+      "sha256": "75e6761e4d664ba9362d791ad332ec81fa33de8b4c33a58fc6a3451e8254e782"
+    },
+    "source-after.tar": {
+      "bytes": 24616960,
+      "sha256": "7d37c54ff0019d46e56f86455ca9f6e1699e26bfb77815d4f641621cee984019"
+    },
+    "before-manifest.json": {
+      "bytes": 451071,
+      "sha256": "280527b7e09edec66ffa6981b6fc3ca994b3aa902afc293f8056814584b8706e"
+    },
+    "after-manifest.json": {
+      "bytes": 451306,
+      "sha256": "a74750f36f9e514222e9d62c6d673c079b855b5088f6a00bdd51b1a3312afe17"
+    },
+    "protected-diff-audit.json": {
+      "bytes": 252350,
+      "sha256": "ef9eed2c35d66d1dc138b45698c8d364b8ac066f566801420eff50e7b849bfcd"
+    },
+    "test-oracle-map.json": {
+      "bytes": 16630,
+      "sha256": "fc33f1844ce0f0c538208ba12d94003919e6bf0e0d13e6c841a5afb493571cbf"
+    },
+    "validation-matrix.json": {
+      "bytes": 14188,
+      "sha256": "8233fbb12219ab0bc4a2ef24b0ddec84cdccd704e25cb7f822846c5471a3e1c0"
+    },
+    "actual-settings.json": {
+      "bytes": 543,
+      "sha256": "ff4c6a2d9635ad89661b9b4719e3fe512a971bed0f0eafb900dc75bf7629cc1e"
+    },
+    "REPORT.md": {
+      "bytes": 9342,
+      "sha256": "82ba2bb1df4235a673bb171bfbebb224b9fbc5e23daaa1a05163ed8ea862b881"
+    },
+    "final-data-verification.json": {
+      "bytes": 514,
+      "sha256": "04d6f77c399299df0a39d14338f7dd24567dbf99510bb4c1e4a15efd7cda7d24"
+    }
+  },
+  "known_test_gaps": [
+    "A deterministic test forcing the unlocked deferred gap prefilter to become stale specifically before the fresh locked sequence recheck. The new recheck is written; existing still-gap/no-lock and new compact/release tests do not establish that exact interleaving. No new release-entry instrumentation was added outside the closed test-hook scope.",
+    "A dedicated pause inside authorized TeamSync fact-signing disk I/O that independently proves envs availability at that exact I/O point. Production order collects/validates disk state before the envs guard; compact-I/O envs availability and no-send-under-lock tests are written, but do not substitute for this exact fact-signing pause. Only the permitted three authored-wall test inputs were added."
+  ],
+  "no_commit_push_PR_merge_deploy": true,
+  "no_runtime_assignment_or_authority_used": true
+}

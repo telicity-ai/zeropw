@@ -12,6 +12,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use super::commit::{self, Commit, CommitStore, Hlc};
+use super::compaction_heads;
 use super::fold::{self, Facts, FoldResult};
 use super::identity::{DeviceKey, DeviceRecord};
 use super::sync_status::PeerState;
@@ -6480,16 +6481,24 @@ impl TeamSync {
         if !fact_role_ok(&doc, kind, &fp, &target) {
             return Err(Error::policy_denied("team_fact_not_authorized"));
         }
-        let observed = CommitStore::new(self.ctx.state, env_id).all_commits()?;
+        let store = CommitStore::new(self.ctx.state, env_id);
+        let observed = store.all_commits()?;
+        let mut observed_clock = Hlc::default();
+        for commit in &observed {
+            observed_clock.observe(&commit.hlc)?;
+        }
+        compaction_heads::observe_cached_hlcs(&store, &observed, &mut observed_clock)?;
         let hlc = {
             let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             let env = envs
                 .get_mut(env_id)
                 .ok_or_else(|| Error::invalid_input("team_env_unknown"))?;
-            for commit in observed {
-                env.hlc.observe(&commit.hlc)?;
-            }
-            env.hlc.tick(None)
+            env.hlc.observe(&observed_clock.render())?;
+            #[cfg(not(test))]
+            let wall = None;
+            #[cfg(test)]
+            let wall = compaction_heads::testing::author_wall();
+            env.hlc.tick(wall)
         };
         sign_fact(&self.device, env_id, kind, target, &hlc)
     }
@@ -9171,22 +9180,26 @@ impl TeamSync {
     }
 
     pub fn compact(&self, env_id: &str) -> Result<Value> {
-        let (facts, peer_vectors, members) = {
+        // As in refold: StateDir first, then only short in-memory envs access.
+        // Keep writers serialized from fresh input collection through pruning.
+        let state_lock = self.ctx.state.lock()?;
+        let peer_vectors = {
             let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             let env = envs
                 .get(env_id)
                 .ok_or_else(|| Error::not_found("team_env_unknown"))?;
-            (
-                env.facts.clone(),
-                env.peer_vectors.clone(),
-                env.document["members"].clone(),
-            )
+            env.peer_vectors.clone()
         };
+        let (facts, _, _) = load_facts(&self.ctx, env_id)?;
         let store = CommitStore::new(self.ctx.state, env_id);
         let commits = store.all_commits()?;
         if commits.is_empty() {
             return Ok(json!({"env_id":env_id,"removed":0,"blocked_by":[]}));
         }
+        let members =
+            fold::fold_with_snapshot(env_id, commits.clone(), self.ctx.state, Some(&facts), None)?
+                .document["members"]
+                .clone();
         let now = PyInt::from(commit::now_ms());
         let mut cutoff = None;
         for (i, entry) in commits.iter().enumerate() {
@@ -9247,16 +9260,42 @@ impl TeamSync {
             .vector
             .values()
             .fold(PyInt::zero(), |acc, v| PyInt(acc.0 + &v.0));
+        #[cfg(test)]
+        compaction_heads::testing::hit(compaction_heads::testing::Boundary::BeforeLayout)?;
+        compaction_heads::preflight_layout(self.ctx.state, env_id, &total)?;
+        // Use receipt's first public records, including fold-skipped authors.
+        // These records grant neither membership nor wrap/use authority.
+        let records = commit::device_registry(&commits);
+        let prepared =
+            compaction_heads::prepare(self.ctx.state, env_id, &snapshot, &commits, &records)?;
+        #[cfg(test)]
+        compaction_heads::testing::hit(compaction_heads::testing::Boundary::BeforeSnapshot)?;
         fold::save_snapshot(self.ctx.state, env_id, &total, &snapshot)?;
-        fold::save_snapshot_record(
-            self.ctx.state,
-            env_id,
-            &total,
-            &fold::snapshot_record(Some(&facts), &commits),
-        )?;
+        #[cfg(test)]
+        compaction_heads::testing::hit(compaction_heads::testing::Boundary::AfterSnapshot)?;
+        let record = fold::snapshot_record(Some(&facts), &commits);
+        #[cfg(test)]
+        compaction_heads::testing::hit(compaction_heads::testing::Boundary::BeforeRecord)?;
+        fold::save_snapshot_record(self.ctx.state, env_id, &total, &record)?;
+        #[cfg(test)]
+        compaction_heads::testing::hit(compaction_heads::testing::Boundary::AfterRecord)?;
+        let persisted_record = self
+            .ctx
+            .state
+            .read_json(
+                &format!("team/{env_id}/snapshot_records/{total}.json"),
+                Value::Null,
+            )
+            .map_err(|_| Error::state("team_compaction_head_persist_failed"))?;
+        if canon(&persisted_record)
+            .map_err(|_| Error::state("team_compaction_head_persist_failed"))?
+            != canon(&record).map_err(|_| Error::state("team_compaction_head_persist_failed"))?
+        {
+            return Err(Error::state("team_compaction_head_persist_failed"));
+        }
+        compaction_heads::persist_before_prune(self.ctx.state, env_id, &total, prepared)?;
         let mut removed = 0;
         {
-            let _lock = self.ctx.state.lock()?;
             for entry in &commits[..=cutoff] {
                 if entry.ops.iter().any(|op| {
                     [
@@ -9275,8 +9314,16 @@ impl TeamSync {
                     "team/{env_id}/commits/{}/{}.json",
                     entry.author, entry.author_seq
                 ));
+                #[cfg(test)]
+                compaction_heads::testing::hit(compaction_heads::testing::Boundary::BeforeUnlink)?;
                 if std::fs::remove_file(path).is_ok() {
                     removed += 1;
+                    #[cfg(test)]
+                    if removed == 1 {
+                        compaction_heads::testing::hit(
+                            compaction_heads::testing::Boundary::AfterFirstUnlink,
+                        )?;
+                    }
                 }
             }
         }
@@ -9288,6 +9335,7 @@ impl TeamSync {
         {
             env.last_snapshot_total = PyNumber::Int(total.0);
         }
+        drop(state_lock);
         self.refold(env_id)?;
         let _ = self.ctx.audit.record(
             "team_compact",
@@ -9298,5 +9346,3053 @@ impl TeamSync {
             },
         );
         Ok(json!({"env_id":env_id,"removed":removed,"blocked_by":[]}))
+    }
+}
+
+#[cfg(test)]
+mod compaction_heads_tests {
+    use super::compaction_heads::testing::{self, Boundary};
+    use super::*;
+    use crate::context::Config;
+    use crate::team::envelope;
+    use crate::team::transport::{InProcessTransport, MembershipCheck};
+    use tempfile::TempDir;
+
+    const VERSION: &str = "0011223344556677";
+    const GENERATION: &str = "0123456789abcdef";
+
+    struct Fixture {
+        _root: TempDir,
+        ctx: Arc<Context>,
+        team: Arc<TeamSync>,
+        env: String,
+        fp: String,
+    }
+    impl Fixture {
+        fn new() -> Self {
+            let root = TempDir::new().unwrap();
+            let ctx = Arc::new(
+                Context::initialize(
+                    root.path().join("state"),
+                    "synthetic-admin",
+                    "synthetic-recovery",
+                    Config::default(),
+                    crate::clock::system(),
+                )
+                .unwrap(),
+            );
+            let device = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+            let fp = device.fingerprint().unwrap();
+            let env = format!("{fp}-0123456789abcdef0123456789abcdef");
+            let wrap =
+                envelope::wrap_dek(&[7; 32], &env, GENERATION, &device.record().unwrap()).unwrap();
+            let init = commit::sign_commit(&device, &env, 1, "1000000-0000", &BTreeMap::new(), vec![
+                json!({"op":"env.init","owner_device":device.record().unwrap().to_dict(),
+                    "owner_name":"synthetic-owner","generation_id":GENERATION,"wraps":{fp.clone():wrap}}),
+            ]).unwrap();
+            let ciphertext =
+                envelope::encrypt_secret(&[7; 32], &env, "gone", VERSION, b"synthetic-head-value")
+                    .unwrap();
+            let put = commit::sign_commit(&device, &env, 2, "1000001-0007", &BTreeMap::from([(fp.clone(), 1.into())]), vec![
+                json!({"op":"secret.put_version","secret_id":"gone","kind":"api_key",
+                    "version_id":VERSION,"generation_id":GENERATION,"ciphertext":ciphertext,"public":{}}),
+            ]).unwrap();
+            let settings = commit::sign_commit(
+                &device,
+                &env,
+                3,
+                "1000002-0007",
+                &BTreeMap::from([(fp.clone(), 2.into())]),
+                vec![json!({"op":"settings.update","sync_interval_seconds":19})],
+            )
+            .unwrap();
+            let store = CommitStore::new(ctx.state, &env);
+            for entry in [init, put, settings] {
+                store.append(&entry).unwrap();
+            }
+            let empty: MembershipCheck = Arc::new(|_, _| None);
+            let transport = Arc::new(InProcessTransport::new(device.clone(), empty));
+            let team = TeamSync::new(ctx.clone(), transport, device);
+            team.register_env(&env).unwrap();
+            testing::reset(None);
+            Self {
+                _root: root,
+                ctx,
+                team,
+                env,
+                fp,
+            }
+        }
+        fn path(&self, seq: i64) -> std::path::PathBuf {
+            self.ctx
+                .state
+                .path
+                .join(format!("team/{}/commits/{}/{seq}.json", self.env, self.fp))
+        }
+        fn reopen_literal_oracle(&self) {
+            let ctx = Context::open(
+                &self.ctx.state.path,
+                Config::default(),
+                crate::clock::system(),
+            )
+            .unwrap();
+            let loaded = crate::team::membership::load_environment(&ctx, &self.env).unwrap();
+            assert_eq!(loaded.vector, BTreeMap::from([(self.fp.clone(), 3.into())]));
+            assert_eq!(loaded.document["settings"]["sync_interval_seconds"], 19);
+            assert_eq!(loaded.version_order["gone"], json!([VERSION]));
+            assert_eq!(
+                loaded.document["secrets"]["gone"]["versions"][VERSION]["status"],
+                "staged"
+            );
+        }
+    }
+    fn assert_order(events: &[Boundary]) {
+        for unlink in events
+            .iter()
+            .enumerate()
+            .filter_map(|(index, event)| (*event == Boundary::BeforeUnlink).then_some(index))
+        {
+            for required in [
+                Boundary::SnapshotDurable,
+                Boundary::RecordDurable,
+                Boundary::CacheDurable,
+                Boundary::BarrierComplete,
+            ] {
+                assert!(
+                    events[..unlink].contains(&required),
+                    "missing {required:?} before unlink"
+                );
+            }
+        }
+    }
+
+    fn publication_files(directory: &std::path::Path) -> BTreeMap<String, Vec<u8>> {
+        let mut files = BTreeMap::new();
+        for name in ["snapshots", "snapshot_records"] {
+            let parent = directory.join(name);
+            if parent.is_dir() {
+                for entry in std::fs::read_dir(parent).unwrap() {
+                    let path = entry.unwrap().path();
+                    if path.is_file() {
+                        files.insert(
+                            format!("{name}/{}", path.file_name().unwrap().to_str().unwrap()),
+                            std::fs::read(path).unwrap(),
+                        );
+                    }
+                }
+            }
+        }
+        let cache = directory.join("compaction_heads.json");
+        if cache.is_file() {
+            files.insert("cache".into(), std::fs::read(cache).unwrap());
+        }
+        files
+    }
+
+    fn change_before_layout(f: &Fixture, change: impl FnOnce()) -> (Result<Value>, Vec<Boundary>) {
+        let (entered_tx, entered_rx) = mpsc::sync_channel(0);
+        let (resume_tx, resume_rx) = mpsc::sync_channel(0);
+        let team = f.team.clone();
+        let env = f.env.clone();
+        thread::scope(|scope| {
+            let child = scope.spawn(move || {
+                testing::reset(None);
+                testing::pause(Boundary::BeforeLayout, entered_tx, resume_rx);
+                let result = team.compact(&env);
+                let events = testing::events();
+                testing::reset(None);
+                (result, events)
+            });
+            entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            change();
+            resume_tx.send(()).unwrap();
+            child.join().unwrap()
+        })
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn compaction_heads_dangling_root_team_and_env_refuse_before_publication() {
+        for level in ["root", "team", "env"] {
+            let f = Fixture::new();
+            let environment = f.ctx.state.path.join(format!("team/{}", f.env));
+            let baseline = publication_files(&environment);
+            let originals: Vec<_> = (1..=3)
+                .map(|seq| std::fs::read(f.path(seq)).unwrap())
+                .collect();
+            let path = match level {
+                "root" => f.ctx.state.path.clone(),
+                "team" => f.ctx.state.path.join("team"),
+                _ => environment.clone(),
+            };
+            let backup = f._root.path().join("retained-layout");
+            let missing = f._root.path().join("missing-target");
+            let retained_environment = match level {
+                "root" => backup.join(format!("team/{}", f.env)),
+                "team" => backup.join(&f.env),
+                _ => backup.clone(),
+            };
+            // The deterministic gate is after reads/cut/no-op gates, while the
+            // real state lock is held. No original is deleted by this mutation.
+            let (result, events) = change_before_layout(&f, || {
+                std::fs::rename(&path, &backup).unwrap();
+                std::os::unix::fs::symlink(&missing, &path).unwrap();
+            });
+            let error = result.unwrap_err();
+            assert_eq!(error.reason, "team_compaction_layout_unsupported");
+            assert!(error.detail.is_empty());
+            assert!(!events.contains(&Boundary::BeforeSnapshot));
+            assert!(!events.contains(&Boundary::BeforeUnlink));
+            assert_eq!(publication_files(&retained_environment), baseline);
+            for (index, bytes) in originals.iter().enumerate() {
+                assert_eq!(
+                    std::fs::read(retained_environment.join(format!(
+                        "commits/{}/{}.json",
+                        f.fp,
+                        index + 1
+                    )))
+                    .unwrap(),
+                    *bytes
+                );
+            }
+            std::fs::remove_file(&path).unwrap();
+            std::fs::rename(backup, path).unwrap();
+            f.reopen_literal_oracle();
+        }
+    }
+
+    #[test]
+    fn compaction_heads_nonregular_prospective_paths_refuse_before_publication() {
+        for relative in [
+            "snapshots",
+            "snapshot_records",
+            "snapshots/3.json",
+            "snapshot_records/3.json",
+            "compaction_heads.json",
+        ] {
+            let f = Fixture::new();
+            let environment = f.ctx.state.path.join(format!("team/{}", f.env));
+            let baseline = publication_files(&environment);
+            let originals: Vec<_> = (1..=3)
+                .map(|seq| std::fs::read(f.path(seq)).unwrap())
+                .collect();
+            let path = environment.join(relative);
+            let backup = f._root.path().join("retained-prospective-path");
+            let existed = path.exists();
+            let destination = relative.ends_with(".json");
+            let (result, events) = change_before_layout(&f, || {
+                if existed {
+                    std::fs::rename(&path, &backup).unwrap();
+                }
+                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+                if destination {
+                    std::fs::create_dir(&path).unwrap();
+                } else {
+                    std::fs::write(&path, b"synthetic-layout-file").unwrap();
+                }
+            });
+            let error = result.unwrap_err();
+            assert_eq!(error.reason, "team_compaction_layout_unsupported");
+            assert!(error.detail.is_empty());
+            assert!(!events.contains(&Boundary::BeforeSnapshot));
+            assert!(!events.contains(&Boundary::BeforeUnlink));
+            if destination {
+                std::fs::remove_dir(&path).unwrap();
+            } else {
+                std::fs::remove_file(&path).unwrap();
+            }
+            if existed {
+                std::fs::rename(backup, path).unwrap();
+            }
+            assert_eq!(publication_files(&environment), baseline);
+            for (index, bytes) in originals.iter().enumerate() {
+                assert_eq!(std::fs::read(f.path(index as i64 + 1)).unwrap(), *bytes);
+            }
+            f.reopen_literal_oracle();
+        }
+    }
+
+    #[test]
+    fn compaction_heads_each_snapshot_readback_rejects_nonregular_identical_content() {
+        use super::compaction_heads::testing::SnapshotReplacement;
+
+        for boundary in [Boundary::AfterRecord, Boundary::BeforeReadback] {
+            for kind in 0..3 {
+                #[cfg(not(unix))]
+                if kind == 2 {
+                    continue;
+                }
+                let f = Fixture::new();
+                let original2 = std::fs::read(f.path(2)).unwrap();
+                let original3 = std::fs::read(f.path(3)).unwrap();
+                let snapshot = f
+                    .ctx
+                    .state
+                    .path
+                    .join(format!("team/{}/snapshots/3.json", f.env));
+                let replacement = match kind {
+                    0 => SnapshotReplacement::Missing,
+                    1 => SnapshotReplacement::Directory,
+                    #[cfg(unix)]
+                    _ => SnapshotReplacement::IdenticalSymlink(
+                        f._root.path().join("identical-snapshot.json"),
+                    ),
+                    #[cfg(not(unix))]
+                    _ => unreachable!(),
+                };
+                testing::replace_snapshot(
+                    boundary,
+                    f._root.path().to_path_buf(),
+                    snapshot.clone(),
+                    replacement,
+                );
+                let error = f.team.compact(&f.env).unwrap_err();
+                let events = testing::events();
+                testing::reset(None);
+                assert_eq!(error.reason, "team_compaction_head_persist_failed");
+                assert!(error.detail.is_empty());
+                assert!(events.contains(&boundary));
+                assert!(!events.contains(&Boundary::BeforeUnlink));
+                assert_eq!(std::fs::read(f.path(2)).unwrap(), original2);
+                assert_eq!(std::fs::read(f.path(3)).unwrap(), original3);
+                #[cfg(unix)]
+                if kind == 2 {
+                    assert!(std::fs::symlink_metadata(&snapshot).unwrap().is_symlink());
+                    assert_eq!(
+                        std::fs::read(&snapshot).unwrap(),
+                        std::fs::read(f._root.path().join("identical-snapshot.json")).unwrap()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn compaction_heads_real_compactor_fault_prefixes_reopen_without_losing_data() {
+        for boundary in [
+            Boundary::BeforeSnapshot,
+            Boundary::AfterSnapshot,
+            Boundary::BeforeRecord,
+            Boundary::AfterRecord,
+            Boundary::DirectorySync,
+            Boundary::SnapshotDurable,
+            Boundary::RecordDurable,
+            Boundary::BeforeCacheWrite,
+            Boundary::AfterCacheWrite,
+            Boundary::CacheDurable,
+            Boundary::BeforeReadback,
+            Boundary::BarrierComplete,
+            Boundary::BeforeUnlink,
+            Boundary::AfterFirstUnlink,
+        ] {
+            let f = Fixture::new();
+            testing::reset(Some(boundary));
+            let error = f.team.compact(&f.env).unwrap_err();
+            let events = testing::events();
+            testing::reset(None);
+            assert_eq!(error.reason, "team_compaction_head_persist_failed");
+            assert!(error.detail.is_empty());
+            assert_order(&events);
+            assert!(f.path(1).is_file());
+            assert_eq!(f.path(2).is_file(), boundary != Boundary::AfterFirstUnlink);
+            assert!(f.path(3).is_file());
+            if boundary == Boundary::AfterFirstUnlink {
+                let cache = f
+                    .ctx
+                    .state
+                    .read_json(
+                        &format!("team/{}/compaction_heads.json", f.env),
+                        Value::Null,
+                    )
+                    .unwrap();
+                assert_eq!(cache["vector"], json!({f.fp.clone():3}));
+                assert_eq!(cache["heads"][0]["hlc"], "1000002-0007");
+                assert_eq!(cache["heads"][0]["author_seq"], 3);
+                assert!(
+                    f.ctx
+                        .state
+                        .exists(&format!("team/{}/snapshots/3.json", f.env))
+                );
+                assert!(
+                    f.ctx
+                        .state
+                        .exists(&format!("team/{}/snapshot_records/3.json", f.env))
+                );
+            }
+            // Deterministic stopped-effect prefixes exercise ordinary recovery;
+            // they do not simulate a physical power failure or fsync hardware.
+            f.reopen_literal_oracle();
+        }
+    }
+
+    #[test]
+    fn compaction_heads_every_successful_unlink_follows_both_durable_images_and_readback() {
+        let f = Fixture::new();
+        assert_eq!(f.team.compact(&f.env).unwrap()["removed"], 2);
+        let events = testing::events();
+        testing::reset(None);
+        assert_order(&events);
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| **event == Boundary::BeforeUnlink)
+                .count(),
+            2
+        );
+        assert!(!f.path(2).exists() && !f.path(3).exists());
+        f.reopen_literal_oracle();
+    }
+
+    #[test]
+    fn compaction_heads_real_snapshot_record_and_cache_rename_failures_precede_unlink() {
+        for directory in ["snapshots", "snapshot_records"] {
+            let f = Fixture::new();
+            let parent = f.ctx.state.path.join(format!("team/{}/{directory}", f.env));
+            std::fs::create_dir_all(&parent).unwrap();
+            let boundary = if directory == "snapshots" {
+                Boundary::BeforeSnapshot
+            } else {
+                Boundary::BeforeRecord
+            };
+            testing::action(boundary, parent.join("3.json"), None);
+            assert!(f.team.compact(&f.env).is_err());
+            let events = testing::events();
+            testing::reset(None);
+            assert!(events.contains(&boundary));
+            assert!(!events.contains(&Boundary::BeforeUnlink));
+            assert!(f.path(2).is_file() && f.path(3).is_file());
+        }
+        let f = Fixture::new();
+        testing::action(
+            Boundary::BeforeCacheWrite,
+            f.ctx
+                .state
+                .path
+                .join(format!("team/{}/compaction_heads.json", f.env)),
+            None,
+        );
+        assert_eq!(
+            f.team.compact(&f.env).unwrap_err().reason,
+            "team_compaction_head_persist_failed"
+        );
+        assert!(!testing::events().contains(&Boundary::BeforeUnlink));
+        testing::reset(None);
+        assert!(f.path(2).is_file() && f.path(3).is_file());
+    }
+
+    #[test]
+    fn compaction_heads_actual_corrupt_readback_refuses_and_ordinary_load_ignores_cache() {
+        let f = Fixture::new();
+        testing::action(
+            Boundary::BeforeReadback,
+            f.ctx
+                .state
+                .path
+                .join(format!("team/{}/compaction_heads.json", f.env)),
+            Some(b"synthetic-invalid-cache".to_vec()),
+        );
+        let error = f.team.compact(&f.env).unwrap_err();
+        assert_eq!(error.reason, "team_compaction_head_persist_failed");
+        assert!(!format!("{error:?}").contains("synthetic-invalid-cache"));
+        assert!(!testing::events().contains(&Boundary::BeforeUnlink));
+        testing::reset(None);
+        assert!(f.path(2).is_file() && f.path(3).is_file());
+        f.reopen_literal_oracle();
+    }
+
+    #[test]
+    fn compaction_heads_fresh_admitted_facts_override_stale_env_cache() {
+        let f = Fixture::new();
+        let fact = sign_fact(
+            &f.team.device,
+            &f.env,
+            "secret_deleted",
+            json!({"secret_id":"gone"}),
+            "1000003-0000",
+        )
+        .unwrap();
+        {
+            let _lock = f.ctx.state.lock().unwrap();
+            receipt_fact(&f.ctx, &fact).unwrap();
+            f.ctx
+                .state
+                .append_line(
+                    &format!("team/{}/facts.jsonl", f.env),
+                    &pyjson::dumps(&fact.to_dict(), DumpOptions::compact_sorted()).unwrap(),
+                )
+                .unwrap();
+        }
+        assert!(
+            f.team
+                .envs
+                .lock()
+                .unwrap()
+                .get(&f.env)
+                .unwrap()
+                .facts
+                .deleted_secrets
+                .is_empty()
+        );
+        assert_eq!(f.team.compact(&f.env).unwrap()["removed"], 2);
+        let loaded = crate::team::membership::load_environment(&f.ctx, &f.env).unwrap();
+        assert_eq!(loaded.document["secrets"]["gone"]["deleted"], true);
+        assert_eq!(
+            loaded.document["secrets"]["gone"]["versions"][VERSION]["status"],
+            "revoked"
+        );
+        let (facts, _, _) = load_facts(&f.ctx, &f.env).unwrap();
+        assert!(facts.tombstone_facts.contains_key(&fact.hash().unwrap()));
+    }
+
+    #[test]
+    fn compaction_heads_rotation_and_self_removal_witnesses_and_fact_records_stay_live() {
+        for self_removal in [false, true] {
+            let f = Fixture::new();
+            let peer = DeviceKey::generate();
+            let peer_fp = peer.fingerprint().unwrap();
+            let wrap =
+                envelope::wrap_dek(&[7; 32], &f.env, GENERATION, &peer.record().unwrap()).unwrap();
+            let add = commit::sign_commit(
+                &f.team.device,
+                &f.env,
+                4,
+                "1000003-0000",
+                &BTreeMap::from([(f.fp.clone(), 3.into())]),
+                vec![
+                    json!({"op":"member.add","device":peer.record().unwrap().to_dict(),
+                    "name":"synthetic-peer","role":"admin","wraps":{GENERATION:wrap}}),
+                ],
+            )
+            .unwrap();
+            let ciphertext = envelope::encrypt_secret(
+                &[7; 32],
+                &f.env,
+                "idle",
+                VERSION,
+                b"synthetic-idle-value",
+            )
+            .unwrap();
+            let data = commit::sign_commit(&peer, &f.env, 1, "1000004-0000", &BTreeMap::from([(f.fp.clone(), 4.into())]), vec![
+                json!({"op":"secret.put_version","secret_id":"idle","kind":"api_key",
+                    "generation_id":GENERATION,"version_id":VERSION,"ciphertext":ciphertext,"public":{}}),
+            ]).unwrap();
+            let author = if self_removal { &peer } else { &f.team.device };
+            let fact = sign_fact(
+                author,
+                &f.env,
+                "member_removed",
+                json!({"fingerprint":peer_fp}),
+                "1000006-0000",
+            )
+            .unwrap();
+            let seen = BTreeMap::from([(f.fp.clone(), 4.into()), (peer_fp.clone(), 1.into())]);
+            let witness = if self_removal {
+                commit::sign_commit(
+                    &peer,
+                    &f.env,
+                    2,
+                    "1000005-0000",
+                    &seen,
+                    vec![json!({"op":"member.remove","fingerprint":peer_fp})],
+                )
+                .unwrap()
+            } else {
+                let generation = "fedcba9876543210";
+                let wrap = envelope::wrap_dek(
+                    &[8; 32],
+                    &f.env,
+                    generation,
+                    &f.team.device.record().unwrap(),
+                )
+                .unwrap();
+                commit::sign_commit(&f.team.device, &f.env, 5, "1000005-0000", &seen, vec![json!({"op":"dek.rotate",
+                    "generation_id":generation,"wraps":{f.fp.clone():wrap},"removal_fact_hash":fact.hash().unwrap()})]).unwrap()
+            };
+            let witness_path = f.ctx.state.path.join(format!(
+                "team/{}/commits/{}/{}.json",
+                f.env, witness.author, witness.author_seq
+            ));
+            {
+                let _lock = f.ctx.state.lock().unwrap();
+                let store = CommitStore::new(f.ctx.state, &f.env);
+                for entry in [&add, &data, &witness] {
+                    store.append(entry).unwrap();
+                }
+                receipt_fact(&f.ctx, &fact).unwrap();
+                f.ctx
+                    .state
+                    .append_line(
+                        &format!("team/{}/facts.jsonl", f.env),
+                        &pyjson::dumps(&fact.to_dict(), DumpOptions::compact_sorted()).unwrap(),
+                    )
+                    .unwrap();
+            }
+            let original_witness = std::fs::read(&witness_path).unwrap();
+            let fact_bytes =
+                std::fs::read(f.ctx.state.path.join(format!("team/{}/facts.jsonl", f.env)))
+                    .unwrap();
+            assert_eq!(f.team.compact(&f.env).unwrap()["removed"], 3);
+            assert_eq!(std::fs::read(witness_path).unwrap(), original_witness);
+            assert_eq!(
+                std::fs::read(f.ctx.state.path.join(format!("team/{}/facts.jsonl", f.env)))
+                    .unwrap(),
+                fact_bytes
+            );
+            // owner:4 + peer:2, or owner:5 + peer:1, both total six.
+            let record = f
+                .ctx
+                .state
+                .read_json(
+                    &format!("team/{}/snapshot_records/6.json", f.env),
+                    Value::Null,
+                )
+                .unwrap();
+            assert_eq!(record["bounds"][&peer_fp], if self_removal { 2 } else { 1 });
+            assert_eq!(
+                record["self_placed"],
+                if self_removal {
+                    json!([peer_fp.clone()])
+                } else {
+                    json!([])
+                }
+            );
+            assert_eq!(
+                record["pending"],
+                if self_removal {
+                    json!([])
+                } else {
+                    json!([[1000006, 0, peer_fp.clone()]])
+                }
+            );
+            let loaded = crate::team::membership::load_environment(&f.ctx, &f.env).unwrap();
+            assert_eq!(loaded.version_order["idle"], json!([VERSION]));
+            assert_eq!(loaded.document["members"][&peer_fp]["status"], "removed");
+            let (facts, _, _) = load_facts(&f.ctx, &f.env).unwrap();
+            assert!(facts.removal_facts.contains_key(&fact.hash().unwrap()));
+        }
+    }
+
+    #[test]
+    fn compaction_heads_lagging_peer_blocks_until_exact_original_vector_coverage() {
+        let f = Fixture::new();
+        let peer = DeviceKey::generate();
+        let peer_fp = peer.fingerprint().unwrap();
+        let wrap =
+            envelope::wrap_dek(&[7; 32], &f.env, GENERATION, &peer.record().unwrap()).unwrap();
+        let add = commit::sign_commit(&f.team.device, &f.env, 4, "1000003-0000", &BTreeMap::from([(f.fp.clone(), 3.into())]), vec![json!({
+            "op":"member.add","device":peer.record().unwrap().to_dict(),"name":"peer","role":"user","wraps":{GENERATION:wrap}})]).unwrap();
+        {
+            let _lock = f.ctx.state.lock().unwrap();
+            CommitStore::new(f.ctx.state, &f.env).append(&add).unwrap();
+            f.team
+                .envs
+                .lock()
+                .unwrap()
+                .get_mut(&f.env)
+                .unwrap()
+                .peer_vectors
+                .insert(peer_fp.clone(), BTreeMap::from([(f.fp.clone(), 3.into())]));
+        }
+        assert_eq!(
+            f.team.compact(&f.env).unwrap(),
+            json!({"env_id":f.env,"removed":0,"blocked_by":[peer_fp.clone()]})
+        );
+        assert!(
+            !f.ctx
+                .state
+                .exists(&format!("team/{}/compaction_heads.json", f.env))
+        );
+        assert!(!testing::events().contains(&Boundary::BeforeSnapshot));
+        f.team
+            .envs
+            .lock()
+            .unwrap()
+            .get_mut(&f.env)
+            .unwrap()
+            .peer_vectors
+            .insert(peer_fp, BTreeMap::from([(f.fp.clone(), 4.into())]));
+        assert_eq!(f.team.compact(&f.env).unwrap()["removed"], 2);
+        let cache = f
+            .ctx
+            .state
+            .read_json(
+                &format!("team/{}/compaction_heads.json", f.env),
+                Value::Null,
+            )
+            .unwrap();
+        assert_eq!(cache["vector"], json!({f.fp.clone():4}));
+    }
+
+    #[test]
+    fn compaction_heads_real_state_holders_and_two_compactors_serialize_without_lost_heads() {
+        let f = Fixture::new();
+        let (entered_tx, entered_rx) = mpsc::sync_channel(0);
+        let (resume_tx, resume_rx) = mpsc::sync_channel(0);
+        let (done_tx, done_rx) = mpsc::channel();
+        let team = f.team.clone();
+        let env = f.env.clone();
+        let first = thread::spawn(move || {
+            testing::reset(None);
+            testing::pause(Boundary::BeforeSnapshot, entered_tx, resume_rx);
+            let result = team.compact(&env);
+            done_tx.send(result).unwrap();
+        });
+        entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (attempt_tx, attempt_rx) = mpsc::channel();
+        let (acquired_tx, acquired_rx) = mpsc::channel();
+        let (writer_done_tx, writer_done_rx) = mpsc::channel();
+        let path = f.ctx.state.path.clone();
+        let commit_path = f.path(2);
+        let writer = thread::spawn(move || {
+            let other = StateDir::new(path);
+            attempt_tx.send(()).unwrap();
+            let _lock = other.lock().unwrap();
+            acquired_tx.send(!commit_path.exists()).unwrap();
+            writer_done_tx.send(()).unwrap();
+        });
+        attempt_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        // This assertion is recorded before releasing the deterministic gate;
+        // no time-based sleep is used to infer serialization.
+        let early_acquisition = acquired_rx.try_recv();
+        let held = matches!(early_acquisition, Err(mpsc::TryRecvError::Empty));
+        let envs_available = f.team.envs.try_lock().is_ok();
+        let (second_tx, second_rx) = mpsc::channel();
+        let team = f.team.clone();
+        let env = f.env.clone();
+        let second = thread::spawn(move || {
+            second_tx.send(team.compact(&env)).unwrap();
+        });
+        resume_tx.send(()).unwrap();
+        let first_result = done_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        let writer_saw_pruned = match early_acquisition {
+            Ok(pruned) => pruned,
+            Err(mpsc::TryRecvError::Empty) => {
+                acquired_rx.recv_timeout(Duration::from_secs(5)).unwrap()
+            }
+            Err(mpsc::TryRecvError::Disconnected) => false,
+        };
+        writer_done_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let second_result = second_rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .unwrap();
+        first.join().unwrap();
+        writer.join().unwrap();
+        second.join().unwrap();
+        assert!(held && envs_available && writer_saw_pruned);
+        assert_eq!(first_result["removed"], 2);
+        assert_eq!(second_result["removed"], 0);
+        let cache = f
+            .ctx
+            .state
+            .read_json(
+                &format!("team/{}/compaction_heads.json", f.env),
+                Value::Null,
+            )
+            .unwrap();
+        assert_eq!(cache["vector"], json!({f.fp.clone():3}));
+        assert_eq!(cache["heads"][0]["author_seq"], 3);
+        f.reopen_literal_oracle();
+    }
+
+    struct ClockSession {
+        ctx: Arc<Context>,
+        env: String,
+        peer: DeviceRecord,
+        sent: Mutex<Vec<Value>>,
+        created: Instant,
+    }
+    impl Session for ClockSession {
+        fn peer(&self) -> DeviceRecord {
+            self.peer.clone()
+        }
+        fn env_id(&self) -> &str {
+            &self.env
+        }
+        fn send(&self, message: &Value) -> Result<()> {
+            assert!(
+                !self.ctx.state.locked_by_current_thread(),
+                "send under state lock"
+            );
+            self.sent.lock().unwrap().push(message.clone());
+            Ok(())
+        }
+        fn recv(&self, _: Duration) -> std::result::Result<Option<Value>, SessionClosed> {
+            Err(SessionClosed("synthetic-closed"))
+        }
+        fn close(&self) {}
+        fn is_closed(&self) -> bool {
+            false
+        }
+        fn created_at(&self) -> Instant {
+            self.created
+        }
+    }
+    fn clock_session(f: &Fixture) -> Arc<ClockSession> {
+        Arc::new(ClockSession {
+            ctx: f.ctx.clone(),
+            env: f.env.clone(),
+            peer: DeviceKey::generate().record().unwrap(),
+            sent: Mutex::new(Vec::new()),
+            created: Instant::now(),
+        })
+    }
+    fn clock_candidate(f: &Fixture, hlc: &str) -> Commit {
+        commit::sign_commit(
+            &f.team.device,
+            &f.env,
+            4,
+            hlc,
+            &CommitStore::new(f.ctx.state, &f.env).vector().unwrap(),
+            vec![json!({"op":"settings.update","sync_interval_seconds":31})],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn compaction_heads_submit_and_actual_handle_commit_share_receipt_clocks_and_local_errors() {
+        for handle in [false, true] {
+            for mode in ["equal", "newer", "corrupt"] {
+                let f = Fixture::new();
+                assert_eq!(f.team.compact(&f.env).unwrap()["removed"], 2);
+                let next = clock_candidate(
+                    &f,
+                    if mode == "equal" {
+                        "1000002-0007"
+                    } else {
+                        "1000002-0008"
+                    },
+                );
+                let signed = next.canonical_json(true).unwrap();
+                let observer = clock_session(&f);
+                {
+                    let mut envs = f.team.envs.lock().unwrap();
+                    let env = envs.get_mut(&f.env).unwrap();
+                    let fp = observer.peer.fingerprint();
+                    env.sessions.insert(fp.clone(), observer.clone());
+                    // Empty-fact legacy capability state: no ACK, admission
+                    // receipt or peer vector is fabricated for this test.
+                    env.gates.insert(
+                        fp,
+                        super::super::tombstone_gate::Gate {
+                            caps_sent: true,
+                            ..Default::default()
+                        },
+                    );
+                }
+                if mode == "corrupt" {
+                    std::fs::write(
+                        f.ctx
+                            .state
+                            .path
+                            .join(format!("team/{}/compaction_heads.json", f.env)),
+                        b"{bad-local-cache",
+                    )
+                    .unwrap();
+                }
+                let before = publication_files(&f.ctx.state.path.join(format!("team/{}", f.env)));
+                let sender: Arc<dyn Session> = clock_session(&f);
+                let result = if handle {
+                    f.team.handle_commit(
+                        &f.env,
+                        &sender,
+                        &json!({"type":"COMMIT","commit":next.to_dict()}),
+                    )
+                } else {
+                    f.team.submit_commit(&f.env, &next).map(|outcome| {
+                        assert_eq!(
+                            outcome,
+                            if mode == "equal" {
+                                "rejected"
+                            } else {
+                                "accepted"
+                            }
+                        );
+                    })
+                };
+                let rejected: Vec<_> = f
+                    .ctx
+                    .audit
+                    .iter_records()
+                    .unwrap()
+                    .into_iter()
+                    .filter(|record| record["event"] == "team_commit_rejected")
+                    .collect();
+                if mode == "corrupt" {
+                    let error = result.unwrap_err();
+                    assert_eq!(error.reason, "team_compaction_head_invalid");
+                    assert!(error.detail.is_empty());
+                    assert!(rejected.is_empty());
+                    assert!(!f.path(4).exists());
+                    assert!(observer.sent.lock().unwrap().is_empty());
+                    assert_eq!(
+                        publication_files(&f.ctx.state.path.join(format!("team/{}", f.env))),
+                        before
+                    );
+                } else if mode == "equal" {
+                    result.unwrap();
+                    assert_eq!(rejected.len(), 1);
+                    assert_eq!(rejected[0]["reason"], "team_hlc_not_monotone");
+                    assert!(!f.path(4).exists());
+                    assert_eq!(
+                        publication_files(&f.ctx.state.path.join(format!("team/{}", f.env))),
+                        before
+                    );
+                    assert!(observer.sent.lock().unwrap().is_empty());
+                } else {
+                    result.unwrap();
+                    assert!(rejected.is_empty());
+                    assert_eq!(
+                        CommitStore::new(f.ctx.state, &f.env)
+                            .get(&f.fp, 4)
+                            .unwrap()
+                            .unwrap()
+                            .canonical_json(true)
+                            .unwrap(),
+                        signed
+                    );
+                    assert!(
+                        observer
+                            .sent
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .any(|frame| frame["type"] == "COMMIT")
+                    );
+                    assert_eq!(
+                        f.team.document(&f.env).unwrap()["settings"]["sync_interval_seconds"],
+                        31
+                    );
+                }
+                assert!(
+                    !f.ctx
+                        .state
+                        .path
+                        .join(format!("team/{}/deferred", f.env))
+                        .exists()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn compaction_heads_compact_serializes_direct_receipt_deferred_release_and_author_clock() {
+        for operation in ["receive", "release", "author"] {
+            let f = Fixture::new();
+            let candidate = clock_candidate(
+                &f,
+                if operation == "receive" {
+                    "1000002-0007"
+                } else {
+                    "1000002-0008"
+                },
+            );
+            if operation == "release" {
+                assert_eq!(
+                    commit::receive_commit(
+                        &CommitStore::new(f.ctx.state, &f.env),
+                        &candidate,
+                        0,
+                        Some(f.ctx.audit)
+                    )
+                    .unwrap(),
+                    "deferred"
+                );
+            }
+            let (entered_tx, entered_rx) = mpsc::sync_channel(0);
+            let (resume_tx, resume_rx) = mpsc::sync_channel(0);
+            let (started_tx, started_rx) = mpsc::sync_channel(0);
+            let (done_tx, done_rx) = mpsc::channel();
+            thread::scope(|scope| {
+                let compact = scope.spawn(|| {
+                    testing::reset(None);
+                    testing::pause(Boundary::BeforeSnapshot, entered_tx, resume_rx);
+                    let result = f.team.compact(&f.env);
+                    let events = testing::events();
+                    testing::reset(None);
+                    (result, events)
+                });
+                entered_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                let writer = scope.spawn(|| {
+                    started_tx.send(()).unwrap();
+                    let outcome = match operation {
+                        "receive" => {
+                            // Separate StateDir exercises the actual OS lock;
+                            // receipt itself, not its caller, acquires it.
+                            let other = StateDir::new(f.ctx.state.path.clone());
+                            let audit = crate::audit::Audit::new(&other, crate::clock::system());
+                            commit::receive_commit(
+                                &CommitStore::new(&other, &f.env),
+                                &candidate,
+                                1_000_010,
+                                Some(&audit),
+                            )
+                            .unwrap()
+                            .to_owned()
+                        }
+                        "release" => {
+                            let released = CommitStore::new(f.ctx.state, &f.env)
+                                .release_deferred(1_000_010, Some(f.ctx.audit))
+                                .unwrap();
+                            assert_eq!(released.len(), 1);
+                            assert_eq!(
+                                released[0].canonical_json(true).unwrap(),
+                                candidate.canonical_json(true).unwrap()
+                            );
+                            "released".to_owned()
+                        }
+                        "author" => {
+                            testing::set_author_wall(Some(1));
+                            let authored = crate::team::membership::author_commit(
+                                &f.ctx,
+                                None,
+                                &f.env,
+                                vec![json!({"op":"settings.update","sync_interval_seconds":37})],
+                            );
+                            testing::set_author_wall(None);
+                            let authored = authored.unwrap();
+                            assert_eq!(authored.hlc, "1000002-0008");
+                            assert_eq!(authored.author_seq, PyInt::from(4));
+                            "authored".to_owned()
+                        }
+                        _ => unreachable!(),
+                    };
+                    done_tx.send(outcome).unwrap();
+                });
+                started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                let completed_before_barrier = done_rx.try_recv();
+                let envs_available = f.team.envs.try_lock().is_ok();
+                resume_tx.send(()).unwrap();
+                let (compacted, events) = compact.join().unwrap();
+                writer.join().unwrap();
+                assert_eq!(compacted.unwrap()["removed"], 2);
+                assert_order(&events);
+                assert!(envs_available);
+                assert!(matches!(
+                    completed_before_barrier,
+                    Err(mpsc::TryRecvError::Empty)
+                ));
+                assert_eq!(
+                    done_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+                    match operation {
+                        "receive" => "rejected",
+                        "release" => "released",
+                        _ => "authored",
+                    }
+                );
+            });
+            assert!(!f.path(2).exists() && !f.path(3).exists());
+            assert_eq!(f.path(4).exists(), operation != "receive");
+            let cache = f
+                .ctx
+                .state
+                .read_json(
+                    &format!("team/{}/compaction_heads.json", f.env),
+                    Value::Null,
+                )
+                .unwrap();
+            assert_eq!(cache["vector"], json!({f.fp.clone():3}));
+        }
+    }
+
+    struct ScopedGateReset(std::marker::PhantomData<std::rc::Rc<()>>);
+    impl ScopedGateReset {
+        fn new() -> Self {
+            testing::reset(None);
+            testing::set_author_wall(None);
+            Self(std::marker::PhantomData)
+        }
+    }
+    impl Drop for ScopedGateReset {
+        fn drop(&mut self) {
+            testing::reset(None);
+            testing::set_author_wall(None);
+        }
+    }
+    struct ScopedGateResume(Option<mpsc::SyncSender<()>>);
+    impl ScopedGateResume {
+        fn release(&mut self) -> bool {
+            self.0
+                .take()
+                .is_some_and(|sender| sender.try_send(()).is_ok())
+        }
+    }
+    impl Drop for ScopedGateResume {
+        fn drop(&mut self) {
+            let _ = self.release();
+        }
+    }
+    type ScopedGateFiles = BTreeMap<String, (Vec<u8>, u32)>;
+    fn scoped_gate_file(path: &std::path::Path) -> Option<(Vec<u8>, u32)> {
+        let metadata = match std::fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return None,
+            Err(error) => panic!("owned fixture metadata: {error}"),
+        };
+        assert!(metadata.file_type().is_file());
+        #[cfg(unix)]
+        let mode = {
+            use std::os::unix::fs::PermissionsExt;
+            metadata.permissions().mode() & 0o777
+        };
+        #[cfg(not(unix))]
+        let mode = if metadata.permissions().readonly() {
+            0o444
+        } else {
+            0o666
+        };
+        Some((std::fs::read(path).unwrap(), mode))
+    }
+    fn scoped_gate_files(f: &Fixture) -> ScopedGateFiles {
+        let root = f.ctx.state.path.join(format!("team/{}", f.env));
+        let mut pending = vec![root.clone()];
+        let mut files = BTreeMap::new();
+        while let Some(directory) = pending.pop() {
+            for entry in std::fs::read_dir(directory).unwrap() {
+                let path = entry.unwrap().path();
+                let kind = std::fs::symlink_metadata(&path).unwrap().file_type();
+                if kind.is_dir() {
+                    pending.push(path);
+                } else {
+                    assert!(kind.is_file());
+                    let name = path
+                        .strip_prefix(&root)
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                        .replace('\\', "/");
+                    files.insert(name, scoped_gate_file(&path).unwrap());
+                }
+            }
+        }
+        files
+    }
+    fn scoped_gate_settings(f: &Fixture, seq: i64, hlc: &str, interval: i64) -> Commit {
+        commit::sign_commit(
+            &f.team.device,
+            &f.env,
+            seq,
+            hlc,
+            &CommitStore::new(f.ctx.state, &f.env).vector().unwrap(),
+            vec![json!({"op":"settings.update","sync_interval_seconds":interval})],
+        )
+        .unwrap()
+    }
+    fn scoped_gate_same_commit(actual: &Commit, expected: &Commit) {
+        assert_eq!(actual.to_dict(), expected.to_dict());
+        assert_eq!(
+            actual.canonical_json(false).unwrap(),
+            expected.canonical_json(false).unwrap()
+        );
+        assert_eq!(
+            actual.canonical_json(true).unwrap(),
+            expected.canonical_json(true).unwrap()
+        );
+        assert_eq!(actual.hash().unwrap(), expected.hash().unwrap());
+        assert_eq!(actual.sig, expected.sig);
+    }
+    fn scoped_gate_cache_head(f: &Fixture, expected: &Commit) {
+        let cache = f
+            .ctx
+            .state
+            .read_json(
+                &format!("team/{}/compaction_heads.json", f.env),
+                Value::Null,
+            )
+            .unwrap();
+        assert_eq!(
+            cache["vector"],
+            json!({f.fp.clone():expected.author_seq.value()})
+        );
+        let heads = cache["heads"].as_array().unwrap();
+        assert_eq!(heads.len(), 1);
+        let original = Commit::from_dict(&heads[0]["commit"]).unwrap();
+        scoped_gate_same_commit(&original, expected);
+        assert_eq!(heads[0]["hlc"], expected.hlc);
+        assert_eq!(heads[0]["commit_hash"], expected.hash().unwrap());
+        assert!(commit::verify_commit(
+            &original,
+            &f.team.device.record().unwrap()
+        ));
+    }
+    fn scoped_gate_env_view(env: &EnvState) -> Value {
+        let removals: BTreeMap<_, _> = env
+            .facts
+            .removal_facts
+            .iter()
+            .map(|(hash, fact)| {
+                (
+                    hash.clone(),
+                    json!({"author":fact.author,"target":fact.target,"hlc":fact.hlc}),
+                )
+            })
+            .collect();
+        json!({
+            "document":env.document,
+            "disabled":env.facts.disabled_connections.iter().collect::<BTreeSet<_>>(),
+            "revoked":env.facts.revoked_versions.iter().collect::<BTreeSet<_>>(),
+            "deleted":env.facts.deleted_secrets.iter().collect::<BTreeSet<_>>(),
+            "tombstones":env.facts.tombstone_facts,
+            "removed":env.facts.removed_members.iter().collect::<BTreeSet<_>>(),
+            "incidents":env.facts.incidents,
+            "removal_facts":removals,
+            "fact_hashes":env.fact_hashes.iter().collect::<BTreeSet<_>>(),
+            "known_fact_lines":env.known_fact_lines,
+        })
+    }
+
+    #[test]
+    fn compaction_heads_deferred_prefilter_stale_forward_receipt_uses_locked_sequence() {
+        for row in [
+            "matching",
+            "conflicting",
+            "pruned",
+            "next-good",
+            "next-equal",
+            "next-lower",
+            "next-local-error",
+            "still-gap",
+        ] {
+            let f = Fixture::new();
+            let store = CommitStore::new(f.ctx.state, &f.env);
+            let originals: Vec<_> = (1..=3)
+                .map(|seq| {
+                    let entry = store.get(&f.fp, seq).unwrap().unwrap();
+                    let physical = std::fs::read(f.path(seq)).unwrap();
+                    let signed = entry.canonical_json(false).unwrap();
+                    let hashed = entry.canonical_json(true).unwrap();
+                    let hash = entry.hash().unwrap();
+                    (entry, physical, signed, hashed, hash)
+                })
+                .collect();
+            assert_eq!(f.team.compact(&f.env).unwrap()["removed"], 2);
+            scoped_gate_cache_head(&f, &originals[2].0);
+            assert_eq!(
+                store.vector().unwrap(),
+                BTreeMap::from([(f.fp.clone(), 3.into())])
+            );
+            let hlc = match row {
+                "next-equal" => "1000003-0007",
+                "next-lower" => "1000002-0009",
+                _ => "1000003-0008",
+            };
+            let deferred = scoped_gate_settings(&f, 5, hlc, 37);
+            let signed = deferred.canonical_json(false).unwrap();
+            let hashed = deferred.canonical_json(true).unwrap();
+            let deferred_hash = deferred.hash().unwrap();
+            let signature = deferred.sig.clone();
+            assert_eq!(
+                commit::receive_commit(&store, &deferred, 0, Some(f.ctx.audit)).unwrap(),
+                "deferred"
+            );
+            let deferred_name = format!("deferred/{}-0000000005.json", f.fp);
+            let deferred_path = f
+                .ctx
+                .state
+                .path
+                .join(format!("team/{}/{}", f.env, deferred_name));
+            let saved_deferred = scoped_gate_file(&deferred_path).unwrap();
+            if row != "still-gap" {
+                let fourth = scoped_gate_settings(&f, 4, "1000003-0007", 31);
+                assert_eq!(
+                    commit::receive_commit(&store, &fourth, 1_000_010, Some(f.ctx.audit)).unwrap(),
+                    "accepted"
+                );
+                assert_eq!(f.team.compact(&f.env).unwrap()["removed"], 1);
+                assert!(!f.path(4).exists());
+                scoped_gate_cache_head(&f, &fourth);
+                assert_eq!(
+                    store.vector().unwrap(),
+                    BTreeMap::from([(f.fp.clone(), 4.into())])
+                );
+            }
+            assert_eq!(scoped_gate_file(&deferred_path).unwrap(), saved_deferred);
+            assert!(
+                f.ctx
+                    .audit
+                    .iter_records()
+                    .unwrap()
+                    .iter()
+                    .all(|e| e["event"] != "team_commit_rejected")
+            );
+            assert!(
+                scoped_gate_files(&f)
+                    .keys()
+                    .all(|name| !name.starts_with("rejected/"))
+            );
+            let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+            let (resume_tx, resume_rx) = mpsc::sync_channel(1);
+            if row == "still-gap" {
+                let before = scoped_gate_files(&f);
+                let audit_before = f.ctx.audit.iter_records().unwrap();
+                let outer = f.ctx.state.lock().unwrap();
+                let (done_tx, done_rx) = mpsc::sync_channel(1);
+                thread::scope(|scope| {
+                    let worker = scope.spawn(|| {
+                        let _reset = ScopedGateReset::new();
+                        testing::scoped_pause(
+                            Boundary::DeferredPrefilterPassed,
+                            f.ctx.state.path.clone(),
+                            f.env.clone(),
+                            entered_tx,
+                            resume_rx,
+                        );
+                        let outcome = store.release_deferred(1_000_010, Some(f.ctx.audit));
+                        let events = testing::events();
+                        let held = f.ctx.state.locked_by_current_thread();
+                        done_tx.send(()).unwrap();
+                        (outcome, events, held)
+                    });
+                    let mut resume = ScopedGateResume(Some(resume_tx));
+                    let completed_while_locked = done_rx.recv_timeout(Duration::from_secs(5));
+                    drop(outer);
+                    let _ = resume.release();
+                    let (outcome, events, held) = worker.join().unwrap();
+                    assert!(completed_while_locked.is_ok());
+                    assert!(outcome.unwrap().is_empty());
+                    assert!(events.is_empty());
+                    assert!(!held);
+                    assert!(matches!(
+                        entered_rx.try_recv(),
+                        Err(mpsc::TryRecvError::Disconnected)
+                    ));
+                });
+                assert_eq!(scoped_gate_files(&f), before);
+                assert_eq!(f.ctx.audit.iter_records().unwrap(), audit_before);
+                continue;
+            }
+            thread::scope(|scope| {
+                let worker = scope.spawn(|| {
+                    let _reset = ScopedGateReset::new();
+                    testing::scoped_pause(
+                        Boundary::DeferredPrefilterPassed,
+                        f.ctx.state.path.clone(),
+                        f.env.clone(),
+                        entered_tx,
+                        resume_rx,
+                    );
+                    let outcome = store.release_deferred(1_000_010, Some(f.ctx.audit));
+                    (
+                        outcome,
+                        testing::events(),
+                        f.ctx.state.locked_by_current_thread(),
+                    )
+                });
+                let mut resume = ScopedGateResume(Some(resume_tx));
+                let entered = entered_rx.recv_timeout(Duration::from_secs(5));
+                let mut competing = None;
+                if entered.is_ok() {
+                    assert_eq!(scoped_gate_file(&deferred_path).unwrap(), saved_deferred);
+                    if matches!(row, "matching" | "conflicting" | "pruned") {
+                        let entry = if row == "conflicting" {
+                            scoped_gate_settings(&f, 5, "1000003-0008", 41)
+                        } else {
+                            deferred.clone()
+                        };
+                        assert_eq!(
+                            commit::receive_commit(&store, &entry, 1_000_010, Some(f.ctx.audit))
+                                .unwrap(),
+                            "accepted"
+                        );
+                        if row == "pruned" {
+                            assert_eq!(f.team.compact(&f.env).unwrap()["removed"], 1);
+                            assert!(!f.path(5).exists());
+                            scoped_gate_cache_head(&f, &deferred);
+                        }
+                        competing = Some(entry);
+                    }
+                    if matches!(
+                        row,
+                        "matching" | "conflicting" | "pruned" | "next-local-error"
+                    ) {
+                        let _lock = f.ctx.state.lock().unwrap();
+                        f.ctx
+                            .state
+                            .write_bytes(
+                                &format!("team/{}/compaction_heads.json", f.env),
+                                b"{synthetic-malformed-cache",
+                            )
+                            .unwrap();
+                    }
+                }
+                let before_release = scoped_gate_files(&f);
+                let audit_before = f.ctx.audit.iter_records().unwrap();
+                let resumed = resume.release();
+                let (outcome, events, held) = worker.join().unwrap();
+                assert!(entered.is_ok(), "missing reached prefilter gate in {row}");
+                assert!(resumed);
+                assert!(!held);
+                assert_eq!(events, vec![Boundary::DeferredPrefilterPassed]);
+                let reason = match row {
+                    "conflicting" => Some("team_author_equivocation"),
+                    "next-equal" | "next-lower" => Some("team_hlc_not_monotone"),
+                    _ => None,
+                };
+                let mut expected = before_release.clone();
+                if row == "next-local-error" {
+                    let error = outcome.unwrap_err();
+                    assert_eq!(error.class, crate::errors::ErrorClass::StateError);
+                    assert_eq!(error.reason, "team_compaction_head_invalid");
+                    assert!(error.detail.is_empty());
+                } else {
+                    let released = outcome.unwrap();
+                    if row == "next-good" {
+                        assert_eq!(released.len(), 1);
+                        scoped_gate_same_commit(&released[0], &deferred);
+                        let name = format!("commits/{}/5.json", f.fp);
+                        let bytes =
+                            pyjson::dumps(&deferred.to_dict(), DumpOptions::pretty_sorted())
+                                .unwrap()
+                                .into_bytes();
+                        expected.insert(name, (bytes, saved_deferred.1));
+                    } else {
+                        assert!(released.is_empty());
+                    }
+                    expected.remove(&deferred_name).unwrap();
+                }
+                if let Some(reason) = reason {
+                    let name =
+                        format!("rejected/{}-0000000005-{}.json", f.fp, &deferred_hash[..12]);
+                    let actual = scoped_gate_files(&f).get(&name).unwrap().clone();
+                    let mut value = pyjson::loads(std::str::from_utf8(&actual.0).unwrap()).unwrap();
+                    assert_eq!(
+                        value.as_object_mut().unwrap().remove("rejected_reason"),
+                        Some(json!(reason))
+                    );
+                    assert_eq!(value, deferred.to_dict());
+                    scoped_gate_same_commit(&Commit::from_dict(&value).unwrap(), &deferred);
+                    assert_eq!(actual.1, saved_deferred.1);
+                    expected.insert(name, actual);
+                }
+                assert_eq!(
+                    scoped_gate_files(&f),
+                    expected,
+                    "exact release inventory {row}"
+                );
+                let audit_after = f.ctx.audit.iter_records().unwrap();
+                assert_eq!(&audit_after[..audit_before.len()], audit_before.as_slice());
+                let suffix = &audit_after[audit_before.len()..];
+                if let Some(reason) = reason {
+                    assert_eq!(suffix.len(), 1);
+                    let event = &suffix[0];
+                    assert_eq!(event["event"], "team_commit_rejected");
+                    assert_eq!(event["result"], "denied");
+                    assert_eq!(event["reason"], reason);
+                    assert_eq!(event["env_id"], f.env);
+                    assert_eq!(event["fingerprint"], f.fp);
+                    assert_eq!(event["author_seq"], 5);
+                } else {
+                    assert!(suffix.is_empty());
+                }
+                let last = if matches!(row, "matching" | "conflicting" | "pruned" | "next-good") {
+                    5
+                } else {
+                    4
+                };
+                assert_eq!(
+                    store.vector().unwrap(),
+                    BTreeMap::from([(f.fp.clone(), last.into())])
+                );
+                let live_names: Vec<_> = scoped_gate_files(&f)
+                    .keys()
+                    .filter(|name| name.starts_with("commits/"))
+                    .cloned()
+                    .collect();
+                let mut expected_live = vec![format!("commits/{}/1.json", f.fp)];
+                if matches!(row, "matching" | "conflicting" | "next-good") {
+                    expected_live.push(format!("commits/{}/5.json", f.fp));
+                }
+                assert_eq!(live_names, expected_live);
+                if let Some(entry) = competing.filter(|_| row != "pruned") {
+                    scoped_gate_same_commit(&store.get(&f.fp, 5).unwrap().unwrap(), &entry);
+                }
+                assert_eq!(std::fs::read(f.path(1)).unwrap(), originals[0].1);
+                assert_eq!(deferred.canonical_json(false).unwrap(), signed);
+                assert_eq!(deferred.canonical_json(true).unwrap(), hashed);
+                assert_eq!(deferred.hash().unwrap(), deferred_hash);
+                assert_eq!(deferred.sig, signature);
+                for (entry, _, saved_signed, saved_hashed, saved_hash) in &originals {
+                    assert_eq!(entry.canonical_json(false).unwrap(), *saved_signed);
+                    assert_eq!(entry.canonical_json(true).unwrap(), *saved_hashed);
+                    assert_eq!(entry.hash().unwrap(), *saved_hash);
+                }
+                let loaded = crate::team::membership::load_environment(&f.ctx, &f.env).unwrap();
+                assert_eq!(loaded.version_order["gone"], json!([VERSION]));
+                assert_eq!(
+                    loaded.document["secrets"]["gone"]["versions"][VERSION]["status"],
+                    "staged"
+                );
+                assert_eq!(
+                    loaded.document["settings"]["sync_interval_seconds"],
+                    if row == "conflicting" {
+                        41
+                    } else if matches!(row, "matching" | "pruned" | "next-good") {
+                        37
+                    } else {
+                        31
+                    }
+                );
+                if row != "next-local-error" {
+                    let before_repeat = scoped_gate_files(&f);
+                    let audit_before_repeat = f.ctx.audit.iter_records().unwrap();
+                    assert!(
+                        store
+                            .release_deferred(1_000_010, Some(f.ctx.audit))
+                            .unwrap()
+                            .is_empty()
+                    );
+                    assert_eq!(scoped_gate_files(&f), before_repeat);
+                    assert_eq!(f.ctx.audit.iter_records().unwrap(), audit_before_repeat);
+                } else {
+                    assert_eq!(scoped_gate_file(&deferred_path).unwrap(), saved_deferred);
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn compaction_heads_authorized_fact_cache_read_pause_keeps_envs_available() {
+        for row in ["cache-wins", "remembered-advances", "corrupt"] {
+            let f = Fixture::new();
+            assert_eq!(f.team.compact(&f.env).unwrap()["removed"], 2);
+            let observer = clock_session(&f);
+            let baseline_env = {
+                let mut envs = f.team.envs.lock().unwrap();
+                let env = envs.get_mut(&f.env).unwrap();
+                env.hlc = Hlc::new(1, 0);
+                env.sessions
+                    .insert(observer.peer.fingerprint(), observer.clone());
+                assert!(env.fact_hashes.is_empty() && env.known_fact_lines == 0);
+                scoped_gate_env_view(env)
+            };
+            assert!(f.team.deferred_sends.lock().unwrap().is_empty());
+            if row == "corrupt" {
+                let _lock = f.ctx.state.lock().unwrap();
+                f.ctx
+                    .state
+                    .write_bytes(
+                        &format!("team/{}/compaction_heads.json", f.env),
+                        b"{synthetic-malformed-cache",
+                    )
+                    .unwrap();
+            }
+            let disk = scoped_gate_files(&f);
+            let audit_path = f.ctx.state.path.join(crate::audit::AUDIT_FILE);
+            let audit = scoped_gate_file(&audit_path);
+            let tombstone_path = f.ctx.state.path.join("vault/tombstones.json");
+            let tombstones = scoped_gate_file(&tombstone_path);
+            let (entered_tx, entered_rx) = mpsc::sync_channel(1);
+            let (resume_tx, resume_rx) = mpsc::sync_channel(1);
+            let (done_tx, done_rx) = mpsc::sync_channel(1);
+            thread::scope(|scope| {
+                let worker = scope.spawn(|| {
+                    let _reset = ScopedGateReset::new();
+                    testing::set_author_wall(Some(1));
+                    testing::scoped_pause(
+                        Boundary::CacheOpenedBeforeRead,
+                        f.ctx.state.path.clone(),
+                        f.env.clone(),
+                        entered_tx,
+                        resume_rx,
+                    );
+                    let first = f.team.sign_authorized_fact(
+                        &f.env,
+                        "secret_deleted",
+                        json!({"secret_id":"gone"}),
+                    );
+                    let held_first = f.ctx.state.locked_by_current_thread();
+                    let second = if first.is_ok() {
+                        Some(f.team.sign_authorized_fact(
+                            &f.env,
+                            "secret_deleted",
+                            json!({"secret_id":"gone"}),
+                        ))
+                    } else {
+                        None
+                    };
+                    let held_second = f.ctx.state.locked_by_current_thread();
+                    let events = testing::events();
+                    // Rearming proves the first one-shot scope AND pause were
+                    // consumed. Reset guard clears this unused new arm on exit.
+                    let (check_tx, _check_rx) = mpsc::sync_channel(1);
+                    let (_check_resume_tx, check_resume_rx) = mpsc::sync_channel(1);
+                    testing::scoped_pause(
+                        Boundary::CacheOpenedBeforeRead,
+                        f.ctx.state.path.clone(),
+                        f.env.clone(),
+                        check_tx,
+                        check_resume_rx,
+                    );
+                    done_tx.send(()).unwrap();
+                    (first, second, held_first, held_second, events)
+                });
+                let mut resume = ScopedGateResume(Some(resume_tx));
+                let entered = entered_rx.recv_timeout(Duration::from_secs(5));
+                let mut available = false;
+                let mut paused_view = None;
+                let mut paused_clock = None;
+                if entered.is_ok() {
+                    if let Ok(mut envs) = f.team.envs.try_lock() {
+                        available = true;
+                        let env = envs.get_mut(&f.env).unwrap();
+                        paused_view = Some(scoped_gate_env_view(env));
+                        paused_clock = Some(env.hlc.render());
+                        if row == "remembered-advances" {
+                            env.hlc.observe("1000003-0041").unwrap();
+                        }
+                    }
+                }
+                let disk_during = scoped_gate_files(&f);
+                let audit_during = scoped_gate_file(&audit_path);
+                let tombstones_during = scoped_gate_file(&tombstone_path);
+                let sent_during = observer.sent.lock().unwrap().clone();
+                let queued_during = f.team.deferred_sends.lock().unwrap().clone();
+                let completed_during = done_rx.try_recv();
+                let resumed = resume.release();
+                let (first, second, held_first, held_second, events) = worker.join().unwrap();
+                assert!(entered.is_ok(), "missing actual opened-cache read gate");
+                assert!(resumed && available);
+                assert_eq!(paused_view, Some(baseline_env.clone()));
+                assert_eq!(paused_clock.as_deref(), Some("1-0000"));
+                assert_eq!(disk_during, disk);
+                assert_eq!(audit_during, audit);
+                assert_eq!(tombstones_during, tombstones);
+                assert!(sent_during.is_empty() && queued_during.is_empty());
+                assert!(matches!(completed_during, Err(mpsc::TryRecvError::Empty)));
+                assert!(!held_first && !held_second);
+                assert_eq!(events, vec![Boundary::CacheOpenedBeforeRead]);
+                let expected_clock = if row == "corrupt" {
+                    let error = first.unwrap_err();
+                    assert_eq!(error.class, crate::errors::ErrorClass::StateError);
+                    assert_eq!(error.reason, "team_compaction_head_invalid");
+                    assert!(error.detail.is_empty());
+                    assert!(second.is_none());
+                    "1-0000"
+                } else {
+                    let first = first.unwrap();
+                    let second = second.unwrap().unwrap();
+                    let clocks = if row == "remembered-advances" {
+                        ["1000003-0042", "1000003-0043"]
+                    } else {
+                        ["1000002-0008", "1000002-0009"]
+                    };
+                    for (fact, expected_hlc) in [&first, &second].into_iter().zip(clocks) {
+                        assert_eq!(fact.format, FACT_FORMAT);
+                        assert_eq!(fact.env_id, f.env);
+                        assert_eq!(fact.kind, "secret_deleted");
+                        assert_eq!(fact.target, json!({"secret_id":"gone"}));
+                        assert_eq!(fact.author, f.fp);
+                        assert_eq!(fact.hlc, expected_hlc);
+                        assert!(verify_fact(fact, &f.team.device.record().unwrap()));
+                        assert_eq!(Fact::from_dict(&fact.to_dict()).unwrap(), *fact);
+                    }
+                    clocks[1]
+                };
+                let envs = f.team.envs.try_lock().unwrap();
+                let env = envs.get(&f.env).unwrap();
+                assert_eq!(scoped_gate_env_view(env), baseline_env);
+                assert_eq!(env.hlc.render(), expected_clock);
+                drop(envs);
+                assert_eq!(scoped_gate_files(&f), disk);
+                assert_eq!(scoped_gate_file(&audit_path), audit);
+                assert_eq!(scoped_gate_file(&tombstone_path), tombstones);
+                assert!(observer.sent.lock().unwrap().is_empty());
+                assert!(f.team.deferred_sends.lock().unwrap().is_empty());
+                assert!(done_rx.recv_timeout(Duration::from_secs(5)).is_ok());
+            });
+        }
+    }
+
+    use crate::team::membership as r1_membership;
+
+    struct R1Fixture {
+        _root: TempDir,
+        _reset: ScopedGateReset,
+        ctx: Arc<Context>,
+        y_ctx: Arc<Context>,
+        team: Arc<TeamSync>,
+        y: DeviceKey,
+        x: DeviceKey,
+        env: String,
+        fp: String,
+        yfp: String,
+        removed: bool,
+        adds_x: bool,
+        n: i64,
+        originals: Vec<Commit>,
+        deferred: Option<Commit>,
+        initial_cache: Vec<u8>,
+    }
+    fn r1_team(ctx: Arc<Context>, device: DeviceKey, env: &str) -> Arc<TeamSync> {
+        let check: MembershipCheck = Arc::new(|_, _| None);
+        let transport = Arc::new(InProcessTransport::new(device.clone(), check));
+        let team = TeamSync::new(ctx, transport, device);
+        team.register_env(env).unwrap();
+        team
+    }
+    fn r1_signed(
+        ctx: &Context,
+        env: &str,
+        key: &DeviceKey,
+        seq: i64,
+        hlc: &str,
+        ops: Vec<Value>,
+    ) -> Commit {
+        commit::sign_commit(
+            key,
+            env,
+            seq,
+            hlc,
+            &CommitStore::new(ctx.state, env).vector().unwrap(),
+            ops,
+        )
+        .unwrap()
+    }
+    fn r1_receive(ctx: &Context, env: &str, original: &Commit, now: i64) {
+        assert_eq!(
+            commit::receive_commit(
+                &CommitStore::new(ctx.state, env),
+                original,
+                now,
+                Some(ctx.audit)
+            )
+            .unwrap(),
+            "accepted"
+        );
+    }
+    fn r1_member(device: &DeviceKey) -> Value {
+        json!({"op":"member.add","device":device.record().unwrap().to_dict(),
+            "name":"synthetic-r1-user","role":"user","wraps":{}})
+    }
+    fn r1_settings(interval: i64) -> Value {
+        json!({"op":"settings.update","sync_interval_seconds":interval})
+    }
+    fn r1_put(env: &str, version: &str) -> Value {
+        json!({"op":"secret.put_version","secret_id":"s","version_id":version,
+            "generation_id":GENERATION,"kind":"api_key","public":{},
+            "ciphertext":envelope::encrypt_secret(&[7;32],env,"s",version,b"synthetic-r1-value").unwrap()})
+    }
+    fn r1_session(f: &R1Fixture, peer: DeviceRecord) -> Arc<ClockSession> {
+        Arc::new(ClockSession {
+            ctx: f.ctx.clone(),
+            env: f.env.clone(),
+            peer,
+            sent: Mutex::new(Vec::new()),
+            created: Instant::now(),
+        })
+    }
+    fn r1_same(original: &Commit, saved: &Commit) {
+        assert_eq!(original.to_dict(), saved.to_dict());
+        assert_eq!(
+            original.canonical_json(false).unwrap(),
+            saved.canonical_json(false).unwrap()
+        );
+        assert_eq!(
+            original.canonical_json(true).unwrap(),
+            saved.canonical_json(true).unwrap()
+        );
+        assert_eq!(original.hash().unwrap(), saved.hash().unwrap());
+        assert_eq!(original.sig, saved.sig);
+    }
+    fn r1_files(ctx: &Context, env: &str) -> ScopedGateFiles {
+        let root = ctx.state.path.join(format!("team/{env}"));
+        let mut pending = vec![root.clone()];
+        let mut files = BTreeMap::new();
+        while let Some(dir) = pending.pop() {
+            if !dir.is_dir() {
+                continue;
+            }
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else {
+                    assert!(std::fs::symlink_metadata(&path).unwrap().is_file());
+                    let rel = path
+                        .strip_prefix(&root)
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                        .to_owned();
+                    files.insert(rel, scoped_gate_file(&path).unwrap());
+                }
+            }
+        }
+        files
+    }
+    fn r1_audit(ctx: &Context) -> Vec<Value> {
+        ctx.audit.iter_records().unwrap()
+    }
+    fn r1_check_audit(f: &R1Fixture, before: &[Value], expected: Vec<Value>) {
+        let after = r1_audit(&f.ctx);
+        assert_eq!(&after[..before.len()], before);
+        let actual: Vec<_> = after[before.len()..]
+            .iter()
+            .cloned()
+            .map(|mut r| {
+                r.as_object_mut().unwrap().remove("ts");
+                r
+            })
+            .collect();
+        assert_eq!(actual, expected);
+    }
+    fn r1_event(f: &R1Fixture, event: &str, result: &str, reason: Value, extra: Value) -> Value {
+        let mut record = json!({"event":event,"caller":null,"connection":null,"target":null,
+            "action":null,"result":result,"reason":reason,"policy_version":null,
+            "run_id":null,"request_id":null,"env_id":f.env});
+        for (key, value) in extra.as_object().unwrap() {
+            record
+                .as_object_mut()
+                .unwrap()
+                .insert(key.clone(), value.clone());
+        }
+        record
+    }
+    fn r1_skips(f: &R1Fixture, rounds: usize) -> Vec<Value> {
+        let mut events = Vec::new();
+        for _ in 0..rounds {
+            if f.adds_x {
+                events.push(r1_event(f,"team_op_skipped","skipped",json!("not_admin"),
+                    json!({"fingerprint":f.x.fingerprint().unwrap(),"author_seq":1,"op":"member.add"})));
+            }
+            events.push(r1_event(
+                f,
+                "team_op_skipped",
+                "skipped",
+                json!("not_admin"),
+                json!({"fingerprint":f.yfp,"author_seq":2,"op":"member.add"}),
+            ));
+        }
+        events
+    }
+    fn r1_apply(f: &R1Fixture, owner_seq: i64) -> Value {
+        r1_event(
+            f,
+            "team_commit_apply",
+            "ok",
+            Value::Null,
+            json!({"count":owner_seq+2+i64::from(f.adds_x)}),
+        )
+    }
+    impl R1Fixture {
+        fn new(removed: bool, adds_x: bool, deferred_hlc: Option<&str>) -> Self {
+            let reset = ScopedGateReset::new();
+            let root = TempDir::new().unwrap();
+            let make = |name| {
+                Arc::new(
+                    Context::initialize(
+                        root.path().join(name),
+                        "synthetic-admin",
+                        "synthetic-recovery",
+                        Config::default(),
+                        crate::clock::system(),
+                    )
+                    .unwrap(),
+                )
+            };
+            let ctx = make("owner");
+            let y_ctx = make("peer");
+            let owner = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+            let y = DeviceKey::load_or_create(y_ctx.state, y_ctx.kms).unwrap();
+            let x = DeviceKey::generate();
+            let alternative = DeviceKey {
+                sign_seed: y.sign_seed.clone(),
+                agree_private: DeviceKey::generate().agree_private,
+            };
+            let fp = owner.fingerprint().unwrap();
+            let yfp = y.fingerprint().unwrap();
+            assert_eq!(alternative.fingerprint().unwrap(), yfp);
+            assert_ne!(alternative.record().unwrap(), y.record().unwrap());
+            assert!(alternative.record().unwrap().verify() && y.record().unwrap().verify());
+            let env = format!("{fp}-0123456789abcdef0123456789abcdef");
+            let wrap =
+                envelope::wrap_dek(&[7; 32], &env, GENERATION, &owner.record().unwrap()).unwrap();
+            let init = r1_signed(
+                &ctx,
+                &env,
+                &owner,
+                1,
+                "1000000-0000",
+                vec![
+                    json!({"op":"env.init","owner_device":owner.record().unwrap().to_dict(),
+                    "owner_name":"synthetic-r1-owner","generation_id":GENERATION,"wraps":{fp.clone():wrap}}),
+                ],
+            );
+            r1_receive(&ctx, &env, &init, 1_000_100);
+            let add = r1_signed(&ctx, &env, &owner, 2, "1000010-0000", vec![r1_member(&y)]);
+            r1_receive(&ctx, &env, &add, 1_000_100);
+            let y1 = r1_signed(&ctx, &env, &y, 1, "1000001-0007", vec![r1_settings(17)]);
+            r1_receive(&ctx, &env, &y1, 1_000_100);
+            let mut originals = vec![init, add, y1];
+            let n = if removed { 4 } else { 3 };
+            let mut deferred = None;
+            let defer = |deferred: &mut Option<Commit>| {
+                if let Some(hlc) = deferred_hlc {
+                    let d = r1_signed(&ctx, &env, &owner, n + 1, hlc, vec![r1_settings(37)]);
+                    assert_eq!(
+                        commit::receive_commit(
+                            &CommitStore::new(ctx.state, &env),
+                            &d,
+                            0,
+                            Some(ctx.audit)
+                        )
+                        .unwrap(),
+                        "deferred"
+                    );
+                    *deferred = Some(d);
+                }
+            };
+            if !removed {
+                defer(&mut deferred);
+            }
+            let put = r1_signed(
+                &ctx,
+                &env,
+                &owner,
+                3,
+                "1000020-0007",
+                vec![r1_put(&env, VERSION)],
+            );
+            r1_receive(&ctx, &env, &put, 1_000_100);
+            originals.push(put);
+            if removed {
+                defer(&mut deferred);
+                let removal = r1_signed(
+                    &ctx,
+                    &env,
+                    &owner,
+                    4,
+                    "1000021-0000",
+                    vec![json!({"op":"member.remove","fingerprint":yfp})],
+                );
+                r1_receive(&ctx, &env, &removal, 1_000_100);
+                originals.push(removal);
+            }
+            for original in &originals {
+                r1_receive(&y_ctx, &env, original, 1_000_100);
+            }
+            let team = r1_team(ctx.clone(), owner, &env);
+            if !removed {
+                let session: Arc<dyn Session> = Arc::new(ClockSession {
+                    ctx: ctx.clone(),
+                    env: env.clone(),
+                    peer: y.record().unwrap(),
+                    sent: Mutex::new(Vec::new()),
+                    created: Instant::now(),
+                });
+                team.handle_vector(
+                    &env,
+                    &session,
+                    &json!({"type":"VECTOR","vector":{fp.clone():3,yfp.clone():1}}),
+                )
+                .unwrap();
+            }
+            assert_eq!(
+                team.compact(&env).unwrap(),
+                json!({"env_id":env,"removed":2,"blocked_by":[]})
+            );
+            let path = ctx
+                .state
+                .path
+                .join(format!("team/{env}/compaction_heads.json"));
+            let initial_cache = std::fs::read(&path).unwrap();
+            let cache = ctx
+                .state
+                .read_json(&format!("team/{env}/compaction_heads.json"), Value::Null)
+                .unwrap();
+            assert_eq!(cache["vector"], json!({fp.clone():n,yfp.clone():1}));
+            let slot = cache["heads"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|h| h["author"] == yfp)
+                .unwrap();
+            assert_eq!(slot["device"], y.record().unwrap().to_dict());
+            r1_same(&Commit::from_dict(&slot["commit"]).unwrap(), &originals[2]);
+            assert!(
+                CommitStore::new(ctx.state, &env)
+                    .get(&yfp, 1)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                CommitStore::new(ctx.state, &env)
+                    .get(&fp, 3)
+                    .unwrap()
+                    .is_none()
+            );
+            let mut attack = vec![r1_signed(
+                &ctx,
+                &env,
+                &y,
+                2,
+                if adds_x {
+                    "1000030-0000"
+                } else {
+                    "1000002-0000"
+                },
+                vec![r1_member(if adds_x { &x } else { &alternative })],
+            )];
+            r1_receive(&ctx, &env, &attack[0], 1_000_100);
+            if adds_x {
+                let x1 = r1_signed(&ctx, &env, &x, 1, "1-0000", vec![r1_member(&alternative)]);
+                r1_receive(&ctx, &env, &x1, 1_000_100);
+                attack.push(x1);
+            }
+            originals.extend(attack);
+            let live = CommitStore::new(ctx.state, &env).all_commits().unwrap();
+            assert_eq!(
+                commit::device_registry(&live)[&yfp],
+                alternative.record().unwrap()
+            );
+            let loaded = r1_membership::load_environment(&ctx, &env).unwrap();
+            assert_eq!(
+                loaded.document["members"][&yfp]["status"],
+                if removed { "removed" } else { "active" }
+            );
+            assert!(
+                loaded.document["members"]
+                    .get(x.fingerprint().unwrap())
+                    .is_none()
+            );
+            assert_eq!(loaded.version_order["s"], json!([VERSION]));
+            assert_eq!(
+                loaded.document["secrets"]["s"]["versions"][VERSION]["status"],
+                "staged"
+            );
+            assert_eq!(std::fs::read(path).unwrap(), initial_cache);
+            Self {
+                _root: root,
+                _reset: reset,
+                ctx,
+                y_ctx,
+                team,
+                y,
+                x,
+                env,
+                fp,
+                yfp,
+                removed,
+                adds_x,
+                n,
+                originals,
+                deferred,
+                initial_cache,
+            }
+        }
+        fn store(&self) -> CommitStore<'_> {
+            CommitStore::new(self.ctx.state, &self.env)
+        }
+        fn cache_path(&self) -> std::path::PathBuf {
+            self.ctx
+                .state
+                .path
+                .join(format!("team/{}/compaction_heads.json", self.env))
+        }
+        fn next(&self, hlc: &str) -> Commit {
+            r1_signed(
+                &self.ctx,
+                &self.env,
+                &self.team.device,
+                self.n + 1,
+                hlc,
+                vec![r1_settings(37)],
+            )
+        }
+        fn h(&self) -> &'static str {
+            if self.adds_x {
+                "1000030-0001"
+            } else if self.removed {
+                "1000021-0001"
+            } else {
+                "1000020-0008"
+            }
+        }
+        fn vector(&self, owner_seq: i64) -> BTreeMap<String, PyInt> {
+            let mut vector = BTreeMap::from([
+                (self.fp.clone(), owner_seq.into()),
+                (self.yfp.clone(), 2.into()),
+            ]);
+            if self.adds_x {
+                vector.insert(self.x.fingerprint().unwrap(), 1.into());
+            }
+            vector
+        }
+        fn observer(&self) -> Arc<ClockSession> {
+            let observer = r1_session(self, DeviceKey::generate().record().unwrap());
+            let fp = observer.peer.fingerprint();
+            let mut envs = self.team.envs.lock().unwrap();
+            let env = envs.get_mut(&self.env).unwrap();
+            env.sessions.insert(fp.clone(), observer.clone());
+            env.gates.insert(
+                fp,
+                super::super::tombstone_gate::Gate {
+                    caps_sent: true,
+                    ..Default::default()
+                },
+            );
+            observer
+        }
+        fn cover_peer(&self, team: &TeamSync, extra: &[Commit], owner_seq: i64) {
+            if self.removed {
+                return;
+            }
+            let store = CommitStore::new(self.y_ctx.state, &self.env);
+            for original in self.originals.iter().chain(extra) {
+                let expected = if store
+                    .get(&original.author, original.author_seq.clone())
+                    .unwrap()
+                    .is_some()
+                {
+                    "duplicate"
+                } else {
+                    "accepted"
+                };
+                assert_eq!(
+                    commit::receive_commit(&store, original, 1_000_100, Some(self.y_ctx.audit))
+                        .unwrap(),
+                    expected
+                );
+            }
+            assert_eq!(store.vector().unwrap(), self.vector(owner_seq));
+            let session: Arc<dyn Session> = r1_session(self, self.y.record().unwrap());
+            team.handle_vector(
+                &self.env,
+                &session,
+                &json!({"type":"VECTOR","vector":store.vector().unwrap()}),
+            )
+            .unwrap();
+        }
+        fn strict_compaction_refusal(&self, team: &TeamSync) {
+            let before = r1_files(&self.ctx, &self.env);
+            let error = team.compact(&self.env).unwrap_err();
+            assert_eq!(error.class, crate::errors::ErrorClass::StateError);
+            assert_eq!(error.reason, "team_compaction_head_invalid");
+            assert!(error.detail.is_empty());
+            assert_eq!(r1_files(&self.ctx, &self.env), before);
+            assert_eq!(
+                std::fs::read(self.cache_path()).unwrap(),
+                self.initial_cache
+            );
+        }
+    }
+
+    #[test]
+    fn compaction_heads_r1_other_author_receipt_handle_and_compaction() {
+        for removed in [false, true] {
+            for adds_x in [false, true] {
+                for handle in [false, true] {
+                    let f = R1Fixture::new(removed, adds_x, None);
+                    let next = f.next("1000040-0007");
+                    let observer = f.observer();
+                    let sender: Arc<dyn Session> = r1_session(&f, f.y.record().unwrap());
+                    let before = r1_files(&f.ctx, &f.env);
+                    let audit = r1_audit(&f.ctx);
+                    if handle {
+                        f.team
+                            .handle_commit(
+                                &f.env,
+                                &sender,
+                                &json!({"type":"COMMIT","commit":next.to_dict()}),
+                            )
+                            .unwrap();
+                        let mut expected = r1_skips(&f, 1);
+                        expected.push(r1_apply(&f, f.n + 1));
+                        r1_check_audit(&f, &audit, expected);
+                        assert_eq!(
+                            *observer.sent.lock().unwrap(),
+                            vec![json!({"type":"COMMIT","commit":next.to_dict()})]
+                        );
+                    } else {
+                        assert_eq!(
+                            commit::receive_commit(&f.store(), &next, 1_000_100, Some(f.ctx.audit))
+                                .unwrap(),
+                            "accepted"
+                        );
+                        r1_check_audit(&f, &audit, Vec::new());
+                    }
+                    r1_same(&f.store().get(&f.fp, f.n + 1).unwrap().unwrap(), &next);
+                    assert_eq!(f.store().vector().unwrap(), f.vector(f.n + 1));
+                    let mut expected = before.clone();
+                    let saved_path = format!("commits/{}/{}.json", f.fp, f.n + 1);
+                    expected.insert(
+                        saved_path.clone(),
+                        scoped_gate_file(
+                            &f.ctx
+                                .state
+                                .path
+                                .join(format!("team/{}/{saved_path}", f.env)),
+                        )
+                        .unwrap(),
+                    );
+                    let after = r1_files(&f.ctx, &f.env);
+                    assert_eq!(after, expected);
+                    assert_eq!(
+                        f.ctx
+                            .state
+                            .read_json(&format!("team/{}/{saved_path}", f.env), Value::Null)
+                            .unwrap(),
+                        next.to_dict()
+                    );
+                    assert!(
+                        !after
+                            .keys()
+                            .any(|p| p.starts_with("rejected/") || p.starts_with("deferred/"))
+                    );
+                    let audit = r1_audit(&f.ctx);
+                    let files = r1_files(&f.ctx, &f.env);
+                    let sent = observer.sent.lock().unwrap().clone();
+                    assert_eq!(
+                        commit::receive_commit(&f.store(), &next, 1_000_100, Some(f.ctx.audit))
+                            .unwrap(),
+                        "duplicate"
+                    );
+                    f.team
+                        .handle_commit(
+                            &f.env,
+                            &sender,
+                            &json!({"type":"COMMIT","commit":next.to_dict()}),
+                        )
+                        .unwrap();
+                    assert_eq!(r1_files(&f.ctx, &f.env), files);
+                    r1_check_audit(&f, &audit, Vec::new());
+                    assert_eq!(*observer.sent.lock().unwrap(), sent);
+                    assert_eq!(
+                        r1_membership::load_environment(&f.ctx, &f.env)
+                            .unwrap()
+                            .document["settings"]["sync_interval_seconds"],
+                        37
+                    );
+                    if !removed {
+                        assert_eq!(
+                            f.team.compact(&f.env).unwrap(),
+                            json!({"env_id":f.env,"removed":0,"blocked_by":[f.yfp.clone()]})
+                        );
+                    }
+                    f.cover_peer(&f.team, std::slice::from_ref(&next), f.n + 1);
+                    f.strict_compaction_refusal(&f.team);
+                    let reopened = Arc::new(
+                        Context::open(&f.ctx.state.path, Config::default(), crate::clock::system())
+                            .unwrap(),
+                    );
+                    let team = r1_team(reopened, f.team.device.clone(), &f.env);
+                    f.cover_peer(&team, std::slice::from_ref(&next), f.n + 1);
+                    f.strict_compaction_refusal(&team);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn compaction_heads_r1_deferred_release_preserves_clock_and_evidence() {
+        for removed in [false, true] {
+            for adds_x in [false, true] {
+                for row in ["good", "equal", "lower", "corrupt"] {
+                    let hlc = match row {
+                        "equal" => {
+                            if removed {
+                                "1000021-0000"
+                            } else {
+                                "1000020-0007"
+                            }
+                        }
+                        "lower" => {
+                            if removed {
+                                "1000020-0009"
+                            } else {
+                                "1000020-0006"
+                            }
+                        }
+                        _ => "1000040-0007",
+                    };
+                    let f = R1Fixture::new(removed, adds_x, Some(hlc));
+                    let d = f.deferred.as_ref().unwrap();
+                    let dpath = f.ctx.state.path.join(format!(
+                        "team/{}/deferred/{}-{:010}.json",
+                        f.env,
+                        f.fp,
+                        f.n + 1
+                    ));
+                    let original = std::fs::read(&dpath).unwrap();
+                    if row == "corrupt" {
+                        std::fs::write(f.cache_path(), b"{bad-owned-cache").unwrap();
+                    }
+                    let before = r1_files(&f.ctx, &f.env);
+                    let audit = r1_audit(&f.ctx);
+                    let result = f.store().release_deferred(1_000_100, Some(f.ctx.audit));
+                    if row == "corrupt" {
+                        let error = result.unwrap_err();
+                        assert_eq!(error.reason, "team_compaction_head_invalid");
+                        assert!(error.detail.is_empty());
+                        assert_eq!(r1_files(&f.ctx, &f.env), before);
+                        assert_eq!(std::fs::read(&dpath).unwrap(), original);
+                        r1_check_audit(&f, &audit, Vec::new());
+                        assert_eq!(
+                            f.store()
+                                .release_deferred(1_000_100, Some(f.ctx.audit))
+                                .unwrap_err()
+                                .reason,
+                            "team_compaction_head_invalid"
+                        );
+                    } else if row == "good" {
+                        let released = result.unwrap();
+                        assert_eq!(released.len(), 1);
+                        r1_same(&released[0], d);
+                        r1_same(&f.store().get(&f.fp, f.n + 1).unwrap().unwrap(), d);
+                        assert_eq!(f.store().vector().unwrap(), f.vector(f.n + 1));
+                        assert!(!dpath.exists());
+                        r1_check_audit(&f, &audit, Vec::new());
+                        assert!(
+                            !r1_files(&f.ctx, &f.env)
+                                .keys()
+                                .any(|p| p.starts_with("rejected/"))
+                        );
+                    } else {
+                        assert!(result.unwrap().is_empty());
+                        assert!(!dpath.exists());
+                        assert!(f.store().get(&f.fp, f.n + 1).unwrap().is_none());
+                        let path = f.ctx.state.path.join(format!(
+                            "team/{}/rejected/{}-{:010}-{}.json",
+                            f.env,
+                            f.fp,
+                            f.n + 1,
+                            &d.hash().unwrap()[..12]
+                        ));
+                        let mut rejected = f
+                            .ctx
+                            .state
+                            .read_json(
+                                path.strip_prefix(&f.ctx.state.path)
+                                    .unwrap()
+                                    .to_str()
+                                    .unwrap(),
+                                Value::Null,
+                            )
+                            .unwrap();
+                        assert_eq!(
+                            rejected.as_object_mut().unwrap().remove("rejected_reason"),
+                            Some(json!("team_hlc_not_monotone"))
+                        );
+                        assert_eq!(rejected, d.to_dict());
+                        r1_same(&Commit::from_dict(&rejected).unwrap(), d);
+                        assert_eq!(f.store().vector().unwrap(), f.vector(f.n));
+                        r1_check_audit(
+                            &f,
+                            &audit,
+                            vec![r1_event(
+                                &f,
+                                "team_commit_rejected",
+                                "denied",
+                                json!("team_hlc_not_monotone"),
+                                json!({"fingerprint":f.fp,"author_seq":f.n+1}),
+                            )],
+                        );
+                    }
+                    if row != "corrupt" {
+                        let files = r1_files(&f.ctx, &f.env);
+                        let audit = r1_audit(&f.ctx);
+                        assert!(
+                            f.store()
+                                .release_deferred(1_000_100, Some(f.ctx.audit))
+                                .unwrap()
+                                .is_empty()
+                        );
+                        assert_eq!(r1_files(&f.ctx, &f.env), files);
+                        r1_check_audit(&f, &audit, Vec::new());
+                    }
+                }
+                if !removed {
+                    let f = R1Fixture::new(false, adds_x, Some("1000040-0007"));
+                    let d = f.deferred.as_ref().unwrap();
+                    let observer = f.observer();
+                    assert!(
+                        f.team
+                            .advance_env(&f.env, Instant::now())
+                            .unwrap()
+                            .is_none()
+                    );
+                    r1_same(&f.store().get(&f.fp, f.n + 1).unwrap().unwrap(), d);
+                    assert!(f.store().deferred_commits().unwrap().is_empty());
+                    let count = observer
+                        .sent
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .filter(|m| m["type"] == "COMMIT" && m["commit"] == d.to_dict())
+                        .count();
+                    assert_eq!(count, 1);
+                    assert!(
+                        f.team
+                            .advance_env(&f.env, Instant::now())
+                            .unwrap()
+                            .is_none()
+                    );
+                    assert_eq!(
+                        observer
+                            .sent
+                            .lock()
+                            .unwrap()
+                            .iter()
+                            .filter(|m| m["type"] == "COMMIT" && m["commit"] == d.to_dict())
+                            .count(),
+                        1
+                    );
+                }
+            }
+        }
+    }
+
+    fn r1_fact_target(f: &R1Fixture, kind: &str) -> Value {
+        if kind == "member_removed" {
+            json!({"fingerprint":f.yfp})
+        } else {
+            json!({"secret_id":"s"})
+        }
+    }
+    fn r1_fact_apply_event(f: &R1Fixture, kind: &str, standalone: bool) -> Value {
+        let mut event = r1_event(
+            f,
+            "team_fact_apply",
+            "ok",
+            Value::Null,
+            if standalone {
+                json!({"kind":kind})
+            } else {
+                json!({"kind":kind,"fingerprint":f.fp})
+            },
+        );
+        if standalone {
+            event["caller"] = json!("admin");
+        }
+        event
+    }
+    fn r1_assert_fact(f: &R1Fixture, fact: &Fact, kind: &str, h: &str) {
+        assert_eq!(fact.format, FACT_FORMAT);
+        assert_eq!(fact.env_id, f.env);
+        assert_eq!(fact.author, f.fp);
+        assert_eq!(fact.kind, kind);
+        assert_eq!(fact.target, r1_fact_target(f, kind));
+        assert_eq!(fact.hlc, h);
+        assert!(verify_fact(fact, &f.team.device.record().unwrap()));
+        assert_eq!(Fact::from_dict(&fact.to_dict()).unwrap(), *fact);
+    }
+    fn r1_stored_fact(f: &R1Fixture, fact: &Fact, kind: &str) {
+        let lines = f
+            .ctx
+            .state
+            .read_lines(&format!("team/{}/facts.jsonl", f.env), None)
+            .unwrap();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(
+            Fact::from_dict(&pyjson::loads(&lines[0]).unwrap()).unwrap(),
+            *fact
+        );
+        let admissions = f
+            .ctx
+            .state
+            .read_lines(&format!("team/{}/fact_admissions.jsonl", f.env), None)
+            .unwrap();
+        assert_eq!(admissions.len(), 1);
+        let receipt = pyjson::loads(&admissions[0]).unwrap();
+        assert_eq!(receipt["hash"], fact.hash().unwrap());
+        let message = canon(
+            &json!({"domain":"zeropw-local-fact-admission-v1","env_id":f.env,
+            "hash":fact.hash().unwrap()}),
+        )
+        .unwrap();
+        let sig = pybase64::b64decode(receipt["sig"].as_str().unwrap()).unwrap();
+        assert!(super::super::verify_signature(
+            &f.team.device.record().unwrap().sign_pub,
+            &message,
+            &sig
+        ));
+        let (facts, hashes, _) = load_facts(&f.ctx, &f.env).unwrap();
+        assert_eq!(hashes, HashSet::from([fact.hash().unwrap()]));
+        assert!(
+            !f.ctx
+                .state
+                .exists(&format!("team/{}/rejected_facts.jsonl", f.env))
+        );
+        if kind == "member_removed" {
+            assert!(facts.removed_members.contains(&f.yfp));
+        } else {
+            assert!(facts.deleted_secrets.contains("s"));
+            assert!(facts.tombstone_facts.contains_key(&fact.hash().unwrap()));
+            assert!(crate::tombstone::is_deleted(f.ctx.state, "s", Some(&f.env)).unwrap());
+            assert_eq!(
+                crate::tombstone::require_live(f.ctx.state, "s", Some(&f.env))
+                    .unwrap_err()
+                    .reason,
+                "secret_deleted"
+            );
+        }
+    }
+
+    #[test]
+    fn compaction_heads_r1_owner_data_removal_and_both_fact_paths() {
+        for removed in [false, true] {
+            for adds_x in [false, true] {
+                for attached in [false, true] {
+                    for op in ["data", "remove"] {
+                        let f = R1Fixture::new(removed, adds_x, None);
+                        testing::set_author_wall(Some(1));
+                        let before = r1_files(&f.ctx, &f.env);
+                        let audit = r1_audit(&f.ctx);
+                        let ops = if op == "data" {
+                            vec![r1_put(&f.env, "8899aabbccddeeff")]
+                        } else {
+                            vec![json!({"op":"member.remove","fingerprint":f.yfp})]
+                        };
+                        let result = r1_membership::author_commit(
+                            &f.ctx,
+                            if attached {
+                                Some(f.team.as_ref())
+                            } else {
+                                None
+                            },
+                            &f.env,
+                            ops,
+                        );
+                        if op == "remove" && removed {
+                            let error = result.unwrap_err();
+                            assert_eq!(error.class, crate::errors::ErrorClass::NotFound);
+                            assert_eq!(error.reason, "member_not_found");
+                            assert_eq!(r1_files(&f.ctx, &f.env), before);
+                            r1_check_audit(&f, &audit, Vec::new());
+                            continue;
+                        }
+                        let original = result.unwrap();
+                        assert_eq!(original.author, f.fp);
+                        assert_eq!(original.author_seq, PyInt::from(f.n + 1));
+                        assert_eq!(original.hlc, f.h());
+                        assert!(commit::verify_commit(
+                            &original,
+                            &f.team.device.record().unwrap()
+                        ));
+                        r1_same(&f.store().get(&f.fp, f.n + 1).unwrap().unwrap(), &original);
+                        let mut expected = r1_skips(&f, if op == "data" { 3 } else { 1 });
+                        expected.push(r1_apply(&f, f.n + 1));
+                        r1_check_audit(&f, &audit, expected);
+                        let loaded = r1_membership::load_environment(&f.ctx, &f.env).unwrap();
+                        if op == "data" {
+                            assert_eq!(
+                                loaded.version_order["s"],
+                                json!([VERSION, "8899aabbccddeeff"])
+                            );
+                            for version in [VERSION, "8899aabbccddeeff"] {
+                                assert_eq!(
+                                    loaded.document["secrets"]["s"]["versions"][version]["status"],
+                                    "staged"
+                                );
+                            }
+                        } else {
+                            assert_eq!(loaded.document["members"][&f.yfp]["status"], "removed");
+                            let after = r1_membership::author_commit(
+                                &f.ctx,
+                                None,
+                                &f.env,
+                                vec![r1_settings(41)],
+                            )
+                            .unwrap();
+                            assert_eq!(
+                                after.hlc,
+                                if adds_x {
+                                    "1000030-0002"
+                                } else {
+                                    "1000020-0009"
+                                }
+                            );
+                            assert_eq!(after.author_seq, PyInt::from(f.n + 2));
+                            r1_same(&f.store().get(&f.fp, f.n + 2).unwrap().unwrap(), &after);
+                            f.strict_compaction_refusal(&f.team);
+                        }
+                        assert_eq!(std::fs::read(f.cache_path()).unwrap(), f.initial_cache);
+                    }
+                }
+                for kind in ["member_removed", "secret_deleted"] {
+                    for path in ["standalone", "sign", "publish"] {
+                        let f = R1Fixture::new(removed, adds_x, None);
+                        testing::set_author_wall(Some(1));
+                        f.team.envs.lock().unwrap().get_mut(&f.env).unwrap().hlc = Hlc::new(1, 0);
+                        let observer = if path == "sign" {
+                            Some(f.observer())
+                        } else {
+                            None
+                        };
+                        let before = r1_files(&f.ctx, &f.env);
+                        let tombstone =
+                            scoped_gate_file(&f.ctx.state.path.join("vault/tombstones.json"));
+                        let audit = r1_audit(&f.ctx);
+                        if path == "sign" {
+                            let first = f
+                                .team
+                                .sign_authorized_fact(&f.env, kind, r1_fact_target(&f, kind))
+                                .unwrap();
+                            let second = f
+                                .team
+                                .sign_authorized_fact(&f.env, kind, r1_fact_target(&f, kind))
+                                .unwrap();
+                            r1_assert_fact(&f, &first, kind, f.h());
+                            let next = if adds_x {
+                                "1000030-0002"
+                            } else if removed {
+                                "1000021-0002"
+                            } else {
+                                "1000020-0009"
+                            };
+                            r1_assert_fact(&f, &second, kind, next);
+                            assert_eq!(f.team.envs.lock().unwrap()[&f.env].hlc.render(), next);
+                            assert_eq!(r1_files(&f.ctx, &f.env), before);
+                            assert_eq!(
+                                scoped_gate_file(&f.ctx.state.path.join("vault/tombstones.json")),
+                                tombstone
+                            );
+                            assert!(observer.as_ref().unwrap().sent.lock().unwrap().is_empty());
+                            assert!(f.team.deferred_sends.lock().unwrap().is_empty());
+                            r1_check_audit(
+                                &f,
+                                &audit,
+                                r1_skips(&f, if kind == "secret_deleted" { 2 } else { 0 }),
+                            );
+                        } else {
+                            let value = if path == "standalone" {
+                                r1_membership::author_fact(
+                                    &f.ctx,
+                                    None,
+                                    &f.env,
+                                    kind,
+                                    r1_fact_target(&f, kind),
+                                )
+                                .unwrap()
+                            } else {
+                                f.team
+                                    .publish_fact(&f.env, kind, r1_fact_target(&f, kind))
+                                    .unwrap()
+                            };
+                            let fact = Fact::from_dict(&value).unwrap();
+                            r1_assert_fact(&f, &fact, kind, f.h());
+                            let mut expected = r1_skips(
+                                &f,
+                                if path == "standalone" || kind == "secret_deleted" {
+                                    1
+                                } else {
+                                    0
+                                },
+                            );
+                            if path == "standalone" {
+                                expected.push(r1_fact_apply_event(&f, kind, true));
+                            }
+                            expected.extend(r1_skips(&f, 1));
+                            expected.push(r1_apply(&f, f.n));
+                            if path == "publish" {
+                                expected.push(r1_fact_apply_event(&f, kind, false));
+                            }
+                            r1_check_audit(&f, &audit, expected);
+                            r1_stored_fact(&f, &fact, kind);
+                            assert_eq!(f.store().vector().unwrap(), f.vector(f.n));
+                            assert_eq!(std::fs::read(f.cache_path()).unwrap(), f.initial_cache);
+                            let after = r1_files(&f.ctx, &f.env);
+                            for (name, bytes) in &before {
+                                assert_eq!(after.get(name), Some(bytes));
+                            }
+                            assert_eq!(
+                                after
+                                    .keys()
+                                    .filter(|key| !before.contains_key(*key))
+                                    .cloned()
+                                    .collect::<BTreeSet<_>>(),
+                                BTreeSet::from([
+                                    "facts.jsonl".into(),
+                                    "fact_admissions.jsonl".into()
+                                ])
+                            );
+                            // A duplicate local publication never creates another signed admission.
+                            if path == "publish" {
+                                f.team.publish_signed_fact(&f.env, fact.clone()).unwrap();
+                                assert_eq!(
+                                    f.ctx
+                                        .state
+                                        .read_lines(&format!("team/{}/facts.jsonl", f.env), None)
+                                        .unwrap()
+                                        .len(),
+                                    1
+                                );
+                                assert_eq!(
+                                    f.ctx
+                                        .state
+                                        .read_lines(
+                                            &format!("team/{}/fact_admissions.jsonl", f.env),
+                                            None
+                                        )
+                                        .unwrap()
+                                        .len(),
+                                    1
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn r1_remove_announcement(f: &R1Fixture, all: bool) {
+        let _lock = f.ctx.state.lock().unwrap();
+        for entry in f.store().all_commits().unwrap() {
+            let mut value = entry.to_dict();
+            let before = value["ops"].clone();
+            value["ops"].as_array_mut().unwrap().retain(|op| {
+                let Some(record) = op
+                    .get("device")
+                    .and_then(|v| DeviceRecord::from_dict(v).ok())
+                else {
+                    return true;
+                };
+                !(record.fingerprint() == f.yfp && (all || record == f.y.record().unwrap()))
+            });
+            if value["ops"] != before {
+                f.ctx
+                    .state
+                    .write_json(
+                        &format!(
+                            "team/{}/commits/{}/{}.json",
+                            f.env, entry.author, entry.author_seq
+                        ),
+                        &value,
+                    )
+                    .unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn compaction_heads_r1_local_failures_and_authority_remain_closed() {
+        for removed in [false, true] {
+            for adds_x in [false, true] {
+                let mutations = if !removed && !adds_x {
+                    vec![
+                        "malformed",
+                        "no-equal",
+                        "unreadable",
+                        "nonregular",
+                        "oversize",
+                        "absent",
+                        "incoming-equal",
+                        "deferred-equal",
+                    ]
+                } else {
+                    vec!["malformed", "no-equal"]
+                };
+                for mutation in mutations {
+                    for action in [
+                        "receive",
+                        "handle",
+                        "release",
+                        "author",
+                        "standalone-removed",
+                        "standalone-deleted",
+                        "sign-removed",
+                        "sign-deleted",
+                        "publish-removed",
+                        "publish-deleted",
+                    ] {
+                        let f = R1Fixture::new(removed, adds_x, Some("1000040-0007"));
+                        testing::set_author_wall(Some(1));
+                        f.team.envs.lock().unwrap().get_mut(&f.env).unwrap().hlc = Hlc::new(1, 0);
+                        if mutation == "deferred-equal" {
+                            let d = r1_signed(
+                                &f.ctx,
+                                &f.env,
+                                &f.team.device,
+                                f.n + 1,
+                                "1000040-0007",
+                                vec![r1_settings(37), r1_member(&f.y)],
+                            );
+                            assert_eq!(
+                                commit::receive_commit(&f.store(), &d, 0, Some(f.ctx.audit))
+                                    .unwrap(),
+                                "deferred"
+                            );
+                        }
+                        let old_permissions =
+                            std::fs::metadata(f.cache_path()).unwrap().permissions();
+                        let mut before = if mutation == "unreadable" {
+                            Some(r1_files(&f.ctx, &f.env))
+                        } else {
+                            None
+                        };
+                        struct R1Restore(std::path::PathBuf, std::fs::Permissions);
+                        impl Drop for R1Restore {
+                            fn drop(&mut self) {
+                                std::fs::set_permissions(&self.0, self.1.clone()).unwrap();
+                            }
+                        }
+                        let restore = if mutation == "unreadable" {
+                            Some(R1Restore(f.cache_path(), old_permissions))
+                        } else {
+                            None
+                        };
+                        match mutation {
+                            "malformed" => {
+                                std::fs::write(f.cache_path(), b"{bad-owned-cache").unwrap()
+                            }
+                            "no-equal" | "incoming-equal" | "deferred-equal" => {
+                                r1_remove_announcement(&f, false)
+                            }
+                            "absent" => r1_remove_announcement(&f, true),
+                            "nonregular" => {
+                                std::fs::remove_file(f.cache_path()).unwrap();
+                                std::fs::create_dir(f.cache_path()).unwrap();
+                            }
+                            "oversize" => std::fs::File::create(f.cache_path())
+                                .unwrap()
+                                .set_len(16_777_217)
+                                .unwrap(),
+                            "unreadable" => {
+                                #[cfg(unix)]
+                                {
+                                    use std::os::unix::fs::PermissionsExt;
+                                    std::fs::set_permissions(
+                                        f.cache_path(),
+                                        std::fs::Permissions::from_mode(0o0),
+                                    )
+                                    .unwrap();
+                                    assert!(
+                                        std::fs::File::open(f.cache_path()).is_err(),
+                                        "unprivileged isolated runner required"
+                                    );
+                                }
+                            }
+                            _ => unreachable!(),
+                        }
+                        if before.is_none() {
+                            before = Some(r1_files(&f.ctx, &f.env));
+                        }
+                        let before = before.unwrap();
+                        let audit = r1_audit(&f.ctx);
+                        let next = if mutation == "incoming-equal" {
+                            r1_signed(
+                                &f.ctx,
+                                &f.env,
+                                &f.team.device,
+                                f.n + 1,
+                                "1000040-0007",
+                                vec![r1_settings(37), r1_member(&f.y)],
+                            )
+                        } else {
+                            f.next("1000040-0007")
+                        };
+                        let kind = if action.ends_with("removed") {
+                            "member_removed"
+                        } else {
+                            "secret_deleted"
+                        };
+                        let error = match action {
+                            "receive" => commit::receive_commit(
+                                &f.store(),
+                                &next,
+                                1_000_100,
+                                Some(f.ctx.audit),
+                            )
+                            .unwrap_err(),
+                            "handle" => {
+                                let sender: Arc<dyn Session> =
+                                    r1_session(&f, f.y.record().unwrap());
+                                f.team
+                                    .handle_commit(
+                                        &f.env,
+                                        &sender,
+                                        &json!({"type":"COMMIT","commit":next.to_dict()}),
+                                    )
+                                    .unwrap_err()
+                            }
+                            "release" => f
+                                .store()
+                                .release_deferred(1_000_100, Some(f.ctx.audit))
+                                .unwrap_err(),
+                            "author" => r1_membership::author_commit(
+                                &f.ctx,
+                                None,
+                                &f.env,
+                                vec![r1_settings(37)],
+                            )
+                            .unwrap_err(),
+                            p if p.starts_with("standalone") => r1_membership::author_fact(
+                                &f.ctx,
+                                None,
+                                &f.env,
+                                kind,
+                                r1_fact_target(&f, kind),
+                            )
+                            .unwrap_err(),
+                            p if p.starts_with("sign") => f
+                                .team
+                                .sign_authorized_fact(&f.env, kind, r1_fact_target(&f, kind))
+                                .unwrap_err(),
+                            _ => f
+                                .team
+                                .publish_fact(&f.env, kind, r1_fact_target(&f, kind))
+                                .unwrap_err(),
+                        };
+                        assert_eq!(error.class, crate::errors::ErrorClass::StateError);
+                        assert_eq!(
+                            error.reason,
+                            if mutation == "oversize" {
+                                "team_compaction_head_limit_exceeded"
+                            } else if mutation == "absent" {
+                                "team_compaction_head_unavailable"
+                            } else {
+                                "team_compaction_head_invalid"
+                            }
+                        );
+                        assert!(error.detail.is_empty());
+                        if mutation == "unreadable" {
+                            #[cfg(unix)]
+                            {
+                                use std::os::unix::fs::PermissionsExt;
+                                assert_eq!(
+                                    std::fs::metadata(f.cache_path())
+                                        .unwrap()
+                                        .permissions()
+                                        .mode()
+                                        & 0o777,
+                                    0
+                                );
+                            }
+                            drop(restore);
+                        }
+                        assert_eq!(r1_files(&f.ctx, &f.env), before);
+                        let rounds = if mutation == "absent" {
+                            // This local-corruption row removes every Y
+                            // announcement, including Y:2's sole operation.
+                            // There is no remaining member.add to audit.
+                            assert!(!adds_x);
+                            0
+                        } else {
+                            usize::from(
+                                action.starts_with("standalone")
+                                    || action == "sign-deleted"
+                                    || action == "publish-deleted",
+                            )
+                        };
+                        let expected_audit = r1_skips(&f, rounds);
+                        assert_eq!(
+                            r1_audit(&f.ctx).len(),
+                            audit.len() + expected_audit.len(),
+                            "r1 negative audit: removed={removed} adds_x={adds_x} mutation={mutation} action={action}"
+                        );
+                        r1_check_audit(&f, &audit, expected_audit);
+                        assert_eq!(f.team.envs.lock().unwrap()[&f.env].hlc.render(), "1-0000");
+                        assert!(f.store().get(&f.fp, f.n + 1).unwrap().is_none());
+                        assert_eq!(f.store().deferred_commits().unwrap().len(), 1);
+                    }
+                }
+                // A real second Context owns Y; retained public records confer no editing authority.
+                let f = R1Fixture::new(removed, adds_x, None);
+                for original in &f.originals {
+                    if CommitStore::new(f.y_ctx.state, &f.env)
+                        .get(&original.author, original.author_seq.clone())
+                        .unwrap()
+                        .is_none()
+                    {
+                        r1_receive(&f.y_ctx, &f.env, original, 1_000_100);
+                    }
+                }
+                testing::set_author_wall(Some(1));
+                for op in [r1_settings(43), r1_put(&f.env, "8899aabbccddeeff")] {
+                    let error =
+                        r1_membership::author_commit(&f.y_ctx, None, &f.env, vec![op]).unwrap_err();
+                    assert_eq!(error.class, crate::errors::ErrorClass::PolicyDenied);
+                    assert_eq!(error.reason, "not_admin");
+                }
+                assert_eq!(
+                    r1_membership::author_fact(
+                        &f.y_ctx,
+                        None,
+                        &f.env,
+                        "secret_deleted",
+                        json!({"secret_id":"s"})
+                    )
+                    .unwrap_err()
+                    .reason,
+                    "team_fact_not_authorized"
+                );
+                assert_eq!(
+                    r1_membership::author_fact(
+                        &f.y_ctx,
+                        None,
+                        &f.env,
+                        "member_removed",
+                        json!({"fingerprint":f.fp})
+                    )
+                    .unwrap_err()
+                    .reason,
+                    "team_fact_not_authorized"
+                );
+                let self_remove = r1_membership::author_fact(
+                    &f.y_ctx,
+                    None,
+                    &f.env,
+                    "member_removed",
+                    json!({"fingerprint":f.yfp}),
+                )
+                .unwrap();
+                assert!(verify_fact(
+                    &Fact::from_dict(&self_remove).unwrap(),
+                    &f.y.record().unwrap()
+                ));
+                assert_eq!(
+                    r1_membership::author_commit(&f.y_ctx, None, &f.env, vec![r1_settings(43)])
+                        .unwrap_err()
+                        .reason,
+                    "member_removed"
+                );
+                assert_eq!(
+                    f.team
+                        .sign_authorized_fact(&f.env, "member_removed", json!({"fingerprint":f.fp}))
+                        .unwrap_err()
+                        .reason,
+                    "team_fact_not_authorized"
+                );
+                let mut wrong = r1_put(&f.env, "8899aabbccddeeff");
+                wrong["generation_id"] = json!("fedcba9876543210");
+                assert_eq!(
+                    r1_membership::author_commit(&f.ctx, None, &f.env, vec![wrong])
+                        .unwrap_err()
+                        .reason,
+                    "team_rekey_pending"
+                );
+                assert!(
+                    f.team.document(&f.env).unwrap()["members"]
+                        .get(f.x.fingerprint().unwrap())
+                        .is_none()
+                );
+                let forged = sign_fact(
+                    &f.x,
+                    &f.env,
+                    "secret_deleted",
+                    json!({"secret_id":"s"}),
+                    "1000040-0007",
+                )
+                .unwrap();
+                let sender: Arc<dyn Session> = r1_session(&f, f.x.record().unwrap());
+                f.team
+                    .handle_fact(
+                        &f.env,
+                        &sender,
+                        &json!({"type":"FACT","fact":forged.to_dict()}),
+                    )
+                    .unwrap();
+                assert!(load_facts(&f.ctx, &f.env).unwrap().1.is_empty());
+                assert!(!crate::tombstone::is_deleted(f.ctx.state, "s", Some(&f.env)).unwrap());
+                let last = r1_audit(&f.ctx).pop().unwrap();
+                assert_eq!(last["event"], "team_fact_rejected");
+                assert_eq!(last["reason"], "team_fact_signature_invalid");
+                assert!(f.store().get(&f.fp, f.n + 1).unwrap().is_none());
+            }
+        }
     }
 }

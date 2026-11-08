@@ -1,0 +1,11 @@
+# Root03 implementation freeze
+
+Actual implementer: gpt-6.1-sol / ultra, local Root coordinator in T3 Code; effective provider service tier not independently exposed. Product source was edited as text only. No source/helper/compiler/generator/formatter/build/test ran on the credential-bearing host.
+
+Product commit `10aac8748c472180d8dc59f9c362d525d610dedb` changes exactly three allowed files over `e47ab31a1886237ee970749508bde99df38d97f3`. Rust tree `edf8e2dff3e1079317d87afc71b89405fdc98774`; Desktop unchanged. All 1,438 other tracked files retain baseline bytes/modes; independent DATA audit preserves original test bodies and publication/fsync/unlink bodies.
+
+The new preflight, while holding the real state lock, rejects unsupported root/descendant/destination types before snapshot publication, permits absent prospective children, and retains trusted ancestor resolution above the configured root. Snapshot readback checks a regular non-symlink file before each existing read. Fixed errors have empty details. StateDir, compatibility helpers, crypto, receipt, authorization, durable barriers and prune policy are unchanged.
+
+Nine new test functions were written: three private helper tests, three real compactor unit tests and three integration tests. They cover lock and no-creation behavior, root slash/dot and dangling links, team/environment links, non-directory ancestors, nonregular and dangling destinations, missing prospective paths and normal repeated compaction, and both readback points with identical-content symlink/directory/absence. Owned cfg(test) mutations and a joined scoped thread provide deterministic boundaries; no TOCTOU or hardware durability claim.
+
+Validation: Git whitespace/DATA preservation checks passed. **All product tests, formatting, compilation, Clippy, Linux/macOS execution and Opus re-review NOTRUN.** This source is implemented but unvalidated. ZPCHEAD-OPUS-03 LOW remains OPEN; 01/02 MEDIUM remain OPEN. Original Opus REVISE, native10 resource HOLD, DOS-1 HIGH, old Go quarantine/interrupted review, M2/runtime/onboarding/physical/Oracle/packaging/acceptance/release holds remain unchanged. No VM, process, key, deployment or service operation occurred in this task.

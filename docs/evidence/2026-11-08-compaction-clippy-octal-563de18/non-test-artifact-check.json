@@ -1,0 +1,1 @@
+{"artifact": "/opt/cgjob/target/release/libzeropw.rlib", "sha256": "ac7594c544d64882f49a8cac6abf4a1bbd3899bdc2004f10c32020b20652a216", "nm_exit": 0, "forbidden_gate_symbols": [], "scope": "explicit non-test release library only; optimized unit tests intentionally retain cfg(test)"}

@@ -1,0 +1,243 @@
+{
+  "actual_model": "gpt-6.1-sol / ultra, T3 Code through Codex; effective service tier not independently exposed",
+  "as_of_utc": "2026-11-08T11:03:16.873760+00:00",
+  "bindings": {
+    "archive_sha256": "567d61decc372ddcee0dd07293e3d2305d1ee154667ffd4d443019a6bc26f609",
+    "driver_sha256": "e8b101722278b3c15cefeea8c8f09f2b6353149e73f4cc178a790abb392fe6be",
+    "host_summary_sha256": "69be22f78be57bcb173832f85a8624243b60947a616636657f60e850ce176b08",
+    "manifest_sha256": "496ba2d16c7ba33300af3329babce07e16503c4492c64c1790945a8710e65b66",
+    "plan_sha256": "e106d85e541a218299b9f6f4f2b95fd811316d5e03ae92b770d973b862a40ade"
+  },
+  "checks": {
+    "112_collection_file_hashes_modes": true,
+    "113_unique_regular_safe_members": true,
+    "1464_fixed_Git_blob_bytes_hashes_modes": true,
+    "27_host_transports_waited_zero_exit": true,
+    "27_receipt_log_and_started_bindings": true,
+    "27_zero_exits_no_timeout_waited_empty_UID_observations": true,
+    "54_source_maps_79056_entries": true,
+    "exact_planned_member_set": true,
+    "features_byte_identical_raw_value_absent": true,
+    "focused31plus27_debug_release": true,
+    "four_named_signer_probes48docs": true,
+    "fourteen_named_stack_selectors1each": true,
+    "full107targets115summaries1874passed0failed5ignored": true,
+    "full112_ordered_begin_end_allzero_failed_marker_empty": true,
+    "new_exact_two1each": true,
+    "non_test_nm_zero_forbidden_symbols": true,
+    "recorded_UID_GID2100_NNP1_zero_caps_no_groups": true
+  },
+  "failures_corrections": "None; all independent DATA assertions passed before output writing.",
+  "features_sha256": "e35c760eb3c801d854c8f5f9bae8ed56b86e9c0e9e0173a9bfa3adbe5366f7d8",
+  "final_assigned_UID2100_processes": [],
+  "full": {
+    "doc_passed": 48,
+    "elapsed_seconds": 2719.007604775,
+    "explicit_signer_probes": [
+      "signer::tests::idle_cpu_with_one_and_nine_live_bindings",
+      "signer::tests::per_client_fd_cost_matches_python_ratio_of_one",
+      "signer::tests::per_binding_fd_cost_matches_python_ratio_of_one",
+      "signer::tests::rlimit_probe_served_clients_and_accept_loop_survival"
+    ],
+    "failed": 0,
+    "ignored": 5,
+    "integration_targets": 107,
+    "passed": 1874,
+    "steps": 112,
+    "summaries": 115
+  },
+  "kind": "Read-only DATA audit; no independent replay, security review or acceptance",
+  "limitations": [
+    "Only frozen archive, fixed Git objects and completed host summary read; no actual VM/child/nm/test replay or live process inquiry.",
+    "POSIX modes are independently compared as archived values against fixed Git expectations, not reread from the guest.",
+    "Release artifact bytes were not fetched; SHA/nm absence are checked recorded observations, not my own binary analysis.",
+    "No native563 validation, physical two-Mac, Oracle/capacity, merge, release or acceptance proof.",
+    "New ZPCHEAD-OPUS-R1-01 HIGH and all original/global holds remain OPEN; passing baseline does not test or resolve that availability issue.",
+    "Root gt01 allocation remains unchanged; I made no release/ownership or VM action."
+  ],
+  "non_test_artifact": {
+    "artifact": "/opt/cgjob/target/release/libzeropw.rlib",
+    "forbidden_gate_symbols": [],
+    "nm_exit": 0,
+    "scope": "explicit non-test release library only; optimized unit tests intentionally retain cfg(test)",
+    "sha256": "ac7594c544d64882f49a8cac6abf4a1bbd3899bdc2004f10c32020b20652a216"
+  },
+  "phases": [
+    {
+      "phase": "01-features-before",
+      "receipt_sha256": "d4a7e3a8c143aeaf01e1153043e2de37788d69da77c1a6567816033d3ba01109",
+      "status": "PASS"
+    },
+    {
+      "phase": "02-format",
+      "receipt_sha256": "0115862e0a908479597e10004c3e4dc1e2e5d932f99857066b08f8905b54243f",
+      "status": "PASS"
+    },
+    {
+      "phase": "02-clippy-preflight",
+      "receipt_sha256": "1312032f342779cd53ac67cd78c3adbdfee0a3c5b9c0a78cdfc605faa791f859",
+      "status": "PASS"
+    },
+    {
+      "exact_test": "team::sync::compaction_heads_tests::compaction_heads_deferred_prefilter_stale_forward_receipt_uses_locked_sequence",
+      "phase": "03-new-exact",
+      "receipt_sha256": "caf37355badee0cca244df502a6b52c319023d401a332fe2e98276e473ae7241",
+      "status": "PASS",
+      "test_passes": 1
+    },
+    {
+      "exact_test": "team::sync::compaction_heads_tests::compaction_heads_authorized_fact_cache_read_pause_keeps_envs_available",
+      "phase": "04-new-exact",
+      "receipt_sha256": "4eb2beb2e46eaa242c6de207b32330b33e1c6a0a369ec4e654946626c8164897",
+      "status": "PASS",
+      "test_passes": 1
+    },
+    {
+      "phase": "05-lib-debug",
+      "receipt_sha256": "d49acba0bfee9b290dfdc9894cbfd5658d4ec562a40ecf5433a1564a986d5bcb",
+      "status": "PASS",
+      "test_passes": 31
+    },
+    {
+      "phase": "06-integration-debug",
+      "receipt_sha256": "dcc35bf78f9d4a9494d4494e182dc81d612d1bcbda6dac8e9fd0bf54faa9dd1b",
+      "status": "PASS",
+      "test_passes": 27
+    },
+    {
+      "phase": "07-lib-release",
+      "receipt_sha256": "019c3eec56a6c37172ef1fb1d5b75334a505c14bc8fd33516b29e56c0a639ee3",
+      "status": "PASS",
+      "test_passes": 31
+    },
+    {
+      "phase": "08-integration-release",
+      "receipt_sha256": "5987ab740bfa4ae6a9e5c83245ec24a8bbcb8ce6af7f4233a920d7d22c0b37bc",
+      "status": "PASS",
+      "test_passes": 27
+    },
+    {
+      "phase": "09-full-matrix",
+      "receipt_sha256": "c6c622f1f573cacb3b2cf82ac329a55f1ba36819d63e92d0171863953de3942a",
+      "status": "PASS",
+      "test_passes": 1874
+    },
+    {
+      "phase": "10-non-test-release-build",
+      "receipt_sha256": "1b78a6efb9366a0640f8d48b6db772176ff2ae4aa762c3634983c8475e96e130",
+      "status": "PASS"
+    },
+    {
+      "phase": "11-non-test-gate-absence",
+      "receipt_sha256": "e1d74e926b70f63ef4e9c7e5f32fb7d67906af2594b64ea4cd9dcf8bb019b86a",
+      "status": "PASS"
+    },
+    {
+      "exact_test": "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+      "phase": "12-stack-exact-debug",
+      "receipt_sha256": "a1eca5ecadac89288bf665bbad48bead05e3e566be34a0101be878ae31396b95",
+      "status": "PASS",
+      "test_passes": 1
+    },
+    {
+      "exact_test": "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+      "phase": "13-stack-exact-debug",
+      "receipt_sha256": "65785297fd344f92e9e9528416d8287e3c8f403fff9677c9f30b27e3f06c4305",
+      "status": "PASS",
+      "test_passes": 1
+    },
+    {
+      "exact_test": "complete_candidate_depth64_success_late_error_repeat_drop_and_65_refusal_on_256_kib",
+      "phase": "14-stack-exact-debug",
+      "receipt_sha256": "6c39898fab433182afed7288edb37da934c8db72e11a7d7d05902c7ddbf747a7",
+      "status": "PASS",
+      "test_passes": 1
+    },
+    {
+      "exact_test": "complete_fold_depth64_on_actual_256_kib_stack",
+      "phase": "15-stack-exact-debug",
+      "receipt_sha256": "adc80f241677bd20136ba76ee73e11869e6bbbc3e6e00075b57903fd6c72b3a6",
+      "status": "PASS",
+      "test_passes": 1
+    },
+    {
+      "exact_test": "required_generation_depth64_success_late_error_repeat_drop_on_actual_256_kib",
+      "phase": "16-stack-exact-debug",
+      "receipt_sha256": "3ec113d169ac176b11593292abc8259505eea290b2b4651f9fa6a9dfe094c29c",
+      "status": "PASS",
+      "test_passes": 1
+    },
+    {
+      "exact_test": "required_generation_depth65_refuses_before_crypto_on_actual_256_kib",
+      "phase": "17-stack-exact-debug",
+      "receipt_sha256": "9b88c676f11c0ebfed4f9bd5ffdb3f75923398f645d4efdb5d82b78c99ab52fd",
+      "status": "PASS",
+      "test_passes": 1
+    },
+    {
+      "exact_test": "required_wrap_depth64_success_error_repeat_drop_on_actual_256_kib",
+      "phase": "18-stack-exact-debug",
+      "receipt_sha256": "f16cb7ffa223cbe858b97a3a023651e6887f2fb13374273f5927be1f39ef95a7",
+      "status": "PASS",
+      "test_passes": 1
+    },
+    {
+      "exact_test": "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+      "phase": "19-stack-exact-release",
+      "receipt_sha256": "0b9609add34152dd8bc0f9ab4567c1998a740576533b216578b9ecd1c16c7e3e",
+      "status": "PASS",
+      "test_passes": 1
+    },
+    {
+      "exact_test": "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+      "phase": "20-stack-exact-release",
+      "receipt_sha256": "4c8df13bcf7a6224c6e5b409bb5e4fb24134842cc6e8defc499b9fb5635920af",
+      "status": "PASS",
+      "test_passes": 1
+    },
+    {
+      "exact_test": "complete_candidate_depth64_success_late_error_repeat_drop_and_65_refusal_on_256_kib",
+      "phase": "21-stack-exact-release",
+      "receipt_sha256": "05cf0212322d1667ecd5a3f1c84aae4b17fa1e01ab141ceaf96629392d5aa905",
+      "status": "PASS",
+      "test_passes": 1
+    },
+    {
+      "exact_test": "complete_fold_depth64_on_actual_256_kib_stack",
+      "phase": "22-stack-exact-release",
+      "receipt_sha256": "076309598467f1710415b1421600f367d802c57e30310efaede9ebbadc67c56b",
+      "status": "PASS",
+      "test_passes": 1
+    },
+    {
+      "exact_test": "required_generation_depth64_success_late_error_repeat_drop_on_actual_256_kib",
+      "phase": "23-stack-exact-release",
+      "receipt_sha256": "5cb2c98d1763d926be86e194a2077c3cef15a40be528f3722aa521b05981717f",
+      "status": "PASS",
+      "test_passes": 1
+    },
+    {
+      "exact_test": "required_generation_depth65_refuses_before_crypto_on_actual_256_kib",
+      "phase": "24-stack-exact-release",
+      "receipt_sha256": "9b4af812478f77b9f169c5357bc2e598f782f39ceb0e5be8467cf46bb2ebb258",
+      "status": "PASS",
+      "test_passes": 1
+    },
+    {
+      "exact_test": "required_wrap_depth64_success_error_repeat_drop_on_actual_256_kib",
+      "phase": "25-stack-exact-release",
+      "receipt_sha256": "49341eab2dd7d83a768b7da584d0f8d6db0e6226c65cf1ac8ec9d223e813c789",
+      "status": "PASS",
+      "test_passes": 1
+    },
+    {
+      "phase": "26-features-after",
+      "receipt_sha256": "13dd2a1e2d66001804f1f27644ab6c1e4ad47f07f26193e74ca117a3eb01c22c",
+      "status": "PASS"
+    }
+  ],
+  "rust_tree": "7cfa2b85d103b50bc5d941f3b6165fe38b51cbd5",
+  "schema": "Sol-independent-frozen-Linux563-DATA-collection-v1",
+  "source_full_tree": "43566b5dfeef1c2943ee9265b0931f8912c19a8f",
+  "source_head": "563de18b61b87b00e33faed955c43f14db43f681"
+}

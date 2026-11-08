@@ -1,0 +1,1921 @@
+{
+  "archives": 172,
+  "bounded_privacy_scan": {
+    "hits": [],
+    "log_files": 62,
+    "new_case_markers": 3,
+    "scope": "new-case known synthetic values plus unchanged tests own privacy assertions; not universal erasure"
+  },
+  "epoch": 1794111679.5929248,
+  "exact_one_test_commands": 14,
+  "features_exact_bytes": "MATCH",
+  "features_sha256": "49272219bd41ec9055a00758629efcfa8fae32b6fb9e14f73f2b0a70eb620051",
+  "full_integration_targets": 107,
+  "full_steps": 112,
+  "full_test_totals": {
+    "failed": 0,
+    "ignored": 5,
+    "passed": 1843
+  },
+  "linux": "NOT_ASSIGNED / NOTRUN",
+  "new_integration_tests_per_profile": 11,
+  "new_library_tests_per_profile": 13,
+  "os_uname": {
+    "machine": "arm64",
+    "nodename": "Manageds-Virtual-Machine.local",
+    "release": "25.6.0",
+    "sysname": "Darwin",
+    "version": "Darwin Kernel Version 25.6.0: Fri Jul 31 19:16:43 PDT 2026; root:xnu-12377.161.14~5/RELEASE_ARM64_VMAPPLE"
+  },
+  "overall_two_platform_validation": "INCOMPLETE",
+  "protected_baseline_exact": 1370,
+  "public_cache_before_after": "MATCH",
+  "python_runtime": "3.15.0 (main, Oct  9 2026, 11:16:41) [Clang 21.0.0 (clang-2100.3.34.2)]",
+  "raw_value": "ABSENT",
+  "records": [
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "clippy",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "changed_source_paths": [],
+      "darwin_time_maximum_resident_set_size_raw": 832978944,
+      "elapsed_seconds": 27.34328532218933,
+      "end_epoch": 1794107589.908609,
+      "exit": 0,
+      "guest_free_after_bytes": 49626583040,
+      "joined": true,
+      "label": "19-clippy-attempt2",
+      "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+      "pid": 96351,
+      "remaining_own_session": [],
+      "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "start_epoch": 1794107562.565328,
+      "stop_reason": null,
+      "test_summaries": [],
+      "timed_argv": [
+        "/usr/bin/time",
+        "-l",
+        "/opt/homebrew/bin/cargo",
+        "clippy",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ]
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/rustc",
+        "--version"
+      ],
+      "changed_source_paths": [],
+      "darwin_time_maximum_resident_set_size_raw": 27803648,
+      "elapsed_seconds": 0.21599292755126953,
+      "end_epoch": 1794107671.302259,
+      "exit": 0,
+      "guest_free_after_bytes": 49626488832,
+      "joined": true,
+      "label": "20-rust-version",
+      "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+      "pid": 97055,
+      "remaining_own_session": [],
+      "selection_and_discovery_checks": {},
+      "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "start_epoch": 1794107671.086266,
+      "stop_reason": null,
+      "test_summaries": [],
+      "timed_argv": [
+        "/usr/bin/time",
+        "-l",
+        "/opt/homebrew/bin/rustc",
+        "--version"
+      ]
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "--version"
+      ],
+      "changed_source_paths": [],
+      "darwin_time_maximum_resident_set_size_raw": 12402688,
+      "elapsed_seconds": 0.17997407913208008,
+      "end_epoch": 1794107671.484514,
+      "exit": 0,
+      "guest_free_after_bytes": 49625735168,
+      "joined": true,
+      "label": "21-cargo-version",
+      "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+      "pid": 97060,
+      "remaining_own_session": [],
+      "selection_and_discovery_checks": {},
+      "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "start_epoch": 1794107671.30454,
+      "stop_reason": null,
+      "test_summaries": [],
+      "timed_argv": [
+        "/usr/bin/time",
+        "-l",
+        "/opt/homebrew/bin/cargo",
+        "--version"
+      ]
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/python3",
+        "--version"
+      ],
+      "changed_source_paths": [],
+      "darwin_time_maximum_resident_set_size_raw": 6553600,
+      "elapsed_seconds": 0.2537801265716553,
+      "end_epoch": 1794107671.7404811,
+      "exit": 0,
+      "guest_free_after_bytes": 49624956928,
+      "joined": true,
+      "label": "22-python-version",
+      "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+      "pid": 97065,
+      "remaining_own_session": [],
+      "selection_and_discovery_checks": {},
+      "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "start_epoch": 1794107671.486702,
+      "stop_reason": null,
+      "test_summaries": [],
+      "timed_argv": [
+        "/usr/bin/time",
+        "-l",
+        "/opt/homebrew/bin/python3",
+        "--version"
+      ]
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "compaction_heads"
+      ],
+      "changed_source_paths": [],
+      "darwin_time_maximum_resident_set_size_raw": 1047298048,
+      "elapsed_seconds": 54.68832206726074,
+      "end_epoch": 1794107726.432205,
+      "exit": 0,
+      "guest_free_after_bytes": 49624182784,
+      "joined": true,
+      "label": "23-lib-debug-final",
+      "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+      "pid": 97074,
+      "remaining_own_session": [],
+      "selection_and_discovery_checks": {
+        "executed_passed": 13,
+        "test_selection": "MATCH"
+      },
+      "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "start_epoch": 1794107671.743883,
+      "stop_reason": null,
+      "test_summaries": [
+        [
+          "ok",
+          "13",
+          "0",
+          "0"
+        ]
+      ],
+      "timed_argv": [
+        "/usr/bin/time",
+        "-l",
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "compaction_heads"
+      ]
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_compaction_heads"
+      ],
+      "changed_source_paths": [],
+      "darwin_time_maximum_resident_set_size_raw": 834240512,
+      "elapsed_seconds": 26.414594173431396,
+      "end_epoch": 1794107752.849024,
+      "exit": 0,
+      "guest_free_after_bytes": 49623416832,
+      "joined": true,
+      "label": "24-integration-debug-final",
+      "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+      "pid": 97371,
+      "remaining_own_session": [],
+      "selection_and_discovery_checks": {
+        "executed_passed": 11,
+        "test_selection": "MATCH"
+      },
+      "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "start_epoch": 1794107726.43443,
+      "stop_reason": null,
+      "test_summaries": [
+        [
+          "ok",
+          "11",
+          "0",
+          "0"
+        ]
+      ],
+      "timed_argv": [
+        "/usr/bin/time",
+        "-l",
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_compaction_heads"
+      ]
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--lib",
+        "compaction_heads"
+      ],
+      "changed_source_paths": [],
+      "darwin_time_maximum_resident_set_size_raw": 1120681984,
+      "elapsed_seconds": 165.31129384040833,
+      "end_epoch": 1794107918.162634,
+      "exit": 0,
+      "guest_free_after_bytes": 49306107904,
+      "joined": true,
+      "label": "25-lib-release-final",
+      "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+      "pid": 97550,
+      "remaining_own_session": [],
+      "selection_and_discovery_checks": {
+        "executed_passed": 13,
+        "test_selection": "MATCH"
+      },
+      "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "start_epoch": 1794107752.85134,
+      "stop_reason": null,
+      "test_summaries": [
+        [
+          "ok",
+          "13",
+          "0",
+          "0"
+        ]
+      ],
+      "timed_argv": [
+        "/usr/bin/time",
+        "-l",
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--lib",
+        "compaction_heads"
+      ]
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_compaction_heads"
+      ],
+      "changed_source_paths": [],
+      "darwin_time_maximum_resident_set_size_raw": 963526656,
+      "elapsed_seconds": 72.08230590820312,
+      "end_epoch": 1794107990.2481012,
+      "exit": 0,
+      "guest_free_after_bytes": 49250971648,
+      "joined": true,
+      "label": "26-integration-release-final",
+      "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+      "pid": 98849,
+      "remaining_own_session": [],
+      "selection_and_discovery_checks": {
+        "executed_passed": 11,
+        "test_selection": "MATCH"
+      },
+      "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "start_epoch": 1794107918.165796,
+      "stop_reason": null,
+      "test_summaries": [
+        [
+          "ok",
+          "11",
+          "0",
+          "0"
+        ]
+      ],
+      "timed_argv": [
+        "/usr/bin/time",
+        "-l",
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_compaction_heads"
+      ]
+    },
+    {
+      "argv": [
+        "/bin/bash",
+        "rust/verify.sh"
+      ],
+      "changed_source_paths": [],
+      "darwin_time_maximum_resident_set_size_raw": 1130496000,
+      "elapsed_seconds": 3633.3759281635284,
+      "end_epoch": 1794111623.627021,
+      "exit": 0,
+      "guest_free_after_bytes": 48232243200,
+      "joined": true,
+      "label": "27-full-verify-final",
+      "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+      "pid": 99269,
+      "remaining_own_session": [],
+      "selection_and_discovery_checks": {
+        "integration_targets": 107,
+        "verify_discovery_order": "MATCH",
+        "verify_steps": 112
+      },
+      "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "start_epoch": 1794107990.251093,
+      "stop_reason": null,
+      "test_summaries": [
+        [
+          "ok",
+          "717",
+          "0",
+          "4"
+        ],
+        [
+          "ok",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "0",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "12",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "9",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "3",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "4",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "4",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "4",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "5",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "5",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "6",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "5",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "3",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "6",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "3",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "5",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "8",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "9",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "5",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "4",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "12",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "4",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "20",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "149",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "3",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "8",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "26",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "26",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "8",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "6",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "17",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "20",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "3",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "26",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "4",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "32",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "8",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "9",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "21",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "15",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "6",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "4",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "86",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "6",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "3",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "2",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "17",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "3",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "6",
+          "0",
+          "1"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "10",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "13",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "4",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "22",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "17",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "11",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "31",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "19",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "12",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "10",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "35",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "13",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "16",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "26",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "3",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "3",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "8",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "3",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "3",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "27",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "46",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "32",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "9",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "4",
+          "0",
+          "0"
+        ],
+        [
+          "ok",
+          "48",
+          "0",
+          "0"
+        ]
+      ],
+      "timed_argv": [
+        "/usr/bin/time",
+        "-l",
+        "/bin/bash",
+        "rust/verify.sh"
+      ]
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "tree",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "-e",
+        "features"
+      ],
+      "changed_source_paths": [],
+      "darwin_time_maximum_resident_set_size_raw": 59179008,
+      "elapsed_seconds": 0.3152430057525635,
+      "end_epoch": 1794111661.0520608,
+      "exit": 0,
+      "guest_free_after_bytes": 48202518528,
+      "joined": true,
+      "label": "42-features-after-final",
+      "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+      "pid": 22337,
+      "remaining_own_session": [],
+      "selection_and_discovery_checks": {
+        "features_exact_bytes": "MATCH"
+      },
+      "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "start_epoch": 1794111660.736819,
+      "stop_reason": null,
+      "test_summaries": [],
+      "timed_argv": [
+        "/usr/bin/time",
+        "-l",
+        "/opt/homebrew/bin/cargo",
+        "tree",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "-e",
+        "features"
+      ]
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_payload",
+        "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+        "--",
+        "--exact"
+      ],
+      "changed_source_paths": [],
+      "darwin_time_maximum_resident_set_size_raw": 61997056,
+      "elapsed_seconds": 0.2994110584259033,
+      "end_epoch": 1794111623.928709,
+      "exit": 0,
+      "guest_free_after_bytes": 48231661568,
+      "joined": true,
+      "label": "28-exact-debug-1",
+      "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+      "pid": 22032,
+      "remaining_own_session": [],
+      "selection_and_discovery_checks": {
+        "executed_passed": 1,
+        "test_selection": "MATCH"
+      },
+      "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "start_epoch": 1794111623.629299,
+      "stop_reason": null,
+      "test_summaries": [
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "timed_argv": [
+        "/usr/bin/time",
+        "-l",
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_payload",
+        "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+        "--",
+        "--exact"
+      ]
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_admission",
+        "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+        "--",
+        "--exact"
+      ],
+      "changed_source_paths": [],
+      "darwin_time_maximum_resident_set_size_raw": 61898752,
+      "elapsed_seconds": 0.41255807876586914,
+      "end_epoch": 1794111624.344239,
+      "exit": 0,
+      "guest_free_after_bytes": 48230707200,
+      "joined": true,
+      "label": "29-exact-debug-2",
+      "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+      "pid": 22037,
+      "remaining_own_session": [],
+      "selection_and_discovery_checks": {
+        "executed_passed": 1,
+        "test_selection": "MATCH"
+      },
+      "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "start_epoch": 1794111623.931682,
+      "stop_reason": null,
+      "test_summaries": [
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "timed_argv": [
+        "/usr/bin/time",
+        "-l",
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_admission",
+        "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+        "--",
+        "--exact"
+      ]
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_semantic_cut",
+        "complete_candidate_depth64_success_late_error_repeat_drop_and_65_refusal_on_256_kib",
+        "--",
+        "--exact"
+      ],
+      "changed_source_paths": [],
+      "darwin_time_maximum_resident_set_size_raw": 61571072,
+      "elapsed_seconds": 0.39599180221557617,
+      "end_epoch": 1794111624.742982,
+      "exit": 0,
+      "guest_free_after_bytes": 48229937152,
+      "joined": true,
+      "label": "30-exact-debug-3",
+      "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+      "pid": 22044,
+      "remaining_own_session": [],
+      "selection_and_discovery_checks": {
+        "executed_passed": 1,
+        "test_selection": "MATCH"
+      },
+      "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "start_epoch": 1794111624.34699,
+      "stop_reason": null,
+      "test_summaries": [
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "timed_argv": [
+        "/usr/bin/time",
+        "-l",
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_semantic_cut",
+        "complete_candidate_depth64_success_late_error_repeat_drop_and_65_refusal_on_256_kib",
+        "--",
+        "--exact"
+      ]
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_semantic_cut",
+        "complete_fold_depth64_on_actual_256_kib_stack",
+        "--",
+        "--exact"
+      ],
+      "changed_source_paths": [],
+      "darwin_time_maximum_resident_set_size_raw": 61571072,
+      "elapsed_seconds": 0.29878902435302734,
+      "end_epoch": 1794111625.0440161,
+      "exit": 0,
+      "guest_free_after_bytes": 48229183488,
+      "joined": true,
+      "label": "31-exact-debug-4",
+      "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+      "pid": 22049,
+      "remaining_own_session": [],
+      "selection_and_discovery_checks": {
+        "executed_passed": 1,
+        "test_selection": "MATCH"
+      },
+      "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "start_epoch": 1794111624.745227,
+      "stop_reason": null,
+      "test_summaries": [
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "timed_argv": [
+        "/usr/bin/time",
+        "-l",
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_semantic_cut",
+        "complete_fold_depth64_on_actual_256_kib_stack",
+        "--",
+        "--exact"
+      ]
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_generation_depth64_success_late_error_repeat_drop_on_actual_256_kib",
+        "--",
+        "--exact"
+      ],
+      "changed_source_paths": [],
+      "darwin_time_maximum_resident_set_size_raw": 61456384,
+      "elapsed_seconds": 4.516669034957886,
+      "end_epoch": 1794111629.563477,
+      "exit": 0,
+      "guest_free_after_bytes": 48228601856,
+      "joined": true,
+      "label": "32-exact-debug-5",
+      "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+      "pid": 22059,
+      "remaining_own_session": [],
+      "selection_and_discovery_checks": {
+        "executed_passed": 1,
+        "test_selection": "MATCH"
+      },
+      "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "start_epoch": 1794111625.046808,
+      "stop_reason": null,
+      "test_summaries": [
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "timed_argv": [
+        "/usr/bin/time",
+        "-l",
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_generation_depth64_success_late_error_repeat_drop_on_actual_256_kib",
+        "--",
+        "--exact"
+      ]
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_generation_depth65_refuses_before_crypto_on_actual_256_kib",
+        "--",
+        "--exact"
+      ],
+      "changed_source_paths": [],
+      "darwin_time_maximum_resident_set_size_raw": 61997056,
+      "elapsed_seconds": 2.279006004333496,
+      "end_epoch": 1794111631.84593,
+      "exit": 0,
+      "guest_free_after_bytes": 48227844096,
+      "joined": true,
+      "label": "33-exact-debug-6",
+      "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+      "pid": 22086,
+      "remaining_own_session": [],
+      "selection_and_discovery_checks": {
+        "executed_passed": 1,
+        "test_selection": "MATCH"
+      },
+      "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "start_epoch": 1794111629.566925,
+      "stop_reason": null,
+      "test_summaries": [
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "timed_argv": [
+        "/usr/bin/time",
+        "-l",
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_generation_depth65_refuses_before_crypto_on_actual_256_kib",
+        "--",
+        "--exact"
+      ]
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_wrap_depth64_success_error_repeat_drop_on_actual_256_kib",
+        "--",
+        "--exact"
+      ],
+      "changed_source_paths": [],
+      "darwin_time_maximum_resident_set_size_raw": 61554688,
+      "elapsed_seconds": 4.415426969528198,
+      "end_epoch": 1794111636.263948,
+      "exit": 0,
+      "guest_free_after_bytes": 48227078144,
+      "joined": true,
+      "label": "34-exact-debug-7",
+      "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+      "pid": 22101,
+      "remaining_own_session": [],
+      "selection_and_discovery_checks": {
+        "executed_passed": 1,
+        "test_selection": "MATCH"
+      },
+      "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "start_epoch": 1794111631.848521,
+      "stop_reason": null,
+      "test_summaries": [
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "timed_argv": [
+        "/usr/bin/time",
+        "-l",
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_wrap_depth64_success_error_repeat_drop_on_actual_256_kib",
+        "--",
+        "--exact"
+      ]
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_payload",
+        "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+        "--",
+        "--exact"
+      ],
+      "changed_source_paths": [],
+      "darwin_time_maximum_resident_set_size_raw": 196788224,
+      "elapsed_seconds": 3.1262261867523193,
+      "end_epoch": 1794111639.3948212,
+      "exit": 0,
+      "guest_free_after_bytes": 48223952896,
+      "joined": true,
+      "label": "35-exact-release-1",
+      "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+      "pid": 22130,
+      "remaining_own_session": [],
+      "selection_and_discovery_checks": {
+        "executed_passed": 1,
+        "test_selection": "MATCH"
+      },
+      "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "start_epoch": 1794111636.268595,
+      "stop_reason": null,
+      "test_summaries": [
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "timed_argv": [
+        "/usr/bin/time",
+        "-l",
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_payload",
+        "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+        "--",
+        "--exact"
+      ]
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_admission",
+        "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+        "--",
+        "--exact"
+      ],
+      "changed_source_paths": [],
+      "darwin_time_maximum_resident_set_size_raw": 239206400,
+      "elapsed_seconds": 5.287840843200684,
+      "end_epoch": 1794111644.6852748,
+      "exit": 0,
+      "guest_free_after_bytes": 48218030080,
+      "joined": true,
+      "label": "36-exact-release-2",
+      "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+      "pid": 22155,
+      "remaining_own_session": [],
+      "selection_and_discovery_checks": {
+        "executed_passed": 1,
+        "test_selection": "MATCH"
+      },
+      "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "start_epoch": 1794111639.397434,
+      "stop_reason": null,
+      "test_summaries": [
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "timed_argv": [
+        "/usr/bin/time",
+        "-l",
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_admission",
+        "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+        "--",
+        "--exact"
+      ]
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_semantic_cut",
+        "complete_candidate_depth64_success_late_error_repeat_drop_and_65_refusal_on_256_kib",
+        "--",
+        "--exact"
+      ],
+      "changed_source_paths": [],
+      "darwin_time_maximum_resident_set_size_raw": 248414208,
+      "elapsed_seconds": 6.136080980300903,
+      "end_epoch": 1794111650.8245382,
+      "exit": 0,
+      "guest_free_after_bytes": 48211722240,
+      "joined": true,
+      "label": "37-exact-release-3",
+      "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+      "pid": 22191,
+      "remaining_own_session": [],
+      "selection_and_discovery_checks": {
+        "executed_passed": 1,
+        "test_selection": "MATCH"
+      },
+      "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "start_epoch": 1794111644.688458,
+      "stop_reason": null,
+      "test_summaries": [
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "timed_argv": [
+        "/usr/bin/time",
+        "-l",
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_semantic_cut",
+        "complete_candidate_depth64_success_late_error_repeat_drop_and_65_refusal_on_256_kib",
+        "--",
+        "--exact"
+      ]
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_semantic_cut",
+        "complete_fold_depth64_on_actual_256_kib_stack",
+        "--",
+        "--exact"
+      ],
+      "changed_source_paths": [],
+      "darwin_time_maximum_resident_set_size_raw": 61964288,
+      "elapsed_seconds": 0.431243896484375,
+      "end_epoch": 1794111651.258328,
+      "exit": 0,
+      "guest_free_after_bytes": 48210964480,
+      "joined": true,
+      "label": "38-exact-release-4",
+      "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+      "pid": 22232,
+      "remaining_own_session": [],
+      "selection_and_discovery_checks": {
+        "executed_passed": 1,
+        "test_selection": "MATCH"
+      },
+      "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "start_epoch": 1794111650.827084,
+      "stop_reason": null,
+      "test_summaries": [
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "timed_argv": [
+        "/usr/bin/time",
+        "-l",
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_semantic_cut",
+        "complete_fold_depth64_on_actual_256_kib_stack",
+        "--",
+        "--exact"
+      ]
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_generation_depth64_success_late_error_repeat_drop_on_actual_256_kib",
+        "--",
+        "--exact"
+      ],
+      "changed_source_paths": [],
+      "darwin_time_maximum_resident_set_size_raw": 254771200,
+      "elapsed_seconds": 8.023902177810669,
+      "end_epoch": 1794111659.292205,
+      "exit": 0,
+      "guest_free_after_bytes": 48204836864,
+      "joined": true,
+      "label": "39-exact-release-5",
+      "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+      "pid": 22237,
+      "remaining_own_session": [],
+      "selection_and_discovery_checks": {
+        "executed_passed": 1,
+        "test_selection": "MATCH"
+      },
+      "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "start_epoch": 1794111651.2683039,
+      "stop_reason": null,
+      "test_summaries": [
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "timed_argv": [
+        "/usr/bin/time",
+        "-l",
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_generation_depth64_success_late_error_repeat_drop_on_actual_256_kib",
+        "--",
+        "--exact"
+      ]
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_generation_depth65_refuses_before_crypto_on_actual_256_kib",
+        "--",
+        "--exact"
+      ],
+      "changed_source_paths": [],
+      "darwin_time_maximum_resident_set_size_raw": 61931520,
+      "elapsed_seconds": 0.43976306915283203,
+      "end_epoch": 1794111659.73528,
+      "exit": 0,
+      "guest_free_after_bytes": 48204083200,
+      "joined": true,
+      "label": "40-exact-release-6",
+      "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+      "pid": 22318,
+      "remaining_own_session": [],
+      "selection_and_discovery_checks": {
+        "executed_passed": 1,
+        "test_selection": "MATCH"
+      },
+      "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "start_epoch": 1794111659.295517,
+      "stop_reason": null,
+      "test_summaries": [
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "timed_argv": [
+        "/usr/bin/time",
+        "-l",
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_generation_depth65_refuses_before_crypto_on_actual_256_kib",
+        "--",
+        "--exact"
+      ]
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_wrap_depth64_success_error_repeat_drop_on_actual_256_kib",
+        "--",
+        "--exact"
+      ],
+      "changed_source_paths": [],
+      "darwin_time_maximum_resident_set_size_raw": 62013440,
+      "elapsed_seconds": 0.9918220043182373,
+      "end_epoch": 1794111660.7310662,
+      "exit": 0,
+      "guest_free_after_bytes": 48203325440,
+      "joined": true,
+      "label": "41-exact-release-7",
+      "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+      "pid": 22326,
+      "remaining_own_session": [],
+      "selection_and_discovery_checks": {
+        "executed_passed": 1,
+        "test_selection": "MATCH"
+      },
+      "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+      "start_epoch": 1794111659.739245,
+      "stop_reason": null,
+      "test_summaries": [
+        [
+          "ok",
+          "1",
+          "0",
+          "0"
+        ]
+      ],
+      "timed_argv": [
+        "/usr/bin/time",
+        "-l",
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_wrap_depth64_success_error_repeat_drop_on_actual_256_kib",
+        "--",
+        "--exact"
+      ]
+    }
+  ],
+  "reviews_acceptance_release": "NOT_PERFORMED / OPEN",
+  "source_files": 1374,
+  "state": "NATIVE_REQUIRED_MATRIX_PASS_ONLY",
+  "uid": 501,
+  "upstream_bytes": 254587496,
+  "upstream_files": 8194
+}

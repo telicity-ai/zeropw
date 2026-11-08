@@ -1,0 +1,105 @@
+{
+  "schema": "Sol-independent-Astra-decision-DATA-collection-v1",
+  "actual_collector": "gpt-6.1-sol/ultra; native child, no subagents; effective service tier not independently exposed",
+  "collection_nature": "read-only DATA/hash/Git provenance and complete output-document reading; not implementation, semantic/adversarial review, runtime replay or Astra acceptance",
+  "Astra_declared_settings": {
+    "model": "gpt-6-astra",
+    "reasoning_effort": "ultra",
+    "requested_tier": "default",
+    "effective_tier": "unexposed",
+    "mode": "static personal decision/planning only"
+  },
+  "outputs": {
+    "decision.md": {
+      "bytes": 13214,
+      "sha256": "f691999d0c84ccb89f2f1590075dbba2f51549573a14d916ddecfdd7fb5b01e1"
+    },
+    "implementation-task.md": {
+      "bytes": 19148,
+      "sha256": "ef0a06a85cfd695ad4b7f89afbe71eee856d30c0096cf5d4b425687dbfadc292"
+    }
+  },
+  "combined_bytes": 32362,
+  "source_count": 1503,
+  "source_bytes": 25176236,
+  "source_modes_hashes_blobs": "all match",
+  "git_object_count": 1333,
+  "actual_git_objects": "all content hashes match",
+  "index_bytes_sha256": "ea376adca6b517b40a1ce8a5170d163c2fc92a3bc78b3b0acfee38393bb1ecb4",
+  "index_stage_list_sha256": "085b7e912bd73b35098f97bf49195fa68765597141738a18a1f7e29c698ff599",
+  "required_input_bindings": 15,
+  "review_ancestor_docs_only_count": 22,
+  "Root_later_docs_only_count": 17,
+  "Root_adaptation_paths": [
+    "docs/evidence/2026-11-08-compaction-clippy-octal-563de18/README.md",
+    "docs/evidence/2026-11-08-compaction-clippy-octal-563de18/SHA256SUMS",
+    "docs/evidence/2026-11-08-compaction-clippy-octal-563de18/collection.json",
+    "docs/evidence/2026-11-08-compaction-clippy-octal-563de18/command-plan.json",
+    "docs/evidence/2026-11-08-compaction-clippy-octal-563de18/full-receipt-summary.json",
+    "docs/evidence/2026-11-08-compaction-clippy-octal-563de18/full.stderr",
+    "docs/evidence/2026-11-08-compaction-clippy-octal-563de18/full.stdout",
+    "docs/evidence/2026-11-08-compaction-clippy-octal-563de18/host-run-summary.json",
+    "docs/evidence/2026-11-08-compaction-clippy-octal-563de18/independent-collection.json",
+    "docs/evidence/2026-11-08-compaction-clippy-octal-563de18/independent-collection.md",
+    "docs/evidence/2026-11-08-compaction-clippy-octal-563de18/non-test-artifact-check.json",
+    "docs/evidence/2026-11-08-compaction-clippy-octal-563de18/own-scope-retained.json",
+    "docs/evidence/2026-11-08-compaction-clippy-octal-563de18/phase-bindings.json",
+    "docs/evidence/2026-11-08-compaction-clippy-octal-563de18/runtime-analysis.json",
+    "docs/evidence/2026-11-08-compaction-clippy-octal-563de18/source-freeze.json",
+    "docs/evidence/2026-11-08-compaction-clippy-octal-563de18/source-inventory.json",
+    "docs/reviews/2026-11-08-compaction-heads-opus-04c7d22/finding-status.json"
+  ],
+  "source_worktree": "/Users/ys/.t3/worktrees/zeropw/t3-0307483b",
+  "source_head": "a1e3bf8f2ddf10c7a2614fd4dfc89e9ec633475f",
+  "source_tree": "319e282f669ffba1fdd95436ac1d99552aa03807",
+  "rust_tree": "7cfa2b85d103b50bc5d941f3b6165fe38b51cbd5",
+  "pins": {
+    "brief.md": "14f8a30b2f93623496a66f5d62df326ba59ae22b434a8ec2c02301fcb4772aca",
+    "input-bindings.json": "07fb1ece2588ab3bea70df1705f9dc39726a898f186c64196dba008d2696dd85",
+    "source-manifest.json": "73624b8300421b8b6d69a02f5fe9f5ed634897de86c2bab5a7e745caed821613"
+  },
+  "source_status_before_after": "clean, same HEAD/index bytes",
+  "plan_facts": {
+    "selection": "actual Opus alternative(b): exact retained normalized full-record evidence for eligible receipt/signing; strict current-first full-record compaction equality preserved",
+    "allowed_paths": [
+      "rust/src/team/compaction_heads.rs",
+      "rust/src/team/commit.rs",
+      "rust/src/team/sync.rs",
+      "rust/tests/team_compaction_heads.rs"
+    ],
+    "production_areas": [
+      "checked_cache only: retained equal-record lookup on current-first mismatch; exact live-copy verification uses cached device",
+      "new matching_device_records helper plus locked canonical sparse retained_matching_device_records walker; old registry/prepare bodies and callsites unchanged"
+    ],
+    "tests_only_paths": [
+      "rust/src/team/sync.rs",
+      "rust/tests/team_compaction_heads.rs"
+    ],
+    "seven_new_test_definitions": [
+      "commit::compaction_heads_r1_exact_announcements_include_nonfirst_ops",
+      "commit::compaction_heads_r1_retained_matches_use_canonical_sparse_files",
+      "sync::compaction_heads_r1_other_author_receipt_handle_and_compaction",
+      "sync::compaction_heads_r1_deferred_release_preserves_clock_and_evidence",
+      "sync::compaction_heads_r1_owner_data_removal_and_both_fact_paths",
+      "sync::compaction_heads_r1_local_failures_and_authority_remain_closed",
+      "integration::compaction_heads_r1_prior_conflicts_identical_and_absence_controls"
+    ],
+    "single_old_block_supersession": "compaction_heads_01_later_conflicting_record_cannot_override_and_earlier_arrival_refuses: earlier=true Y:2/HLC1000007-0000 receipt changes invalid/no-file expectation to accepted/exact original/no rejection/no authority/cache unchanged; earlier-X acceptance, compaction refusal, later=false, originals/name remain protected",
+    "preservation": "Root03, two scoped gates/test bodies/helpers, old unrelated helpers/tests, three authored-wall sites, valid wrap and octal0o0, membership production, identity/crypto/wire/persistence/M1/CI/harness/schema/AGENTS/dependencies/features/goldens unchanged under plan",
+    "residuals": "conflict can permanently block compaction; no recovery/anti-rollback/capacity guarantee; no authority from cache/evidence; real corruption/missing evidence may still halt operations"
+  },
+  "status": {
+    "R1-01_HIGH": "OPEN_UNFIXED",
+    "original01_02_MEDIUM_03_LOW": "OPEN pending validation/acceptance; prior Opus source-fixed disposition not new acceptance",
+    "implementation_tests": "NOTRUN by Astra or collector",
+    "global_holds": "all retained OPEN, including DOS-1 HIGH, Go quarantine/lease, old native10HOLD, M2/runtime/physical/Oracle/release/acceptance",
+    "later_Linux563_baseline": "parent supplies later27phasePASS; not independently audited in this collection and does not rewrite frozen Astra ACTIVE snapshot or prove policy/final repaired source"
+  },
+  "coverage_limits": [
+    "Only two output documents read completely for policy/scope statements; brief hash and parsed input bindings/manifest provenance checked, not a second product-decision review.",
+    "All1503 source bytes were hashed and compared to fixed Git object content/modes; no full source semantic review.",
+    "Astra execution history/tool stream not replayed; declared first-hash order/settings/coverage remain author claims supported by fixed bindings, not independent model attestation.",
+    "No runtime/VM/process/SSH/network/cache/HOME/credential actions, product/helper/compiler/formatter/test/dependency/harness execution, source/ref/index edit or resource release."
+  ],
+  "actual_git_raw_byte_equality": "all1503 paths match independent Git blob raw bytes and manifest SHA256"
+}

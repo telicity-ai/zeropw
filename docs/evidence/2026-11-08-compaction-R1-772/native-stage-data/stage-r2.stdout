@@ -1,0 +1,2 @@
+{"assigned_uid_ps_exit": 1, "assigned_uid_ps_stdout_bytes": 0, "assigned_uid_ps_stderr_bytes": 0, "phase": "DATA_only_stage_preflight"}
+{"state": "STAGED_DATA_ONLY", "source_files": 1519, "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef", "controls_verified": 4, "public_crates": 172, "upstream_files_verified": 8194, "uid502_before": [], "product": "NOTRUN", "old501": "NOT_QUERIED"}

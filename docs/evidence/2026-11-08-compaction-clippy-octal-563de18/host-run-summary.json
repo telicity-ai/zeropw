@@ -1,0 +1,196 @@
+{
+  "state": "ALL_PHASE_COMMANDS_EXIT0",
+  "results": [
+    {
+      "phase": "01-features-before",
+      "exit_code": 0,
+      "timeout": false,
+      "own_host_child_wait": true,
+      "elapsed_seconds": 0.47
+    },
+    {
+      "phase": "02-format",
+      "exit_code": 0,
+      "timeout": false,
+      "own_host_child_wait": true,
+      "elapsed_seconds": 1.364
+    },
+    {
+      "phase": "02-clippy-preflight",
+      "exit_code": 0,
+      "timeout": false,
+      "own_host_child_wait": true,
+      "elapsed_seconds": 5.154
+    },
+    {
+      "phase": "03-new-exact",
+      "exit_code": 0,
+      "timeout": false,
+      "own_host_child_wait": true,
+      "elapsed_seconds": 13.912
+    },
+    {
+      "phase": "04-new-exact",
+      "exit_code": 0,
+      "timeout": false,
+      "own_host_child_wait": true,
+      "elapsed_seconds": 5.342
+    },
+    {
+      "phase": "05-lib-debug",
+      "exit_code": 0,
+      "timeout": false,
+      "own_host_child_wait": true,
+      "elapsed_seconds": 66.726
+    },
+    {
+      "phase": "06-integration-debug",
+      "exit_code": 0,
+      "timeout": false,
+      "own_host_child_wait": true,
+      "elapsed_seconds": 44.996
+    },
+    {
+      "phase": "07-lib-release",
+      "exit_code": 0,
+      "timeout": false,
+      "own_host_child_wait": true,
+      "elapsed_seconds": 3.714
+    },
+    {
+      "phase": "08-integration-release",
+      "exit_code": 0,
+      "timeout": false,
+      "own_host_child_wait": true,
+      "elapsed_seconds": 5.708
+    },
+    {
+      "phase": "09-full-matrix",
+      "exit_code": 0,
+      "timeout": false,
+      "own_host_child_wait": true,
+      "elapsed_seconds": 2719.274
+    },
+    {
+      "phase": "10-non-test-release-build",
+      "exit_code": 0,
+      "timeout": false,
+      "own_host_child_wait": true,
+      "elapsed_seconds": 0.424
+    },
+    {
+      "phase": "11-non-test-gate-absence",
+      "exit_code": 0,
+      "timeout": false,
+      "own_host_child_wait": true,
+      "elapsed_seconds": 0.354
+    },
+    {
+      "phase": "12-stack-exact-debug",
+      "exit_code": 0,
+      "timeout": false,
+      "own_host_child_wait": true,
+      "elapsed_seconds": 0.304
+    },
+    {
+      "phase": "13-stack-exact-debug",
+      "exit_code": 0,
+      "timeout": false,
+      "own_host_child_wait": true,
+      "elapsed_seconds": 0.411
+    },
+    {
+      "phase": "14-stack-exact-debug",
+      "exit_code": 0,
+      "timeout": false,
+      "own_host_child_wait": true,
+      "elapsed_seconds": 0.414
+    },
+    {
+      "phase": "15-stack-exact-debug",
+      "exit_code": 0,
+      "timeout": false,
+      "own_host_child_wait": true,
+      "elapsed_seconds": 0.293
+    },
+    {
+      "phase": "16-stack-exact-debug",
+      "exit_code": 0,
+      "timeout": false,
+      "own_host_child_wait": true,
+      "elapsed_seconds": 3.769
+    },
+    {
+      "phase": "17-stack-exact-debug",
+      "exit_code": 0,
+      "timeout": false,
+      "own_host_child_wait": true,
+      "elapsed_seconds": 2.009
+    },
+    {
+      "phase": "18-stack-exact-debug",
+      "exit_code": 0,
+      "timeout": false,
+      "own_host_child_wait": true,
+      "elapsed_seconds": 3.73
+    },
+    {
+      "phase": "19-stack-exact-release",
+      "exit_code": 0,
+      "timeout": false,
+      "own_host_child_wait": true,
+      "elapsed_seconds": 2.136
+    },
+    {
+      "phase": "20-stack-exact-release",
+      "exit_code": 0,
+      "timeout": false,
+      "own_host_child_wait": true,
+      "elapsed_seconds": 4.289
+    },
+    {
+      "phase": "21-stack-exact-release",
+      "exit_code": 0,
+      "timeout": false,
+      "own_host_child_wait": true,
+      "elapsed_seconds": 4.806
+    },
+    {
+      "phase": "22-stack-exact-release",
+      "exit_code": 0,
+      "timeout": false,
+      "own_host_child_wait": true,
+      "elapsed_seconds": 0.301
+    },
+    {
+      "phase": "23-stack-exact-release",
+      "exit_code": 0,
+      "timeout": false,
+      "own_host_child_wait": true,
+      "elapsed_seconds": 5.251
+    },
+    {
+      "phase": "24-stack-exact-release",
+      "exit_code": 0,
+      "timeout": false,
+      "own_host_child_wait": true,
+      "elapsed_seconds": 0.35
+    },
+    {
+      "phase": "25-stack-exact-release",
+      "exit_code": 0,
+      "timeout": false,
+      "own_host_child_wait": true,
+      "elapsed_seconds": 0.474
+    },
+    {
+      "phase": "26-features-after",
+      "exit_code": 0,
+      "timeout": false,
+      "own_host_child_wait": true,
+      "elapsed_seconds": 0.296
+    }
+  ],
+  "later_phases": "NONE",
+  "source_head": "563de18b61b87b00e33faed955c43f14db43f681"
+}

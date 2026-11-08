@@ -1,0 +1,11 @@
+{
+  "schema": "RootLinux563OwnScopeJoined-v1",
+  "as_of_utc": "2026-11-08T11:01:37.086970+00:00",
+  "source_head": "563de18b61b87b00e33faed955c43f14db43f681",
+  "all27phasechildren_and_hosttransports": "waited with exit0,no timeout",
+  "lastUID2100_observation": [],
+  "Root89928": "completed exit0, direct retained handle joined",
+  "allocation": "Root retains sole gt01 warm idle, no new source/grant/query/stop/deletion; private data/caches/targets/evidence retained",
+  "oldresources": "oldnative10HOLD/Goquarantine/cancellation/lease unchanged; nativecurrentown8ajobjoined/RootTart64637idle retained",
+  "limits": "Recorded own scope observations, not whole-machine erasure, physical twoMac, Oracle or security acceptance"
+}

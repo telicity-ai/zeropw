@@ -1,0 +1,297 @@
+{
+  "actual_model": "gpt-6.1-sol / ultra, T3 Code through Codex; effective service tier unexposed",
+  "as_of_utc": "2026-11-08T12:47:32.542602+00:00",
+  "bindings": {
+    "archive_bytes": 11776000,
+    "archive_sha256": "7ed67280ae5dc46dced70ae710240ea9914a61b07378c21aaaa0383135605e74",
+    "driver_sha256": "7738602b70cfff2f48d972c22b5e7c7fd87e1a27c88492ddbc936b78a1a5e2a2",
+    "grant_sha256": "6e8026d8d52243b6cb915b1808afa40888c4a5baed8dcd63d88fe4d31fba595e",
+    "host_summary_sha256": "091312e74887d47ed0c3919e7e3cd47efaa56872d366a2d5a1b6a4a6b77987f7",
+    "launcher_sha256": "6214f389333537d85d22a847dd0031e3e0c7eb2e14bebbbef3986b27a0cda788",
+    "manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+    "plan_sha256": "86180debe6219bf3a312c1a1f9a2bac36d2d0f1e23948cc484ed850e651cf154"
+  },
+  "checks": {
+    "13_host_driver_launcher_and_receipt_fetch_waits_match": true,
+    "13_recorded502_identity_expected_groups_no_root_admin": true,
+    "13_recorded_waits_and_empty_assigned_UID": true,
+    "13_started_and_completed_bindings": true,
+    "13_zero_exits_no_timeouts_cancel_failure": true,
+    "1519_fixed_Git_bytes_blobs_hashes_modes": true,
+    "26_raw_log_hashes_lengths": true,
+    "26_source_maps_39494entries": true,
+    "4controls0644_52evidence0600": true,
+    "56_unique_safe_regular_exact_members_no_links_or_casefold_aliases": true,
+    "7_exact_selections1each": true,
+    "focused37library28integration_bothprofiles": true,
+    "format_all_check": true,
+    "strictClippy_alltargets_Dwarnings": true
+  },
+  "coverage": "Complete56-member archive; diagnostic grant/manifest/plan; all fixed772 Git1519objects/modes; completed13host summary,13host metadata/stdout and13fetchedreceipt bytes; original/corrected ps stage hash metadata. No semantic code review.",
+  "failures_corrections": "No assertion failure in this DATA audit. Native identity schema handled separately from Linux.",
+  "final_recorded_assigned_UID502_processes": [],
+  "full_tree": "43ccc017c0336a9d1d90d494705ec40ab4865c6d",
+  "head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+  "host_receipt_bindings": [
+    {
+      "driver_wait": true,
+      "fetched_receipt_sha256": "f24218d0173a04ac62dc2df2054d938772472eb33c2cebc4bf8b741ea4bba5b7",
+      "host_transport_wait": true,
+      "phase": "01-format",
+      "receipt_fetch_wait": true,
+      "root_launcher_wait": true
+    },
+    {
+      "driver_wait": true,
+      "fetched_receipt_sha256": "a136cd616668360716fb3abd8005d76e5d12305fac7371405c14087a4e934b06",
+      "host_transport_wait": true,
+      "phase": "02-clippy",
+      "receipt_fetch_wait": true,
+      "root_launcher_wait": true
+    },
+    {
+      "driver_wait": true,
+      "fetched_receipt_sha256": "a1d09cc9b83e020f7f6212ca76158d8fec5cbc0f579a4886409d83893c86a366",
+      "host_transport_wait": true,
+      "phase": "03-new-exact",
+      "receipt_fetch_wait": true,
+      "root_launcher_wait": true
+    },
+    {
+      "driver_wait": true,
+      "fetched_receipt_sha256": "8ee117565527f64af9f10f5bab45fac4aefe973bbb4310e3dc3a1754b330146d",
+      "host_transport_wait": true,
+      "phase": "04-new-exact",
+      "receipt_fetch_wait": true,
+      "root_launcher_wait": true
+    },
+    {
+      "driver_wait": true,
+      "fetched_receipt_sha256": "f2b1d7c03d038f0da7000e3f3ffbae9e7ff2245df19333093eb047364f5342c9",
+      "host_transport_wait": true,
+      "phase": "05-new-exact",
+      "receipt_fetch_wait": true,
+      "root_launcher_wait": true
+    },
+    {
+      "driver_wait": true,
+      "fetched_receipt_sha256": "01a7d5ddbfe11dbd766bb3b2162a7552d2707f9fd38bdb0e11e00a0e421ebe66",
+      "host_transport_wait": true,
+      "phase": "06-new-exact",
+      "receipt_fetch_wait": true,
+      "root_launcher_wait": true
+    },
+    {
+      "driver_wait": true,
+      "fetched_receipt_sha256": "bf25dc55f8f12a0abb9754eed7b4261beceb6e8a1d095e283d7ce22c3b4dd291",
+      "host_transport_wait": true,
+      "phase": "07-new-exact",
+      "receipt_fetch_wait": true,
+      "root_launcher_wait": true
+    },
+    {
+      "driver_wait": true,
+      "fetched_receipt_sha256": "42bfc2690a44697b872488c52ad9f9b7d18fac1a7dd82f807a988cb69b2855cd",
+      "host_transport_wait": true,
+      "phase": "08-new-exact",
+      "receipt_fetch_wait": true,
+      "root_launcher_wait": true
+    },
+    {
+      "driver_wait": true,
+      "fetched_receipt_sha256": "27058b36722b75782e3f83773e9e274c01dcffa1ff6cc007029ea81cc9a07cd6",
+      "host_transport_wait": true,
+      "phase": "09-new-exact",
+      "receipt_fetch_wait": true,
+      "root_launcher_wait": true
+    },
+    {
+      "driver_wait": true,
+      "fetched_receipt_sha256": "9be7ef53cb443b32011846b3180fa7f00e48a7964fc198340fd5daab2e094338",
+      "host_transport_wait": true,
+      "phase": "10-lib-debug",
+      "receipt_fetch_wait": true,
+      "root_launcher_wait": true
+    },
+    {
+      "driver_wait": true,
+      "fetched_receipt_sha256": "0a30ec5da9f7fcc0eba7dba0952a6f991fabfc6e9edc39a080958803801473cc",
+      "host_transport_wait": true,
+      "phase": "11-integration-debug",
+      "receipt_fetch_wait": true,
+      "root_launcher_wait": true
+    },
+    {
+      "driver_wait": true,
+      "fetched_receipt_sha256": "b90c259aa2f01e457d5750ce40287ca71d0c031fde6b3afca9b7e62d533548af",
+      "host_transport_wait": true,
+      "phase": "12-lib-release",
+      "receipt_fetch_wait": true,
+      "root_launcher_wait": true
+    },
+    {
+      "driver_wait": true,
+      "fetched_receipt_sha256": "fd434837dba2485aa2f6da79625a61387921a7b2bae13e53649a3b9ae2783e2f",
+      "host_transport_wait": true,
+      "phase": "13-integration-release",
+      "receipt_fetch_wait": true,
+      "root_launcher_wait": true
+    }
+  ],
+  "limits": [
+    "Recorded test/lifecycle/identity facts only, no independent replay or cryptographic execution attestation.",
+    "Archived POSIX modes match fixed Git expectations; no live guest filesystem/process inquiry or old501HOLD action.",
+    "Only completed diagnostic13: no full unchanged matrix or active final23campaign observation, no physical/Oracle/capacity result.",
+    "All four findings and global holds remain OPEN; no security/Astraacceptance/release verdict.",
+    "Original ps DATA-stage failure/correction and older candidate failures left untouched and not replaced. No resource release/cancel."
+  ],
+  "phases": [
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 1.420288375000382,
+      "kind": "formatcheck",
+      "own_child_waited": true,
+      "phase": "01-format",
+      "receipt_sha256": "f24218d0173a04ac62dc2df2054d938772472eb33c2cebc4bf8b741ea4bba5b7",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 22.71433637500013,
+      "kind": "clippy",
+      "own_child_waited": true,
+      "phase": "02-clippy",
+      "receipt_sha256": "a136cd616668360716fb3abd8005d76e5d12305fac7371405c14087a4e934b06",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 14.589069292000204,
+      "exact_test": "team::commit::compaction_heads_tests::compaction_heads_r1_exact_announcements_include_nonfirst_ops",
+      "kind": "exact",
+      "own_child_waited": true,
+      "passed": 1,
+      "phase": "03-new-exact",
+      "receipt_sha256": "a1d09cc9b83e020f7f6212ca76158d8fec5cbc0f579a4886409d83893c86a366",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 0.23085695900044811,
+      "exact_test": "team::commit::compaction_heads_tests::compaction_heads_r1_retained_matches_use_canonical_sparse_files",
+      "kind": "exact",
+      "own_child_waited": true,
+      "passed": 1,
+      "phase": "04-new-exact",
+      "receipt_sha256": "8ee117565527f64af9f10f5bab45fac4aefe973bbb4310e3dc3a1754b330146d",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 28.6653727920002,
+      "exact_test": "team::sync::compaction_heads_tests::compaction_heads_r1_other_author_receipt_handle_and_compaction",
+      "kind": "exact",
+      "own_child_waited": true,
+      "passed": 1,
+      "phase": "05-new-exact",
+      "receipt_sha256": "f2b1d7c03d038f0da7000e3f3ffbae9e7ff2245df19333093eb047364f5342c9",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 65.2591346249992,
+      "exact_test": "team::sync::compaction_heads_tests::compaction_heads_r1_deferred_release_preserves_clock_and_evidence",
+      "kind": "exact",
+      "own_child_waited": true,
+      "passed": 1,
+      "phase": "06-new-exact",
+      "receipt_sha256": "01a7d5ddbfe11dbd766bb3b2162a7552d2707f9fd38bdb0e11e00a0e421ebe66",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 144.0509049579996,
+      "exact_test": "team::sync::compaction_heads_tests::compaction_heads_r1_owner_data_removal_and_both_fact_paths",
+      "kind": "exact",
+      "own_child_waited": true,
+      "passed": 1,
+      "phase": "07-new-exact",
+      "receipt_sha256": "bf25dc55f8f12a0abb9754eed7b4261beceb6e8a1d095e283d7ce22c3b4dd291",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 507.54908579199946,
+      "exact_test": "team::sync::compaction_heads_tests::compaction_heads_r1_local_failures_and_authority_remain_closed",
+      "kind": "exact",
+      "own_child_waited": true,
+      "passed": 1,
+      "phase": "08-new-exact",
+      "receipt_sha256": "42bfc2690a44697b872488c52ad9f9b7d18fac1a7dd82f807a988cb69b2855cd",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 25.701022584000384,
+      "exact_test": "compaction_heads_r1_prior_conflicts_identical_and_absence_controls",
+      "kind": "exact",
+      "own_child_waited": true,
+      "passed": 1,
+      "phase": "09-new-exact",
+      "receipt_sha256": "27058b36722b75782e3f83773e9e274c01dcffa1ff6cc007029ea81cc9a07cd6",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 588.9850809580003,
+      "kind": "tests",
+      "own_child_waited": true,
+      "passed": 37,
+      "phase": "10-lib-debug",
+      "receipt_sha256": "9be7ef53cb443b32011846b3180fa7f00e48a7964fc198340fd5daab2e094338",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 54.09384070800115,
+      "kind": "tests",
+      "own_child_waited": true,
+      "passed": 28,
+      "phase": "11-integration-debug",
+      "receipt_sha256": "0a30ec5da9f7fcc0eba7dba0952a6f991fabfc6e9edc39a080958803801473cc",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 117.35443879200102,
+      "kind": "tests",
+      "own_child_waited": true,
+      "passed": 37,
+      "phase": "12-lib-release",
+      "receipt_sha256": "b90c259aa2f01e457d5750ce40287ca71d0c031fde6b3afca9b7e62d533548af",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 66.78891187499903,
+      "kind": "tests",
+      "own_child_waited": true,
+      "passed": 28,
+      "phase": "13-integration-release",
+      "receipt_sha256": "fd434837dba2485aa2f6da79625a61387921a7b2bae13e53649a3b9ae2783e2f",
+      "test_exit": 0
+    }
+  ],
+  "ps_stage_failure_provenance": {
+    "corrected_stage_sha256": "2a969be4738d7ed14725c4537a6bea7dc597bd5e5365c5100577550c163d0916",
+    "correction_json_sha256": "b318e4bdeccc9d58da798d04de5def56b439a9382b240eb0b36173dda801593f",
+    "old_stage_sha256": "245ab5b60e001bc8210dd39b0e7b6305091c9429177a96671549d5f59f33efbf",
+    "original_stderr_sha256": "03756a79737abb4433aacedf5a94df9810baf8e2b4ecd57cd94f021cd7bda258",
+    "status": "Original DATA-stage ps no-match failure/correction preserved unchanged, not a product PASS"
+  },
+  "recorded_source_path": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+  "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+  "schema": "Sol-independent-native-R1-diagnostic13-DATA-v1",
+  "scope": "Completed immutable DATA audit only, no execution/replay/security/acceptance",
+  "source_files": 1519
+}

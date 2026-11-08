@@ -1,0 +1,2994 @@
+{
+  "archive_local": "/Users/ys/Code/zeropw-mlp-evidence/compaction-R1-native-final-20261108/final-evidence.tar",
+  "archive_sha256": "98f11067b3592ad2a0558f91e0e7bfc0e32278d470183b0876b2dca802e444dc",
+  "phases": [
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "tree",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "-e",
+        "features"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 51904512,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "ab2211e15fe8ba4db17086c257523557a8dcb360af01256140845b21eccb6112",
+      "elapsed_seconds": 0.1515926659994875,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "441f1fc4439116e7f44246abc9d0562820db7b77a9691da61cc919514bf64800",
+      "guest_free_bytes_before_phase": 47224913920,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 8664,
+      "own_child_waited": true,
+      "own_session_pgrp": 8664,
+      "phase": "01-features-before",
+      "raw_value_feature_present": false,
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 0,
+        "file": "01-features-before.stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stdout": {
+        "bytes": 43532,
+        "file": "01-features-before.stdout",
+        "sha256": "06097095414d44982469d5f7683e1a9d03520624c4ecdb0c8b5a93e7727fff8c"
+      },
+      "test_exit": 0,
+      "test_summaries": [],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "team::sync::compaction_heads_tests::compaction_heads_deferred_prefilter_stale_forward_receipt_uses_locked_sequence",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 53673984,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "ab2211e15fe8ba4db17086c257523557a8dcb360af01256140845b21eccb6112",
+      "elapsed_seconds": 14.79321012499895,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "c7c0fcd149dfacfb0cc8ac1ef967d778a6d9de6674d38f31af937370b48529a3",
+      "guest_free_bytes_before_phase": 47223984128,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 8686,
+      "own_child_waited": true,
+      "own_session_pgrp": 8686,
+      "phase": "02-scoped-exact-debug",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 173,
+        "file": "02-scoped-exact-debug.stderr",
+        "sha256": "35a5c3a61600dd14c9f28e32bcf448b8eb2e43d1b68b463ed32cef073a0f79cd"
+      },
+      "stdout": {
+        "bytes": 242,
+        "file": "02-scoped-exact-debug.stdout",
+        "sha256": "d6586f42641a0e1e6b5b8ba17a2cd55b921eebf874f01a4473ef1740bad22dbe"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 744,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "team::sync::compaction_heads_tests::compaction_heads_authorized_fact_cache_read_pause_keeps_envs_available",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 53755904,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "ab2211e15fe8ba4db17086c257523557a8dcb360af01256140845b21eccb6112",
+      "elapsed_seconds": 5.29078283400122,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "b9a10a0ed479530db49325d4b302bf03e498a7b596dbfc928adede94306a96c5",
+      "guest_free_bytes_before_phase": 47223099392,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 8715,
+      "own_child_waited": true,
+      "own_session_pgrp": 8715,
+      "phase": "03-scoped-exact-debug",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 173,
+        "file": "03-scoped-exact-debug.stderr",
+        "sha256": "b84ed054f44dee1f98037542b0671c0dd565aa51f6355bf735198da6796b7636"
+      },
+      "stdout": {
+        "bytes": 233,
+        "file": "03-scoped-exact-debug.stdout",
+        "sha256": "da782b7f74370b60e8d9bb2caa1fd23e0a045e54b362c4cba214fda4107159a9"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 744,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--lib",
+        "team::sync::compaction_heads_tests::compaction_heads_deferred_prefilter_stale_forward_receipt_uses_locked_sequence",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 53837824,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "ab2211e15fe8ba4db17086c257523557a8dcb360af01256140845b21eccb6112",
+      "elapsed_seconds": 1.492125541999485,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "8e36b7198b965b2cd19bd7ba076cc8235b7e845b0e442441c939c2864c523a98",
+      "guest_free_bytes_before_phase": 47222206464,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 8736,
+      "own_child_waited": true,
+      "own_session_pgrp": 8736,
+      "phase": "04-scoped-exact-release",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 176,
+        "file": "04-scoped-exact-release.stderr",
+        "sha256": "81b2c6907e352d475f8bd451b8f3aac01c28066073379d50ac5bfb1d728b96da"
+      },
+      "stdout": {
+        "bytes": 241,
+        "file": "04-scoped-exact-release.stdout",
+        "sha256": "7253401a8ff2266b5d2c2fff2b6dfc2f51711728042d10e6f8088093693f291f"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 744,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--lib",
+        "team::sync::compaction_heads_tests::compaction_heads_authorized_fact_cache_read_pause_keeps_envs_available",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 53755904,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "ab2211e15fe8ba4db17086c257523557a8dcb360af01256140845b21eccb6112",
+      "elapsed_seconds": 0.41830483299963817,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "0b859a87a2cd1e3417fa6f2e6ba511e99ccb44e3dfbae50a9f994f5477756cf2",
+      "guest_free_bytes_before_phase": 47221329920,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 8756,
+      "own_child_waited": true,
+      "own_session_pgrp": 8756,
+      "phase": "05-scoped-exact-release",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 176,
+        "file": "05-scoped-exact-release.stderr",
+        "sha256": "758bebe80aa46a88a42991e2d6fdfdb4900f51cb1a7bab3d96086a309c8b4b72"
+      },
+      "stdout": {
+        "bytes": 233,
+        "file": "05-scoped-exact-release.stdout",
+        "sha256": "69ce0c23330c55085e2547057ec35ab7f9b5c8038e73c5a2b32e12bde7e0ee8b"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 744,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/bin/bash",
+        "rust/verify.sh"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 1353007104,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "ab2211e15fe8ba4db17086c257523557a8dcb360af01256140845b21eccb6112",
+      "elapsed_seconds": 3625.115284083,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_matrix": {
+        "explicit_signer_probes": {
+          "signer::tests::idle_cpu_with_one_and_nine_live_bindings": true,
+          "signer::tests::per_binding_fd_cost_matches_python_ratio_of_one": true,
+          "signer::tests::per_client_fd_cost_matches_python_ratio_of_one": true,
+          "signer::tests::rlimit_probe_served_clients_and_accept_loop_survival": true
+        },
+        "failed": 0,
+        "ignored": 5,
+        "integration_targets": 107,
+        "ordered_markers_match": true,
+        "passed": 1884,
+        "steps": 112,
+        "test_summary_count": 115
+      },
+      "full_receipt_sha256": "211472561438874e846ce674084c7d402313c20ae7964e5420c93dc1cb97852f",
+      "guest_free_bytes_before_phase": 47220441088,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 8773,
+      "own_child_waited": true,
+      "own_session_pgrp": 8773,
+      "phase": "06-full-matrix",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 30249,
+        "file": "06-full-matrix.stderr",
+        "sha256": "b880dc8ca99b61980fa7fdef78a0cd5e66c1f5caf8532db7395c617a4e03928b"
+      },
+      "stdout": {
+        "bytes": 162333,
+        "file": "06-full-matrix.stdout",
+        "sha256": "35719bded1e7e9bfc7155437eda357f9729b5a7208fc49cdefc215228c6d02d6"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 4,
+          "measured": 0,
+          "passed": 741,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 0,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 0,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 0,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 0,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 0,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 12,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 9,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 5,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 5,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 6,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 5,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 6,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 5,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 8,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 9,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 5,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 12,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 20,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 149,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 8,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 26,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 26,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 8,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 6,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 17,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 20,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 26,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 32,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 8,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 9,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 21,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 15,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 6,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 86,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 6,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 17,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 1,
+          "measured": 0,
+          "passed": 6,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 10,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 13,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 22,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 17,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 28,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 31,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 19,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 12,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 10,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 35,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 13,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 16,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 26,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 8,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 27,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 46,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 32,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 9,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 741,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 48,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "build",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--lib"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 53673984,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "ab2211e15fe8ba4db17086c257523557a8dcb360af01256140845b21eccb6112",
+      "elapsed_seconds": 0.15631333400051517,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "b09833bcf0c4ed37bbf29a2e19ec61853d2d0a0d27f29b899017646dd3f0e432",
+      "guest_free_bytes_before_phase": 47211597824,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 13109,
+      "own_child_waited": true,
+      "own_session_pgrp": 13109,
+      "phase": "07-non-test-release-build",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 62,
+        "file": "07-non-test-release-build.stderr",
+        "sha256": "1ff8bbcb4151dc887e69b78a29bc241d5062cba4757aa5f4639926ae712a8181"
+      },
+      "stdout": {
+        "bytes": 0,
+        "file": "07-non-test-release-build.stdout",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "test_exit": 0,
+      "test_summaries": [],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/python3",
+        "-I",
+        "/private/var/zeropw-R1-native-final-control/non_test_symbols.py"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 42942464,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "ab2211e15fe8ba4db17086c257523557a8dcb360af01256140845b21eccb6112",
+      "elapsed_seconds": 0.45723474999977043,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "cdfd7ad1a70c565f676763229e808a1307ee95776f48949c31345ed4ac89a547",
+      "guest_free_bytes_before_phase": 47210487808,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 13129,
+      "own_child_waited": true,
+      "own_session_pgrp": 13129,
+      "phase": "08-non-test-gate-absence",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 0,
+        "file": "08-non-test-gate-absence.stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stdout": {
+        "bytes": 316,
+        "file": "08-non-test-gate-absence.stdout",
+        "sha256": "9722a2d1303382544e2e55df39effa3fe27db1764623015d7ee4c86a32595381"
+      },
+      "test_exit": 0,
+      "test_summaries": [],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_payload",
+        "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 54034432,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "ab2211e15fe8ba4db17086c257523557a8dcb360af01256140845b21eccb6112",
+      "elapsed_seconds": 0.12390137500005949,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "fcab5fd973040cffb84decbdbcafcd1b6a8d44498cbe9c637f06499e3cf11c63",
+      "guest_free_bytes_before_phase": 47209611264,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 13178,
+      "own_child_waited": true,
+      "own_session_pgrp": 13178,
+      "phase": "09-stack-exact-debug",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 202,
+        "file": "09-stack-exact-debug.stderr",
+        "sha256": "87d227fde090ebed83d9b45db11a62e34fd7f73a30d7ae88c104e70704a841b7"
+      },
+      "stdout": {
+        "bytes": 197,
+        "file": "09-stack-exact-debug.stdout",
+        "sha256": "5bee27b2fe1642f782b154c5c3e8fb1e162e87739f4ffadb09c6324aceb74423"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 12,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_admission",
+        "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 54591488,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "ab2211e15fe8ba4db17086c257523557a8dcb360af01256140845b21eccb6112",
+      "elapsed_seconds": 0.20254616599959263,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "7d932ad329767e6a7741e1649530aa37cff2398f7b4d254613dfdc97a6dc33eb",
+      "guest_free_bytes_before_phase": 47208710144,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 13195,
+      "own_child_waited": true,
+      "own_session_pgrp": 13195,
+      "phase": "10-stack-exact-debug",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 206,
+        "file": "10-stack-exact-debug.stderr",
+        "sha256": "3508e22b7f37b673116161dd2c0da30130d14ecb4e179b83534d71c6566c6175"
+      },
+      "stdout": {
+        "bytes": 194,
+        "file": "10-stack-exact-debug.stdout",
+        "sha256": "2afab82485fd28a56085299d4425e94b11ed39c6cd434761e6854ac4f8d1a22b"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 16,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_semantic_cut",
+        "complete_candidate_depth64_success_late_error_repeat_drop_and_65_refusal_on_256_kib",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 53985280,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "ab2211e15fe8ba4db17086c257523557a8dcb360af01256140845b21eccb6112",
+      "elapsed_seconds": 0.2174229579995881,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "a365cff295120dd699c039846fddae270a27d8655bc5d0cc14cb2a62ff3e84ca",
+      "guest_free_bytes_before_phase": 47207833600,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 13213,
+      "own_child_waited": true,
+      "own_session_pgrp": 13213,
+      "phase": "11-stack-exact-debug",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 212,
+        "file": "11-stack-exact-debug.stderr",
+        "sha256": "74603a21ea589760263b5bcb01b5905fbcfdd32fa2941571446760b3a6647f60"
+      },
+      "stdout": {
+        "bytes": 209,
+        "file": "11-stack-exact-debug.stdout",
+        "sha256": "6f2fb37b03ae2d56ae59e4f022d869958c5aaf0f61b97c2849e66854b98b1fe2"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 16,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_semantic_cut",
+        "complete_fold_depth64_on_actual_256_kib_stack",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 54345728,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "ab2211e15fe8ba4db17086c257523557a8dcb360af01256140845b21eccb6112",
+      "elapsed_seconds": 0.09098654199988232,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "8120702e0b506d8405c40c700079b385553549eef5d11091a6fbea25b02af2f7",
+      "guest_free_bytes_before_phase": 47206948864,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 13230,
+      "own_child_waited": true,
+      "own_session_pgrp": 13230,
+      "phase": "12-stack-exact-debug",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 212,
+        "file": "12-stack-exact-debug.stderr",
+        "sha256": "e08514ef6fdfc3c3708f1936b5f2b3a6d8e20bd9c8306ba1e01b042e3ba45c51"
+      },
+      "stdout": {
+        "bytes": 171,
+        "file": "12-stack-exact-debug.stdout",
+        "sha256": "67b2746c8ea478b65311ddb85e483565a2753c23a3d4fb42bd450797d550cca7"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 16,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_generation_depth64_success_late_error_repeat_drop_on_actual_256_kib",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 54214656,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "ab2211e15fe8ba4db17086c257523557a8dcb360af01256140845b21eccb6112",
+      "elapsed_seconds": 3.6927491250007733,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "d79d047bdcb4c4e54d8cad1d204f275ddcbf183cc11494f7fa12ce9e998da0c0",
+      "guest_free_bytes_before_phase": 47206068224,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 13247,
+      "own_child_waited": true,
+      "own_session_pgrp": 13247,
+      "phase": "13-stack-exact-debug",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 228,
+        "file": "13-stack-exact-debug.stderr",
+        "sha256": "2c1f66c7993e0356dc9cb4c258a6233a188b4e55ac89d7b627fa44c6c48c59f1"
+      },
+      "stdout": {
+        "bytes": 202,
+        "file": "13-stack-exact-debug.stdout",
+        "sha256": "d5f3461bf1c880aa07ef847fabea0cc995209a6165a524ab810e369f47e1444b"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 21,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_generation_depth65_refuses_before_crypto_on_actual_256_kib",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 54132736,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "ab2211e15fe8ba4db17086c257523557a8dcb360af01256140845b21eccb6112",
+      "elapsed_seconds": 1.7846804580003663,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "22a05120db21143979c12800b97987a4b312db9b0e23aeef2f39d7492b091a87",
+      "guest_free_bytes_before_phase": 47205564416,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 13264,
+      "own_child_waited": true,
+      "own_session_pgrp": 13264,
+      "phase": "14-stack-exact-debug",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 228,
+        "file": "14-stack-exact-debug.stderr",
+        "sha256": "2c1f66c7993e0356dc9cb4c258a6233a188b4e55ac89d7b627fa44c6c48c59f1"
+      },
+      "stdout": {
+        "bytes": 193,
+        "file": "14-stack-exact-debug.stdout",
+        "sha256": "5d447b4c830656ba00009706c06cd6ee876b1069a83ea18433b65ae488912f6b"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 21,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_wrap_depth64_success_error_repeat_drop_on_actual_256_kib",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 54411264,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "ab2211e15fe8ba4db17086c257523557a8dcb360af01256140845b21eccb6112",
+      "elapsed_seconds": 3.50563804200101,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "ec40fa3cd0d71cd98dd2368eb4ccf4b783f0d1ca2f0a2b5781349a3dfa567c7b",
+      "guest_free_bytes_before_phase": 47204683776,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 13281,
+      "own_child_waited": true,
+      "own_session_pgrp": 13281,
+      "phase": "15-stack-exact-debug",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 228,
+        "file": "15-stack-exact-debug.stderr",
+        "sha256": "7598b7a48f11389998d09c59f38db622c4e43f2c934c0f53b87f0a0d49e61ecd"
+      },
+      "stdout": {
+        "bytes": 191,
+        "file": "15-stack-exact-debug.stdout",
+        "sha256": "652245810c1adb7cf2db1bbc24be2dc7b10c0825ab5708552721eb5089e714d6"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 21,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_payload",
+        "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 197197824,
+      "child_ru_maxrss_before_bytes": 1851392,
+      "command_plan_sha256": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "ab2211e15fe8ba4db17086c257523557a8dcb360af01256140845b21eccb6112",
+      "elapsed_seconds": 2.6442965830010507,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "8052fd02c2bfc6e21302b629378f363955e247bf94e739230efb850592d49fb2",
+      "guest_free_bytes_before_phase": 47203799040,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 13299,
+      "own_child_waited": true,
+      "own_session_pgrp": 13299,
+      "phase": "16-stack-exact-release",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 280,
+        "file": "16-stack-exact-release.stderr",
+        "sha256": "18c1de03f3a3afbe8557826566ac845f509055e69413a40d816013d62c435075"
+      },
+      "stdout": {
+        "bytes": 197,
+        "file": "16-stack-exact-release.stdout",
+        "sha256": "56c051b13f82686fb5fd08d32cc52f11bde85a0157eee0f6766404abadbd5816"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 12,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_admission",
+        "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 239681536,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "ab2211e15fe8ba4db17086c257523557a8dcb360af01256140845b21eccb6112",
+      "elapsed_seconds": 4.200256292000631,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "6e51de9750c05b3763a29a4b8ef2b6729046b8b66b4933b1f2d46171a0aa8656",
+      "guest_free_bytes_before_phase": 47200759808,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 13322,
+      "own_child_waited": true,
+      "own_session_pgrp": 13322,
+      "phase": "17-stack-exact-release",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 284,
+        "file": "17-stack-exact-release.stderr",
+        "sha256": "78dfcede892a9afaa16db5ae6c00022263940fc625fba47d08e7b37ed5a6c745"
+      },
+      "stdout": {
+        "bytes": 194,
+        "file": "17-stack-exact-release.stdout",
+        "sha256": "3b7e3cb224e7a690a44f1040699ad02b2253a71ae5729ed1b52c37e5440b1205"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 16,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_semantic_cut",
+        "complete_candidate_depth64_success_late_error_repeat_drop_and_65_refusal_on_256_kib",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 249118720,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "ab2211e15fe8ba4db17086c257523557a8dcb360af01256140845b21eccb6112",
+      "elapsed_seconds": 4.720620207999673,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "de634b78fb73d8aee69ac8f41034b3720dcd61d3d6dfd97e6ee76c13d1144b3d",
+      "guest_free_bytes_before_phase": 47194558464,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 13346,
+      "own_child_waited": true,
+      "own_session_pgrp": 13346,
+      "phase": "18-stack-exact-release",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 290,
+        "file": "18-stack-exact-release.stderr",
+        "sha256": "2b24c0e412ee39da267daafb1ee8f524577e7515122d08eb2e12f779075670c6"
+      },
+      "stdout": {
+        "bytes": 209,
+        "file": "18-stack-exact-release.stdout",
+        "sha256": "36046cfb2e08b78119e7e3c9055c2cd3dbefd14032e7808793d647b5f5876880"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 16,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_semantic_cut",
+        "complete_fold_depth64_on_actual_256_kib_stack",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 54444032,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "ab2211e15fe8ba4db17086c257523557a8dcb360af01256140845b21eccb6112",
+      "elapsed_seconds": 0.0852506249993894,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "977e4932e0cc89585af3f52604b6b4d24ca3dae1a65ffaadd2d2df984e8843e3",
+      "guest_free_bytes_before_phase": 47188176896,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 13369,
+      "own_child_waited": true,
+      "own_session_pgrp": 13369,
+      "phase": "19-stack-exact-release",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 215,
+        "file": "19-stack-exact-release.stderr",
+        "sha256": "6f1807f859b5cea14e927949cf9f97afdacfe54943114e03dd824f83440b6b67"
+      },
+      "stdout": {
+        "bytes": 171,
+        "file": "19-stack-exact-release.stdout",
+        "sha256": "c32651ca5191b442f5fee38543a475015a433b10ef28207b8932778cad49e001"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 16,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_generation_depth64_success_late_error_repeat_drop_on_actual_256_kib",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 254296064,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "ab2211e15fe8ba4db17086c257523557a8dcb360af01256140845b21eccb6112",
+      "elapsed_seconds": 5.060436249999839,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "018d9cf339c50ba52715a42d9c7efed3d10f564fae1e4d54e95d01177f7019c6",
+      "guest_free_bytes_before_phase": 47187296256,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 13386,
+      "own_child_waited": true,
+      "own_session_pgrp": 13386,
+      "phase": "20-stack-exact-release",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 306,
+        "file": "20-stack-exact-release.stderr",
+        "sha256": "3d59b1bdbc7e3ff9e0fac3a57e976782f098ffab35ecef5c077ce62fa3098e4f"
+      },
+      "stdout": {
+        "bytes": 202,
+        "file": "20-stack-exact-release.stdout",
+        "sha256": "17c8720aea5b4b6ff093118a4b9e38aa5dfc0ee0faa17e85157b61a831d7eec1"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 21,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_generation_depth65_refuses_before_crypto_on_actual_256_kib",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 54018048,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "ab2211e15fe8ba4db17086c257523557a8dcb360af01256140845b21eccb6112",
+      "elapsed_seconds": 0.1669635409998591,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "8059fdcf8f02e59fec4b92bdd3f6837d865fc5c60e08d937878594672fa4211a",
+      "guest_free_bytes_before_phase": 47181111296,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 13410,
+      "own_child_waited": true,
+      "own_session_pgrp": 13410,
+      "phase": "21-stack-exact-release",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 231,
+        "file": "21-stack-exact-release.stderr",
+        "sha256": "e2f0b7684618a039eba1aa47ad357c75e8a53406ba4986f9865d99114ea72c29"
+      },
+      "stdout": {
+        "bytes": 193,
+        "file": "21-stack-exact-release.stdout",
+        "sha256": "cb3c7ed078adb2d42ee36e425dfe29b867047ff418051da63e1f00709c49be31"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 21,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_wrap_depth64_success_error_repeat_drop_on_actual_256_kib",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 54460416,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "ab2211e15fe8ba4db17086c257523557a8dcb360af01256140845b21eccb6112",
+      "elapsed_seconds": 0.2585264589997678,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "473143dbb94fdf0c76af6e3fc5d61759cd09f9b728623fe6ff5529c912768f0f",
+      "guest_free_bytes_before_phase": 47180230656,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 13427,
+      "own_child_waited": true,
+      "own_session_pgrp": 13427,
+      "phase": "22-stack-exact-release",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 231,
+        "file": "22-stack-exact-release.stderr",
+        "sha256": "e2f0b7684618a039eba1aa47ad357c75e8a53406ba4986f9865d99114ea72c29"
+      },
+      "stdout": {
+        "bytes": 191,
+        "file": "22-stack-exact-release.stdout",
+        "sha256": "a14e566d22df83f9c115590a3f89517b3aa0214f4fc05b9fd60eb33319536d7d"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 21,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "tree",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "-e",
+        "features"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 51707904,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "ab2211e15fe8ba4db17086c257523557a8dcb360af01256140845b21eccb6112",
+      "elapsed_seconds": 0.05173095799909788,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "596c542db781d773616bf3dba7c7cd0311ac88ded438ba0fdfb3d8b2a8beff98",
+      "guest_free_bytes_before_phase": 47179341824,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 13444,
+      "own_child_waited": true,
+      "own_session_pgrp": 13444,
+      "phase": "23-features-after",
+      "raw_value_feature_present": false,
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 0,
+        "file": "23-features-after.stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stdout": {
+        "bytes": 43532,
+        "file": "23-features-after.stdout",
+        "sha256": "06097095414d44982469d5f7683e1a9d03520624c4ecdb0c8b5a93e7727fff8c"
+      },
+      "test_exit": 0,
+      "test_summaries": [],
+      "timeout": false
+    }
+  ],
+  "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+  "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+  "source_maps": "full46maps remain in immutable archive; exact receipt hashes bind summaries"
+}

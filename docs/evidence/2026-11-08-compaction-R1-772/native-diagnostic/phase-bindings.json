@@ -1,0 +1,1160 @@
+{
+  "archive_local": "/Users/ys/Code/zeropw-mlp-evidence/compaction-R1-native-diagnostic-20261108/diagnostic-evidence.tar",
+  "archive_sha256": "7ed67280ae5dc46dced70ae710240ea9914a61b07378c21aaaa0383135605e74",
+  "phases": [
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "fmt",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--all",
+        "--check"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 115589120,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "86180debe6219bf3a312c1a1f9a2bac36d2d0f1e23948cc484ed850e651cf154",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "7738602b70cfff2f48d972c22b5e7c7fd87e1a27c88492ddbc936b78a1a5e2a2",
+      "elapsed_seconds": 1.420288375000382,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "f24218d0173a04ac62dc2df2054d938772472eb33c2cebc4bf8b741ea4bba5b7",
+      "guest_free_bytes_before_phase": 47244857344,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 7832,
+      "own_child_waited": true,
+      "own_session_pgrp": 7832,
+      "phase": "01-format",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_after_canonical_map_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "stderr": {
+        "bytes": 0,
+        "file": "01-format.stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stdout": {
+        "bytes": 0,
+        "file": "01-format.stdout",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "test_exit": 0,
+      "test_summaries": [],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "clippy",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 864813056,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "86180debe6219bf3a312c1a1f9a2bac36d2d0f1e23948cc484ed850e651cf154",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "7738602b70cfff2f48d972c22b5e7c7fd87e1a27c88492ddbc936b78a1a5e2a2",
+      "elapsed_seconds": 22.71433637500013,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "a136cd616668360716fb3abd8005d76e5d12305fac7371405c14087a4e934b06",
+      "guest_free_bytes_before_phase": 47243960320,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 7853,
+      "own_child_waited": true,
+      "own_session_pgrp": 7853,
+      "phase": "02-clippy",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_after_canonical_map_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "stderr": {
+        "bytes": 136,
+        "file": "02-clippy.stderr",
+        "sha256": "87d22b88dde8cdd21877eda7f1646b597822d01b322c39b11dd5c8aaf3c00988"
+      },
+      "stdout": {
+        "bytes": 0,
+        "file": "02-clippy.stdout",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "test_exit": 0,
+      "test_summaries": [],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "team::commit::compaction_heads_tests::compaction_heads_r1_exact_announcements_include_nonfirst_ops",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 1049296896,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "86180debe6219bf3a312c1a1f9a2bac36d2d0f1e23948cc484ed850e651cf154",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "7738602b70cfff2f48d972c22b5e7c7fd87e1a27c88492ddbc936b78a1a5e2a2",
+      "elapsed_seconds": 14.589069292000204,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "a1d09cc9b83e020f7f6212ca76158d8fec5cbc0f579a4886409d83893c86a366",
+      "guest_free_bytes_before_phase": 47240851456,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 8015,
+      "own_child_waited": true,
+      "own_session_pgrp": 8015,
+      "phase": "03-new-exact",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_after_canonical_map_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "stderr": {
+        "bytes": 249,
+        "file": "03-new-exact.stderr",
+        "sha256": "f2684b6287494ba9d5f6c3751cecfa420351583fbc049ad636f94e2cecd4cfcf"
+      },
+      "stdout": {
+        "bytes": 225,
+        "file": "03-new-exact.stdout",
+        "sha256": "82ea7441708e07c48d631691db9da7b2bf079987604a611d42c00d8cc43c6620"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 744,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "team::commit::compaction_heads_tests::compaction_heads_r1_retained_matches_use_canonical_sparse_files",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 54099968,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "86180debe6219bf3a312c1a1f9a2bac36d2d0f1e23948cc484ed850e651cf154",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "7738602b70cfff2f48d972c22b5e7c7fd87e1a27c88492ddbc936b78a1a5e2a2",
+      "elapsed_seconds": 0.23085695900044811,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "8ee117565527f64af9f10f5bab45fac4aefe973bbb4310e3dc3a1754b330146d",
+      "guest_free_bytes_before_phase": 47236284416,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 8050,
+      "own_child_waited": true,
+      "own_session_pgrp": 8050,
+      "phase": "04-new-exact",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_after_canonical_map_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "stderr": {
+        "bytes": 173,
+        "file": "04-new-exact.stderr",
+        "sha256": "585530a6b5733814ec0c1cbcc4fb05319dbb7f08410c9f08508966498fcdc914"
+      },
+      "stdout": {
+        "bytes": 228,
+        "file": "04-new-exact.stdout",
+        "sha256": "b740eec0211fd11ffe755a4bbcb9f6778fa4f95b53d5d4130c4958490899a546"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 744,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "team::sync::compaction_heads_tests::compaction_heads_r1_other_author_receipt_handle_and_compaction",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 53706752,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "86180debe6219bf3a312c1a1f9a2bac36d2d0f1e23948cc484ed850e651cf154",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "7738602b70cfff2f48d972c22b5e7c7fd87e1a27c88492ddbc936b78a1a5e2a2",
+      "elapsed_seconds": 28.6653727920002,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "f2b1d7c03d038f0da7000e3f3ffbae9e7ff2245df19333093eb047364f5342c9",
+      "guest_free_bytes_before_phase": 47235371008,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 8067,
+      "own_child_waited": true,
+      "own_session_pgrp": 8067,
+      "phase": "05-new-exact",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_after_canonical_map_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "stderr": {
+        "bytes": 173,
+        "file": "05-new-exact.stderr",
+        "sha256": "b84ed054f44dee1f98037542b0671c0dd565aa51f6355bf735198da6796b7636"
+      },
+      "stdout": {
+        "bytes": 226,
+        "file": "05-new-exact.stdout",
+        "sha256": "22a6d82c8427b474ccd1f856c3583e87767b2450b5ef7812b67752877b3d2a7b"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 744,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "team::sync::compaction_heads_tests::compaction_heads_r1_deferred_release_preserves_clock_and_evidence",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 53739520,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "86180debe6219bf3a312c1a1f9a2bac36d2d0f1e23948cc484ed850e651cf154",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "7738602b70cfff2f48d972c22b5e7c7fd87e1a27c88492ddbc936b78a1a5e2a2",
+      "elapsed_seconds": 65.2591346249992,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "01a7d5ddbfe11dbd766bb3b2162a7552d2707f9fd38bdb0e11e00a0e421ebe66",
+      "guest_free_bytes_before_phase": 47234441216,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 8096,
+      "own_child_waited": true,
+      "own_session_pgrp": 8096,
+      "phase": "06-new-exact",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_after_canonical_map_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "stderr": {
+        "bytes": 173,
+        "file": "06-new-exact.stderr",
+        "sha256": "dc2e70e7fe76908d13a2198aee091bbb81d70a9e8e82f0aed50c937be18cd7cd"
+      },
+      "stdout": {
+        "bytes": 373,
+        "file": "06-new-exact.stdout",
+        "sha256": "2c281f518203fd03a83587aba83d6e2f09332ae9c80c0df994c7e1c3af611fc9"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 744,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "team::sync::compaction_heads_tests::compaction_heads_r1_owner_data_removal_and_both_fact_paths",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 53985280,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "86180debe6219bf3a312c1a1f9a2bac36d2d0f1e23948cc484ed850e651cf154",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "7738602b70cfff2f48d972c22b5e7c7fd87e1a27c88492ddbc936b78a1a5e2a2",
+      "elapsed_seconds": 144.0509049579996,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "bf25dc55f8f12a0abb9754eed7b4261beceb6e8a1d095e283d7ce22c3b4dd291",
+      "guest_free_bytes_before_phase": 47233560576,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 8119,
+      "own_child_waited": true,
+      "own_session_pgrp": 8119,
+      "phase": "07-new-exact",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_after_canonical_map_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "stderr": {
+        "bytes": 173,
+        "file": "07-new-exact.stderr",
+        "sha256": "95d068985f9327925d90e1e0634541d55d7e8e63f553018caae01da452723ca3"
+      },
+      "stdout": {
+        "bytes": 360,
+        "file": "07-new-exact.stdout",
+        "sha256": "18a6901162ea0705ef7043b5987b78ee7a858f68e19051f812ed650b7924b759"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 744,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "team::sync::compaction_heads_tests::compaction_heads_r1_local_failures_and_authority_remain_closed",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 66977792,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "86180debe6219bf3a312c1a1f9a2bac36d2d0f1e23948cc484ed850e651cf154",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "7738602b70cfff2f48d972c22b5e7c7fd87e1a27c88492ddbc936b78a1a5e2a2",
+      "elapsed_seconds": 507.54908579199946,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "42bfc2690a44697b872488c52ad9f9b7d18fac1a7dd82f807a988cb69b2855cd",
+      "guest_free_bytes_before_phase": 47232614400,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 8173,
+      "own_child_waited": true,
+      "own_session_pgrp": 8173,
+      "phase": "08-new-exact",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_after_canonical_map_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "stderr": {
+        "bytes": 173,
+        "file": "08-new-exact.stderr",
+        "sha256": "95d068985f9327925d90e1e0634541d55d7e8e63f553018caae01da452723ca3"
+      },
+      "stdout": {
+        "bytes": 368,
+        "file": "08-new-exact.stdout",
+        "sha256": "99f6fa149980cba4c04f7f4de6a4347f984418143b906c09fd69335f524d1eba"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 744,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_compaction_heads",
+        "compaction_heads_r1_prior_conflicts_identical_and_absence_controls",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 820658176,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "86180debe6219bf3a312c1a1f9a2bac36d2d0f1e23948cc484ed850e651cf154",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "7738602b70cfff2f48d972c22b5e7c7fd87e1a27c88492ddbc936b78a1a5e2a2",
+      "elapsed_seconds": 25.701022584000384,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "27058b36722b75782e3f83773e9e274c01dcffa1ff6cc007029ea81cc9a07cd6",
+      "guest_free_bytes_before_phase": 47231582208,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 8284,
+      "own_child_waited": true,
+      "own_session_pgrp": 8284,
+      "phase": "09-new-exact",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_after_canonical_map_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "stderr": {
+        "bytes": 274,
+        "file": "09-new-exact.stderr",
+        "sha256": "092685b2eae4649b1bf29cb0da63e240d804b6473fd11499ea141d712cc14632"
+      },
+      "stdout": {
+        "bytes": 193,
+        "file": "09-new-exact.stdout",
+        "sha256": "a2bc3bfa03f15bc6bbc0b3252981734efcb43e805023bfda3fad234871b21bf7"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 27,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "compaction_heads"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 461537280,
+      "child_ru_maxrss_before_bytes": 1851392,
+      "command_plan_sha256": "86180debe6219bf3a312c1a1f9a2bac36d2d0f1e23948cc484ed850e651cf154",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "7738602b70cfff2f48d972c22b5e7c7fd87e1a27c88492ddbc936b78a1a5e2a2",
+      "elapsed_seconds": 588.9850809580003,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "9be7ef53cb443b32011846b3180fa7f00e48a7964fc198340fd5daab2e094338",
+      "guest_free_bytes_before_phase": 47229767680,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 8351,
+      "own_child_waited": true,
+      "own_session_pgrp": 8351,
+      "phase": "10-lib-debug",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_after_canonical_map_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "stderr": {
+        "bytes": 173,
+        "file": "10-lib-debug.stderr",
+        "sha256": "f88d0cb17b43385b2d953931894ff25807b2517f81bb975f7f6c1063acde747c"
+      },
+      "stdout": {
+        "bytes": 5051,
+        "file": "10-lib-debug.stdout",
+        "sha256": "8a5c54a7a75a1acf3753efd351cc64fe11537a24b5f6915252844ecb70b9a836"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 708,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 37,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_compaction_heads"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 80412672,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "86180debe6219bf3a312c1a1f9a2bac36d2d0f1e23948cc484ed850e651cf154",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "7738602b70cfff2f48d972c22b5e7c7fd87e1a27c88492ddbc936b78a1a5e2a2",
+      "elapsed_seconds": 54.09384070800115,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "0a30ec5da9f7fcc0eba7dba0952a6f991fabfc6e9edc39a080958803801473cc",
+      "guest_free_bytes_before_phase": 47228583936,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 8468,
+      "own_child_waited": true,
+      "own_session_pgrp": 8468,
+      "phase": "11-integration-debug",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_after_canonical_map_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "stderr": {
+        "bytes": 198,
+        "file": "11-integration-debug.stderr",
+        "sha256": "b185201367cbf94a495c5f70c29e2238a29947d77b221ef56da44053fa98f2db"
+      },
+      "stdout": {
+        "bytes": 2676,
+        "file": "11-integration-debug.stdout",
+        "sha256": "31f1f3622220ef785e621e3c0c7d7ad43e5cd43063bc507b8cbcaff9f78cc2e7"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 28,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--lib",
+        "compaction_heads"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 1225752576,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "86180debe6219bf3a312c1a1f9a2bac36d2d0f1e23948cc484ed850e651cf154",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "7738602b70cfff2f48d972c22b5e7c7fd87e1a27c88492ddbc936b78a1a5e2a2",
+      "elapsed_seconds": 117.35443879200102,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "b90c259aa2f01e457d5750ce40287ca71d0c031fde6b3afca9b7e62d533548af",
+      "guest_free_bytes_before_phase": 47227662336,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 8501,
+      "own_child_waited": true,
+      "own_session_pgrp": 8501,
+      "phase": "12-lib-release",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_after_canonical_map_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "stderr": {
+        "bytes": 252,
+        "file": "12-lib-release.stderr",
+        "sha256": "512194d3a3f97f704b7f4e3d12e2eab5e8c912ea5852ea45f61645241c39218f"
+      },
+      "stdout": {
+        "bytes": 4628,
+        "file": "12-lib-release.stdout",
+        "sha256": "9e7412bd91946ae6e77cdced5a23641d8ce55f25ce79d7c9381aff5f9870b140"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 708,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 37,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_compaction_heads"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_bytes": 969375744,
+      "child_ru_maxrss_before_bytes": 1867776,
+      "command_plan_sha256": "86180debe6219bf3a312c1a1f9a2bac36d2d0f1e23948cc484ed850e651cf154",
+      "cwd": "/Volumes/ZeroPWBuild/cg-native-r1/r1-src",
+      "driver_exit": 0,
+      "driver_sha256": "7738602b70cfff2f48d972c22b5e7c7fd87e1a27c88492ddbc936b78a1a5e2a2",
+      "elapsed_seconds": 66.78891187499903,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/Volumes/ZeroPWBuild/cg-native-r1/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/Volumes/ZeroPWBuild/cg-native-r1/target",
+        "HOME": "/Volumes/ZeroPWBuild/cg-native-r1/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/Volumes/ZeroPWBuild/cg-native-r1/txxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "fd434837dba2485aa2f6da79625a61387921a7b2bae13e53649a3b9ae2783e2f",
+      "guest_free_bytes_before_phase": 47226486784,
+      "identity": {
+        "egid": 502,
+        "euid": 502,
+        "gid": 502,
+        "groups": [
+          12,
+          61,
+          100,
+          502,
+          701
+        ],
+        "uid": 502
+      },
+      "own_child_pid": 8562,
+      "own_child_waited": true,
+      "own_session_pgrp": 8562,
+      "phase": "13-integration-release",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "macOS ru_maxrss bytes of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_after_canonical_map_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "stderr": {
+        "bytes": 277,
+        "file": "13-integration-release.stderr",
+        "sha256": "104bf2e1c4792700b3cb526f11675e36c678918394bccfb1f6afdb9f18166ef4"
+      },
+      "stdout": {
+        "bytes": 2675,
+        "file": "13-integration-release.stdout",
+        "sha256": "f4a6b173b40b2070d32dac3a87d97c89a42577945c1e682834cbb3330f5be0dc"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 28,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    }
+  ],
+  "receipt_source_maps": "full26maps retained in immutable archive; summaries omit duplicate maps and bind exact receipt hashes",
+  "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+  "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f"
+}

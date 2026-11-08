@@ -1,0 +1,235 @@
+{
+ "reviewer": {
+  "model": "claude-opus-5-5",
+  "runtime": "Claude Code (Claude Agent SDK harness) inside T3 Code",
+  "exposed_options": "none exposed",
+  "reasoning_effort": "unexposed",
+  "thinking_budget": "unexposed",
+  "service_tier": "unexposed",
+  "subagents_workflows_delegates": "none"
+ },
+ "worktree": "/Users/ys/.t3/worktrees/zeropw/t3-fcfc5b9a",
+ "expected": {
+  "brief_sha256": "c43b1dbbb9c0963a84b92494b5f73f43c91ec1781b705309bf586727b3f48aab",
+  "bindings_sha256": "cad005fa58fbd0a5d1ca8f329b266c18dcbfd48c989188bbebcebd231574c907",
+  "head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+  "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+  "files": 1519
+ },
+ "before": {
+  "brief_sha256": "c43b1dbbb9c0963a84b92494b5f73f43c91ec1781b705309bf586727b3f48aab",
+  "bindings_sha256": "cad005fa58fbd0a5d1ca8f329b266c18dcbfd48c989188bbebcebd231574c907",
+  "manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+  "manifest_sha_match": true,
+  "inputs": {
+   "/Users/ys/Code/zeropw-mlp-evidence/compaction-conflicting-record-decision-astra-20261108/decision.md": {
+    "exists": true,
+    "sha256": "f691999d0c84ccb89f2f1590075dbba2f51549573a14d916ddecfdd7fb5b01e1",
+    "bytes": 13214,
+    "match": true
+   },
+   "/Users/ys/Code/zeropw-mlp-evidence/compaction-conflicting-record-decision-astra-20261108/implementation-task.md": {
+    "exists": true,
+    "sha256": "ef0a06a85cfd695ad4b7f89afbe71eee856d30c0096cf5d4b425687dbfadc292",
+    "bytes": 19148,
+    "match": true
+   },
+   "/Users/ys/Code/zeropw-mlp-evidence/compaction-conflicting-decision-independent-20261108/REPORT.md": {
+    "exists": true,
+    "sha256": "123c0b7cad050ec9a83f26514533d95c505de5d848eb008ee8ca7864a97d73c0",
+    "bytes": 3498,
+    "match": true
+   },
+   "/Users/ys/Code/zeropw-mlp-evidence/compaction-conflicting-decision-independent-20261108/REPORT.json": {
+    "exists": true,
+    "sha256": "b4bb6e69c4a64ffab1c99fc31cd83eb219f13fbc9b39ec42852fd254f91d0372",
+    "bytes": 7126,
+    "match": true
+   },
+   "/Users/ys/Code/zeropw-mlp-evidence/compaction-R1-scope-772-independent-20261108/REPORT.md": {
+    "exists": true,
+    "sha256": "e3faa69e0405cef4e980bd47d1953e6587831460694d707e58add6a83dfef744",
+    "bytes": 3403,
+    "match": true
+   },
+   "/Users/ys/Code/zeropw-mlp-evidence/compaction-R1-scope-772-independent-20261108/REPORT.json": {
+    "exists": true,
+    "sha256": "0907922f8e555f6d9c0a1e89a4d59f964eee47decd86d5eea6ee4c4358884b9b",
+    "bytes": 7783,
+    "match": true
+   },
+   "/Users/ys/.t3/worktrees/zeropw/t3-e26a33fa/docs/reviews/2026-11-08-compaction-fixes-opus-a63c800/report.json": {
+    "exists": true,
+    "sha256": "58a8193538739d7d2f41ca09bd49ac2036f148e2e312156a96a2844ee790ad7e",
+    "bytes": 12988,
+    "match": true
+   },
+   "/Users/ys/.t3/worktrees/zeropw/t3-e26a33fa/docs/reviews/2026-11-08-compaction-fixes-opus-a63c800/report.md": {
+    "exists": true,
+    "sha256": "a83d6e1d4b06f54c91da0e169cd0cd2ddebcaf2147a082451ab3715486080f75",
+    "bytes": 11610,
+    "match": true
+   },
+   "/Users/ys/.t3/worktrees/zeropw/t3-e26a33fa/docs/reviews/2026-11-08-compaction-heads-opus-04c7d22/report.json": {
+    "exists": true,
+    "sha256": "4e7296a50f281a3e066eb91998a7c3e79f6767b8ee8d17fcd60d77219bcb8ec0",
+    "bytes": 7399,
+    "match": true
+   },
+   "/Users/ys/.t3/worktrees/zeropw/t3-e26a33fa/docs/reviews/2026-11-08-compaction-heads-opus-04c7d22/finding-status.json": {
+    "exists": true,
+    "sha256": "7f6c6869fc9d207c5cd1e13e2de52e1e85ebb2d83c64c866674e2053e79000ac",
+    "bytes": 20948,
+    "match": true
+   },
+   "/Users/ys/Code/zeropw-mlp-evidence/compaction-R1-linux-r3-20261108/test-plan.json": {
+    "exists": true,
+    "sha256": "710a0b4422b42e6c442a0fafd98bd3311eeee9163dcb1e99a1e663c16de131fd",
+    "bytes": 5314,
+    "match": true
+   },
+   "/Users/ys/Code/zeropw-mlp-evidence/compaction-R1-native-diagnostic-20261108/command-plan.json": {
+    "exists": true,
+    "sha256": "86180debe6219bf3a312c1a1f9a2bac36d2d0f1e23948cc484ed850e651cf154",
+    "bytes": 5242,
+    "match": true
+   },
+   "/Users/ys/Code/zeropw-mlp-evidence/compaction-R1-linux-final-20261108/command-plan.json": {
+    "exists": true,
+    "sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+    "bytes": 10166,
+    "match": true
+   },
+   "/Users/ys/Code/zeropw-mlp-evidence/compaction-R1-native-final-20261108/command-plan.json": {
+    "exists": true,
+    "sha256": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+    "bytes": 10072,
+    "match": true
+   }
+  },
+  "manifest_count": 1519,
+  "HEAD": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+  "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+  "branch": "t3/compaction-r1-opus-review",
+  "status_porcelain": "",
+  "index_count": 1519,
+  "mismatches": [],
+  "index_extra": [],
+  "index_file_sha256": "878021bb1ac8285102d5448910c520eb2c6f9ef792d6857c52ad0b6cfc6886c1",
+  "git_dir": "/Users/ys/Code/zeropw/.git/worktrees/t3-fcfc5b9a",
+  "refs_head_branch": "772e84517a188ad8ee60f2f247bf6413ac8fe88f"
+ },
+ "after": {
+  "brief_sha256": "c43b1dbbb9c0963a84b92494b5f73f43c91ec1781b705309bf586727b3f48aab",
+  "bindings_sha256": "cad005fa58fbd0a5d1ca8f329b266c18dcbfd48c989188bbebcebd231574c907",
+  "manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+  "manifest_sha_match": true,
+  "inputs": {
+   "/Users/ys/Code/zeropw-mlp-evidence/compaction-conflicting-record-decision-astra-20261108/decision.md": {
+    "exists": true,
+    "sha256": "f691999d0c84ccb89f2f1590075dbba2f51549573a14d916ddecfdd7fb5b01e1",
+    "bytes": 13214,
+    "match": true
+   },
+   "/Users/ys/Code/zeropw-mlp-evidence/compaction-conflicting-record-decision-astra-20261108/implementation-task.md": {
+    "exists": true,
+    "sha256": "ef0a06a85cfd695ad4b7f89afbe71eee856d30c0096cf5d4b425687dbfadc292",
+    "bytes": 19148,
+    "match": true
+   },
+   "/Users/ys/Code/zeropw-mlp-evidence/compaction-conflicting-decision-independent-20261108/REPORT.md": {
+    "exists": true,
+    "sha256": "123c0b7cad050ec9a83f26514533d95c505de5d848eb008ee8ca7864a97d73c0",
+    "bytes": 3498,
+    "match": true
+   },
+   "/Users/ys/Code/zeropw-mlp-evidence/compaction-conflicting-decision-independent-20261108/REPORT.json": {
+    "exists": true,
+    "sha256": "b4bb6e69c4a64ffab1c99fc31cd83eb219f13fbc9b39ec42852fd254f91d0372",
+    "bytes": 7126,
+    "match": true
+   },
+   "/Users/ys/Code/zeropw-mlp-evidence/compaction-R1-scope-772-independent-20261108/REPORT.md": {
+    "exists": true,
+    "sha256": "e3faa69e0405cef4e980bd47d1953e6587831460694d707e58add6a83dfef744",
+    "bytes": 3403,
+    "match": true
+   },
+   "/Users/ys/Code/zeropw-mlp-evidence/compaction-R1-scope-772-independent-20261108/REPORT.json": {
+    "exists": true,
+    "sha256": "0907922f8e555f6d9c0a1e89a4d59f964eee47decd86d5eea6ee4c4358884b9b",
+    "bytes": 7783,
+    "match": true
+   },
+   "/Users/ys/.t3/worktrees/zeropw/t3-e26a33fa/docs/reviews/2026-11-08-compaction-fixes-opus-a63c800/report.json": {
+    "exists": true,
+    "sha256": "58a8193538739d7d2f41ca09bd49ac2036f148e2e312156a96a2844ee790ad7e",
+    "bytes": 12988,
+    "match": true
+   },
+   "/Users/ys/.t3/worktrees/zeropw/t3-e26a33fa/docs/reviews/2026-11-08-compaction-fixes-opus-a63c800/report.md": {
+    "exists": true,
+    "sha256": "a83d6e1d4b06f54c91da0e169cd0cd2ddebcaf2147a082451ab3715486080f75",
+    "bytes": 11610,
+    "match": true
+   },
+   "/Users/ys/.t3/worktrees/zeropw/t3-e26a33fa/docs/reviews/2026-11-08-compaction-heads-opus-04c7d22/report.json": {
+    "exists": true,
+    "sha256": "4e7296a50f281a3e066eb91998a7c3e79f6767b8ee8d17fcd60d77219bcb8ec0",
+    "bytes": 7399,
+    "match": true
+   },
+   "/Users/ys/.t3/worktrees/zeropw/t3-e26a33fa/docs/reviews/2026-11-08-compaction-heads-opus-04c7d22/finding-status.json": {
+    "exists": true,
+    "sha256": "7f6c6869fc9d207c5cd1e13e2de52e1e85ebb2d83c64c866674e2053e79000ac",
+    "bytes": 20948,
+    "match": true
+   },
+   "/Users/ys/Code/zeropw-mlp-evidence/compaction-R1-linux-r3-20261108/test-plan.json": {
+    "exists": true,
+    "sha256": "710a0b4422b42e6c442a0fafd98bd3311eeee9163dcb1e99a1e663c16de131fd",
+    "bytes": 5314,
+    "match": true
+   },
+   "/Users/ys/Code/zeropw-mlp-evidence/compaction-R1-native-diagnostic-20261108/command-plan.json": {
+    "exists": true,
+    "sha256": "86180debe6219bf3a312c1a1f9a2bac36d2d0f1e23948cc484ed850e651cf154",
+    "bytes": 5242,
+    "match": true
+   },
+   "/Users/ys/Code/zeropw-mlp-evidence/compaction-R1-linux-final-20261108/command-plan.json": {
+    "exists": true,
+    "sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+    "bytes": 10166,
+    "match": true
+   },
+   "/Users/ys/Code/zeropw-mlp-evidence/compaction-R1-native-final-20261108/command-plan.json": {
+    "exists": true,
+    "sha256": "e97ab40e68bb5023ca9c03de06392eaf2baf794848015854da9da6e074022f0f",
+    "bytes": 10072,
+    "match": true
+   }
+  },
+  "manifest_count": 1519,
+  "HEAD": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+  "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+  "branch": "t3/compaction-r1-opus-review",
+  "status_porcelain": "?? review-output/compaction-R1-772-opus-20261108/COVERAGE.md\n?? review-output/compaction-R1-772-opus-20261108/report.json\n?? review-output/compaction-R1-772-opus-20261108/report.md",
+  "index_count": 1519,
+  "mismatches": [],
+  "index_extra": [],
+  "index_file_sha256": "878021bb1ac8285102d5448910c520eb2c6f9ef792d6857c52ad0b6cfc6886c1",
+  "git_dir": "/Users/ys/Code/zeropw/.git/worktrees/t3-fcfc5b9a",
+  "refs_head_branch": "772e84517a188ad8ee60f2f247bf6413ac8fe88f"
+ },
+ "before_after_identical_excluding_status": true,
+ "after_status_note": "only untracked review-output/ expected",
+ "diff_scope_vs_1a20a2dd": {
+  "rust/src/team/commit.rs": "+293/-0",
+  "rust/src/team/compaction_heads.rs": "+24/-4",
+  "rust/src/team/sync.rs": "+1390/-0",
+  "rust/tests/team_compaction_heads.rs": "+230/-10",
+  "new_test_attrs": 7
+ },
+ "executions": "none of product/helper/compiler/test/dependency; only git reads, shasum and own python3 -I stdlib scripts in /tmp/opus-r1-772-scripts"
+}

@@ -1,0 +1,20 @@
+{
+  "actual_changed_paths": [
+    "rust/src/team/compaction_heads.rs",
+    "rust/src/team/mod.rs",
+    "rust/src/team/sync.rs",
+    "rust/tests/team_compaction_heads.rs"
+  ],
+  "base": "65a3105c1ff4b491a613b2e27631cf9df56727f4",
+  "base_files": 1372,
+  "exact_four_path_patch": true,
+  "expected_four_paths": [
+    "rust/src/team/compaction_heads.rs",
+    "rust/src/team/mod.rs",
+    "rust/src/team/sync.rs",
+    "rust/tests/team_compaction_heads.rs"
+  ],
+  "frozen_source_files": 1374,
+  "protected1370_blob_modes_unchanged": true,
+  "scope": "Independent DATA comparison of Git blob IDs and modes against base; filesystem SHA256/bytes/modes separately verified."
+}

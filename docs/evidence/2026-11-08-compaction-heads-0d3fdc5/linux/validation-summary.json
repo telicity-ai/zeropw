@@ -1,0 +1,55 @@
+{
+  "actual_full_counts": {
+    "failed": 0,
+    "filtered": 716,
+    "ignored": 5,
+    "measured": 0,
+    "passed": 1840
+  },
+  "actual_full_integration_targets": 107,
+  "actual_full_steps": 112,
+  "all_own_transport_handles_joined": true,
+  "attempted_phases": 21,
+  "errors": [],
+  "exact_phases_passed": 14,
+  "feature_stdout_equal": true,
+  "focused_counts": {
+    "11-lib-debug": {
+      "failed": 0,
+      "filtered": 707,
+      "ignored": 0,
+      "measured": 0,
+      "passed": 13
+    },
+    "12-integration-debug": {
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "measured": 0,
+      "passed": 11
+    },
+    "13-lib-release": {
+      "failed": 0,
+      "filtered": 707,
+      "ignored": 0,
+      "measured": 0,
+      "passed": 13
+    },
+    "14-integration-release": {
+      "failed": 0,
+      "filtered": 0,
+      "ignored": 0,
+      "measured": 0,
+      "passed": 11
+    }
+  },
+  "guest_known_child_count": 21,
+  "guest_remaining_uid_observations_empty": true,
+  "no_runtime_after_own_release": true,
+  "notrun_phases": [],
+  "own_transport_count": 24,
+  "state": "PASS_BOUNDED_LINUX_MATRIX",
+  "synthetic_marker_count": 24,
+  "synthetic_marker_match_count": 0,
+  "whole_ch01_owner": "Root; no VM release/stop/delete/physical erasure claim"
+}

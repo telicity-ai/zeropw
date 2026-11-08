@@ -1,0 +1,184 @@
+{
+  "actual_model": "gpt-6.1-sol/ultra Root",
+  "archive_sha256": "1a008ce34a881a9f77187b23e84b615df89b5970176f9f022b5b5e5201c20bfb",
+  "completed_phases": 8,
+  "data_checks": [],
+  "limits": "DATA consistency, not independent runtime replay, cryptographic execution attestation, physical two-Mac/Oracle/capacity/review/acceptance evidence.",
+  "phases": [
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 0.6037545000001501,
+      "failure_class": null,
+      "own_child_waited": true,
+      "phase": "01-features-before",
+      "receipt_sha256": "c0141248c978d74da263e877427020e2b9c2a3f7e9bc39a335b8c26ce496aa43",
+      "source_match": true,
+      "status": "PASS",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 1.1973029589998987,
+      "failure_class": null,
+      "own_child_waited": true,
+      "phase": "02-format",
+      "receipt_sha256": "6491dc4aaa9712ae86f12cf2ecf15076f2baf67306b057989aecd6b61e074a8f",
+      "source_match": true,
+      "status": "PASS",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 68.67262237499995,
+      "exact_tests_passed": 1,
+      "failure_class": null,
+      "own_child_waited": true,
+      "phase": "03-new-exact",
+      "receipt_sha256": "a40504038c7d28ce4b18dac08dc5410a9393df84e757b048411aa229eba57a57",
+      "source_match": true,
+      "status": "PASS",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 6.330970582999953,
+      "exact_tests_passed": 1,
+      "failure_class": null,
+      "own_child_waited": true,
+      "phase": "04-new-exact",
+      "receipt_sha256": "3d15213eab28a7267b65983e2de8a9e9c1525b5326175ba0d775777b15ae66a4",
+      "source_match": true,
+      "status": "PASS",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 73.08865366699979,
+      "failure_class": null,
+      "own_child_waited": true,
+      "phase": "05-lib-debug",
+      "receipt_sha256": "ef1cb7502dfb118b7403edbf3971998c42fbce8a04a579d75b528b243d93d883",
+      "source_match": true,
+      "status": "PASS",
+      "test_exit": 0,
+      "tests_passed": 31
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 58.3675702500002,
+      "failure_class": null,
+      "own_child_waited": true,
+      "phase": "06-integration-debug",
+      "receipt_sha256": "3f4b699159516097967200bc61ff04e13cf6540242cf849d731f971391ad0b8a",
+      "source_match": true,
+      "status": "PASS",
+      "test_exit": 0,
+      "tests_passed": 27
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 139.24710099999993,
+      "failure_class": null,
+      "own_child_waited": true,
+      "phase": "07-lib-release",
+      "receipt_sha256": "83266b2add9d69ca63a1eb04df4de77f64aaee1e42c0bcd337aceaab95b55789",
+      "source_match": true,
+      "status": "PASS",
+      "test_exit": 0,
+      "tests_passed": 31
+    },
+    {
+      "driver_exit": 0,
+      "elapsed_seconds": 57.5492777500001,
+      "failure_class": null,
+      "own_child_waited": true,
+      "phase": "08-integration-release",
+      "receipt_sha256": "50d3f71695422866fbf70ce23ecd5e5daf196462ad7f82c1ba1246dd03066371",
+      "source_match": true,
+      "status": "PASS",
+      "test_exit": 0,
+      "tests_passed": 27
+    },
+    {
+      "phase": "09-full-matrix",
+      "status": "NOTRUN_OR_NO_RECEIPT"
+    },
+    {
+      "phase": "10-non-test-release-build",
+      "status": "NOTRUN_OR_NO_RECEIPT"
+    },
+    {
+      "phase": "11-non-test-gate-absence",
+      "status": "NOTRUN_OR_NO_RECEIPT"
+    },
+    {
+      "phase": "12-stack-exact-debug",
+      "status": "NOTRUN_OR_NO_RECEIPT"
+    },
+    {
+      "phase": "13-stack-exact-debug",
+      "status": "NOTRUN_OR_NO_RECEIPT"
+    },
+    {
+      "phase": "14-stack-exact-debug",
+      "status": "NOTRUN_OR_NO_RECEIPT"
+    },
+    {
+      "phase": "15-stack-exact-debug",
+      "status": "NOTRUN_OR_NO_RECEIPT"
+    },
+    {
+      "phase": "16-stack-exact-debug",
+      "status": "NOTRUN_OR_NO_RECEIPT"
+    },
+    {
+      "phase": "17-stack-exact-debug",
+      "status": "NOTRUN_OR_NO_RECEIPT"
+    },
+    {
+      "phase": "18-stack-exact-debug",
+      "status": "NOTRUN_OR_NO_RECEIPT"
+    },
+    {
+      "phase": "19-stack-exact-release",
+      "status": "NOTRUN_OR_NO_RECEIPT"
+    },
+    {
+      "phase": "20-stack-exact-release",
+      "status": "NOTRUN_OR_NO_RECEIPT"
+    },
+    {
+      "phase": "21-stack-exact-release",
+      "status": "NOTRUN_OR_NO_RECEIPT"
+    },
+    {
+      "phase": "22-stack-exact-release",
+      "status": "NOTRUN_OR_NO_RECEIPT"
+    },
+    {
+      "phase": "23-stack-exact-release",
+      "status": "NOTRUN_OR_NO_RECEIPT"
+    },
+    {
+      "phase": "24-stack-exact-release",
+      "status": "NOTRUN_OR_NO_RECEIPT"
+    },
+    {
+      "phase": "25-stack-exact-release",
+      "status": "NOTRUN_OR_NO_RECEIPT"
+    },
+    {
+      "phase": "26-features-after",
+      "status": "NOTRUN_OR_NO_RECEIPT"
+    }
+  ],
+  "plan_sha256": "3c1c96cb75a2b13026ca2d0c57cef4e5a5516c1e73f814383857526f8d96d5c0",
+  "platform": "native",
+  "raw_value_feature_present": false,
+  "rust_tree": "d63be7c07896e271bb48610463f4a6e027581f59",
+  "same_source_features_identical": false,
+  "schema": "Root-independent-parser-own-run-data-v1",
+  "source_files": 1464,
+  "source_head": "8a8073b3d876bb3f83a628a7fdbd2902e8b40851",
+  "state": "INCOMPLETE_OR_FAILED"
+}

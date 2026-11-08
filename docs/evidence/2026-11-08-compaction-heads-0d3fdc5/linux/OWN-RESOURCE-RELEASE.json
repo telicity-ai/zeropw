@@ -1,0 +1,477 @@
+{
+  "absolute_deadline_epoch": 1794134679.664181,
+  "assurance": "Own direct handles and frozen saved kernel observations only; no same-UID cryptographic attestation or whole-machine/physical cleanup proof",
+  "data_bookkeeping": "Preserved DATA display truncations and pre-execution report-template SyntaxError; corrections completed without runtime retry or source/control/test/cap/criteria change",
+  "excluded_resources": "Native Mac 10 unexplained identities remain HOLD; old Go quarantine/lease/custody/authority-cancellation remain untouched",
+  "host_free_bytes_at_seal": 3652341760,
+  "known_guest_product_children": [
+    {
+      "own_child_pid": 9143,
+      "own_child_waited": true,
+      "own_session_pgrp": 9143,
+      "phase": "10-features-before",
+      "remaining_assigned_uid_processes": []
+    },
+    {
+      "own_child_pid": 9202,
+      "own_child_waited": true,
+      "own_session_pgrp": 9202,
+      "phase": "11-lib-debug",
+      "remaining_assigned_uid_processes": []
+    },
+    {
+      "own_child_pid": 10766,
+      "own_child_waited": true,
+      "own_session_pgrp": 10766,
+      "phase": "12-integration-debug",
+      "remaining_assigned_uid_processes": []
+    },
+    {
+      "own_child_pid": 10917,
+      "own_child_waited": true,
+      "own_session_pgrp": 10917,
+      "phase": "13-lib-release",
+      "remaining_assigned_uid_processes": []
+    },
+    {
+      "own_child_pid": 12850,
+      "own_child_waited": true,
+      "own_session_pgrp": 12850,
+      "phase": "14-integration-release",
+      "remaining_assigned_uid_processes": []
+    },
+    {
+      "own_child_pid": 13060,
+      "own_child_waited": true,
+      "own_session_pgrp": 13060,
+      "phase": "15-full-matrix",
+      "remaining_assigned_uid_processes": []
+    },
+    {
+      "own_child_pid": 30019,
+      "own_child_waited": true,
+      "own_session_pgrp": 30019,
+      "phase": "16-exact-debug-1",
+      "remaining_assigned_uid_processes": []
+    },
+    {
+      "own_child_pid": 30077,
+      "own_child_waited": true,
+      "own_session_pgrp": 30077,
+      "phase": "17-exact-debug-2",
+      "remaining_assigned_uid_processes": []
+    },
+    {
+      "own_child_pid": 30137,
+      "own_child_waited": true,
+      "own_session_pgrp": 30137,
+      "phase": "18-exact-debug-3",
+      "remaining_assigned_uid_processes": []
+    },
+    {
+      "own_child_pid": 30196,
+      "own_child_waited": true,
+      "own_session_pgrp": 30196,
+      "phase": "19-exact-debug-4",
+      "remaining_assigned_uid_processes": []
+    },
+    {
+      "own_child_pid": 30253,
+      "own_child_waited": true,
+      "own_session_pgrp": 30253,
+      "phase": "20-exact-debug-5",
+      "remaining_assigned_uid_processes": []
+    },
+    {
+      "own_child_pid": 30312,
+      "own_child_waited": true,
+      "own_session_pgrp": 30312,
+      "phase": "21-exact-debug-6",
+      "remaining_assigned_uid_processes": []
+    },
+    {
+      "own_child_pid": 30369,
+      "own_child_waited": true,
+      "own_session_pgrp": 30369,
+      "phase": "22-exact-debug-7",
+      "remaining_assigned_uid_processes": []
+    },
+    {
+      "own_child_pid": 30427,
+      "own_child_waited": true,
+      "own_session_pgrp": 30427,
+      "phase": "23-exact-release-1",
+      "remaining_assigned_uid_processes": []
+    },
+    {
+      "own_child_pid": 30515,
+      "own_child_waited": true,
+      "own_session_pgrp": 30515,
+      "phase": "24-exact-release-2",
+      "remaining_assigned_uid_processes": []
+    },
+    {
+      "own_child_pid": 30617,
+      "own_child_waited": true,
+      "own_session_pgrp": 30617,
+      "phase": "25-exact-release-3",
+      "remaining_assigned_uid_processes": []
+    },
+    {
+      "own_child_pid": 30718,
+      "own_child_waited": true,
+      "own_session_pgrp": 30718,
+      "phase": "26-exact-release-4",
+      "remaining_assigned_uid_processes": []
+    },
+    {
+      "own_child_pid": 30775,
+      "own_child_waited": true,
+      "own_session_pgrp": 30775,
+      "phase": "27-exact-release-5",
+      "remaining_assigned_uid_processes": []
+    },
+    {
+      "own_child_pid": 30875,
+      "own_child_waited": true,
+      "own_session_pgrp": 30875,
+      "phase": "28-exact-release-6",
+      "remaining_assigned_uid_processes": []
+    },
+    {
+      "own_child_pid": 30932,
+      "own_child_waited": true,
+      "own_session_pgrp": 30932,
+      "phase": "29-exact-release-7",
+      "remaining_assigned_uid_processes": []
+    },
+    {
+      "own_child_pid": 30990,
+      "own_child_waited": true,
+      "own_session_pgrp": 30990,
+      "phase": "30-features-after",
+      "remaining_assigned_uid_processes": []
+    }
+  ],
+  "known_host_ssh_transports": [
+    {
+      "exit": 0,
+      "finished_epoch": 1794113356.7664351,
+      "joined": true,
+      "label": "00-audit-before",
+      "pid": 43635,
+      "session": 43635,
+      "termination": {
+        "kill_sent": false,
+        "term_sent": false
+      }
+    },
+    {
+      "exit": 0,
+      "finished_epoch": 1794113369.165409,
+      "joined": true,
+      "label": "10-features-before",
+      "pid": 43724,
+      "session": 43724,
+      "termination": {
+        "kill_sent": false,
+        "term_sent": false
+      }
+    },
+    {
+      "exit": 0,
+      "finished_epoch": 1794113441.0382679,
+      "joined": true,
+      "label": "11-lib-debug",
+      "pid": 43730,
+      "session": 43730,
+      "termination": {
+        "kill_sent": false,
+        "term_sent": false
+      }
+    },
+    {
+      "exit": 0,
+      "finished_epoch": 1794113465.915658,
+      "joined": true,
+      "label": "12-integration-debug",
+      "pid": 44402,
+      "session": 44402,
+      "termination": {
+        "kill_sent": false,
+        "term_sent": false
+      }
+    },
+    {
+      "exit": 0,
+      "finished_epoch": 1794113590.877617,
+      "joined": true,
+      "label": "13-lib-release",
+      "pid": 44718,
+      "session": 44718,
+      "termination": {
+        "kill_sent": false,
+        "term_sent": false
+      }
+    },
+    {
+      "exit": 0,
+      "finished_epoch": 1794113644.375308,
+      "joined": true,
+      "label": "14-integration-release",
+      "pid": 45880,
+      "session": 45880,
+      "termination": {
+        "kill_sent": false,
+        "term_sent": false
+      }
+    },
+    {
+      "exit": 0,
+      "finished_epoch": 1794116415.386285,
+      "joined": true,
+      "label": "15-full-matrix",
+      "pid": 46380,
+      "session": 46380,
+      "termination": {
+        "kill_sent": false,
+        "term_sent": false
+      }
+    },
+    {
+      "exit": 0,
+      "finished_epoch": 1794116415.983134,
+      "joined": true,
+      "label": "16-exact-debug-1",
+      "pid": 72403,
+      "session": 72403,
+      "termination": {
+        "kill_sent": false,
+        "term_sent": false
+      }
+    },
+    {
+      "exit": 0,
+      "finished_epoch": 1794116416.402324,
+      "joined": true,
+      "label": "17-exact-debug-2",
+      "pid": 72410,
+      "session": 72410,
+      "termination": {
+        "kill_sent": false,
+        "term_sent": false
+      }
+    },
+    {
+      "exit": 0,
+      "finished_epoch": 1794116416.819337,
+      "joined": true,
+      "label": "18-exact-debug-3",
+      "pid": 72422,
+      "session": 72422,
+      "termination": {
+        "kill_sent": false,
+        "term_sent": false
+      }
+    },
+    {
+      "exit": 0,
+      "finished_epoch": 1794116417.1774411,
+      "joined": true,
+      "label": "19-exact-debug-4",
+      "pid": 72429,
+      "session": 72429,
+      "termination": {
+        "kill_sent": false,
+        "term_sent": false
+      }
+    },
+    {
+      "exit": 0,
+      "finished_epoch": 1794116420.99866,
+      "joined": true,
+      "label": "20-exact-debug-5",
+      "pid": 72431,
+      "session": 72431,
+      "termination": {
+        "kill_sent": false,
+        "term_sent": false
+      }
+    },
+    {
+      "exit": 0,
+      "finished_epoch": 1794116423.045186,
+      "joined": true,
+      "label": "21-exact-debug-6",
+      "pid": 72463,
+      "session": 72463,
+      "termination": {
+        "kill_sent": false,
+        "term_sent": false
+      }
+    },
+    {
+      "exit": 0,
+      "finished_epoch": 1794116426.801985,
+      "joined": true,
+      "label": "22-exact-debug-7",
+      "pid": 72479,
+      "session": 72479,
+      "termination": {
+        "kill_sent": false,
+        "term_sent": false
+      }
+    },
+    {
+      "exit": 0,
+      "finished_epoch": 1794116429.487684,
+      "joined": true,
+      "label": "23-exact-release-1",
+      "pid": 72508,
+      "session": 72508,
+      "termination": {
+        "kill_sent": false,
+        "term_sent": false
+      }
+    },
+    {
+      "exit": 0,
+      "finished_epoch": 1794116434.322182,
+      "joined": true,
+      "label": "24-exact-release-2",
+      "pid": 72523,
+      "session": 72523,
+      "termination": {
+        "kill_sent": false,
+        "term_sent": false
+      }
+    },
+    {
+      "exit": 0,
+      "finished_epoch": 1794116439.4288168,
+      "joined": true,
+      "label": "25-exact-release-3",
+      "pid": 72561,
+      "session": 72561,
+      "termination": {
+        "kill_sent": false,
+        "term_sent": false
+      }
+    },
+    {
+      "exit": 0,
+      "finished_epoch": 1794116439.790998,
+      "joined": true,
+      "label": "26-exact-release-4",
+      "pid": 72597,
+      "session": 72597,
+      "termination": {
+        "kill_sent": false,
+        "term_sent": false
+      }
+    },
+    {
+      "exit": 0,
+      "finished_epoch": 1794116445.2022789,
+      "joined": true,
+      "label": "27-exact-release-5",
+      "pid": 72602,
+      "session": 72602,
+      "termination": {
+        "kill_sent": false,
+        "term_sent": false
+      }
+    },
+    {
+      "exit": 0,
+      "finished_epoch": 1794116445.576877,
+      "joined": true,
+      "label": "28-exact-release-6",
+      "pid": 72642,
+      "session": 72642,
+      "termination": {
+        "kill_sent": false,
+        "term_sent": false
+      }
+    },
+    {
+      "exit": 0,
+      "finished_epoch": 1794116445.988377,
+      "joined": true,
+      "label": "29-exact-release-7",
+      "pid": 72643,
+      "session": 72643,
+      "termination": {
+        "kill_sent": false,
+        "term_sent": false
+      }
+    },
+    {
+      "exit": 0,
+      "finished_epoch": 1794116446.280545,
+      "joined": true,
+      "label": "30-features-after",
+      "pid": 72651,
+      "session": 72651,
+      "termination": {
+        "kill_sent": false,
+        "term_sent": false
+      }
+    },
+    {
+      "exit": 0,
+      "finished_epoch": 1794116456.9142551,
+      "joined": true,
+      "label": "90-audit-after",
+      "pid": 72740,
+      "session": 72740,
+      "termination": {
+        "kill_sent": false,
+        "term_sent": false
+      }
+    },
+    {
+      "exit": 0,
+      "finished_epoch": 1794116460.5497532,
+      "joined": true,
+      "label": "91-bundle",
+      "pid": 72766,
+      "session": 72766,
+      "termination": {
+        "kill_sent": false,
+        "term_sent": false
+      }
+    }
+  ],
+  "known_read_only_git_child": {
+    "exit": 0,
+    "joined": true,
+    "pid": 48892,
+    "termination": {
+      "kill_sent": false,
+      "term_sent": false
+    }
+  },
+  "no_runtime_calls_after_this_release": true,
+  "no_signal_or_adoption_of_unknown_process": true,
+  "own_guest_product_child_count": 21,
+  "own_scope": "/Users/ys/Code/zeropw-mlp-evidence/compaction-heads-linux-sol-20261108/t3-f9592cb5",
+  "own_ssh_count": 24,
+  "preserved_holds": "analysis/preserved-holds.json",
+  "product_review_acceptance_release": "NONE; all holds OPEN",
+  "release_epoch": 1794116732.520512,
+  "runtime_result": "PASS_BOUNDED_LINUX_MATRIX",
+  "saved_guest_assigned_uid_residual_observations_all_empty": true,
+  "schema": "compaction-heads-linux-own-resource-release-v1",
+  "source": {
+    "files": 1374,
+    "full_tree": "fbf13d73d270e441dd574cf592609d7d8b38dc6d",
+    "manifest_sha256": "6d671db58e54fa2d31b13c010942b251032a484d0c782329db84ae6ff97b05f1",
+    "protected_files": 1370,
+    "rust_tree": "afc41fcb5d55aaec2bc2fead7c7d8a94f312cc9f"
+  },
+  "state": "RELEASED_OWN_KNOWN_HANDLES_ONLY",
+  "unexplained_guest_uid_survivor_observed": false,
+  "whole_ch01_disposition": "NOT RELEASED; no VM stop/delete/admin/idle or physical-erasure claim",
+  "whole_ch01_owner": "Root"
+}

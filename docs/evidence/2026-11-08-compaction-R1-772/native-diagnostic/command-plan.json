@@ -1,0 +1,215 @@
+{
+  "schema": "RootR1NativeFocusedDiagnostic-v1",
+  "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+  "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+  "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+  "driver_sha256": "7738602b70cfff2f48d972c22b5e7c7fd87e1a27c88492ddbc936b78a1a5e2a2",
+  "expected_source_files": 1519,
+  "expected_integration_targets": 107,
+  "phases": [
+    {
+      "phase": "01-format",
+      "kind": "formatcheck",
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "fmt",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--all",
+        "--check"
+      ],
+      "timeout_seconds": 180
+    },
+    {
+      "phase": "02-clippy",
+      "kind": "clippy",
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "clippy",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "timeout_seconds": 1800
+    },
+    {
+      "phase": "03-new-exact",
+      "kind": "exact",
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "team::commit::compaction_heads_tests::compaction_heads_r1_exact_announcements_include_nonfirst_ops",
+        "--",
+        "--exact"
+      ],
+      "timeout_seconds": 1800
+    },
+    {
+      "phase": "04-new-exact",
+      "kind": "exact",
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "team::commit::compaction_heads_tests::compaction_heads_r1_retained_matches_use_canonical_sparse_files",
+        "--",
+        "--exact"
+      ],
+      "timeout_seconds": 1800
+    },
+    {
+      "phase": "05-new-exact",
+      "kind": "exact",
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "team::sync::compaction_heads_tests::compaction_heads_r1_other_author_receipt_handle_and_compaction",
+        "--",
+        "--exact"
+      ],
+      "timeout_seconds": 1800
+    },
+    {
+      "phase": "06-new-exact",
+      "kind": "exact",
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "team::sync::compaction_heads_tests::compaction_heads_r1_deferred_release_preserves_clock_and_evidence",
+        "--",
+        "--exact"
+      ],
+      "timeout_seconds": 1800
+    },
+    {
+      "phase": "07-new-exact",
+      "kind": "exact",
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "team::sync::compaction_heads_tests::compaction_heads_r1_owner_data_removal_and_both_fact_paths",
+        "--",
+        "--exact"
+      ],
+      "timeout_seconds": 1800
+    },
+    {
+      "phase": "08-new-exact",
+      "kind": "exact",
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "team::sync::compaction_heads_tests::compaction_heads_r1_local_failures_and_authority_remain_closed",
+        "--",
+        "--exact"
+      ],
+      "timeout_seconds": 1800
+    },
+    {
+      "phase": "09-new-exact",
+      "kind": "exact",
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_compaction_heads",
+        "compaction_heads_r1_prior_conflicts_identical_and_absence_controls",
+        "--",
+        "--exact"
+      ],
+      "timeout_seconds": 1800
+    },
+    {
+      "phase": "10-lib-debug",
+      "kind": "tests",
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "compaction_heads"
+      ],
+      "expected_pass_count": 37,
+      "timeout_seconds": 1800
+    },
+    {
+      "phase": "11-integration-debug",
+      "kind": "tests",
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_compaction_heads"
+      ],
+      "expected_pass_count": 28,
+      "timeout_seconds": 1800
+    },
+    {
+      "phase": "12-lib-release",
+      "kind": "tests",
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--lib",
+        "compaction_heads"
+      ],
+      "expected_pass_count": 37,
+      "timeout_seconds": 1800
+    },
+    {
+      "phase": "13-integration-release",
+      "kind": "tests",
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_compaction_heads"
+      ],
+      "expected_pass_count": 28,
+      "timeout_seconds": 1800
+    }
+  ]
+}

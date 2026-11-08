@@ -1,0 +1,151 @@
+{
+  "state": "ALL13_DIAGNOSTIC_COMMANDS_AND_RECEIPTS_PASS",
+  "results": [
+    {
+      "phase": "01-format",
+      "exit": 0,
+      "timeout": false,
+      "own_host_child_waited": true,
+      "elapsed_seconds": 1.8915389999999999,
+      "receipt_fetch_exit": 0,
+      "receipt_transport_waited": true,
+      "receipt_sha256": "f24218d0173a04ac62dc2df2054d938772472eb33c2cebc4bf8b741ea4bba5b7",
+      "host_receipt_checks": true
+    },
+    {
+      "phase": "02-clippy",
+      "exit": 0,
+      "timeout": false,
+      "own_host_child_waited": true,
+      "elapsed_seconds": 23.435315667,
+      "receipt_fetch_exit": 0,
+      "receipt_transport_waited": true,
+      "receipt_sha256": "a136cd616668360716fb3abd8005d76e5d12305fac7371405c14087a4e934b06",
+      "host_receipt_checks": true
+    },
+    {
+      "phase": "03-new-exact",
+      "exit": 0,
+      "timeout": false,
+      "own_host_child_waited": true,
+      "elapsed_seconds": 15.155646125,
+      "receipt_fetch_exit": 0,
+      "receipt_transport_waited": true,
+      "receipt_sha256": "a1d09cc9b83e020f7f6212ca76158d8fec5cbc0f579a4886409d83893c86a366",
+      "host_receipt_checks": true
+    },
+    {
+      "phase": "04-new-exact",
+      "exit": 0,
+      "timeout": false,
+      "own_host_child_waited": true,
+      "elapsed_seconds": 0.5822114999999997,
+      "receipt_fetch_exit": 0,
+      "receipt_transport_waited": true,
+      "receipt_sha256": "8ee117565527f64af9f10f5bab45fac4aefe973bbb4310e3dc3a1754b330146d",
+      "host_receipt_checks": true
+    },
+    {
+      "phase": "05-new-exact",
+      "exit": 0,
+      "timeout": false,
+      "own_host_child_waited": true,
+      "elapsed_seconds": 29.088161667,
+      "receipt_fetch_exit": 0,
+      "receipt_transport_waited": true,
+      "receipt_sha256": "f2b1d7c03d038f0da7000e3f3ffbae9e7ff2245df19333093eb047364f5342c9",
+      "host_receipt_checks": true
+    },
+    {
+      "phase": "06-new-exact",
+      "exit": 0,
+      "timeout": false,
+      "own_host_child_waited": true,
+      "elapsed_seconds": 65.748873958,
+      "receipt_fetch_exit": 0,
+      "receipt_transport_waited": true,
+      "receipt_sha256": "01a7d5ddbfe11dbd766bb3b2162a7552d2707f9fd38bdb0e11e00a0e421ebe66",
+      "host_receipt_checks": true
+    },
+    {
+      "phase": "07-new-exact",
+      "exit": 0,
+      "timeout": false,
+      "own_host_child_waited": true,
+      "elapsed_seconds": 144.541419792,
+      "receipt_fetch_exit": 0,
+      "receipt_transport_waited": true,
+      "receipt_sha256": "bf25dc55f8f12a0abb9754eed7b4261beceb6e8a1d095e283d7ce22c3b4dd291",
+      "host_receipt_checks": true
+    },
+    {
+      "phase": "08-new-exact",
+      "exit": 0,
+      "timeout": false,
+      "own_host_child_waited": true,
+      "elapsed_seconds": 508.05646929200003,
+      "receipt_fetch_exit": 0,
+      "receipt_transport_waited": true,
+      "receipt_sha256": "42bfc2690a44697b872488c52ad9f9b7d18fac1a7dd82f807a988cb69b2855cd",
+      "host_receipt_checks": true
+    },
+    {
+      "phase": "09-new-exact",
+      "exit": 0,
+      "timeout": false,
+      "own_host_child_waited": true,
+      "elapsed_seconds": 26.417637583999976,
+      "receipt_fetch_exit": 0,
+      "receipt_transport_waited": true,
+      "receipt_sha256": "27058b36722b75782e3f83773e9e274c01dcffa1ff6cc007029ea81cc9a07cd6",
+      "host_receipt_checks": true
+    },
+    {
+      "phase": "10-lib-debug",
+      "exit": 0,
+      "timeout": false,
+      "own_host_child_waited": true,
+      "elapsed_seconds": 589.4740005419999,
+      "receipt_fetch_exit": 0,
+      "receipt_transport_waited": true,
+      "receipt_sha256": "9be7ef53cb443b32011846b3180fa7f00e48a7964fc198340fd5daab2e094338",
+      "host_receipt_checks": true
+    },
+    {
+      "phase": "11-integration-debug",
+      "exit": 0,
+      "timeout": false,
+      "own_host_child_waited": true,
+      "elapsed_seconds": 54.4921650419999,
+      "receipt_fetch_exit": 0,
+      "receipt_transport_waited": true,
+      "receipt_sha256": "0a30ec5da9f7fcc0eba7dba0952a6f991fabfc6e9edc39a080958803801473cc",
+      "host_receipt_checks": true
+    },
+    {
+      "phase": "12-lib-release",
+      "exit": 0,
+      "timeout": false,
+      "own_host_child_waited": true,
+      "elapsed_seconds": 118.00848570899984,
+      "receipt_fetch_exit": 0,
+      "receipt_transport_waited": true,
+      "receipt_sha256": "b90c259aa2f01e457d5750ce40287ca71d0c031fde6b3afca9b7e62d533548af",
+      "host_receipt_checks": true
+    },
+    {
+      "phase": "13-integration-release",
+      "exit": 0,
+      "timeout": false,
+      "own_host_child_waited": true,
+      "elapsed_seconds": 67.2642515,
+      "receipt_fetch_exit": 0,
+      "receipt_transport_waited": true,
+      "receipt_sha256": "fd434837dba2485aa2f6da79625a61387921a7b2bae13e53649a3b9ae2783e2f",
+      "host_receipt_checks": true
+    }
+  ],
+  "later_phases": "NONE",
+  "head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+  "resource": "RootTartallocationRETAINED; no old501 disposition"
+}

@@ -1,0 +1,29 @@
+{
+  "archive_sha256": "cec9108487f2ee5884662a789eb0a5133ee2b47302388077f5ee08e6df4b0a12",
+  "diagnostic_phase_count": 13,
+  "elapsed_seconds": 3357.2108106779997,
+  "features_equal": true,
+  "final_phase_count": 23,
+  "full_matrix": {
+    "explicit_signer_probes": {
+      "signer::tests::idle_cpu_with_one_and_nine_live_bindings": true,
+      "signer::tests::per_binding_fd_cost_matches_python_ratio_of_one": true,
+      "signer::tests::per_client_fd_cost_matches_python_ratio_of_one": true,
+      "signer::tests::rlimit_probe_served_clients_and_accept_loop_survival": true
+    },
+    "failed": 0,
+    "ignored": 5,
+    "integration_targets": 107,
+    "ordered_markers_match": true,
+    "passed": 1881,
+    "steps": 112,
+    "test_summary_count": 115
+  },
+  "full_receipt_sha256": "274b9a9a9c739466ed76984c2328ab44fbe5a6e4847ccf7150ac2b67a2b8dea7",
+  "resource": "RootwholeVMretained; ownjobclosed/finalassignedUIDempty; oldholdsnotreleased",
+  "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+  "scope": "same source772 both36phases; not newwholepublicationHEAD/physicalMac/release/Astraacceptance",
+  "source_files": 1519,
+  "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+  "source_maps_total": 72
+}

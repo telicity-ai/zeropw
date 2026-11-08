@@ -1,0 +1,5161 @@
+{
+  "schema": "independent-Sol0102-DATA-collection-v1",
+  "as_of_utc": "2026-11-08T07:56:39.051679+00:00",
+  "actual_model": "gpt-6.1-sol",
+  "effort": "ultra",
+  "scope": "DATA integrity only, no product/helper/compiler/formatter/test/runtime execution; no review or acceptance",
+  "checks": {
+    "artifact_catalogue": {
+      "entries": 23,
+      "freeze_bound": 11,
+      "all_match": true,
+      "catalogue_sha256": "b75a1ba06481fcf960936dc867c92e0fdc0c85b976b4622342aeba686e504630"
+    },
+    "archives": {
+      "before": 1450,
+      "after": 1450,
+      "regular_safe_unique_paths": true,
+      "every_entry_bytes_sha256_blob_Git_POSIX_modes": "MATCH"
+    },
+    "source_delta": {
+      "changed": [
+        "rust/src/team/commit.rs",
+        "rust/src/team/compaction_heads.rs",
+        "rust/src/team/membership.rs",
+        "rust/src/team/sync.rs",
+        "rust/tests/team_compaction_heads.rs"
+      ],
+      "protected_files_exact": 1445,
+      "all_1450_modes_preserved": true
+    },
+    "reconstructed_trees": {
+      "before": {
+        "root": "6c3220036e913c703965be3e309949b97836ebf9",
+        "rust": "edf8e2dff3e1079317d87afc71b89405fdc98774",
+        "desktop": "2413844c89265a3e239be2372d34b1e6e1b2d4bb"
+      },
+      "after": {
+        "root": "1e854e542a69b66a7ba575ad2faae713b54780ca",
+        "rust": "b1208451ac515920c4a749315b0d012b0524c74a",
+        "desktop": "2413844c89265a3e239be2372d34b1e6e1b2d4bb"
+      }
+    },
+    "Root_baseline": {
+      "head": "adb2f3cf2cb9f5371e0e1047e3805c11d65c1f28",
+      "all_files_blobs_modes_exact": 1450,
+      "read_only_Git": true
+    },
+    "patch": {
+      "paths": 5,
+      "hunks": 24,
+      "all_context_deletions_counts_positions_exact": true,
+      "reproduces_frozen_after_bytes": true
+    },
+    "protected_function_spans": {
+      "claimed": 584,
+      "independently_located_and_matched": 584,
+      "all_exact": true,
+      "extended_line_spans": 15
+    },
+    "old_test_bodies": {
+      "independently_matched": 160,
+      "all_exact": true,
+      "Root03_bodies": 9,
+      "Root03_production_hooks_functions_exact": 11
+    },
+    "oracle_outputs": {
+      "written_tests": 23,
+      "library": 10,
+      "integration": 13,
+      "all_declared_functions_present": true,
+      "regression_rows": 8,
+      "known_test_gaps": [
+        "A deterministic test forcing the unlocked deferred gap prefilter to become stale specifically before the fresh locked sequence recheck. The new recheck is written; existing still-gap/no-lock and new compact/release tests do not establish that exact interleaving. No new release-entry instrumentation was added outside the closed test-hook scope.",
+        "A dedicated pause inside authorized TeamSync fact-signing disk I/O that independently proves envs availability at that exact I/O point. Production order collects/validates disk state before the envs guard; compact-I/O envs availability and no-send-under-lock tests are written, but do not substitute for this exact fact-signing pause. Only the permitted three authored-wall test inputs were added."
+      ],
+      "validation_matrix_sha256": "8233fbb12219ab0bc4a2ef24b0ddec84cdccd704e25cb7f822846c5471a3e1c0",
+      "actual_settings": {
+        "provider": "codex",
+        "runtime": "T3 Code through the Codex harness",
+        "actual_model": "gpt-6.1-sol",
+        "reasoning_effort": "ultra",
+        "requested_service_tier": "default",
+        "effective_service_tier": "not independently exposed",
+        "role": "implementation sub-agent; personally performed source-only edits and own standard-library DATA operations",
+        "delegates": 0,
+        "workflows": 0,
+        "other_models": 0,
+        "review_invocations": 0,
+        "runtime_resources_assigned": [],
+        "Linux": "NOT_ASSIGNED/NOTRUN",
+        "macOS": "NOT_ASSIGNED/NOTRUN"
+      }
+    },
+    "original_attempts": {
+      "retained_failed_DATA_audit": "protected-diff-audit-attempt-01.json",
+      "correction_recorded": "attempt-01 used 2467-2468 for the new test module; SequenceMatcher anchors its insertion on reused closing brace at 2465. Exact source inspection established no production scope expansion; original STOP-shaped bookkeeping report retained unchanged.",
+      "initial_failed_attempt_unchanged_by_collector": true
+    }
+  },
+  "limitations": [
+    "No Rust compiler/parser, formatting, build, semantic behavior test, Opus review or Astra acceptance was performed.",
+    "Function span comparison is lexical DATA preservation, not semantic proof.",
+    "Exactly forced stale deferred-prefilter interleaving remains NOT IMPLEMENTED.",
+    "Dedicated fact-signing disk-I/O/envs availability pause remains NOT IMPLEMENTED."
+  ],
+  "status": "PASS_DATA_INTEGRITY_WITH_DECLARED_TEST_GAPS",
+  "product_execution": "ALL_NOTRUN",
+  "findings": "ZPCHEAD-OPUS-01 medium,02 medium,03 low all OPEN; all global/review/runtime/release holds unchanged",
+  "protected_functions": [
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "invalid",
+      "baseline_sha256": "f5de9bc4592154d58a21173d3b43f748176512ffa142b324a8cde3bb8ef8a13a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "unavailable",
+      "baseline_sha256": "3ab56c12dc0153206be7b8430e42fa4fde42cfa54470ea1ba1aa866643b72d98",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "limit",
+      "baseline_sha256": "5a054ccf6960f4e0d91d1710a989f8d06958903503285140812485aff2e73820",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "persist_failed",
+      "baseline_sha256": "1b7f981aaff22fda7b7882b5b2ba9309055e92fdc6ec1560a2f069520c3047dc",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "layout_unsupported",
+      "baseline_sha256": "740759655213786f3f545a035b6fdf49ea72ec5a9aebf1d183a8af3fe427b65b",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "require_lock",
+      "baseline_sha256": "89bed8fcb2a776086178b0d869ec5daf1e82c8f73547c2f1ee471b16b4fe3b90",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "cache_path",
+      "baseline_sha256": "9aa93f17e53ab27b29a2abd963226d5f19405c036767035824016c115821f686",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "fingerprint",
+      "baseline_sha256": "1079c3abf77696ca91ea36d3f2dfa422120e3df4bc631126103ef58c516e1d11",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "object",
+      "baseline_sha256": "6264366307bd6f28ac995ce46ce9e2fc5c1bdd4e1221057d473192e58ef88e0e",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "canonical",
+      "baseline_sha256": "19b4055185c71cf727b7e5e06728f7ac43ee0fdf72480c401bd2516103991aa0",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "pretty",
+      "baseline_sha256": "c561a3e1418007462daf70c9f64dd0bababbd5981e66c79deb6ff6166d9fe5d5",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "positive",
+      "baseline_sha256": "8d19a85c7869d62d1d30ee88bdbec2512432c2965e7fb957e64b42b58f8e09bb",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "vector",
+      "baseline_sha256": "481a4bdc08da2c6de956e18403e0c7e4a723f76e9a528a31bcd270a5facb9fd0",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "vector_value",
+      "baseline_sha256": "82d9f2f372438105bbe89eb938b5b695b8efe23fab579cb5393b7dedfe1d280b",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "record",
+      "baseline_sha256": "d2aa97a7ccf2bf970750faa1143637f6e1ac3decae183ba85aa543029e8cdd32",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "checked",
+      "baseline_sha256": "518ab89d077eb5871b55fbd5fbb14e54e1f1eb675de8d47f878660a580e30f5f",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "value",
+      "baseline_sha256": "8f83d44e5c3b070e5162f3878ff9789c10567d94fc419593e01fd46ea10f705f",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "same_original",
+      "baseline_sha256": "b1979c3cf1cb92880b7a22d57e0d5fc9c4f47e18fa81aeddedd655eddab90bc6",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "decode",
+      "baseline_sha256": "b0a91f6901db0646a240ca7c188cc3546b30659ce8c1d96bec045db45e8412f2",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "load",
+      "baseline_sha256": "4f1e5dbbe996d8b0c261cc5ab9ac8cf4d75a83f93bcf861dbb556f626d7d9517",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "preflight_layout",
+      "baseline_sha256": "353d59d43945f1fd1aca290f5888bc7de0290590897a0244416c7e3e1941ce6f",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "check_snapshot",
+      "baseline_sha256": "9bc0b076d5c69b88e5827ed5196ee3932d1a90647819dffe0ca330b6b5dc922a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "sync_directories",
+      "baseline_sha256": "6244aa2a81f399e49658037aae0c6741f79637863482cddcff8f964da4f483c4",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "read_record",
+      "baseline_sha256": "eeb0d8f183af52c34046f24d62905aac96f8de102fe4f75bff6ea69974f90969",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "persist_before_prune",
+      "baseline_sha256": "e2dbcc42e9e9c9bda27feb005e3cb29de622abb2038470103fd63557386e88ca",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "reset",
+      "baseline_sha256": "2e2ff6a8f251af14bf60c7e261bf9d2b708b5119befb686aaec7e70e5c807315",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "action",
+      "baseline_sha256": "7ac2afb3a8bef8d4a772050fc50a1ce69de546a425cd74d8dc21d5842078431b",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "pause",
+      "baseline_sha256": "3bc8a0cc140ad25423ccba5bdf94be5570c122aea8ccc4e6797d3b4c1818eb0e",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "events",
+      "baseline_sha256": "d09c6c8bdf0a4a485d2c6387c53f8299e0ad669d7b4c3cbc48d186d819819b24",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "replace_snapshot",
+      "baseline_sha256": "8b4cfab5220687a85202b7ee9dbe0e68a194451bcd5fdf4a3b4905a5f515b343",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "hit",
+      "baseline_sha256": "c433e9a53f69773fe4e09dc2e548e30d6920f2d0310c914abfd130ada28f3e65",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "key",
+      "baseline_sha256": "9a00b9b492c2e32130a06a06244fbf92220af5a87a251b2c6dc8eb6ecf3727ca",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "signed",
+      "baseline_sha256": "3669e4cad27d3a3b79c31c0daffbe53ee69144f0be03f9c39b538defa944a42b",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "snapshot",
+      "baseline_sha256": "c5b68ecb3b5a1baf5bc78a57313a17bb7444bf6ee5666999d55291a8836e30a5",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "env",
+      "baseline_sha256": "cdb86427c55a421dbb6734765670d1e97ef75a961ba640e0f872444e6d4b27de",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "compaction_heads_layout_requires_lock_and_creates_no_prospective_paths",
+      "baseline_sha256": "9909c3adb70e21138789cfb4580f6fa099b38a37c8356332caaa16f2f417caf2",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "compaction_heads_layout_refuses_non_directory_and_nonregular_destinations",
+      "baseline_sha256": "b01f8f8cf1f26c107a2f5e0039942324d6a0d54345b4d5ed6da80ce8deb84e6f",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "compaction_heads_layout_rejects_dangling_links_but_allows_trusted_parent_alias",
+      "baseline_sha256": "d1ab5e99be1493d35a3087e7f86f2d3e4a6aabf5824c8f87f057e20b15661a66",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "compaction_heads_helpers_require_real_lock_and_bind_snapshot_plan",
+      "baseline_sha256": "471448825cd1d0d9955a264eec455076c57486467118e95b3a6462171f8ffa2a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "compaction_heads_exact_huge_pyint_slots_hlc_monotonicity_and_vector_regression",
+      "baseline_sha256": "b6f50b85bbcf7991e5271488a4df5d8ad87d95a84b06678b28851cd2279755b1",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "compaction_heads_at_256_and_over_256_are_exact_without_sequence_enumeration",
+      "baseline_sha256": "5474fab25ed9deca1adfdb8a3c65c2eeb13e69bcd7c51b13e39095e69b3c9fd8",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "compaction_heads_serialized_16_mib_boundary_and_bounded_disk_read",
+      "baseline_sha256": "aaecbb0d178d8913a2c7a9d6f769d93f478a65876cb1e3bd3038446b58da1612",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "compaction_heads_reserved_number_normalization_refuses_before_publication",
+      "baseline_sha256": "0a47b5e3f8575357f94349ea7332113d12737dda678ee0e5c6c4a690b0a0965a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "canon",
+      "baseline_sha256": "a52e47365090c2a0ac1be59bab34a9d1bed4b84071542cf9755c4b5ff487f7f8",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "take_dial_mark",
+      "baseline_sha256": "f5755919678f34e6c3d75fa96fb6003ce90627bbf5989d48e33a57cf03427d6e",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "hold_frame",
+      "baseline_sha256": "94e1d2f261b13430ca38e2c3599dc6cd6036bfd043c6baa5f65733535598fcc2",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "peer",
+      "baseline_sha256": "74f09b5f052a08ab8a4dac59064be4bc02c71510219e1200b80a65e31ebf00bc",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "env_id",
+      "baseline_sha256": "8f91bb7dd4b5c11c64fd9d6fcb0de7c9ce539fe133d28f136f22980fcbc87ac5",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "send",
+      "baseline_sha256": "fe9bc27776ba66120ed238c5231e8be5909b4add2af3b1fcc994799961d3d01f",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "recv",
+      "baseline_sha256": "5fc808d6e6c9d8d8ca1f9c0f33aafc1494e6bd913f77adcf6f877389e5bf914d",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "close",
+      "baseline_sha256": "69a94b80d06b45618fc5b4f9461f77318448ca484e094eadaf20773db4b48792",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "is_closed",
+      "baseline_sha256": "127fe21a0dd3e1919b9080b902142a2d65ff68a9d379453f71862c1275741c90",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "created_at",
+      "baseline_sha256": "fcc0842136f7dc67645f34175d23da34ab3d5e18132913019e7b39885efd80ef",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "set_membership",
+      "baseline_sha256": "d74a69f543de6628fb6fdf3bf025a4b2df7cc31ee975734f5c708f5dbd8b3868",
+      "recorded_span_kind": "extended_line_span",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "set_invite_check",
+      "baseline_sha256": "e0e678da2f208f7f83abe60045d47c6eea9ebef7420fde06c7438745d0795012",
+      "recorded_span_kind": "extended_line_span",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "set_handshake_failed",
+      "baseline_sha256": "1991f83a0f46822758c66257d16833e74446ee193c996465761f3a81bfc2553d",
+      "recorded_span_kind": "extended_line_span",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "listen",
+      "baseline_sha256": "a76bc7a9909e38eaa5d581f8e7cb15aad939091d2ff09cd39052130c3978e891",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "dial",
+      "baseline_sha256": "8de70d0ad18902fe575bb48076e06c5bbd7511e05700d25e0e9775fb3272bf42",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "close",
+      "baseline_sha256": "b7a8eb47430bd88d52bd32741877ce39e6eff5f6880c959928e6b028a354b1cb",
+      "recorded_span_kind": "extended_line_span",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "new",
+      "baseline_sha256": "88b3d0eb137bbdd4d7445e6b8b2e1ffa990327802324fb8561505be1a3da656c",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "dials",
+      "baseline_sha256": "9c759af3d9654f9ad9e497aabdfc5d079d4ad8be2fdb91d40af65d4ce912ea77",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "set_membership",
+      "baseline_sha256": "d74a69f543de6628fb6fdf3bf025a4b2df7cc31ee975734f5c708f5dbd8b3868",
+      "recorded_span_kind": "extended_line_span",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "set_invite_check",
+      "baseline_sha256": "e0e678da2f208f7f83abe60045d47c6eea9ebef7420fde06c7438745d0795012",
+      "recorded_span_kind": "extended_line_span",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "set_handshake_failed",
+      "baseline_sha256": "1991f83a0f46822758c66257d16833e74446ee193c996465761f3a81bfc2553d",
+      "recorded_span_kind": "extended_line_span",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "listen",
+      "baseline_sha256": "a76bc7a9909e38eaa5d581f8e7cb15aad939091d2ff09cd39052130c3978e891",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "dial",
+      "baseline_sha256": "258124a84cbf7021ca3693d67e89da9cc20a72b35d37476ef57cc221f2c92e85",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "close",
+      "baseline_sha256": "b7043cb1948b23973737dc2bc1033e3bb7395b5102558ce28542d94d717e8fb8",
+      "recorded_span_kind": "extended_line_span",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "peer",
+      "baseline_sha256": "74f09b5f052a08ab8a4dac59064be4bc02c71510219e1200b80a65e31ebf00bc",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "env_id",
+      "baseline_sha256": "08d1e54e38f19d7cf3a3be29b99143a6a57badd242d0b0f260d48327ee2e92d4",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "send",
+      "baseline_sha256": "ac1e54b832517fab03618fe5e05a459d7af55ea54e8056eb5a12bb43ab8dcd70",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "recv",
+      "baseline_sha256": "5fc808d6e6c9d8d8ca1f9c0f33aafc1494e6bd913f77adcf6f877389e5bf914d",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "close",
+      "baseline_sha256": "69a94b80d06b45618fc5b4f9461f77318448ca484e094eadaf20773db4b48792",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "is_closed",
+      "baseline_sha256": "127fe21a0dd3e1919b9080b902142a2d65ff68a9d379453f71862c1275741c90",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "created_at",
+      "baseline_sha256": "fcc0842136f7dc67645f34175d23da34ab3d5e18132913019e7b39885efd80ef",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "fact_replay_stops_on_session_replacement_and_receive_only_drain",
+      "baseline_sha256": "9f7f990547c3f2eca3107db54d1f1a97034c82a18a25ebf12a51c17436c5d200",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "concurrent_store_fact_has_exactly_one_insert_winner",
+      "baseline_sha256": "9d194db329c047b4a8c6f5a7f5baa9496e73dc0430d120f6192b55546bbef02c",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "owner_with_admin_peer",
+      "baseline_sha256": "01717377d36c1ec0b9a99a9623faa40434117c3424711c240b967b98eb1ddfd3",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "owner_with_admin_peer_configured",
+      "baseline_sha256": "9ebdb7617ac1bd60e3d282a16297bc54a7a48a5d6ceaa31020d246d24c2cec2c",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "caps",
+      "baseline_sha256": "6c1c704b2276d06d2402d04cd9c85793e30cd24c7dc4f4befbb64c035fc8d044",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "state_frame",
+      "baseline_sha256": "c4b211a45d7005ffb9fd5eb93030cece642c1e80bb5d8aac6939a02bfda854f6",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "m1_empty_capable_peer_needs_exact_current_session_ack_and_legacy_does_not",
+      "baseline_sha256": "77365570bb2f1590df1990378b2deca2d8fc58cfb4fb3ebee90070fa12e5f65f",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "m1_advertisement_is_not_authority_and_persists_unsupported_gate",
+      "baseline_sha256": "60aedd12ddfe0fd64d86461bfa3fbfee8f7a5582352412130e6a88bb70ea8574",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "m1_concurrent_deletions_require_union_and_lost_ack_retries",
+      "baseline_sha256": "1c946dd0c3468486a35fdaab25fdff19997e7ddd25a69424878d5343437a2447",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "m1_no_ack_after_derive_or_storage_failure_and_no_unauthorized_deletion",
+      "baseline_sha256": "07f0b9defcc535db6c28a192e771030fb8ce0f74137870476525ce8f11d9997a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "m1_new_delete_closes_established_legacy_session_without_partial_fact_delivery",
+      "baseline_sha256": "dddbd56e19db765c35b864bb39ab6af2610ec2a17a92314b9b1c3284e449bbf9",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "m1_delayed_control_from_replaced_session_cannot_negotiate_its_successor",
+      "baseline_sha256": "6dbeb8f9dd5fa2b0d49bb01b5d8b10d1e2ba8bf983dcb1d012d4c09830d7d4ea",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "m1_replacing_a_ready_session_clears_persisted_cli_agreement_immediately",
+      "baseline_sha256": "44128139087ffcc7af8366e850891f12711df2bb082542fe9fa53bbe98cb4da3",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "peer",
+      "baseline_sha256": "9d61ba8a68f46943914aa24a01da92ff56276857db1eda4da28fd975e2426824",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "env_id",
+      "baseline_sha256": "ae0700496e18cc4f87dd5ef48988f80e6dd1f0e7d136fcdde6f95aaadf9b0c2f",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "send",
+      "baseline_sha256": "4ec86506f6b0ea0b45ceafdcb54132b05008474e9e7339cc6261ca8c726ae054",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "recv",
+      "baseline_sha256": "cc14f6db3c0ad7de71dc9b71c4966d991007c240c0346a6d095fdb0c6359e690",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "close",
+      "baseline_sha256": "e2d0afc71b0017968d58a412d3ccc06c7686c62b089909c035d9244951434aa3",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "is_closed",
+      "baseline_sha256": "949256028a2385b84d10934bc7d240641cca6e3432acb1220826ee6dcc7f555f",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "created_at",
+      "baseline_sha256": "2161a8c178579e9d1a9930b0e0212fad0c356091bde91c157eec628c3bc6378d",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "m1_initial_capability_send_cannot_be_overtaken_by_data",
+      "baseline_sha256": "cb99911f89b45bb8bc08ec950689a22b04335367f0455ac14d7d0057d1470a44",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "m1_dialed_link_status_is_complete_before_capability_send",
+      "baseline_sha256": "271e8ed99c0861a1b107f7cf259c0d06ef46228be8a2ff5dbab59a4053b1254c",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "m1_legacy_quiet_status_keeps_its_original_bytes_and_inode",
+      "baseline_sha256": "5c2d4bd08e74c73d66d69e8960b31d5213e0f5dded1a6ba9d25ecde9b4abf821",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "m1_feature_deadline_survives_a_failing_environment_step",
+      "baseline_sha256": "521baa8672cc40c93433784624af55acdd5270e904001e07eb9fb08694f30005",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "settings_commit",
+      "baseline_sha256": "8b104e330f58a3e906964672dfae02e889bd749d6226736795baf57a35425eab",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "data_sent",
+      "baseline_sha256": "9bf4a8383079967380b9c5dc14cffb7c0e5414249b484358a2bd8456f2e34a8b",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "sent_of_type",
+      "baseline_sha256": "5e6580a660c3a67340dbe775d6f9737787c10d4809ef7f448f8d794754d58f3c",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "recording_session",
+      "baseline_sha256": "e94eab93fa10a14c87f11a6522a714dece5521f8d028b890e3a240ecd3bafc6a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "another_environment",
+      "baseline_sha256": "5e6152c017793089a50c47fa97f4edc3704f85a675d04372c93a15fbb0c84c8c",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "quarantined",
+      "baseline_sha256": "95570624b7ddd542a2cc80085c65af54e104f9fc23b927aaf00703287b8efdfc",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_refold_replaces_a_stale_snapshot",
+      "baseline_sha256": "7a304dc0a9fd78643986f65808aee44836fd6bd7a2cd41d7d5e1eb0bad48a74a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_refold_records_an_unrecorded_snapshot",
+      "baseline_sha256": "27eae0870ad8f4dfff586a5ccc6b4de42f118c8a44a856380e51c0a94ab4208a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_refold_records_an_unrecorded_snapshot_while_replacing_a_stale_one",
+      "baseline_sha256": "2e627565031d911cfaeebfae98ddeb1b91cf72b8a16938c7ab6f4b54151ff9ab",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "joiner_gets_history_in_total_order_before_live_traffic",
+      "baseline_sha256": "629d7fe7f1b96229362b9fc7b22ec44fc32ec88fefeaff7572cdfc890705f40b",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_joiner_removed_while_held_gets_only_its_removal_notice",
+      "baseline_sha256": "7a62cb61134dfe487746874e9f4be4d59c7d8419eba77d4506785a290b740a98",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "an_unreadable_deferred_entry_keeps_an_early_commit_waiting",
+      "baseline_sha256": "37fa06b3df7ed8bf598b2f72f3efff33ea2bcde197441e7c291be3e41a0a845e",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_failing_environment_holds_up_no_other_environment",
+      "baseline_sha256": "395d9c33448db424b20698ee7be32c8dc8b79384cd31d7ae62bc743b53c7278e",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "sync_poll_audits",
+      "baseline_sha256": "bde03a5841abe2215e2773703638d6647be17225bc9a9e528be86d6025e3afcd",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_failure_after_a_load_failure_is_audited",
+      "baseline_sha256": "277e82e8def55ac67a5c64cd4728e1405996cdcac14ab5cf423ebac28681eba5",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_refold_failing_at_registration_after_a_load_failure_is_audited",
+      "baseline_sha256": "66215349f906f776f9d23b819058078dadb6cbec36dd37080d6fb1b3e8c28c04",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_failing_environment_closes_due_sessions_and_asks_nothing",
+      "baseline_sha256": "24c439186acc9f7ba0acac111f989f27efd21abb6f518d6ceb3e39bee64c4751",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "an_environment_that_cannot_load_holds_up_no_other",
+      "baseline_sha256": "16b6ac30723c23d91a5bdc31f874f631c13e26d86b1c271cc8efaa4f3b61739e",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_failing_environment_dials_no_one",
+      "baseline_sha256": "187608d0eec06917934976afa97905339283ff0a4159d93d3cc67ef238a44675",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_failing_environment_closes_expired_sessions",
+      "baseline_sha256": "371e68c1bd4d2840437aba4cb795560d420b05fb559140c7f62782befc28b83a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_session_the_poll_closes_is_redialed_from_the_next_tick",
+      "baseline_sha256": "561af4fc1831b0d919bec35054beae60085f88676b98f46cfe47d66aba98c639",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_failing_environment_is_audited_once_per_failure",
+      "baseline_sha256": "7fdf2701b12cbe0d232d85f84bde3aca85fca931a38296b98cb1bc444302c777",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_poll_returns_the_first_failure",
+      "baseline_sha256": "0019b0e692a1a5ca505e1230c8f2d89358358b93019abae7dfa1bf21e03595cb",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "discovery_returns_the_first_failure_and_start_refuses",
+      "baseline_sha256": "31cb19874ab1b7dbe1757c5a5aee83ecb012131b4783969ff01aa3e8d1a8b8f3",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "fail_refolds",
+      "baseline_sha256": "234f7c7a9f00add06f29adb8e83b9832b30e1ebe4fdc17cb812b9a0fe203c2a1",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "retrying_refolds_at_once",
+      "baseline_sha256": "61590bb088ef484872fc37447cb41b4320b88e4901b38764a085fbabea1d600f",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "sync_interval",
+      "baseline_sha256": "9791c3a59ba6564e050096fefeb0eb03e7b4ce2611ccd2222ad90a3037fdc284",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "fact_audits",
+      "baseline_sha256": "7d3e76586b533725d1ee341e90340bc62963612c097780131f5cd43e2c4a595b",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_failed_pickup_refold_is_retried_until_it_succeeds",
+      "baseline_sha256": "1f328336fbba05cdfc6ad1fed196d74d596b014f3fc166bbe324af81f1f06588",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_failed_refold_after_a_removal_fact_is_retried",
+      "baseline_sha256": "2cbd48573eaf649e35735ddc0ee62678e4e7ef7cb2631f0949eee4432ff5512b",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_removal_fact_refuses_the_device_while_its_refold_fails",
+      "baseline_sha256": "de1efea342a39df5089f186d9df9fe97192fa859c53fb1e3953dd80b09bd737a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_session_whose_handshake_preceded_a_removal_fact_is_refused",
+      "baseline_sha256": "ca2be35dbbf8016b9b04ec80dd06967c7c379637a3fa87706744ef7cba6c8406",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "an_environment_whose_first_refold_fails_is_retried",
+      "baseline_sha256": "3d27deb7f74b2c2e467801d8c67281b71c3c9261877ff72cc9e964a2f9f7fc59",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_failing_refold_is_retried_with_backoff",
+      "baseline_sha256": "42c03ec0dc9e90fa84e5952785e31f95aa8d609c1713de4330d0571dfb8c482a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "the_poll_rejects_a_released_commit_out_of_its_authors_hlc_order",
+      "baseline_sha256": "04e8157f67da1faa359c1266d86315a27fab87df79ea5650084a5ad518ec4d70",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_failing_refold_holds_up_no_other_step_or_the_sync",
+      "baseline_sha256": "e319b0f2c307b6e023aae8021f7ca56886540d905982782e6905067ecfcc8ca9",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_fact_is_announced_although_its_refold_failed",
+      "baseline_sha256": "b0f75a7b10ff4b4d6e382b8578e4e8f92f4aeda7d574c16ad4f113fccd232804",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "an_interrupted_answer_audits_what_it_sent",
+      "baseline_sha256": "a835ae3595940b59c6dd3f836fa0396e37c9534805212fab197b11b271abc994",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "incident_retry_stops_once_the_admin_drains",
+      "baseline_sha256": "b6138326b9336dfacf44a4cfea9cc662606d935abd6ed884cd47f86e4e2c17ad",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_joiner_removed_mid_batch_gets_none_of_the_rest",
+      "baseline_sha256": "47c75ee2265916adac3790f57413b6469ceec752abe515ed36b77af207a9b16e",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "early_commits_wait_for_a_deferred_admission",
+      "baseline_sha256": "777cbe36952c5ef7d5cca346d9f3e884b5e2ed210f8fac26c6b6db460ce44a6e",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_replaced_or_dropped_session_takes_its_hold_along",
+      "baseline_sha256": "45a6fb878e5c681eccc336e763dc4585b7ef2aa11e80b97827fbf51ecbfdfae7",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "early_live_commits_wait_for_their_history",
+      "baseline_sha256": "3da0057ac3bcf1e6a7cfc9056da8092d8374b8a8674fad5d0e2a37eccc71cdf9",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "retained_admin_role_does_not_authorize_a_removed_author",
+      "baseline_sha256": "d9cd3a1d925864afab2de36b9969bffddc87e6fcf64fdafcbdaf397fd6d4d259",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "removed_admin_cannot_remove_unrelated_member_on_receive_replay_or_publish",
+      "baseline_sha256": "5fd0226df9792b8be5f99e6df7af84ce8d11ab9bacd1e5ec478d5656d1ddedc7",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "idle_fact_pickup_skips_admission_and_concurrent_cli_appends_survive",
+      "baseline_sha256": "5490e9443c3f4f30652fbac57a7c3a55a2b95dcdc45cc5a0a3f60dfd460bf338",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "admission_observes_future_commits_and_send_waits_for_unlock",
+      "baseline_sha256": "75d054319eb70322ed921d6f28e17931c0b8177ee4fe5eeae862fea9ea6e702b",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "live_pickup_preserves_receipted_revocation_after_role_change",
+      "baseline_sha256": "2ca6805c22699bda5efeff2416e01e842ff25de54124c493b61c7cfc1efb4f19",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "historical_revocations_survive_unreceipted_author_role_changes",
+      "baseline_sha256": "a0eaa8d390ace4234dc0b57bbabcf24e3df58c66c3ccdde099e941f46314c29e",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "removal_repair_sorts_after_a_received_future_rotation",
+      "baseline_sha256": "4bbd1f60b5933b63c676e4e8a4fbb2c3d6ebd36fc0920a63cd6025988c2286c0",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "commit_removal_blocks_writes_under_old_wrapped_generation",
+      "baseline_sha256": "0d66c9aad457d93fad7903418a0111e81ba06e1675eaf8857e0c7b0e94f007e5",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "stale_live_process_cannot_admit_after_standalone_removal",
+      "baseline_sha256": "57eb468136f9490473b0991062fb988c073fa6b7c4371900699a17358d23cc81",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "cold_loader_rejects_unadmitted_removed_admin_fact",
+      "baseline_sha256": "c137bf0890f6149fbafcc2aae801a3a67ec2d1e4b65b5feb72c48e0cbce7249b",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "concurrent_rotations_cannot_leave_removed_device_in_current_wraps",
+      "baseline_sha256": "864728e24578dc81e3943db7cb960184d24792ade064609057b0ea1673d3c536",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "draining_admin_cannot_send_a_non_reciprocal_removal",
+      "baseline_sha256": "09b99c8efccac6918d771fa6e5746b514e8a943ccb0c6da40db67ae0dd56644b",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "valid_secret_version",
+      "baseline_sha256": "ec8d94d9b3b0c6c3bf2dd3ae5c2064bffe518dba89bbc186592a8a9b9d48c9fc",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "self_removal_rekeys_on_receipt_and_after_restart_without_repeat_rotation",
+      "baseline_sha256": "badc60c720cc652565316b3dfe5287b256dcb1dba4e203b7bf7d5641e2f4a194",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "ordinary_admin_removal_also_blocks_stale_generation_writes",
+      "baseline_sha256": "d11b3615b56a560c9c7160436e8620306ba82aa452e418764d75134d6d8c1b8f",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "persistent_rekey_failure_does_not_stop_another_environment",
+      "baseline_sha256": "2175d14a8e6c7c0b52eba4d55b18147ab13a50935dd9dac9e1afeb5584eb58e3",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "received_ordinary_removal_rekeys_and_duplicate_confirmation_does_not_repeat_it",
+      "baseline_sha256": "7a9ad61fdd9a36d54c51e3cc34436db25fa19e2751d5ed9388c8ac6e8129d0ab",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "relaxed_document_is_cached_by_store_vector",
+      "baseline_sha256": "36bb7a3b3f784f2b0092b9c67e5576a677b5054de8c97aed43f236dbedecc460",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "corrupt_rotation_flags_fail_the_incident",
+      "baseline_sha256": "8b12634b84378b79dd28ddb9b7904a90901887899add4ab04853358133b9b6c4",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "peer_state_documents_load",
+      "baseline_sha256": "757c24998b34ae460c0867710a522204a131a5e6279072288d2ef93833e80957",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "peer_vector_ints_are_exact",
+      "baseline_sha256": "2c0bf369e2f2ccee418afe580c11d54ef4eed2063a7f00509d93546867a00086",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "set_membership",
+      "baseline_sha256": "d74a69f543de6628fb6fdf3bf025a4b2df7cc31ee975734f5c708f5dbd8b3868",
+      "recorded_span_kind": "extended_line_span",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "set_invite_check",
+      "baseline_sha256": "e0e678da2f208f7f83abe60045d47c6eea9ebef7420fde06c7438745d0795012",
+      "recorded_span_kind": "extended_line_span",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "set_handshake_failed",
+      "baseline_sha256": "1991f83a0f46822758c66257d16833e74446ee193c996465761f3a81bfc2553d",
+      "recorded_span_kind": "extended_line_span",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "listen",
+      "baseline_sha256": "a76bc7a9909e38eaa5d581f8e7cb15aad939091d2ff09cd39052130c3978e891",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "dial",
+      "baseline_sha256": "7219a186bdca81f9671679b4a8f5cca1be55a8ba1fdf265dc6121d0fbf984c96",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "close",
+      "baseline_sha256": "c9531929bef8c71ca49a8f866c93f72c525edc344c9c342754f813aa479e3efa",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "stop_joins_the_poll_thread_before_closing_the_transport",
+      "baseline_sha256": "9999bc870e6200cae5a9b4a82ea7a1c2871fd978fe84c4384dea4d1ec502312d",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "member_removal_forgets_dial_backoff_state",
+      "baseline_sha256": "737fda14425f8b4713fba9e4a2fa4de70feb3f4bb747b7baff6c073a52bbe278",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "lru_seen_set_refreshes_on_hit_and_evicts_least_recent",
+      "baseline_sha256": "897c27a3e703f135325591602b1fb22da4c4b08c430f160bbc041333639fb444",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "peer",
+      "baseline_sha256": "74f09b5f052a08ab8a4dac59064be4bc02c71510219e1200b80a65e31ebf00bc",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "env_id",
+      "baseline_sha256": "8f91bb7dd4b5c11c64fd9d6fcb0de7c9ce539fe133d28f136f22980fcbc87ac5",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "send",
+      "baseline_sha256": "c20f530d0dc6064510622cbc8f68c7a5b6d6853a1739e5d950e241593065734f",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "recv",
+      "baseline_sha256": "5c51de568c25e2d7979013204122c86a1e83a47cd75ee97c6dd2073d82586242",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "close",
+      "baseline_sha256": "69a94b80d06b45618fc5b4f9461f77318448ca484e094eadaf20773db4b48792",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "is_closed",
+      "baseline_sha256": "127fe21a0dd3e1919b9080b902142a2d65ff68a9d379453f71862c1275741c90",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "created_at",
+      "baseline_sha256": "fcc0842136f7dc67645f34175d23da34ab3d5e18132913019e7b39885efd80ef",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "dialing_team",
+      "baseline_sha256": "a9a21792c7f54cc4ac1f91d41f1b36f06eb0cdac572ffc6bf5dc69662bc54697",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "wait_for",
+      "baseline_sha256": "aae2e3d6a10b1bf73e12897d3dd49c0b8370125d82224ba4563f10df0bee6f7c",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "scripted",
+      "baseline_sha256": "d3dd2f190d6bcf41f54a6cc2a72a31df349ce80d6c05d66977a70cb8e4af6f23",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "scripted_with",
+      "baseline_sha256": "b5c3fa647236e6dd17174a1f21e60b47f5f2aecc32a78dd75191ab0abe546042",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "successful_retry_resets_backoff_before_next_disconnect",
+      "baseline_sha256": "404e63ac4a82df859dd71bf358184b86cc1e983b4997047ace98840d972e6af6",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "refused_dials_back_off",
+      "baseline_sha256": "c5354dc184aeeaf570940df6adbcb8a3f54b51be789fab2b9055a623a79b261a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_dial_that_loses_the_tie_break_leaves_no_mark",
+      "baseline_sha256": "e75b865db4d0dd32b7cfd34a4e18ac22b776199663a954f6d82de4564fa2d027",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "an_inbound_session_resets_the_backoff",
+      "baseline_sha256": "f6bacc7004f6107e508a80fe3e6faac4746cf4c79b31546fae54d92baa60a3b9",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "an_accepted_dial_dropped_by_a_failed_send_backs_off",
+      "baseline_sha256": "91eca4a69f676bd8d668aed3415de7a4d32c53f0dca701772ce99065d12b3eac",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "m1_checked_adoption_does_not_report_success_after_caps_send_failure",
+      "baseline_sha256": "acafbf3a0601b922862d6bef85c00a043371e5bb76562a711cd12ac69e51c0ac",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "new",
+      "baseline_sha256": "adf9f79b0998428cdfc4ad390cd9554b0f13b7956ab757cc62ff9937ee69fef3",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "set_live",
+      "baseline_sha256": "8f5e7a74fe763bc57b469d452d0f14003232e190a8eb61c4106534f52ea782dd",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "queue",
+      "baseline_sha256": "8c1f1a1b1b74884ccfd67b63e5ff353d10de57b575b3affd71100f13a05e2f98",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "take_dialed",
+      "baseline_sha256": "5c0c63c09f977409dc4c7364e61bebade7977ea144c9ee6e8a5463bd4d341958",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "set_membership",
+      "baseline_sha256": "d74a69f543de6628fb6fdf3bf025a4b2df7cc31ee975734f5c708f5dbd8b3868",
+      "recorded_span_kind": "extended_line_span",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "set_invite_check",
+      "baseline_sha256": "e0e678da2f208f7f83abe60045d47c6eea9ebef7420fde06c7438745d0795012",
+      "recorded_span_kind": "extended_line_span",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "set_handshake_failed",
+      "baseline_sha256": "1991f83a0f46822758c66257d16833e74446ee193c996465761f3a81bfc2553d",
+      "recorded_span_kind": "extended_line_span",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "listen",
+      "baseline_sha256": "a76bc7a9909e38eaa5d581f8e7cb15aad939091d2ff09cd39052130c3978e891",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "dial",
+      "baseline_sha256": "785ce611f631a38696084b0eafb5db060a440970eadb00edd703e345ea343cac",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "close",
+      "baseline_sha256": "790bf8aab0254d4399d0fbcabcdc4ea474a1e4b3055346d5c686240ba3c0392a",
+      "recorded_span_kind": "extended_line_span",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "rotating_team",
+      "baseline_sha256": "21d894e309d313850cfa28dc32b9fb93adeab9284435ec820dee6785cb6fcffa",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "connect_and_hang_up",
+      "baseline_sha256": "f5f89343b3f12cc22c8add51c085ea6e03fda6f8a2691a2ef91c32e5c3ae626c",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "backoff_of",
+      "baseline_sha256": "d3cdd0bc13395fb672e1afeb26416de6cc44da8bcf3f3ccf78f06ba81b083e58",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_failed_dial_moves_the_peer_to_its_next_address_and_success_keeps_it",
+      "baseline_sha256": "ee110534f6e5fc9e8a677142e22ce1f3526d22eb86924d2b5e84876b49c1f15e",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "unreachable_addresses_are_tried_in_turn_with_the_usual_backoff",
+      "baseline_sha256": "917fb29977b5fd89d4f51ae1f4865c236a9fe84235c9c3b0cfd25af33bd67ec8",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_refused_dial_also_moves_to_the_next_address",
+      "baseline_sha256": "3dc844d83ecac584ecca1199a29f3ab37d997e5cf7b896ccc202751215094800",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "peers_gossip_carries_link_addresses_within_the_bound",
+      "baseline_sha256": "de450aafa3260045eeb597bef30c1e6de54772e8079616a3a911b606e5b3855a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "member_removal_forgets_the_dial_cursor",
+      "baseline_sha256": "e22480d67832c9325008eb3c8c98448e9119705b980d3623bfd7c793b1554e39",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "valid_id",
+      "baseline_sha256": "f6a48eb0aa4a58d078a4a431fdb5ada3ba3609cc4af75b7e06a6764ad149d762",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "valid_token",
+      "baseline_sha256": "127402c9a5f8e6cc519862fab3efdcb3189e3bb3071c6d5f056bacaab858c402",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "valid_fp",
+      "baseline_sha256": "fea3fdb9ac6047d01196ccc0b0a9917ddc733e2f91c59d8dc20022d0f823bbfb",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "valid_incident_str",
+      "baseline_sha256": "b596e35c889fa82bcbfd6ae5cffe8ce7a11abdd552073e58c0adbd5ad48a798b",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "valid_incident_int",
+      "baseline_sha256": "71ac15298fa4434d7726381342b5ae1c1cd8749b75913b110696fdfbf6b93c76",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "valid_incident_list",
+      "baseline_sha256": "55b72ea010a68ca7ba61e8b8a0f6ab8dd39179d08246ae3c9358b2a810f251e4",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "sanitize_incident_summary",
+      "baseline_sha256": "2af3d7deade6688fa21743eb05e7b44d61460221aabf58e58efc8da22deaefab",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "validate_fact_target",
+      "baseline_sha256": "826580f4dec0ef32f87c167b182606cc3db2132ef46e9aa1f564400e47069b17",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "canonical_json",
+      "baseline_sha256": "a69595e98cd881790d4898fb8e32d7206b533dc546bf435ce59bef821b4908e2",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "canonical",
+      "baseline_sha256": "8926e313a1e8f0b4857301a11616a829d59f2f527a493e52ea18d817af60bbad",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "hash",
+      "baseline_sha256": "6b3d1717fe30fc87903e4d7c993c5cffd3dd1c73368a50edd128a2202bf6f00a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "to_dict",
+      "baseline_sha256": "2b3b61dd0dbe554a611763e76b98783884a0825fa31b9a0f43ddea966f6f518a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "from_dict",
+      "baseline_sha256": "9d01976632f9bc409863483922568fe5d32287f0a93df15793ff92e306283995",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "sign_fact",
+      "baseline_sha256": "8e6d5c61a725380729dad156f50b30357490d27997e0b4376f08bb10364dfaf7",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "verify_fact",
+      "baseline_sha256": "40a32e7275c7f65d392a700c9191eb7df1b9049d0b8259635d452239ca944365",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "apply_fact",
+      "baseline_sha256": "ed86c5c0fa37bea2248455485eac9fe1df5089f2c3bbb32b3f6787786c012dde",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "is_admin",
+      "baseline_sha256": "a67be3475ad8c1c1b6fdcf0191c3a0bd0339d31e9dc1a656b730c0022f1e4a00",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "fact_role_ok",
+      "baseline_sha256": "230cb3565f000a10682e2663b0945e088ec0faf540ada7b7632dc93adde23248",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "receipt_fact",
+      "baseline_sha256": "b5b9e2713edba8127bfa1c1af60f2278cf0995a9b7620f16fc12219e0c527cef",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "load_facts",
+      "baseline_sha256": "33d772dbbfbf842dbef743dd7632f456718fe0376ada7391f630dbafad9c61c0",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "read_env_mapping",
+      "baseline_sha256": "1692071e4a55a1b3bf7a94356c87928453fff2faec2276a9c9476f35f54d3ed6",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "write_env_mapping",
+      "baseline_sha256": "a025e755306039b59fc130f78f7bdf62666f80d06dae9ef9463f59030d87a396",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "env_mappings",
+      "baseline_sha256": "6f942940b812a12aabc68c6fab12b840b322e92758b8c8482c5069cab184f1d2",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "env_project_environment",
+      "baseline_sha256": "ae65cea80fcd279b6b7ff8d26ba86576c0788e15d250e1da0e2c5c0bbca19b57",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "resolve_env_id",
+      "baseline_sha256": "b8c2f46e8fd9af8705398cf1b52244239846fb38b57314172ea7182c0a4b1b4b",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "discover_envs",
+      "baseline_sha256": "19d49441595b277e109ca03994fd5f32bb422772e8cc23a30e56a627be746558",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "python_list",
+      "baseline_sha256": "c8418422ba896bff0c9efa2dd13711914834b01bae279e99bf58e692ea1a6bd6",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "member_device_record",
+      "baseline_sha256": "54f74b2f321309a15a17dd57327961afd86dbbbab910fb428cde3febb85f324d",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "read_dict_or_empty",
+      "baseline_sha256": "5fe3daaced255607bc2277afef4d42dddefe5da4ef24c3750102d690b69a15f2",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "new",
+      "baseline_sha256": "d4fee8b911bf3c1b54d2983ddec1640d604ee19e13a2f1ab2131e9a6fc306c6e",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "add_if_new",
+      "baseline_sha256": "2b4a0afeffe7d2ae2c389031d8c1b5c4e1b671bd582b92aed36fa268016ea4b3",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "spawn",
+      "baseline_sha256": "0adc1e3af7ea78bc3ba6e7e034405ed3a4350ff24209022f22ce8e9baa6deedc",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "join_bounded",
+      "baseline_sha256": "853f857f0a2334265e9ca4049003aa67fa6b77ba3febee2d416c9c969a87fad5",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "new",
+      "baseline_sha256": "fe46627fb8060d84d4c67344cbefe0c324483379a9386cb886d7e7317ae7f1a3",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "active_member",
+      "baseline_sha256": "4c617cbf474db63da58fb0d0174b5921f6daac030f3afa373f9a33f1a3170f78",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "next_dial_address",
+      "baseline_sha256": "3af15544b31294bf5504b9586a77e8a917d47ee38d9ee0bd7dd0fdb9034bd794",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "advance_dial_cursor",
+      "baseline_sha256": "da4a8fe0909e367b0754c0c52ac81e363e7eefc93dce365f43b7bd7c4155226c",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "attached",
+      "baseline_sha256": "fd87ce6b61d63638ccefe047ad03d51b04cb88d3b3337e248e4ebac71df106ee",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "new",
+      "baseline_sha256": "d4020ceeef6145b2c12d80eeb6171d6afb4c50c0eff3f44cba850b85c627fe54",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "start",
+      "baseline_sha256": "efd90546e4096bc3836bb3effcacd2e532f415e2519e10d1f44844734ff824fe",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "stop",
+      "baseline_sha256": "0b5202a230ed7a79eda7c05ad3c8f493291c69a028d1490ec68d17714571f47e",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "known_envs",
+      "baseline_sha256": "8e41ee7be08d83d93c5c1a420eb35598fa7a1ab266bf7fe15ad0d90055311bb8",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "discover",
+      "baseline_sha256": "1bdde3e88035350272bc4459d8053f7151f79a4be7349e499aeccbd11963ff69",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "note_poll_failure",
+      "baseline_sha256": "96fc8fbddd9a63475411687639a0fa87268551530d73716981301b700259bbcd",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "register_env",
+      "baseline_sha256": "d254db2317faa17de61a5a11e95f20121d3d71165e6b6af6d388732d2fd265a6",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "refold",
+      "baseline_sha256": "f7481901fb36902bc9954c6921b7e65fa89fb6fcfef4910ef947268265108b3f",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "retry_failed_refold",
+      "baseline_sha256": "e5256195b47931b9655097d356ee00e15fa0042a467f159678198c2bc1e42db7",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "fold_env",
+      "baseline_sha256": "1886538f51a788976951cb989c855aed7c42429f1e49c016827b8a77bc8fe64d",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "record_overrides",
+      "baseline_sha256": "1953e6e5844710d11a1444cc758536ecabf8a013383f75a6bd4e8b7bb4922f2b",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "membership",
+      "baseline_sha256": "01070d8f89ec51ac2c5b9c3cdfb775831a7f9724e0dbdb85d71e79d3f4d34cc1",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "audit_handshake_failed",
+      "baseline_sha256": "c5b8087e8d9585053b877bd6115af10d7ebaa5e8fbc79eb0e251e45b4d80d8b3",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "invite_check",
+      "baseline_sha256": "feb67c3bc0fbe694a99aec43e1d39d757c390d70cfd3f5fae0ff66aa7fcd9968",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "audit_join_request",
+      "baseline_sha256": "e267874b16aab195a54135fd4556e3da997ff16eb025aea5c824ff8ecc971a88",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "document",
+      "baseline_sha256": "a83bba6ef6efa0e8f49a093bd2088facef91d2ad69e5970c0dfcca7ccd77b1bd",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "is_active_member",
+      "baseline_sha256": "8e4bca88ed69f4b66df2b62615f8d18d5426165e5dbbbf2f04a9bc7706566912",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "set_peer_address",
+      "baseline_sha256": "129657a97a93920ce6c8b87129290978cb4d95eae1df6ea01371f74a0167c70d",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "persist_peer_address",
+      "baseline_sha256": "a7d08e3b4882d8eacfd6e138d67d46e66f4316902b83353f6e884982f58b0aeb",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "commit_first_seen",
+      "baseline_sha256": "b49a5178454dc7fa0e41317809a2219b3386f1fb740f7ecbd05b6a0ddfc5f1dc",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "submit_commit",
+      "baseline_sha256": "b3fe438055177b3bf26795f6b7c2d6971e8acc91d0d4c0f4ee6396554476e734",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "publish_fact",
+      "baseline_sha256": "c9282a3d18c89e7311eaa570c99753b39a5e014fd1456a451939693d3073c017",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "publish_signed_fact",
+      "baseline_sha256": "22dedd39cf521f1c8e7222f42638d432599ccac92190c24763c8ed02d6e324f3",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "store_and_apply_fact",
+      "baseline_sha256": "0b8b34d4de8009717234a5c44a14fb0e0ea170c07a819b8089d30b59bd4be618",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "announce_fact",
+      "baseline_sha256": "851f438885656ef3673fc1779e451369cc4d63d372e0520b14f96ad6dcc6fc0d",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "store_fact",
+      "baseline_sha256": "a657583d562ac7b856a99f6e3357f5380639e41b4acb989f569b55f4b4319642",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "defer_send",
+      "baseline_sha256": "9eaf1bc963bbb90346c375884139e9638a6480d25a7c34a7f80907e4714cd529",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "flush_deferred_sends",
+      "baseline_sha256": "1dc80f37c0d50cf4a8a2c47ee7166445e27afaa5cb421b839a170e491463102c",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "broadcast",
+      "baseline_sha256": "8e7e07a692dcea76e4afdb8b331fef40d9ab832eaebcf071e773bb7eddc93ffc",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "send_removal_notice",
+      "baseline_sha256": "f51c0a29d2e4d7e3fad95b1a1f1af2750122d48b0718f9636ae83528e2488bc1",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "drain_removed",
+      "baseline_sha256": "159d7ee7f8ad5575c14804cdb6c4b497556e746e9eb944673c0d8571b9c961fb",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "synced_at",
+      "baseline_sha256": "5ef4c14d8e90682242840cbab3588c506240e4977067b1797720bbe15401bc17",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "accept_session",
+      "baseline_sha256": "95171dcfa8bf06762fe64baebaaa979f9ae388d64c926349c1c28b1d14e9a4d0",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "accept_session_with_transport",
+      "baseline_sha256": "f7b27385f5343ed51d6219237b5de29cf592d3b05f845c1a90f1814c514fbe23",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "on_inbound_session",
+      "baseline_sha256": "6d29c03a8f5f4c852da46f4ca3398220e1aa3f3d926cf412222523d5f276eff5",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "admit_member",
+      "baseline_sha256": "f0bee81099eef51796f08795bacb78e3a9c3b85c9f457bf174a00d3fce013502",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "start_receiver",
+      "baseline_sha256": "9dd3e512c6158b982db60330748d23630844713479e680fbb3262a1239921b3f",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "drop_session",
+      "baseline_sha256": "ee2065058680a1ba9f518de37b6be0eb4966677645a152f932abf546ce833039",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "replication_allowed",
+      "baseline_sha256": "47d37211c6b0a2b22923f8b3d3bf5ca3fd638a62220053083362b139502bf08c",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "send_replication",
+      "baseline_sha256": "c78767c0718e0718b329a47c7a6f46f33454107a9da1be42d21ab30d3da5af67",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "handle_tombstone_control",
+      "baseline_sha256": "460d2010a280bace5e0a1f17a4d7fe37c40c3cbde22e2663faed28cf34e0ee59",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "service_tombstones",
+      "baseline_sha256": "4249240ca6a9b46fff06f3f5feeed4bdd1924b77d836585b00c6e146aeb9c673",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "update_readiness",
+      "baseline_sha256": "94f949e24537d945679ed43c545a7d7f91dfb9ef341a84dad361ef129284ad5f",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "send_vector",
+      "baseline_sha256": "3741dd762bd2c7ca2f6e5062188a650d7571d0fcdbc5247e1b7c1ed58c6f6cb0",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "send_due_vectors",
+      "baseline_sha256": "f64baedca6c4cc6f39484b128960d53f534bc7d9867a7400d49ab6da20606a98",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "send_peers",
+      "baseline_sha256": "10f7aa865a2e20f9f2bda99561f6912b76a53ee880fc13ddb41ee0849aa3baf1",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "handle_message",
+      "baseline_sha256": "db8525c899c4dd152ce7a5596b0f80b31519e590a7a822f01612be75113bb789",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "handle_vector",
+      "baseline_sha256": "0d4b692c13168e12ecf931f13211c039d57cd6c8cff5c2491a58dfdff0f084d2",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "end_hold",
+      "baseline_sha256": "c5fa00f5d373f10715fe4c9d9331fb52c4ee0f158fc1a2054eec37d60cd0f88a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "draining",
+      "baseline_sha256": "b99ec07badd9f213daa8f1399b620a6f3660f1418e635a985d77bc1154e754cf",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "current_fact_session",
+      "baseline_sha256": "109bb6b2c0c150e302986fc58267ee5e0c594f7824b2cad0b834cb45aa65e76f",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "send_fact_catchup",
+      "baseline_sha256": "96d05fc6651b4c22916a42d6465a0eed860c55eacad04e4841fc9ae523e644ee",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "persist_peer_vectors",
+      "baseline_sha256": "e2218c9929f5b4f1214175155af3dcd18e82ca4a0daaeac07f88619ff1e7f919",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "handle_commit",
+      "baseline_sha256": "e5b6d76de97028fe904cf7707bd814f98a8c59b7ed9a82bda66017bd4629e361",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "early_commit_quarantined",
+      "baseline_sha256": "fed5e2ed00314b973264bba7c1577669e69a758df65181adef4a72c6ca305965",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "after_receipt",
+      "baseline_sha256": "f66d4b40a40851cb4dafd24a0ccd9e5046386b5876bccc77d5f90c94858ab8bc",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "relaxed_document",
+      "baseline_sha256": "467837072a249d90db62f0fe09abe93a6affeb3100912836f0cbbd1c11a9e04d",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "known_record",
+      "baseline_sha256": "ea11cf9373327bca87e1c4f59dd65b775cc23ce80bca29472fedc3688e3f6f21",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "role_document_for_removal",
+      "baseline_sha256": "5a16468d0f4c3f733a7dafedc1742355802713298a98505b9376e38dda862aa7",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "validate_incoming_fact",
+      "baseline_sha256": "943153d4883d73106ef6225077a44f41d9f4df804d2aa1096c543c77e8c3cfd1",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "repair_member_removals",
+      "baseline_sha256": "baff582d5bfd055feb801e30bc2088431e4b7184f2b34a78932246ca73259a9d",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "handle_fact",
+      "baseline_sha256": "8e99c7067db6b91ab68d6a30f1e8b0b7c4f02cd29a2b6f6ee0a94d5df8946986",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "handle_peers",
+      "baseline_sha256": "9af8bbdbd4d34d7a28bc2e0a9560ea775b963c2c59512a8664b7d94c90676776",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "audit_event",
+      "baseline_sha256": "2dc5e8944fa9f2e27114e527899da62de8f1b75e3a0ea114163e9da8c8340dc6",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "audit_fact_apply",
+      "baseline_sha256": "5acf4e87e0197fcd2145fba1ff7aee1a78b4daff2867aeadf67be35884b2e78e",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "record_removal_conflict",
+      "baseline_sha256": "ad5877a3f3c8ae965435c194fab0b7672c3240de68625050241c697a1e7f0030",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "audit_fact_rejected",
+      "baseline_sha256": "d4d224917b667f7843be872e649b7f0436339e1c1ed826a7673e766251fdbec0",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "handle_incident",
+      "baseline_sha256": "f5304edf4a20e165453c0b88484fa3d7c6d74c742a4c531ba2db723ebcaf6dcb",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "apply_incident_rotation_flags",
+      "baseline_sha256": "15de1df582fec8df599e65ce5e4979783cff2a5e3fd1122741a88cb15fd2f19a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "handle_incident_ack",
+      "baseline_sha256": "ff3e1bdfe653e2dfd0b27361359d8f681d3a940caa814a68b0a6bb16a191e247",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "persist_incident_outbox",
+      "baseline_sha256": "56f2fb94d0456b25eb486ab1d2ee273f9f5e417035bbed65d8ebc945ff4c77e9",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "deliver_incident",
+      "baseline_sha256": "058505731b634299d9e309faa9c73b388db52e3138a2d518e408704036fed3bf",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "send_incident",
+      "baseline_sha256": "d7768dff47b2a858049e85d9c83ef7139e7d89169eba0923492c87ae731ffc87",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "send_incident_for_all_envs",
+      "baseline_sha256": "7fc1c230aee7ea18746fde7c627d5910ef0e294f3845e1baf8e0156eb7da272a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "on_incident_open",
+      "baseline_sha256": "87a0285d6c94be06a1d322e78b1e35b4c6e743a0170e1819e18f59ed0b162e5c",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "retry_pending_incidents_to",
+      "baseline_sha256": "875b0c4c45074c6aca9be3c766ecaf6ae80439f8f787552027e64da994301d01",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "poll_incident_outbox",
+      "baseline_sha256": "043e9285bb1505ab74f65ecebe5844904930fa4d9e9695029b5e7b93f312abb0",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "poll",
+      "baseline_sha256": "da6708f3403b30d2a1a21fc414c0dfd56ffd51d3e755d97e1d256a83347c6ebf",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "poll_env",
+      "baseline_sha256": "f68c686d9b2271d549ad50ea45a95c36a620befe80e12eeaa3121e168272c171",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "advance_env",
+      "baseline_sha256": "aea92c8dbc3fc061dca00fc02a1e38921a9ef6b1fb6024e1d3c62ad195f5f9b7",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "pick_up_local_commits",
+      "baseline_sha256": "e02fd9f82eabf593d6f0cabc1949f3bcfcae1dfc133cbaf3aa03226e1eba7fdc",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "quarantine_local_fact",
+      "baseline_sha256": "40fe7208e0646f6112da54c9f87e61eb8880f95b1e58af984196561a365bc439",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "fact_file_stamp",
+      "baseline_sha256": "8b099a44822cdfc2be813eb5d074c12fd4313f6473bc7af77ad45d607d1d52b5",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "pick_up_local_facts",
+      "baseline_sha256": "7d0e7718f32ad35fac1d04d0bc56bc65a5185dba2127856e5914617755bc2eef",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "dial_attempt",
+      "baseline_sha256": "45ca77b54f863a5abe8ebfbca78d06641edd3b13217cafcb98dce07179807bbb",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "record_dial_failure",
+      "baseline_sha256": "5e804aa9931661a42c9f1c3b05d2ad79e4e3473780cbc7e4722e11ebfe1b83da",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "note_dial_failure",
+      "baseline_sha256": "40036f22059f16e27701aade158f74f39e55f89d435a5dbe6915c901df9bf113",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "confirm_dial",
+      "baseline_sha256": "ecc6f16b66ea9fb93a5831323672f3fda5fe0be29add18fc268b2699ac51ef4c",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "fail_unconfirmed_dial",
+      "baseline_sha256": "491aed13464cd529df92c9091a1a0a41bc12866c4b826a51d26db1230dfaab7e",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "wire_dialed_session",
+      "baseline_sha256": "0b29cc45d04f8bee968bd61c12cc700df5f90718fb6037da49c787f09fda5dad",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "adopt_outbound_session",
+      "baseline_sha256": "a8f832bf1b6cfc34158e06e52a820c92f4774a4875efdf1beff7cb72f4f80050",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "adopt_outbound_session_checked",
+      "baseline_sha256": "3c37226b17dcc6acf9e42825a30261acde4bbc7f8fe9d35f56a15310bf47e9c4",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "enable_sync_state",
+      "baseline_sha256": "df303a65d70bbf90cc8141ee6794e1258c3e593b2cfe55b8354659fc2ac46d3d",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "note_contact",
+      "baseline_sha256": "5d43d2714244cf066aaa16f3b28bc36f0201e41608f7c6e06ed13cb2e96053f0",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "note_join_pending",
+      "baseline_sha256": "201053d4d381c9b1a6d93262fd2209247b4995131b68c2216a6ba4bd07cd01ed",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "take_join_pending",
+      "baseline_sha256": "af2d9a2b9aad5c3df14addc7100c55b69ab20ec08eb65a11f7493732f17e407a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "sync_peers",
+      "baseline_sha256": "e9697c8d585b694ba8361f335b376049fd8d5f1a8f72d8ad5e23ea9ef8c9887b",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "write_sync_state",
+      "baseline_sha256": "eb315764e43cd4cd97e6b623af73e772a877262d5347c1a8dba04bc5a4f795e6",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "status",
+      "baseline_sha256": "35a425a3c9b1b3e0487add5378472768001416c3edddee9e080f243b9a535937",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "new",
+      "baseline_sha256": "d52af1368133871b616d57a763eafc08cdd2d5f101d1d63dcaa0818649531133",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "path",
+      "baseline_sha256": "e6cc6455e690bbe01a488df98470790e42affa802f72ed9da5465193cfb5ad27",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "reopen_literal_oracle",
+      "baseline_sha256": "00683117577e1b243ca2dc2cdc133d387fd9994412a0467d57330c3b87d97bdf",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "assert_order",
+      "baseline_sha256": "8688af643660eb6742b1d1f007a7f08d1ca9a9ca78153e3ea674e25c583deedf",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "publication_files",
+      "baseline_sha256": "20cdb228307ea7da843c944cc1680748f6f69848c9b1e0e729483cff4de9cf5c",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "change_before_layout",
+      "baseline_sha256": "a6dab636ff054785df13bf677ac2952461f6e6aa4ab2f5add516356c1bbea786",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "compaction_heads_dangling_root_team_and_env_refuse_before_publication",
+      "baseline_sha256": "de14e8a6badf53ea5a00db940dfcf75225fd1e4594ffe84573a4a8fb543d6b67",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "compaction_heads_nonregular_prospective_paths_refuse_before_publication",
+      "baseline_sha256": "a1d456ca520e5a78872b4c4d9fa23f86feb515b64c020375d700ca6dfcbf3b85",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "compaction_heads_each_snapshot_readback_rejects_nonregular_identical_content",
+      "baseline_sha256": "b9040a7c2e8bd3b4578ff1821dea96d909173fa441f0668829fee0e16a5975db",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "compaction_heads_real_compactor_fault_prefixes_reopen_without_losing_data",
+      "baseline_sha256": "d97fdbfd8ee63eb5ef94f7f5a0ae4b4bd248a5ac01be964fe9f4ea9162850a69",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "compaction_heads_every_successful_unlink_follows_both_durable_images_and_readback",
+      "baseline_sha256": "9aa638058048895413450a27442b0d177c3424e73f12b850f9b0b8b9a1a701cf",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "compaction_heads_real_snapshot_record_and_cache_rename_failures_precede_unlink",
+      "baseline_sha256": "abbbf9b3b822b3b0af32ef05dc8b5d1bb443c0db567cbe109d0937df9f3c11a9",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "compaction_heads_actual_corrupt_readback_refuses_and_ordinary_load_ignores_cache",
+      "baseline_sha256": "009d04954decaea61bd1ef62424dd8be0969894e29be26c8395a0e02122da3a0",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "compaction_heads_fresh_admitted_facts_override_stale_env_cache",
+      "baseline_sha256": "e01684c259bb4d3c966eb7b26ddb7f921a5e7b59e742d99301a538770062840c",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "compaction_heads_rotation_and_self_removal_witnesses_and_fact_records_stay_live",
+      "baseline_sha256": "59c86b6dbf2bc283d7b8348a6a52f5c179601af8f99dc6ad951eeb901b85f58c",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "compaction_heads_lagging_peer_blocks_until_exact_original_vector_coverage",
+      "baseline_sha256": "d452b0fbf86628ebe4d43660e2a336e68fdce65ec4daa6b53ab45a8f058638a4",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "compaction_heads_real_state_holders_and_two_compactors_serialize_without_lost_heads",
+      "baseline_sha256": "4e0b448a0b582bee3eeefd4be1b1d6674386480ade02f0f9ff473193b0faf1b9",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "random_bytes",
+      "baseline_sha256": "31cffe0e56423ace2af50729e5d404e3a668e55dd4bc5f82c9e5a3fc5a749de0",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "control_re_search",
+      "baseline_sha256": "9b00d79bb6f42618471565ea943d974a26ea46a0f5230a19a708e9b835b55e97",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "is_fingerprint",
+      "baseline_sha256": "999771f1417eaa415caa08c88e05d8a4570315c07fc8b5b259237d33b64794d4",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "is_token",
+      "baseline_sha256": "625f0856e6761ec3f5b31798be608647ce34be52468641bd062e27fe7a7ef3c8",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "is_python_isdigit_char",
+      "baseline_sha256": "b8f1452e685ff1c1edf815b069ebdd490739ec258eba507f1fa679874a3e931c",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "python_stem_isdigit",
+      "baseline_sha256": "c2aa3af02bfb3679a0699fd9a286a0ac6af1d3278f719b4932bbb6ca8f3ed8f6",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "uncaught_builtin",
+      "baseline_sha256": "3d589d73b8c9b749ebe2d1cc0363da0384932e6d85f23c4d1f557baa66fdb308",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "raises_only_when_canonicalized",
+      "baseline_sha256": "01f3fe582b2abf4a28a00f1a2d13ef260568d2c31a7a537303945c247ddc71fe",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "python_int_field",
+      "baseline_sha256": "3e8ada9fc78ba36ced3fa848c32dcc63de3abb20db720309f5a6bea33732d8fb",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "python_int_parse",
+      "baseline_sha256": "703891bb260dad3de37fd56a2952084b56578e02bd31d31bfb1b3ac7a5b99b78",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "b64decode_strict",
+      "baseline_sha256": "dc46c59f470958337a0e4c06b8dd03c7ed430de1989c396c41c5a257f4e9da31",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "default",
+      "baseline_sha256": "55fbaee1758acc200ce73ebffe04c75edee9e9ab56db93fb012ea6e726f2e451",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "new",
+      "baseline_sha256": "43f2f55c8712a610846936d1514521f56ff5e0ab7c7023d6670c0a14f2e05fa9",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "parse",
+      "baseline_sha256": "d562fdba64fced86c618af92b50fab8bc2c69606cd8514e32a0b8efe8ff27be4",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "render",
+      "baseline_sha256": "83a0ac12c9ba84f65ed39f84e8ae7d61980fb80dd26564963aa35c226415c528",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "observe",
+      "baseline_sha256": "5d7843db821c9140e4cc27fb8f364a3ef8da7c860e6d017d11ba95dd0b41b4bd",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "tick",
+      "baseline_sha256": "f28803f82df6c08b6ba93f21ed19972ac9786542497cf98243c0e2e0bd18aeed",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "now_ms",
+      "baseline_sha256": "cce071851d76f21cb06fa529d674364583ebe5fbf4529769f0067b2c1b2dc53f",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "order_key",
+      "baseline_sha256": "6192c401a3b3603fb0331d5737ce224faab8055f66ad689a3da87e1f28ca8771",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "sort_total_order",
+      "baseline_sha256": "22727df119d2f11829050e72e99c2d8097d59815a2ad35c438686cd4d049fcb3",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "canonical_dict",
+      "baseline_sha256": "e27901f780d811398ee6719f8f5610d62da0adc7d90e1615641cbcf36850e585",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "canonical_json",
+      "baseline_sha256": "51d0f921eb132445a41f5f3e7a1f94db9629092896de028c4766a9d10310b7ec",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "hash",
+      "baseline_sha256": "732687ffefe37da053a149e2db0ba204043aec598822e89b3de9e9daa9ae6695",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "to_dict",
+      "baseline_sha256": "00272d9ccaee602758bde4dec74ee0f625f7a377487b0f87ac849c57d51e8e81",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "from_dict",
+      "baseline_sha256": "fc8ed6dd2ac04c3707c5d1384d64b7bb65cee23282888e08e17c6e39747d8a1e",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "python_str_coerce",
+      "baseline_sha256": "c521f15e0056aae127c314560a8fc64efe2da95ef2414b1a248d114c333e9335",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "python_dict_pairs",
+      "baseline_sha256": "a88eccc61c465a0a4b82b65024a9fd6ce527a28cab8447a1f8ac4ebb8562f5a7",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "python_dict_pairs_checked",
+      "baseline_sha256": "1ee5fbff4105a948e6dae1e1a9a6a7aabfec90623919548cffbf8be4aa8298d1",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "dict_key_is_hashable",
+      "baseline_sha256": "0643d6f60c23e5e2ad3ad2c1d8cc0a7ce7e92793e9fd6d7bb5700db420b80b6d",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "dict_keys_equal",
+      "baseline_sha256": "0f0374aeb05155039d650ea4e27b229b19d9b1420015e31ad20f8abde1f20938",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "dict_key_numeric_value",
+      "baseline_sha256": "6c9e95157e260d041a12bcab77d45f529378322e4c8ade5354353e47444c4b71",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "float_exact_integer",
+      "baseline_sha256": "b79b6ee99ba5f6f042219f476534036b427a8d3f467eed2e9ff49dcb28bf50a4",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "sign_commit",
+      "baseline_sha256": "94c7d0126d97f64e6a91647a7e239a46ef32158502dbdbc9e32d577e96dbaa94",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "verify_commit",
+      "baseline_sha256": "74b151cc83a28a5fc80ca08991817bae2ef3ea17954c5ea9d4bdfe81afd8e8bc",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "env_root",
+      "baseline_sha256": "f0249f1270dcd28b9147df3545b81db2575a6b98414b885706338dc0a2cf6371",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "new_env_id",
+      "baseline_sha256": "bf4ca47c863a854c0a67fc94e86a9e797c7ba24147d85a7de23089a3ac73b0cb",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "env_owner_fingerprint",
+      "baseline_sha256": "1176126a59604653dee63e9823e1ebf13c6205bf2e6ffa8155d9db4bef8c8cee",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "valid_env_id",
+      "baseline_sha256": "7ae69d81c9b8e0cd91d9d229682815dc84aa769f94995495faf1c4698d38a98a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "valid_name_field",
+      "baseline_sha256": "3b605c7c18e440897b988f5c2211aa3eec962ca85da075430a40c5488ff946b4",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "valid_fingerprint",
+      "baseline_sha256": "d716c06fa284e1e7a9e17a304b649ce255dafd9b084ef5924e4e885a2cfab6e3",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "valid_token",
+      "baseline_sha256": "977b1062d89b0803ccadcdbbf971408e264a2b24d222729781330ace2df02798",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "valid_wrap",
+      "baseline_sha256": "7955a0fca792f66b9b852ccf3b5a926f5cf00e9624f68ebc244043ecd472312d",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "valid_wraps",
+      "baseline_sha256": "9dd791ef78268477f6d11e8929ad50c7f992162d66d3ec80f098501abf7e53c4",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "json_strings_lossy",
+      "baseline_sha256": "448fcdfa2be7ef93d7a592d01d3d170286a58d38ea3e25366658d2773348d462",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "python_iterable_strings",
+      "baseline_sha256": "794df812259e9af22f7d6022254d322702e3f1226ca0a6854bad807f4f77a5c6",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "opt_string",
+      "baseline_sha256": "5a78fc68cb501ec5b0af0bff263783013ad4c9f1614a45b2e23f6ac2275374c3",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "http_target_value",
+      "baseline_sha256": "c4e04847840604372dd4f634f99e169592d2304a47a7ad64c98080680897bf55",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "http_auth_value",
+      "baseline_sha256": "9c93fdf8f5ddef9bd82fea59d1e9edaa29167e70e53440a97abf1951d741fa16",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "http_scope_value",
+      "baseline_sha256": "cd1ce205a05cddaae29a416e774b2e357d02ce180cb6d9692a411d5aa0275bf3",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "ssh_target_value",
+      "baseline_sha256": "f200c87b1510ec9c5a3e8838c4ccaea3f25b0d23c439214aea50f1bf8ba9aef1",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "cli_profile_value",
+      "baseline_sha256": "2fdcdb17c8ca8f58717e783b85851a3fc4fbb66775b1c685c7bdb43077e7c653",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "build_http_target",
+      "baseline_sha256": "77e0fe82fb390ef73a05c30b2e2636885226607280e291f72622335d5aa51834",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "build_http_auth",
+      "baseline_sha256": "a80a2f611ceab8d7a443f565ae0f345ed00340ca3d6434d86c8b5d17d4fab41c",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "build_http_scope",
+      "baseline_sha256": "15754e058e663e60c4b39f4e27c7f5e6838addcbe7f7903b9f7b8e851fa66634",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "build_ssh_target",
+      "baseline_sha256": "9df7470d67a84e75778dddbc37ef5754c763fd6c5e113a42f958013d5e9d2b02",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "build_cli_profile",
+      "baseline_sha256": "0c5af4d643a01bdb6b74d9c6c0147e847c07e7d8c00a4e11f0a4e0506b64b842",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "env_value_or_nul_sentinel",
+      "baseline_sha256": "4fac21788177618c2a327eaaa79d5f9d33e94b702458af37badce838200ca055",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "build_connection_fields",
+      "baseline_sha256": "8caa7b7c28334748e25a8fc9739aaff34806779c70651e3e669d9bb5cae9ffad",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "validate_connection_create",
+      "baseline_sha256": "7e1990a436964e4dcb2fbb9d930a99837bb7085b339a26edde2ec06ba34be648",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "validate_connection_update",
+      "baseline_sha256": "c57ce95d0eba5767dd0aab1ba7d081b52b4b5155534e0893c1645d69676f1b48",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "validate_connection_switch_credential",
+      "baseline_sha256": "f0aedc159c1bf4ac0040e996035654b870539a0cf69b20d724b702b5f725c6c9",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "validate_connection_disable",
+      "baseline_sha256": "8dc7108e079a61152b9eadf02924586dfa20dc3a6ea7acce096eee1148669cd0",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "validate_secret_put_version",
+      "baseline_sha256": "453cb571ec250f9ec8e1fae12796ecd85bc3bceefaca7fed5d9f3ef2704405a3",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "validate_secret_set_status",
+      "baseline_sha256": "2a13ed21954af64435867d4cdcc86c8fb0037555f257e292854e40873591c6ea",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "validate_secret_activate",
+      "baseline_sha256": "ff24f03389e20964feaff9c1ce564073145415776dc191a2e775077f80bca36f",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "valid_member_add_wraps",
+      "baseline_sha256": "7cd0edcc14ed70d011c83f52c465dbef8b7bc1193e6695adeb790841f5e7ae1c",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "validate_member_add",
+      "baseline_sha256": "7f6946b63ffcdee5e1cb22a8b781d2e2ba4aa34c1cb7ffd6437b4ed207ac6e60",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "validate_member_set_role",
+      "baseline_sha256": "d993892ec11b2e5fb809c3366d734020d4d7252edb09158a9b646daff465305b",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "validate_member_remove",
+      "baseline_sha256": "89b77e1494228023ea3efedaa45f35db2af2239a9615afc9a3bbe4aee8dc859a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "validate_owner_transfer",
+      "baseline_sha256": "92adb1d8340c9d320f08d34ded7a4606b98ad423a3ce756d90a873387e2025aa",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "validate_dek_rotate",
+      "baseline_sha256": "64caee740bc2e7208ccae81047328078634f24da4ade51c6a2ab2f6bc638069c",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "validate_settings_update",
+      "baseline_sha256": "09e74259bcd469ee6dd9279c08d102023ce08f61ab32aae0ee7d8382fd98b08e",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "validate_env_init",
+      "baseline_sha256": "fd520473a72c707a45d44a24e7830a906cfad87e2458dadf81874b9a2c1e2e9a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "dispatch_validator",
+      "baseline_sha256": "21d574cf6e0b0569442f90b2722a6cc8e32b304fe0084a976b51acad73eba7d0",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "op_too_deep",
+      "baseline_sha256": "0759fca5f34dc3687fe15692e0f3268096629177556ee2fb5b0c2e2521a04cf6",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "creates_misnamed_connection",
+      "baseline_sha256": "e97f1e27c5aa881dd7797d02eb3673e25a32711e38dbc272f6078fa6ed830d07",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "check_authored_op",
+      "baseline_sha256": "9a29b3419f4376f593db66c851010e7b6cd5fb7c532f722d70945a20fe371946",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "validate_op",
+      "baseline_sha256": "be766358655e643a53cbae442875f4ffe9c3386862a00ea5e6f0a21e4ac325ea",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "validate_ops",
+      "baseline_sha256": "d409202cd4dd9e0d286cee695ace5393d37fd420117836c25fcac3c089afbeab",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "new",
+      "baseline_sha256": "4478f415c0166d91d9101aa273f9685acc93ed69d9a2cbc16e40c3933113fdeb",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "commit_path",
+      "baseline_sha256": "83ca7b8e9a64d50ae78d5a2a72a1410f57d5b038265f5bcf3db904e47bff4e15",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "dir",
+      "baseline_sha256": "6ad47eaa9a8d7f323d168c7ffe08c6ef548f0a2af8be7a0355abe7dcf0a24282",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "vector",
+      "baseline_sha256": "a252297da82222bf3ada44aab963bc53e015ab48fb67c8bf0168e3245fc9f953",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "last_seq",
+      "baseline_sha256": "7ca86dc9c4ca7535afb6a8145d1e9eab9be482a1ac2b15e995e59e9aee59ee13",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "append",
+      "baseline_sha256": "36e120d9a993118e7d6a2cfd12a903806486f43b427ef4a2aa86a87b870c38f9",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "get",
+      "baseline_sha256": "0e62d86dbda7c76b3c543dc8df50541612a29cd3799ae6d92ebc813209f70d76",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "all_commits",
+      "baseline_sha256": "f6076059eb2dfaffe4762ba2c229dd4e69e68dabf32e765260a07b1cf7fd1dc5",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "reject",
+      "baseline_sha256": "b703305db80a4df07d67792c8dc45967089ad05db33e168f58eff8df59470d32",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "deferred_path",
+      "baseline_sha256": "f19bf523920b34e9f6ebe5d5e0d7030b08a60de67b9fbbae61424832e9b667d0",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "defer",
+      "baseline_sha256": "7dc2298389215f759d7b6f40c2c359ad671867dbb614156d2d4b9dbe6ba07527",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "deferred_commits",
+      "baseline_sha256": "eddc29db22e730c1799af05d09f4505e4481d2ca7f0a547cc92abec618083e47",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "digit_stems",
+      "baseline_sha256": "85fc3db3ed988a6506eb2031015a4ab2e007f7e7e5eccfaa4a24e7bbc1a2bf78",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "receive_commit",
+      "baseline_sha256": "bfa2a5300bc3005df91b9bf9448937382d425d5b165345eeffdedddfd1841ce6",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "receive_live_commit",
+      "baseline_sha256": "c56aa3d06d30de6e2b33976fa3e327894b9405f4fe33bbf01871f9972d93d4b2",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "waits_on_deferred",
+      "baseline_sha256": "f079540b26b6ae18e494c1bbd9b22bfd611e2b61758f30254d8d3155dd3bcf8c",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "reject_commit",
+      "baseline_sha256": "f9042182087cfc08c281e0a5232eff56efd6a9f7e3bd19f6d268df7a9e4d7bea",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "env_init_op",
+      "baseline_sha256": "73c025046d9dc5e610b204275ad45db6908bfac6164b62bcdaac3fcde0619055",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "connection_create_op",
+      "baseline_sha256": "674fd574e34707ce5e23cc2d3507b4525f7e632218122a9b53532d61df71b9a6",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "tick_advances_and_zeroes_counter_on_wall_advance",
+      "baseline_sha256": "e6d44fba17f429acede698b9d65a6cd5df998fac7ed25dfd6defc1bfbe7db66c",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "tick_increments_counter_when_wall_does_not_advance",
+      "baseline_sha256": "327e256e13c142f1f346dfbac8c06fa24d4bfa4ad7197fca81ddad83113add98",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "tick_increments_beyond_any_fixed_width",
+      "baseline_sha256": "9414ea7408204d1370fe5dca0de068752aa3bcf370c94d9840aced4c718a0674",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "observe_raises_clock_and_causal_tick_sorts_after",
+      "baseline_sha256": "ff882d0370c327a2c6ae6c6d843d47b4ff38e9e1f93d9715a913cfae32f201d4",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "observe_tie_takes_max_counter",
+      "baseline_sha256": "f18e60d2cd4ae3061c0ccc6aac5308b44e7affac9a50e09acad68999d7955e7e",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "parse_rejects_malformed",
+      "baseline_sha256": "9203fdc3ff73f907378b9ef10cfa880b17d794719d40c9d25a7a894f013b61a1",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "total_order_numeric_not_lexicographic",
+      "baseline_sha256": "6c0ae90218b111f1e93ca037a65afde20e51434d18ea7b6e9a9c506a288d4523",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "sign_then_verify",
+      "baseline_sha256": "63efb83af8e6c8662532a8cde29e9d62a03f4846fec1a75146b88f17dab00290",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "tampered_op_fails_verification",
+      "baseline_sha256": "04055af5e38186582362203be64f33265ba2c42f83a5b3752e05698d0a230cb9",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "wrong_signer_fails_verification",
+      "baseline_sha256": "0e09a5ffdfa2707f439eda823df38065d0ba1110661570195181b2af847b9f47",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "hash_changes_with_sig",
+      "baseline_sha256": "3f9b01b660204cbfd8db9fa50a2f15b4e3a01c552f3ff444f9feb82194734a2d",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "malformed_ops_refused_at_sign_time",
+      "baseline_sha256": "72ef8fefc3f885228b911541a438dbfb127dfa012a3101a017a4ecccff83ca35",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "to_dict_from_dict_roundtrip",
+      "baseline_sha256": "12c3f1032bc966b241e9b59ffeaa8a3552d330b45aa73d00053e054355db8cf9",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "from_dict_reports_a_non_string_op_key_as_the_later_uncaught_typeerror",
+      "baseline_sha256": "48839dee3578c2a83f61e5d20e2d3722a0d9be984da29e4fdbd84d49c2fd7470",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "connection_create_accepts_valid_shape",
+      "baseline_sha256": "107006633ecda94b39c2ce35c0716d5bf8e49f5af9f8da54b4a80b74fdda53b2",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "connection_create_rejects_bad_host",
+      "baseline_sha256": "d73a9f820627bd8e274ba2e2af2ea11ea3bae3e12b490a095c1a6d143e8a21f3",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "connection_update_rejects_unknown_field",
+      "baseline_sha256": "e7069f44f2c4d9dc2850c0f0ef28ad0c657832e0a37558ec736cd796ba0ba923",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "connection_update_requires_a_field",
+      "baseline_sha256": "a8da3e4a5bea9146da75f9698a40d8cad4b9666f8712b656e7b5301e038f0360",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "secret_put_version_shape",
+      "baseline_sha256": "4663db21e40531daf3aa3147344891916fd9f449397505a26db6037b71049f3d",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "member_add_shape",
+      "baseline_sha256": "dab9430a72da225febf48c6f52498e3ce7fefd2fc974df4cf888ff6c44c852a7",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "unknown_op_rejected",
+      "baseline_sha256": "c5b715ed8710437c7d6b1551b532c69498fbe1ade9a27070a4e2325718b2c0b9",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "non_dict_op_rejected",
+      "baseline_sha256": "4f871ac89bba6439326d8830d86abc9619c55927d90f314689c32c9479916c10",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "dek_rotate_shape",
+      "baseline_sha256": "f2ea36b84d07773ad9c23d793b10fc70f30fa68b52ec873ed09cc0626b7802da",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "fixture",
+      "baseline_sha256": "27f03b0d9975e56b607752baa95629f759a02ae3b0f170d56d6ea9e5f21f9d35",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "bootstrap",
+      "baseline_sha256": "199b179f62bede51c73a3e21dfb549965e5c0d3cd92b34675be02f65d36644a6",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "append_enforces_contiguous_sequence",
+      "baseline_sha256": "7d9c1fd9818597aa7351ab26c45d443b0df2a9438b9a42485c23890d66385a63",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "vector_and_all_commits",
+      "baseline_sha256": "ab0f54fe2b5c3378ec741f9e9d2fd4ed836165d3e9884fe55338232ac2e25a5d",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "receive_commit_rejects_env_id_mismatch",
+      "baseline_sha256": "f9052a8bc7af4e51568cf34e77bfe6a142dd9963da0abee873111854d3191a86",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "sign_unchecked",
+      "baseline_sha256": "fab1d4fa7f04f943499e5b96b70a1d0f0e2060e0f839dc1026e63a122719c4f6",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "a_connection_id_derive_refuses_is_stored_but_not_signed",
+      "baseline_sha256": "a309f94723646bc63e49c873f129939432d35b9a0a01c256408c0caf0b5d6328",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "put_version_nested",
+      "baseline_sha256": "3f5ab69af757dc472802ac2ce4275725655288e9644fa96af144eddcb056875d",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "an_op_nested_too_deep_is_stored_but_not_signed",
+      "baseline_sha256": "ba38257fb850a718cabb87c9521b89f000579fc758a5d6b71295272481a3f777",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "receive_commit_rejects_unknown_author",
+      "baseline_sha256": "d13050d79b39be0a55d605547a06a28e457723f0f2d74589f88d3a643d9d7f0e",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "receive_commit_rejects_bad_signature",
+      "baseline_sha256": "fb07977b4343415c9b0d47f9f43958673ae7fcd19b9b60d51cd038d31eef383c",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "receive_commit_rejects_replayed_seq_after_bootstrap",
+      "baseline_sha256": "21625cf5e85d7b8b9ae7de166c6d4fb6d4cfe7b8b1e3db8ba33039fa7cbbc3c6",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "clock_skew_defers_then_releases",
+      "baseline_sha256": "6e8653db9caed8dddf6dbf6718a0a945acb2a5d5891ce62d46688c6121e63503",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "rejections",
+      "baseline_sha256": "18fb4aaad79f982bc698696b24322fcb98f6ba907abd4427764b6dd7c03c669c",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "a_released_commit_keeps_its_authors_hlc_order",
+      "baseline_sha256": "06a458246187f667b4166ba4c96c402e1efd7128a2d3547b781c8f747187d0d0",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "receive_commit_rejects_an_hlc_not_above_the_previous_one",
+      "baseline_sha256": "5607c666ce8a6e3cbeb8d8a586fe228b4ace3744da25faf504defbbcf1fe5119",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "a_deferred_commit_stored_since_is_dropped",
+      "baseline_sha256": "7ee322a43ca3b9a6f5d4fed8f0b8717da4e2b5603f97d78d96919caf4686007a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "a_deferred_commit_another_took_the_sequence_of_is_rejected",
+      "baseline_sha256": "52462f810d0e0a32850e3238a70b1de8668916aa472f7c8a66f6faaa2f57232d",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "a_deferred_commit_waiting_for_its_sequence_takes_no_lock",
+      "baseline_sha256": "9628438b86e97a2e63c8af1f03d646b336d347d74b22e871bc298c79b4ea9d98",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "a_released_commit_is_decided_under_the_state_lock",
+      "baseline_sha256": "3a493da796ed9c06e593f9ffd06c2c05bd2c343c7a4e4637e69b31d343badd01",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "second_bootstrap_from_same_author_rejected_by_sequence",
+      "baseline_sha256": "3fd0bdb425f6d8d3fbde0ba39f1b00f9ef0dae4ab27cbbca2b0293caae44e74e",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "forged_early_bootstrap_from_non_owner_rejected",
+      "baseline_sha256": "5346b1096d2db098d573d0a594bdaf8b2895f1131b11b29eb78a9df5dd5a3481",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "non_monotone_hlc_rejected",
+      "baseline_sha256": "73f91a4f83e45f445a0b884d38482ec8d87633acb009d4719c989c4b09956989",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "exact_duplicate_is_silently_accepted_as_duplicate",
+      "baseline_sha256": "4d338418c1ee511c0aa21b44a122571a64a42148bea97544b347821dd9d7ecca",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "conflicting_commit_at_same_slot_is_equivocation",
+      "baseline_sha256": "34e53ebb19f9eda8199c69023cbee36e1bb7cdf4cc36656c6245c3096d9841ea",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "int_strip_space_rejects_the_four_separator_controls",
+      "baseline_sha256": "b3fa77c1676f1337e39fe2b386f1871bb0fedeaa4523b2c2ed50af455060d51f",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "unicode_decimal_digit_matches_python_for_the_previously_missing_blocks",
+      "baseline_sha256": "6322a5a38028c8595e8b7f5b64c6d1f102181ee954500b867571689dc48a79f2",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "b32e",
+      "baseline_sha256": "e8b5a395fc6967b3d2a4a15d681898146e586d0ef89e3a4f03a3fb6b5a9c6e2d",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "b32d",
+      "baseline_sha256": "c8336790875a69f9eb639dc639648f4a4e59cf93e53a20944add180513200b69",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "parse_expiry",
+      "baseline_sha256": "42638cd4af451ad157e9ab51282f95d8252cc3dc9e68f0bf7a33dee518d3275f",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "parse_stored_time",
+      "baseline_sha256": "d4cede919a917be1bff87af34df90234e307e5dcb9c6398adfad1ba4cc509c48",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "token",
+      "baseline_sha256": "7de14e540e4499039a734347774c7f9bc0fcd40f60b787031a78b8da049f6099",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "audit",
+      "baseline_sha256": "7dc8efba21e0b380a03c4f3b045ad9a4cf6d73243f31c449553b55b1a14ac905",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "load_environment",
+      "baseline_sha256": "d44115018d66930bb913aafd4acfc80b89d17eb95492589b28850aabdce23bcb",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "refold_and_derive",
+      "baseline_sha256": "1dee824fec7c3a2e9e5e7f27c4cc6b514f4cae2709f852c9ee9acf759d487999",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "require_editing_standing",
+      "baseline_sha256": "3cf2d49797a95c4c4cf9895dfedf4546d11dac050d44d1d463e6833fd8c4d283",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "refuse_unauthorized_ops",
+      "baseline_sha256": "63e037b0d59383c1795f9e14917e6657dca9fa5f58ade6fe9e220ff594b57fa1",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "author_fact",
+      "baseline_sha256": "1d92add65049da74207b04e933ce11e4a44d2adb1a07f419a6e703fff137b4a7",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "publish_signed_fact",
+      "baseline_sha256": "a846ccdae41a8676d9143dfad5c2cc3d0afac0cd1dccf4e2b4c6db185dd8f04c",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "parse_invite",
+      "baseline_sha256": "a0873dc46225dd3dd4385c327b4700af5e5bd5eb58eba8b5343b4bdfec386620",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "invite_id",
+      "baseline_sha256": "5ec0545ce01227ff138f5e4ec187dc581ea1f965736c22bf6259d2cc0d067cb9",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "invite_link",
+      "baseline_sha256": "429ae18c3cd17806008aa5a8254545b7767787c48d55502f30e846a5d814b31f",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "malformed",
+      "baseline_sha256": "48d0314135cf4b4e3a32140e80b301c5a12f5897f6a26eee32db1bb9f90bca8a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "is_b32_char",
+      "baseline_sha256": "606a5e0cbcd6915397dafadae65fccb0c8b013b9172686d52cabc2da3d770e80",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "parse_invite_link",
+      "baseline_sha256": "5a8534d4c332638a98b70846c06085a08f2a5fa3022b23961b0a022a80bcc889",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "invite_string_of",
+      "baseline_sha256": "f82be524a9f9b96e3be221cfdfa5ab27293f010087f32141d5339e3ed693e534",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "is_host_name_byte",
+      "baseline_sha256": "0bacbde05a793e633d52ca9921b346bdb479e59f192f193bbf4f2f59e105f430",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "valid_invite_address",
+      "baseline_sha256": "224b481cfe4d9ff1d2e7f064643753e5f549794345a22688e81170ace2c7099a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "valid_fingerprint",
+      "baseline_sha256": "e2b19ff2afb9ddd6b33de7618f8ce3f44fcfd360223835146db248b601a49e22",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "parse_invite_or_link",
+      "baseline_sha256": "e83eb299f4fc5baa705b4cc6aa47a5c84cb4ef14a3b49ddbee0aee07c0b63aae",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "invite_expired",
+      "baseline_sha256": "335168e8ff016200b25b66732aeb56e7f8f323588ed8ec0840dbaf9bd898263a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "invite_preview",
+      "baseline_sha256": "2f08816a29860bb3e476896f30887140d4db6ddcd9d54b70b60171367b6c2f05",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "create_invite",
+      "baseline_sha256": "a06c316e546a4589eec2ae5ad6ade7adebf1a1756d3166adc50718fd10ed3479",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "create_invite_with",
+      "baseline_sha256": "13b758182f19c7ee7d854871830efd44a77e76bbdd0ded7acf54b22343459d5d",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "create_invite_opts",
+      "baseline_sha256": "94b8df63b755c1aef1c4032e04065f2d4a8105757510c7afe11061d0d5f5dc62",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "stored_time",
+      "baseline_sha256": "aad03daf6da3abf292556e52620b9083161f3247a44e1b158a0400ccab473bac",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "list_invites",
+      "baseline_sha256": "e5ce0ee099a080f2efb7f0ffa5803a49351683e7279aadd48d1ab557a805b468",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "revoke_invite",
+      "baseline_sha256": "6a2a3be5fce742619310011190329d9192136e695ee9b3715e5923f723c29ac9",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "revoke_pending_invites",
+      "baseline_sha256": "f3263b0e960e4e1137bca8b52c8c0459cdf3454819b3a5a6b6da9190c0b3e553",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "consume_invite",
+      "baseline_sha256": "6d994be07ccb5995a12fd81ceba84da97023be7bc4ef1a34a6e7e7d6642347f2",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "consume_invite_by",
+      "baseline_sha256": "854d3bcb92aab4513e9276a540d32f68b50a5dc6e79c53bca9bf0c77fc314d1b",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "check_invite",
+      "baseline_sha256": "0406a73507ccaaccef98e0930864aac5ba17837af694d05f5a5d27dbfb7072e8",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "match_invite",
+      "baseline_sha256": "b40e717d7e169c2c968a8dbcf5ac4cef23ea410f49e930e2c5a5e9432ae8c244",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "join",
+      "baseline_sha256": "e86a74fa8a8044e73855f8eb6b51630e8faa53e3333d6e4802cd2b26a2e1638e",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "remove_member",
+      "baseline_sha256": "eb6b855918ea84072b14a3242880ca8126d2317618d45c6685e83b108686d068",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "rotate_dek_bound",
+      "baseline_sha256": "429760c0081d7db003b15da41bf0faf745abd0eab8fd8af177b35c34c2033f0f",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "ensure_removal_rotations",
+      "baseline_sha256": "a511b51994404a4d6b919e1c90f7031828fb8ad3000437b16cc0d7399450da9a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "flag_rotation_recommended",
+      "baseline_sha256": "49815f4caf4c39572b09bdf2aa56c6d25f18d113ac99787e5a918bc8c4188ee1",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "share_environment",
+      "baseline_sha256": "fa79b04a59d3f884bbf0ddd56efc7732fc91070f1748a67c7037d667db88b242",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "numeric_value_equals_int",
+      "baseline_sha256": "76eb2c5e2ef6812d0e6e00b8ba44a4d1c6f5ff71f8344d2a39c4093fde3acbbf",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "base32_padding_and_malformed_inputs",
+      "baseline_sha256": "249ebf50bcf56ab324ff3b4b8999235825de85f50d64d82464760c2e7c7c9d2f",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "invite_addresses_accept_well_formed_link_addresses_only",
+      "baseline_sha256": "920b4b35b33fe3b56c624ad29254a3a95df2c817d535a3e95a86308f9cebc171",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "saved_invite_expiry_numeric_and_iso_utc_forms",
+      "baseline_sha256": "03da2a27744b3270e7f3bf576895397e3fd94ef6519fc407f90ca43a66badcba",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "new",
+      "baseline_sha256": "9165ac4a212ba0758884c9380cb9d975750f2ef7e2869a6f22ab365135a08e77",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "append",
+      "baseline_sha256": "ae0e1d8e8aefaa35a86ff1f7037b74ba4e4b5db1393b0746df5e938919bb536b",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "put_op",
+      "baseline_sha256": "3b1dfa2fbcb9110af0b27b14cbbefdfd6656ce92c1fc6e43e7b35002229c54cc",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "put",
+      "baseline_sha256": "f6a36718b752ce0d338a33dd6798b5fa4be9ff72afd0c569fc6ca1e2de49ddbd",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "sync",
+      "baseline_sha256": "0da506d9aa54bcbbb99794aa36a66bd07c9535d6148fe0fde7f85fde59ba0160",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "cache",
+      "baseline_sha256": "6d5e949d4919df96e3e3384f411347870869511292c8f8a105f99aaaaf80a472",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "cache_name",
+      "baseline_sha256": "04f515d00f4e633902f4cc724920ac50a6e8777fa47193e3f7b3bb78d4f16ae6",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "path",
+      "baseline_sha256": "a29f464ede4104c493fbb6c2fc24756701adf5d02b5435ba164e1cc2422a0fa9",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "add",
+      "baseline_sha256": "fff4b91ffa23490a957cdb32a4cd058f482d8716c32586f15a69698818fa0146",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "team",
+      "baseline_sha256": "d9a635b23d65c1e9d5621c2a06d928b6307bcbdaeb65d349386bd55fcb4403c4",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "canon",
+      "baseline_sha256": "5e889895bb3663266ec75251706a50772725d0e22b64e666372796ed01f3a780",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "assert_head",
+      "baseline_sha256": "2c9d0577556afefa7d16727976b9c2979a67656964581dd43d0492b692c530a3",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "metadata",
+      "baseline_sha256": "60c53da6bbaa9dc8b44e08316811680de5839407b568ed7090eb6105ba0d046c",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "final_data_head_is_deleted_live_but_original_bytes_hlc_and_version_order_survive",
+      "baseline_sha256": "71b4314752e7feb7dc13ec6bfd05833de17af2ea80f82c0e0dadd90403b8658e",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "newer_live_head_cannot_replace_the_exact_old_cutoff_slot",
+      "baseline_sha256": "242d63d8111185eae30e051487bbc6a88571562cb7fd42c37b8ad4d5ada6cb8e",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "second_compaction_after_context_reopen_preserves_idle_removed_author_and_next_sequence",
+      "baseline_sha256": "40fafa3b4c60f5c78223e5773986e2a77f411e1579f8d71c8cac68a625fc9ebb",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "all_six_authority_kinds_and_mixed_commits_stay_byte_identical",
+      "baseline_sha256": "d708b6c913125faf89bd60a005d3ceda42549293ea822d33991b6adc0828b402",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "legacy_missing_idle_head_refuses_before_new_images_and_preserves_ordinary_reads",
+      "baseline_sha256": "8c09eb4b60a5918b2460d6cdd974e9698fa1cb0f7f15dbfcf5469c5d2de35034",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "one_axis_cache_corruption_and_full_record_substitution_never_publish_or_prune",
+      "baseline_sha256": "12ecfdc9744d377af60553f8facdc76b023c822de249fae037883d52dde5e2a6",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "conflicting_live_original_at_the_cached_slot_refuses_without_fallback",
+      "baseline_sha256": "98a1d011d9ffb2b87b0ec3ad18617fe35b4e6757e3de36612d5eac5c666a8997",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "no_old_and_fresh_active_member_gate_keep_original_result_schema_and_no_cache",
+      "baseline_sha256": "45549fb833f1e2799bd985aada0b57e8b207a998ceab763cc67ebc3b1e5e3555",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "legacy_float_opaque_and_deeper_than_checkpoint_values_preserve_original_bytes",
+      "baseline_sha256": "09727391d306dafc48b93ce5223deb225e3432e80f192c4ea519dd775af2e321",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "deletion_and_version_revocation_survive_real_compaction_restart_and_cache_loss",
+      "baseline_sha256": "b813da095e8f71af2676bd096b887c4dba5c537708944eee77ad13137dabc161",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "reserved_number_legacy_head_refuses_real_compaction_before_new_publication",
+      "baseline_sha256": "1a1782905b3156907a9b30234c7544cf2f80e67051fccac7366ac95dc2271b1a",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "symlinked_state_root_with_plain_slash_and_dot_spellings_refuses_before_publication",
+      "baseline_sha256": "763b7fa1dded9944576743f87dbe76502fef00359e85e91458bd04a6eaf9d2e5",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "symlinked_team_and_environment_directories_refuse_without_new_images_or_unlink",
+      "baseline_sha256": "9153192f3d78f7d4dec15956101dd0fbab3b7680439a8c84750dda3db67ff320",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "missing_prospective_paths_and_regular_repeat_destinations_compact_normally",
+      "baseline_sha256": "29bf68be758b95ab5893787191dc37e182ab61371ed068ee40b87b44fab18d89",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "team_with_device",
+      "baseline_sha256": "e4cbe267937575fef47dfc0dcc7e946c8bf211c68f7908ad268b65a95f68881b",
+      "recorded_span_kind": "lexical_function",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "snapshot_floor",
+      "recorded_span_kind": "visibility_only_body",
+      "body_sha256": "fcc9e1c2aef7b4b7e496cc8606545f54351e9187aee2574044be707f29d10d09",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "device_registry",
+      "recorded_span_kind": "visibility_only_body",
+      "body_sha256": "17ad9c6ed08f655f011b6b440709e57126724a91919d790d0ca87711eab61305",
+      "exact": true
+    }
+  ],
+  "old_test_spans": [
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "compaction_heads_at_256_and_over_256_are_exact_without_sequence_enumeration",
+      "body_sha256": "d05cf94909c222ec2a70fb7d4ba0f3696bcb33fc686c12091163f1adef0c5121",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "compaction_heads_exact_huge_pyint_slots_hlc_monotonicity_and_vector_regression",
+      "body_sha256": "7946af2cc5c8fdbc876f9dd68326835cd45f3288513b23901107299c3943b990",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "compaction_heads_helpers_require_real_lock_and_bind_snapshot_plan",
+      "body_sha256": "93a07afa64f991f2334bda6bac0b76ca679314bb60ba30528738c09991f24c95",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "compaction_heads_layout_refuses_non_directory_and_nonregular_destinations",
+      "body_sha256": "daa280e8ccb43ec090e12730a092bc0b62fde3917a3985857565d7e5a79bfa28",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "compaction_heads_layout_rejects_dangling_links_but_allows_trusted_parent_alias",
+      "body_sha256": "21bc4f98581e5b7b6ba416790d9516b4eb853decf94ff58710d19559b9daa853",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "compaction_heads_layout_requires_lock_and_creates_no_prospective_paths",
+      "body_sha256": "d76b02e22b37c8434379ee830ae7cd0bae6a890d3f5f8ed4ed43ea9b934651cf",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "compaction_heads_reserved_number_normalization_refuses_before_publication",
+      "body_sha256": "0d6e29eb1349ec7e80b0c081e2353ce51af61cded7da97d7d8a2c57054914027",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "name": "compaction_heads_serialized_16_mib_boundary_and_bounded_disk_read",
+      "body_sha256": "f332f34a5401afead64b8992d524805e03912240593857df6e5c56f7c578aed9",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_dial_that_loses_the_tie_break_leaves_no_mark",
+      "body_sha256": "5e6b8995cc13545ea1f64a107ffa3e8aa6bc56a9c578e531fd1c61880c87db5c",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_fact_is_announced_although_its_refold_failed",
+      "body_sha256": "5655b323ab3812324552a5fd590a24d383131a794497ec986d17e007f1405b4e",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_failed_dial_moves_the_peer_to_its_next_address_and_success_keeps_it",
+      "body_sha256": "81d0ccad91fc930022194d7b5aaadbe3101df5bc8f9834555a4546bb8ab67e3e",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_failed_pickup_refold_is_retried_until_it_succeeds",
+      "body_sha256": "9911f93374b6f55a4794f897faf92397c90c87be08e6f210d91309dd0efc4545",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_failed_refold_after_a_removal_fact_is_retried",
+      "body_sha256": "4e4315926d7cde7e600ae7b2bce2b31de56ad432931ac3d401e3646a83e3ca8e",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_failing_environment_closes_due_sessions_and_asks_nothing",
+      "body_sha256": "adaadaa662c7cde46973357645cea264638aab0cb6ec9f3c9d9adef2ab75f18a",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_failing_environment_closes_expired_sessions",
+      "body_sha256": "346bd78e5ee50ce49c6f1b626f96ffe2d7977cc5a86070a56fc86d85f59f7993",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_failing_environment_dials_no_one",
+      "body_sha256": "6a8ab431e029b67265f636e5f4ea6562d4a351114ecd9f0ec33021ea725f9a63",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_failing_environment_holds_up_no_other_environment",
+      "body_sha256": "561a3afa5b78e23aa796d95c7de25a8f3800b006e77598228125c6316ee2d6a0",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_failing_environment_is_audited_once_per_failure",
+      "body_sha256": "181b1036effd38a15a767bcfba0f212dee1f647cb6344dccc4d1cab0beff9633",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_failing_refold_holds_up_no_other_step_or_the_sync",
+      "body_sha256": "6e52814e89b17ceb3700b8a665de077516ecdf4a8b322b0faafd231e2e7f1989",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_failing_refold_is_retried_with_backoff",
+      "body_sha256": "762d5833602031f5f44dde8a1fcb686c98902db7b67ef9f93d3977a57e8a11e6",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_failure_after_a_load_failure_is_audited",
+      "body_sha256": "6f0982cf4acb40e9bae649045c2686254602014c93a12381272f972e069c8fd0",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_joiner_removed_mid_batch_gets_none_of_the_rest",
+      "body_sha256": "0a4403d3d11902766aa24391503ec577b8a90a8658f23c5b1f472fce0418296d",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_joiner_removed_while_held_gets_only_its_removal_notice",
+      "body_sha256": "995a6ecf001c811aa81cb23db0a9fb04977bddde1aa96269a7b3d894a498810d",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_poll_returns_the_first_failure",
+      "body_sha256": "2b2f5fade604058e86080c38ee40773db072ae26f947a2d1bb0673fb48b323b9",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_refold_failing_at_registration_after_a_load_failure_is_audited",
+      "body_sha256": "370e55ba93d33881e6cf9dfd78d329e120b10bf9f5e84767d73e92e9a85cfa61",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_refold_records_an_unrecorded_snapshot",
+      "body_sha256": "c278090d4918c6b49211b0cb97dca7933c6d2819e2b215fbc4d83f6be575c4b9",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_refold_records_an_unrecorded_snapshot_while_replacing_a_stale_one",
+      "body_sha256": "f85b0e5f8333cb68dc949c366962dd10bcac784c729bab7410cf6569e95337f0",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_refold_replaces_a_stale_snapshot",
+      "body_sha256": "565e94f33bd9182fa902d413f9e1841caf645a36133ac8466959e3c4d8cb908c",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_refused_dial_also_moves_to_the_next_address",
+      "body_sha256": "c6d4d211cacf947aad434e34beb37fe1544d394369352f1694dd395a2c1df102",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_removal_fact_refuses_the_device_while_its_refold_fails",
+      "body_sha256": "f192f8c4c9e821e468bea7e8bb8d15ec8fd856e132ef7916a85c04bc5d795741",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_replaced_or_dropped_session_takes_its_hold_along",
+      "body_sha256": "12323984f363f78b202cf3199befeb5f030849240794ee970d91db5c0324ffc1",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_session_the_poll_closes_is_redialed_from_the_next_tick",
+      "body_sha256": "28690f7aa33ebd0c2581c098ac37a6793ac77725323b2e834c913520702af8a7",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "a_session_whose_handshake_preceded_a_removal_fact_is_refused",
+      "body_sha256": "fe2adc25ed9d356bdb2301550f96fbd95371943980e1cb5553dbee2571574fcb",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "admission_observes_future_commits_and_send_waits_for_unlock",
+      "body_sha256": "24dd8864407518fc688fe5518f5671de7e58b34d9c338e5bf47064c0c4392a25",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "an_accepted_dial_dropped_by_a_failed_send_backs_off",
+      "body_sha256": "70d86c0b0fe85cedd7abc5fcfb543abde1669736576e2120d57f42962fafcff4",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "an_environment_that_cannot_load_holds_up_no_other",
+      "body_sha256": "bbfb16203faeb3001791d46370d0087bb8b6342b0862964ada2de3e5d3b780f1",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "an_environment_whose_first_refold_fails_is_retried",
+      "body_sha256": "9d21e41e30f387b43713f5c9ddf79cf104f454ee4489b03ec92346a434f13221",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "an_inbound_session_resets_the_backoff",
+      "body_sha256": "75090f6fd5171f9f9e47ca1ecad59649697320ceac8c68155c9be1d3c750b14e",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "an_interrupted_answer_audits_what_it_sent",
+      "body_sha256": "5c4374f231cc92074676761e492ad8436e7a2b1e7cf0f31fbba982030d33c3fc",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "an_unreadable_deferred_entry_keeps_an_early_commit_waiting",
+      "body_sha256": "11cbed43f70f8be56739d1121f14a73accb12bf6a97f84f51b799a256428a6aa",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "cold_loader_rejects_unadmitted_removed_admin_fact",
+      "body_sha256": "eb7907ee39973a835e144899c45b069dc8ee995d854946899a9b698ffc68c982",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "commit_removal_blocks_writes_under_old_wrapped_generation",
+      "body_sha256": "bd0bac5c87325c9332c0919706eb93f1a84f745b1897295bc5fdf5c34a8d5bad",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "compaction_heads_actual_corrupt_readback_refuses_and_ordinary_load_ignores_cache",
+      "body_sha256": "de1a91129d3d3c50923b6b0ac09360d06b01f8f9ccdc8651f4ebea78408c42bf",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "compaction_heads_dangling_root_team_and_env_refuse_before_publication",
+      "body_sha256": "b44203ea5a5a1b53b9114b2abb05caf402d3267c37fd54624f289fab465fafb6",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "compaction_heads_each_snapshot_readback_rejects_nonregular_identical_content",
+      "body_sha256": "173fe881c8238e7279e71ebf8d714db64893cde070a929ae2d773b526af5d5be",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "compaction_heads_every_successful_unlink_follows_both_durable_images_and_readback",
+      "body_sha256": "57d50b8ef58342e30af9367826d76800af6c7b45f04374e9fdbf7a0514bdd685",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "compaction_heads_fresh_admitted_facts_override_stale_env_cache",
+      "body_sha256": "348b795800611eafbe5bdeba4ab50b572f6024ae56ba3f73ce2e7f74bb78f008",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "compaction_heads_lagging_peer_blocks_until_exact_original_vector_coverage",
+      "body_sha256": "1d4dfe9d1e404ea89a5f34ad3544b62ee53f4e40d6b287bcc7c5d9b10116ca2c",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "compaction_heads_nonregular_prospective_paths_refuse_before_publication",
+      "body_sha256": "4535c10feb501e5f24dedeae84dcc0ac5052ab530c3b53de25b21e94f5471966",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "compaction_heads_real_compactor_fault_prefixes_reopen_without_losing_data",
+      "body_sha256": "664aee1facc3bcd59811ee437b5736cf186e63cc44b6b746ac6298df01a07227",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "compaction_heads_real_snapshot_record_and_cache_rename_failures_precede_unlink",
+      "body_sha256": "2f2801985447273de138cb1f0c70f25e73bf3d6d7da2713734a9635cdc36ca7e",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "compaction_heads_real_state_holders_and_two_compactors_serialize_without_lost_heads",
+      "body_sha256": "eff8e4a95260348efdba61e1a863f3a0e4c0831437d8eb557311e2c3bb639fc8",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "compaction_heads_rotation_and_self_removal_witnesses_and_fact_records_stay_live",
+      "body_sha256": "b1e64c357612400a0c4f85cb7f29e059c8f8ea4cb17b2fd31aa1bfe8d6af096c",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "concurrent_rotations_cannot_leave_removed_device_in_current_wraps",
+      "body_sha256": "eec44a0991f4047132771ef4403fd569d22af31f6bab8e89d15103b7afe66de5",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "concurrent_store_fact_has_exactly_one_insert_winner",
+      "body_sha256": "7848d87e28ec1f08bafd5cce4cbcf3a8758ac569b688dda22482df547bf79b66",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "corrupt_rotation_flags_fail_the_incident",
+      "body_sha256": "53ff5db41a84d5c388b955d4d4f3340838fe6e1bcc4a63169e63cbe9a9a1cfd9",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "discovery_returns_the_first_failure_and_start_refuses",
+      "body_sha256": "e3fbc257b6edaef0265b6270005baf0383e0383c72afc41733a244a0bb870322",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "draining_admin_cannot_send_a_non_reciprocal_removal",
+      "body_sha256": "3c17d33944becc008f203145c8b006d38ba89bc9d6f145db9dbf1eb6cb59ae3d",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "early_commits_wait_for_a_deferred_admission",
+      "body_sha256": "d3dce5984c20c902296d84da4c6a4cc259ff111b073a46814a7ba620fabbe579",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "early_live_commits_wait_for_their_history",
+      "body_sha256": "eca4184bb6f1164b6ca3649a514a375d2ae9c045d22af005064e93cd7dea69f9",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "fact_replay_stops_on_session_replacement_and_receive_only_drain",
+      "body_sha256": "bd94a4783142678c3b5f88dceb7aa8e4106a194137509ee3ba66d567d10ce7db",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "historical_revocations_survive_unreceipted_author_role_changes",
+      "body_sha256": "d36300fbcfa0e82271c5966ce550ea9295530f226117288612ba05a579373f0a",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "idle_fact_pickup_skips_admission_and_concurrent_cli_appends_survive",
+      "body_sha256": "afed5f4e04174e79526ff8bcf46ab3d2e962ec5bf31bd875fe237364e410608d",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "incident_retry_stops_once_the_admin_drains",
+      "body_sha256": "0972d62c63f20b303d655e5bf52ae56e0b389d3cc1d23c72aded4a01b79a9dc0",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "joiner_gets_history_in_total_order_before_live_traffic",
+      "body_sha256": "0932dbf49ca27008d5e5f80531d1ce688aae4383585b0bf050cf5448635066e5",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "live_pickup_preserves_receipted_revocation_after_role_change",
+      "body_sha256": "07d3f0c5938d93e32060849d5b6734c4c89bb8dbab7612441d0bc67f06520636",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "lru_seen_set_refreshes_on_hit_and_evicts_least_recent",
+      "body_sha256": "b1a02f5ebef24149181c8666d17b691a9f8ed11266cab09d6d3066283110ffa3",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "m1_advertisement_is_not_authority_and_persists_unsupported_gate",
+      "body_sha256": "099c6373f8009ed969dfafb7947792263694f5f2984d9066aa6c7fba847b2288",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "m1_checked_adoption_does_not_report_success_after_caps_send_failure",
+      "body_sha256": "3a32ad9f091466dbe76dc39cb442d0e3fe873d74cd1368662a2438254115db39",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "m1_concurrent_deletions_require_union_and_lost_ack_retries",
+      "body_sha256": "85d924c38a07efeb81851fd1dae317eea39d4b415914f3c9163341bdf56e42f4",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "m1_delayed_control_from_replaced_session_cannot_negotiate_its_successor",
+      "body_sha256": "5d227b193bf925abf09c1f80e1ab2c09f9aa9272205afd719b1aab8305d2da8c",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "m1_dialed_link_status_is_complete_before_capability_send",
+      "body_sha256": "0037d8deaaaf9cf1663d18eaba87835df5c9553e8bc91cce433b2a53c05c683b",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "m1_empty_capable_peer_needs_exact_current_session_ack_and_legacy_does_not",
+      "body_sha256": "0a3da5b9abc75d5038877d73114f7ead19ed8cc055c09bfbc5669d4587a0b70f",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "m1_feature_deadline_survives_a_failing_environment_step",
+      "body_sha256": "7374763958cd873dd023cbb4c6e8e1c33f12dc2f756038e6376ce66ed980d987",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "m1_initial_capability_send_cannot_be_overtaken_by_data",
+      "body_sha256": "81bf0aa675249b5274689ce02e3d9b40eff9da2843f66e761dfa448a20a521a0",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "m1_legacy_quiet_status_keeps_its_original_bytes_and_inode",
+      "body_sha256": "db847e1447d5a27488cd77e1d060061d83114abcf929dc0dea79b133cc3b1d13",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "m1_new_delete_closes_established_legacy_session_without_partial_fact_delivery",
+      "body_sha256": "6b275bdc4cdb68efc00f48af41d177b3306aa084a1e0e39a4195f36950da01fa",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "m1_no_ack_after_derive_or_storage_failure_and_no_unauthorized_deletion",
+      "body_sha256": "d7d58e841984dfd1b611e95a048a5dfa1984ffa87be37fd51412607f15384938",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "m1_replacing_a_ready_session_clears_persisted_cli_agreement_immediately",
+      "body_sha256": "e44f80b6ddd20780d8e56d7ece8df6f2498babb1cf8931a4fead1dc9343b0aa8",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "member_removal_forgets_dial_backoff_state",
+      "body_sha256": "7c94d6089e46432e8cfe331a9518b2bc37e6897aaa91eb3c01d1127ac804b696",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "member_removal_forgets_the_dial_cursor",
+      "body_sha256": "aad626b61317d15ce1e2aafea00df0f89fd57165d764a569c77c0b7d62cecbd2",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "ordinary_admin_removal_also_blocks_stale_generation_writes",
+      "body_sha256": "d709737fecd593201d0a085886c973b3e8f71bc879018931b7c599a56a69164a",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "peer_state_documents_load",
+      "body_sha256": "761012805101017e40a311878f59a11fb25129136b941cff4489850dcc955829",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "peer_vector_ints_are_exact",
+      "body_sha256": "94a9fe8fd3465c1f005d0f9be06e617da36e23d62394da05eb649b186a7d0496",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "peers_gossip_carries_link_addresses_within_the_bound",
+      "body_sha256": "492587b81180d9383695cb74307c3c007dfc6f2547b1b410862f5f4716123d79",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "persistent_rekey_failure_does_not_stop_another_environment",
+      "body_sha256": "bbffb0878c3861fb408cb47c9e8d322c84a99da3f479b17b535f95036e76642b",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "received_ordinary_removal_rekeys_and_duplicate_confirmation_does_not_repeat_it",
+      "body_sha256": "50d990b0df846b20e6fb27d9309547e1f8f04cb55f892088251acc3a425d6180",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "refused_dials_back_off",
+      "body_sha256": "4fea230f81bb162b53fe048c5568ed6e1dd04793ed908ac47de80d816c24767e",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "relaxed_document_is_cached_by_store_vector",
+      "body_sha256": "9276f4c051b25db3a3aac08ef0e1afa8b910a6717bac91ef09cdd2e87826683e",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "removal_repair_sorts_after_a_received_future_rotation",
+      "body_sha256": "453cea9cfc28bfca61de266a6f00a13aa6ab7e53dc51a3ab51bdc8833268e67b",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "removed_admin_cannot_remove_unrelated_member_on_receive_replay_or_publish",
+      "body_sha256": "b711551778b60f693c64880ccae31d3826d4581637c869d5654ab85b70bd4b5e",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "retained_admin_role_does_not_authorize_a_removed_author",
+      "body_sha256": "242498937e5ecd9ec9291727ac487f23fbee6174a41f5a503973c1ae92196652",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "self_removal_rekeys_on_receipt_and_after_restart_without_repeat_rotation",
+      "body_sha256": "c5082a3af6a2023a78857aea060e66a416e02ea362a8ad51757cf7d01954be51",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "stale_live_process_cannot_admit_after_standalone_removal",
+      "body_sha256": "9f7b878b735873de37085ac29582209f77425d45f3995b11ddf0f27198f951a9",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "stop_joins_the_poll_thread_before_closing_the_transport",
+      "body_sha256": "041089e8b2225a49f46c8d739f1a2faffbd51d3670f21451a0a8c14df46589e3",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "successful_retry_resets_backoff_before_next_disconnect",
+      "body_sha256": "665309c99c2f9b8dd04fcfa2b4a5d1b128e35045b6961e8aa9876c5007bf9bd1",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "the_poll_rejects_a_released_commit_out_of_its_authors_hlc_order",
+      "body_sha256": "a8fae8ec950691b4e3cca2834c16af3b440516709fbefb76c4ae014ca064530a",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "name": "unreachable_addresses_are_tried_in_turn_with_the_usual_backoff",
+      "body_sha256": "641fac0e86751da39fc6e1688e43be9d3e4e4a587da903b383147541f25d1e07",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "a_connection_id_derive_refuses_is_stored_but_not_signed",
+      "body_sha256": "f611522aa377fd4e59c918b1a77e0b7a66ee2649dc4ed37ce5b56926ea7f14f4",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "a_deferred_commit_another_took_the_sequence_of_is_rejected",
+      "body_sha256": "5e5c3f95a5aa47bc3bc8a28d71d5dfe95716db9e566d1f8621822d4c77172160",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "a_deferred_commit_stored_since_is_dropped",
+      "body_sha256": "7fe1e3be46e857234f63d6dd6277ae640f172a2178d5a04354aab82b3a206dd7",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "a_deferred_commit_waiting_for_its_sequence_takes_no_lock",
+      "body_sha256": "450384bab54705fd7b890b2f77a20507946dfbc0c3fa5488f8d558566419f383",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "a_released_commit_is_decided_under_the_state_lock",
+      "body_sha256": "7c197f49b79f4181f54211d80038fac9e80044e84b8392a09010030b67447962",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "a_released_commit_keeps_its_authors_hlc_order",
+      "body_sha256": "e8510262a962ba35d3667bb4c26b9e8cb067211ecc2d64a632f94263909107ee",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "an_op_nested_too_deep_is_stored_but_not_signed",
+      "body_sha256": "32725f8e57d160d71f0b6095ab9e449850b3c4a82abcd1e8a91b630104b2e632",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "append_enforces_contiguous_sequence",
+      "body_sha256": "1c3fab2e2504024f28f0692a3fd41562df6c6f95924b6517b380d047c4fa8cd7",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "clock_skew_defers_then_releases",
+      "body_sha256": "020df97e796cc4ac263a54fa00a59c377e697c369d298c8d326cbe134b940803",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "conflicting_commit_at_same_slot_is_equivocation",
+      "body_sha256": "735f05676fa6b551974031ca76dfb92a94fb9f5595022e1e4ca57cfbe2392694",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "connection_create_accepts_valid_shape",
+      "body_sha256": "adf6feaa18d8d4d1a096cef77642926c03d111326c7fabdc9fcb22668209320b",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "connection_create_rejects_bad_host",
+      "body_sha256": "bba8aff8da93291d9fc0c4f3b3ffe1c07584003f3274970f43ef1a7f6466e740",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "connection_update_rejects_unknown_field",
+      "body_sha256": "5618a172cb627519b279f1a175e35a3dc004848fca48c710c40bf78ff91314c6",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "connection_update_requires_a_field",
+      "body_sha256": "be2d903ec0cfe051ea96518366ea308dbbfd87c73ba5f4020924b2d349f6c38b",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "dek_rotate_shape",
+      "body_sha256": "f36ef24d5d6fd6b55049f2b6d3715b087795c11f7531bb9ba573e28a1feb6761",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "exact_duplicate_is_silently_accepted_as_duplicate",
+      "body_sha256": "5b63f527616471ae4fe85d2a3071e4c3d9b1a5d000914fc72f706089920944a7",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "forged_early_bootstrap_from_non_owner_rejected",
+      "body_sha256": "4a3ee5a34caf5524a77771d8566344e7be33b3897553f94d3f54a57358bfd791",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "from_dict_reports_a_non_string_op_key_as_the_later_uncaught_typeerror",
+      "body_sha256": "eba365af2dd1c14a9bdbdb51ab9cd7615bd343ddec4af9ad8b6df78a6f197eff",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "hash_changes_with_sig",
+      "body_sha256": "c6c0a97f23411c8c6e53fe7fae8a94fcd53a5a03ad1a01b9b2b49a1a01c4e03e",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "int_strip_space_rejects_the_four_separator_controls",
+      "body_sha256": "c25d10151534898647c6ed7232a75754cbd7a45578bde1b50101b81acf0cd2c5",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "malformed_ops_refused_at_sign_time",
+      "body_sha256": "0852f6da452ac8f4755fd16f00bc32bd5b8e300f9938090c5ae526684a6dfb47",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "member_add_shape",
+      "body_sha256": "dbaa286350024aefe6c10ce005997582454c5b08d10ff0c8a647bde119a19674",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "non_dict_op_rejected",
+      "body_sha256": "cc6b370db06394b15256deb5221df1e86ee9a4720449b6e302b65235132bdd72",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "non_monotone_hlc_rejected",
+      "body_sha256": "5a6df7cb8cac9b2c23b86eb3b5fcffab6e8a05a7a10b05ffa526629c1c41b38d",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "observe_raises_clock_and_causal_tick_sorts_after",
+      "body_sha256": "11685400874ad067902b95fe18befac5ace524b5c6aff14b0ab0b6d7e3a42ea6",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "observe_tie_takes_max_counter",
+      "body_sha256": "13d65d088c7cf296174f06236031fb920df33f52e78e69aa22b808c2d80d5eb1",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "parse_rejects_malformed",
+      "body_sha256": "a69ceb32361672c4f876f3407cfcafe226630f0251a60334d0f742b2d51968ce",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "receive_commit_rejects_an_hlc_not_above_the_previous_one",
+      "body_sha256": "c75a19b8598d8e0b580be4e3fd4d629db964c04b0683813b41f4ed07a5fa2435",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "receive_commit_rejects_bad_signature",
+      "body_sha256": "f0a37786a0bf3b16f4ed999f893dc6352bd0eb210b55a8e5de808365d8382a5f",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "receive_commit_rejects_env_id_mismatch",
+      "body_sha256": "88147eb6cc73abab918fb57f2a1127b5dc85b51008021009e2cf0f0811dd50df",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "receive_commit_rejects_replayed_seq_after_bootstrap",
+      "body_sha256": "99bd016c3e8b13ed5011798348e606d45fcbdd6cf90e9c2fed2a52386555be5b",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "receive_commit_rejects_unknown_author",
+      "body_sha256": "b008f21f89e4b1378e6cfc83e6775ab1d79ea45a97cb15b830790a0267ee615f",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "second_bootstrap_from_same_author_rejected_by_sequence",
+      "body_sha256": "1fae3d5b7cf0832f697cf24fe650a9ca189d0f5632cd66f377a2e70d7bc79c2c",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "secret_put_version_shape",
+      "body_sha256": "910939a8525ad0a56e60195df2c8972883fd349d5da8347f1ea580ff6c9d4f5b",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "sign_then_verify",
+      "body_sha256": "ce5a05b130583b87e4cffe4692b99523fb8851b2995c8ad7b21e98f97d62d7d3",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "tampered_op_fails_verification",
+      "body_sha256": "96ecf6c0b5e0e82b079d8cca894a1e7017863c5d1c645bbff33ed9f6c0472ab1",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "tick_advances_and_zeroes_counter_on_wall_advance",
+      "body_sha256": "701ff152d75f5df4c1285845dbd7697089d207d08e98a1a8950a278a3c5601ee",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "tick_increments_beyond_any_fixed_width",
+      "body_sha256": "d81337c68395ecb21b458ca496ba8e8ab64005c4fcd5ad3a0f4ae66e17d29540",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "tick_increments_counter_when_wall_does_not_advance",
+      "body_sha256": "093c552f94a940bbeea23f5359354f9f3e429660b3ac3398707b8bc3517e8c47",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "to_dict_from_dict_roundtrip",
+      "body_sha256": "e9e77af92959cffb7b815b72252c6a3999caf3a2e6d2f3b2887d07f23d403758",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "total_order_numeric_not_lexicographic",
+      "body_sha256": "b65684cdea488d44cda84fb0b2cc700f983d7149cd2695d6dd0ec10b6b4ce6b7",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "unicode_decimal_digit_matches_python_for_the_previously_missing_blocks",
+      "body_sha256": "ea1a4662c98d76c3102e753cf94e9c1d376b21d625563e07373721340067799d",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "unknown_op_rejected",
+      "body_sha256": "254bccdfea7f9bac9b06839a41a60486bf9354b6fdfcfbbdc31c741248a3c38e",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "vector_and_all_commits",
+      "body_sha256": "8ea6fe419f1a972941d5b3550da25c1f6e33cc60f64f530590c2d2170c489d32",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "name": "wrong_signer_fails_verification",
+      "body_sha256": "52bc731fb3a493e1027a2526ff907937fb91fa364bea11ce89413973ad01deda",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "base32_padding_and_malformed_inputs",
+      "body_sha256": "21a45580e3169293efce4fbfb0964ee733f7dfa0ae922052c08b4e952fb4add0",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "invite_addresses_accept_well_formed_link_addresses_only",
+      "body_sha256": "802d83a910bbf3b66c8b981c482cd28ba305070101c83115ea85f2d37afe4e15",
+      "exact": true
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "name": "saved_invite_expiry_numeric_and_iso_utc_forms",
+      "body_sha256": "18836982e84eab3dd2084fa1d5df23ebcfc4ad4c0cae6e96b56b45bdb1345db0",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "all_six_authority_kinds_and_mixed_commits_stay_byte_identical",
+      "body_sha256": "e9cdb7a7340efb17e3d8a8f05133f54617fc77f9748abc3aad3b2aa3c62e8fd4",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "conflicting_live_original_at_the_cached_slot_refuses_without_fallback",
+      "body_sha256": "4fdceca6af4c5ff1187fadaa716945bce5403e456f1b5f59a3742eb20f6fd2aa",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "deletion_and_version_revocation_survive_real_compaction_restart_and_cache_loss",
+      "body_sha256": "e662d57d8c8bcadd0c9c19cbdfd2e356ee595b68f6a0505d65a6bb027d508285",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "final_data_head_is_deleted_live_but_original_bytes_hlc_and_version_order_survive",
+      "body_sha256": "687b63bdc10cd76229545fb7a3b645082b732c39199a1bd9217af4072d220060",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "legacy_float_opaque_and_deeper_than_checkpoint_values_preserve_original_bytes",
+      "body_sha256": "e896c41a53bf174a793b8cf3fbdb3ae36270f2b843a02273af0be99c6754a013",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "legacy_missing_idle_head_refuses_before_new_images_and_preserves_ordinary_reads",
+      "body_sha256": "02e41c611d60d09d99e149ed8d7fbb33d44cd7dd1012aff1c9ba50781e2d9b84",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "missing_prospective_paths_and_regular_repeat_destinations_compact_normally",
+      "body_sha256": "c3b79ee0ed06fdd95d545269e0f1c8ec3671adb339ce89d5e1f5f64d134ee8fc",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "newer_live_head_cannot_replace_the_exact_old_cutoff_slot",
+      "body_sha256": "36c619bed9e4ca4db22a80f5b72e777ff596aabe005cd62f6510874451ac0d4d",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "no_old_and_fresh_active_member_gate_keep_original_result_schema_and_no_cache",
+      "body_sha256": "493d386173b67ace02e81c71191f7fb048b5c09eedb102ff44ad1e720f52efe3",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "one_axis_cache_corruption_and_full_record_substitution_never_publish_or_prune",
+      "body_sha256": "7bc7112c269f4d203094e1460e388e0855945165a59b6e802c83e68a98c83542",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "reserved_number_legacy_head_refuses_real_compaction_before_new_publication",
+      "body_sha256": "58c829ab74af48b7773da10c3c1cc79076c27976410a286c233faecf9e46ba9b",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "second_compaction_after_context_reopen_preserves_idle_removed_author_and_next_sequence",
+      "body_sha256": "81d2444203238901ac306f89eeb4b871f5297ddc155668fd28cbf49f5175eb97",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "symlinked_state_root_with_plain_slash_and_dot_spellings_refuses_before_publication",
+      "body_sha256": "5e87b8385f94754a266059c033eef75232ed798e550c849515bac4f43f52f975",
+      "exact": true
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "name": "symlinked_team_and_environment_directories_refuse_without_new_images_or_unlink",
+      "body_sha256": "b3017921963ae1febf08815e89e47b689211e6b81da08602082ac2e963fcf92e",
+      "exact": true
+    }
+  ]
+}

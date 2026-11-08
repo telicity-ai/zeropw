@@ -1,0 +1,202 @@
+{
+  "schema": "Sol-independent-native8a-frozen-DATA-audit-v1",
+  "actual_model": "gpt-6.1-sol / ultra",
+  "mode": "read-only stdlib DATA and trusted read-only Git; no subagents, execution replay or semantic-review verdict",
+  "archive": {
+    "path": "/Users/ys/Code/zeropw-mlp-evidence/compaction-two-tests-root-collection-20261108/native-planned-evidence.tar",
+    "bytes": 8253440,
+    "sha256": "908ee2301c9a947c97a55cba514bf2788c02e7b46af1f5abb660894c7d83a5fe",
+    "regular_unique_safe_members": 41,
+    "collection_file_entries_verified": 40,
+    "collection_sha256": "fadaee60b08f32d1d27813e7d8664b4fef66fade66bd9e8e9fdd05378b0c0010"
+  },
+  "source": {
+    "head": "8a8073b3d876bb3f83a628a7fdbd2902e8b40851",
+    "full_tree": "a43f60ea5438355879c90f9bf4bb6c63cd0e6679",
+    "rust_tree": "d63be7c07896e271bb48610463f4a6e027581f59",
+    "files": 1464,
+    "manifest_sha256": "c453a1c337c0870a96c1ca51e21785b313a317d13c892225bb8e97feefcfd4cd",
+    "Git_path_sets_bytes_lengths_SHA256_blobs_modes_match": true,
+    "source_before_after_maps_matched": 18,
+    "POSIX_modes": "Recorded maps match canonical Git-derived644/755; no live filesystem queried"
+  },
+  "controls": {
+    "plan_sha256": "3c1c96cb75a2b13026ca2d0c57cef4e5a5516c1e73f814383857526f8d96d5c0",
+    "driver_sha256": "83df6234a6ed508b6ac1eb3028a65d552100eada0433a7d13b433a8498ddd17b",
+    "symbol_checker_sha256": "1137760f9fc8730ebc31fa0de3af93f268dda08735b8f1b68698aa3377d798c0",
+    "all_receipts_plan_driver_source_pins_match": true
+  },
+  "phases": [
+    {
+      "phase": "01-features-before",
+      "test_exit": 0,
+      "driver_exit": 0,
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0,
+      "receipt_sha256": "c0141248c978d74da263e877427020e2b9c2a3f7e9bc39a335b8c26ce496aa43",
+      "stdout_sha256": "5bbc7178747bbe7e058ab320ff34041ba8b1ec88186c727ce9fd0a7572feabc2",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "phase": "02-format",
+      "test_exit": 0,
+      "driver_exit": 0,
+      "passed": 0,
+      "failed": 0,
+      "ignored": 0,
+      "receipt_sha256": "6491dc4aaa9712ae86f12cf2ecf15076f2baf67306b057989aecd6b61e074a8f",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "phase": "03-new-exact",
+      "test_exit": 0,
+      "driver_exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "receipt_sha256": "a40504038c7d28ce4b18dac08dc5410a9393df84e757b048411aa229eba57a57",
+      "stdout_sha256": "2a3b6f889434a658f436334017ff4f78133c640dab9062c025690d5d8bcb6138",
+      "stderr_sha256": "1e6ead24fb464774f066fe258f5ad3575fa84f42875266006d0b2ca4a9237b94"
+    },
+    {
+      "phase": "04-new-exact",
+      "test_exit": 0,
+      "driver_exit": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "receipt_sha256": "3d15213eab28a7267b65983e2de8a9e9c1525b5326175ba0d775777b15ae66a4",
+      "stdout_sha256": "e708b58f83ffbdade814fb0d8526f6daf1b89b8a084c178b2b4dacbde4a17ead",
+      "stderr_sha256": "4eb10b378cf4548c6d9e0a442d06eed78868dccdd75514a1f72149fe824ad388"
+    },
+    {
+      "phase": "05-lib-debug",
+      "test_exit": 0,
+      "driver_exit": 0,
+      "passed": 31,
+      "failed": 0,
+      "ignored": 0,
+      "receipt_sha256": "ef1cb7502dfb118b7403edbf3971998c42fbce8a04a579d75b528b243d93d883",
+      "stdout_sha256": "bfd3063aab883207939571dd211fbf23148b0db259c5b81711097b5807cd6f5e",
+      "stderr_sha256": "0cac5e2fee8dd5b8b45aef51f90394f279d8ab0bf6b199641e7d73d916ebc185"
+    },
+    {
+      "phase": "06-integration-debug",
+      "test_exit": 0,
+      "driver_exit": 0,
+      "passed": 27,
+      "failed": 0,
+      "ignored": 0,
+      "receipt_sha256": "3f4b699159516097967200bc61ff04e13cf6540242cf849d731f971391ad0b8a",
+      "stdout_sha256": "ee11b3db26e30ba5e0e534701923787a84ea835b4defbdf3337685f692f16947",
+      "stderr_sha256": "80697112c06594cd57ab7dd0f2010e1ce1c019cc6d06bf08a3006f58b4e19da3"
+    },
+    {
+      "phase": "07-lib-release",
+      "test_exit": 0,
+      "driver_exit": 0,
+      "passed": 31,
+      "failed": 0,
+      "ignored": 0,
+      "receipt_sha256": "83266b2add9d69ca63a1eb04df4de77f64aaee1e42c0bcd337aceaab95b55789",
+      "stdout_sha256": "44f1cd53d6f323b0f4f5f04249d3c007b77c9715dd0b2a740e95bcfc47e8dbb3",
+      "stderr_sha256": "2c08c45c32b546a4087ca0ab0432a8a9e507ee6cd4680c6a0ae88dd1ceac94ca"
+    },
+    {
+      "phase": "08-integration-release",
+      "test_exit": 0,
+      "driver_exit": 0,
+      "passed": 27,
+      "failed": 0,
+      "ignored": 0,
+      "receipt_sha256": "50d3f71695422866fbf70ce23ecd5e5daf196462ad7f82c1ba1246dd03066371",
+      "stdout_sha256": "30351a4ec640dbe2c944ad875b8172b929a6e528dcad5d4823f303aba5c61d20",
+      "stderr_sha256": "ab64105049800f57289f86a44c12624d54ebb6b5fb2680e61c50321923ea707b"
+    },
+    {
+      "phase": "09-full-matrix",
+      "test_exit": 1,
+      "driver_exit": 125,
+      "passed": 1877,
+      "failed": 0,
+      "ignored": 5,
+      "receipt_sha256": "9bc64388d47226c42937b491258f741de45ba6b5da6c2f65d693e9f7bf49eac7",
+      "stdout_sha256": "9c2952d773ba1d61056eeb7cb3b281cce7a3b2de75f34a830a3214834b97eebc",
+      "stderr_sha256": "d28b8750900d89afe05a7ef6089ecb65f132b1c28212a391c90d09a76f9f5e9f"
+    }
+  ],
+  "full": {
+    "overall": "FAIL",
+    "steps_in_exact_order": 112,
+    "integration_targets": 107,
+    "test_summary_count": 115,
+    "passed": 1877,
+    "failed": 0,
+    "ignored": 5,
+    "only_nonzero_step": [
+      [
+        "clippy",
+        101
+      ]
+    ],
+    "verify_failed": "clippy",
+    "verifier_exit": 1,
+    "driver_exit": 125,
+    "failure_class": "nonzero_test_exit",
+    "explicit_signer_probes": {
+      "signer::tests::idle_cpu_with_one_and_nine_live_bindings": true,
+      "signer::tests::per_client_fd_cost_matches_python_ratio_of_one": true,
+      "signer::tests::per_binding_fd_cost_matches_python_ratio_of_one": true,
+      "signer::tests::rlimit_probe_served_clients_and_accept_loop_survival": true
+    },
+    "doc_tests_passed": 48,
+    "error": "strictClippy non_octal_unix_permissions, tests/team_compaction_heads.rs:1926:59, from_mode(0), suggested0o0",
+    "elapsed_seconds": 3263.5622869999997,
+    "maxrss_bytes_observed": 1339490304,
+    "accounting_limit": "Waited child high-water observation, not sum, quota, Oracle/coturn/OS capacity or proof of whole-machine erasure"
+  },
+  "later_phases": {
+    "documented_status": "NOTRUN",
+    "missing_receipts_count": 17,
+    "names": [
+      "10-non-test-release-build",
+      "11-non-test-gate-absence",
+      "12-stack-exact-debug",
+      "13-stack-exact-debug",
+      "14-stack-exact-debug",
+      "15-stack-exact-debug",
+      "16-stack-exact-debug",
+      "17-stack-exact-debug",
+      "18-stack-exact-debug",
+      "19-stack-exact-release",
+      "20-stack-exact-release",
+      "21-stack-exact-release",
+      "22-stack-exact-release",
+      "23-stack-exact-release",
+      "24-stack-exact-release",
+      "25-stack-exact-release",
+      "26-features-after"
+    ],
+    "non_test_gate_absence": "NOTRUN",
+    "exact_stack_selectors14": "NOTRUN",
+    "feature_after_and_comparison": "NOTRUN"
+  },
+  "custody_observations": {
+    "each_of9_guest_receipts_own_child_waited": true,
+    "all_recorded_uid_euid_gid_egid": 502,
+    "all_recorded_groups": [
+      12,
+      61,
+      100,
+      502,
+      701
+    ],
+    "each_recorded_assigned_UID_remainder": [],
+    "timeouts": 0,
+    "limits": "Archived observations only, no runtime/process query or parentage/custody attestation. Root reports host62583 finished and Tart64637 retained; these host handles were not queried/adopted/released by collector. Old native10HOLD unchanged."
+  },
+  "holds": "ZPCHEAD-OPUS-R1-01 HIGH OPEN; original findings and all M2/runtime/physical/Oracle/Go/native-oldHOLD/review/acceptance/release gates unchanged. No corrected563-native result or overallPASS.",
+  "coverage": "All archive members,40 internal hashes/modes,9 final+9 started receipts,18 complete source maps, both raw streams for9phases, full marker order and115 summaries, four probes/48docs, all1464fixed Git blobs. No toolchain/vendor/host transport/fullVM evidence or unrelated source semantics audited."
+}

@@ -1,0 +1,3178 @@
+{
+  "archive_local": "/Users/ys/Code/zeropw-mlp-evidence/compaction-R1-linux-final-20261108/final-evidence.tar",
+  "archive_sha256": "cec9108487f2ee5884662a789eb0a5133ee2b47302388077f5ee08e6df4b0a12",
+  "phases": [
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "tree",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "-e",
+        "features"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_kib": 35580,
+      "child_ru_maxrss_before_kib": 0,
+      "command_plan_sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+      "cwd": "/opt/cgjob/r1-r3-src",
+      "driver_exit": 0,
+      "driver_sha256": "001c03838061c192669661c68e5e15d7342b56085f5efc807fc08f098968bcfb",
+      "elapsed_seconds": 0.06560692299899529,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/opt/cgjob/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/opt/cgjob/target",
+        "HOME": "/opt/cgjob/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/rg-rust-1.99.0/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/opt/cgjob/ctxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "18158941afcbf35b11479fe922f324064ff4f2a1e235ea008db1bc31de0e7233",
+      "guest_free_bytes_before_phase": 5150302208,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_pid": 47175,
+      "own_child_waited": true,
+      "own_session_pgrp": 47175,
+      "phase": "01-features-before",
+      "raw_value_feature_present": false,
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "Linux ru_maxrss of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 0,
+        "file": "01-features-before.stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stdout": {
+        "bytes": 41364,
+        "file": "01-features-before.stdout",
+        "sha256": "6d374b3d0b30497f84484f82e3b89479403c73d0daa7b92f52afadeb362f25b2"
+      },
+      "test_exit": 0,
+      "test_summaries": [],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "team::sync::compaction_heads_tests::compaction_heads_deferred_prefilter_stale_forward_receipt_uses_locked_sequence",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_kib": 48152,
+      "child_ru_maxrss_before_kib": 0,
+      "command_plan_sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+      "cwd": "/opt/cgjob/r1-r3-src",
+      "driver_exit": 0,
+      "driver_sha256": "001c03838061c192669661c68e5e15d7342b56085f5efc807fc08f098968bcfb",
+      "elapsed_seconds": 14.563671243000499,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/opt/cgjob/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/opt/cgjob/target",
+        "HOME": "/opt/cgjob/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/rg-rust-1.99.0/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/opt/cgjob/ctxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "fa4e4337deca51a34e777da191a92fd0dcbd32e324ce8e00968114be7034eb92",
+      "guest_free_bytes_before_phase": 5149384704,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_pid": 47192,
+      "own_child_waited": true,
+      "own_session_pgrp": 47192,
+      "phase": "02-scoped-exact-debug",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "Linux ru_maxrss of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 150,
+        "file": "02-scoped-exact-debug.stderr",
+        "sha256": "2c7e2fa6263c739ae0235785deda63de2f2a1d759bd2fdffc3d72c806f68d6bc"
+      },
+      "stdout": {
+        "bytes": 242,
+        "file": "02-scoped-exact-debug.stdout",
+        "sha256": "0ea1afee54033a717a1762583f8cc10b72f501261eac3ff386459bed2064fb9f"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 743,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "team::sync::compaction_heads_tests::compaction_heads_authorized_fact_cache_read_pause_keeps_envs_available",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_kib": 48304,
+      "child_ru_maxrss_before_kib": 0,
+      "command_plan_sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+      "cwd": "/opt/cgjob/r1-r3-src",
+      "driver_exit": 0,
+      "driver_sha256": "001c03838061c192669661c68e5e15d7342b56085f5efc807fc08f098968bcfb",
+      "elapsed_seconds": 5.243014427000162,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/opt/cgjob/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/opt/cgjob/target",
+        "HOME": "/opt/cgjob/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/rg-rust-1.99.0/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/opt/cgjob/ctxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "60a53b2c275bd473b87f26892e90a615a43de50ae552a83e00cbe9bb8ab4ac44",
+      "guest_free_bytes_before_phase": 5148504064,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_pid": 47217,
+      "own_child_waited": true,
+      "own_session_pgrp": 47217,
+      "phase": "03-scoped-exact-debug",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "Linux ru_maxrss of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 150,
+        "file": "03-scoped-exact-debug.stderr",
+        "sha256": "5cc56c0cef3b68352a45f64e82074ea1a2f570b512f1fadac535ecca462eb7f4"
+      },
+      "stdout": {
+        "bytes": 233,
+        "file": "03-scoped-exact-debug.stdout",
+        "sha256": "762e843cca808b06490085a61611f236f01729f903ee49954d00b4d59400cbfb"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 743,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--lib",
+        "team::sync::compaction_heads_tests::compaction_heads_deferred_prefilter_stale_forward_receipt_uses_locked_sequence",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_kib": 43220,
+      "child_ru_maxrss_before_kib": 0,
+      "command_plan_sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+      "cwd": "/opt/cgjob/r1-r3-src",
+      "driver_exit": 0,
+      "driver_sha256": "001c03838061c192669661c68e5e15d7342b56085f5efc807fc08f098968bcfb",
+      "elapsed_seconds": 0.6179332100000465,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/opt/cgjob/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/opt/cgjob/target",
+        "HOME": "/opt/cgjob/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/rg-rust-1.99.0/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/opt/cgjob/ctxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "3e20a0cc26db08ae31464f5a8bd18ed88caa319f11dbebd3a5f8dbaa54d1284f",
+      "guest_free_bytes_before_phase": 5147619328,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_pid": 47235,
+      "own_child_waited": true,
+      "own_session_pgrp": 47235,
+      "phase": "04-scoped-exact-release",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "Linux ru_maxrss of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 153,
+        "file": "04-scoped-exact-release.stderr",
+        "sha256": "354ee832703105d3a06cb9a5bb8b68226c3ac026669d9aefd2d5e401af8d8357"
+      },
+      "stdout": {
+        "bytes": 241,
+        "file": "04-scoped-exact-release.stdout",
+        "sha256": "b1c4696bd05354e047aaa8fa5972254066bdc07074e7eeff3ca3ef3fd8a9c352"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 743,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--lib",
+        "team::sync::compaction_heads_tests::compaction_heads_authorized_fact_cache_read_pause_keeps_envs_available",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_kib": 43284,
+      "child_ru_maxrss_before_kib": 0,
+      "command_plan_sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+      "cwd": "/opt/cgjob/r1-r3-src",
+      "driver_exit": 0,
+      "driver_sha256": "001c03838061c192669661c68e5e15d7342b56085f5efc807fc08f098968bcfb",
+      "elapsed_seconds": 0.2539088499997888,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/opt/cgjob/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/opt/cgjob/target",
+        "HOME": "/opt/cgjob/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/rg-rust-1.99.0/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/opt/cgjob/ctxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "72f2d4ab2b74bd4c709feaee9119cce6f9e9554f34e26766f37b86e83ecc39f6",
+      "guest_free_bytes_before_phase": 5146738688,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_pid": 47258,
+      "own_child_waited": true,
+      "own_session_pgrp": 47258,
+      "phase": "05-scoped-exact-release",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "Linux ru_maxrss of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 153,
+        "file": "05-scoped-exact-release.stderr",
+        "sha256": "b424605360f822963ea839d4cb2d6775f66ecfcbaa6fce0eb7bc487d19e6f86a"
+      },
+      "stdout": {
+        "bytes": 233,
+        "file": "05-scoped-exact-release.stdout",
+        "sha256": "66d8e0e6af247e15620505f52ac3736bc83cc706e9f37111b5c32f11e47ee603"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 743,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/bin/bash",
+        "rust/verify.sh"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_kib": 1337064,
+      "child_ru_maxrss_before_kib": 0,
+      "command_plan_sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+      "cwd": "/opt/cgjob/r1-r3-src",
+      "driver_exit": 0,
+      "driver_sha256": "001c03838061c192669661c68e5e15d7342b56085f5efc807fc08f098968bcfb",
+      "elapsed_seconds": 3357.2108106779997,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/opt/cgjob/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/opt/cgjob/target",
+        "HOME": "/opt/cgjob/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/rg-rust-1.99.0/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/opt/cgjob/ctxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_matrix": {
+        "explicit_signer_probes": {
+          "signer::tests::idle_cpu_with_one_and_nine_live_bindings": true,
+          "signer::tests::per_binding_fd_cost_matches_python_ratio_of_one": true,
+          "signer::tests::per_client_fd_cost_matches_python_ratio_of_one": true,
+          "signer::tests::rlimit_probe_served_clients_and_accept_loop_survival": true
+        },
+        "failed": 0,
+        "ignored": 5,
+        "integration_targets": 107,
+        "ordered_markers_match": true,
+        "passed": 1881,
+        "steps": 112,
+        "test_summary_count": 115
+      },
+      "full_receipt_sha256": "274b9a9a9c739466ed76984c2328ab44fbe5a6e4847ccf7150ac2b67a2b8dea7",
+      "guest_free_bytes_before_phase": 5145858048,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_pid": 47276,
+      "own_child_waited": true,
+      "own_session_pgrp": 47276,
+      "phase": "06-full-matrix",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "Linux ru_maxrss of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 25487,
+        "file": "06-full-matrix.stderr",
+        "sha256": "727c1c93f28d7e33559bb4d21547b5a3503bf8a767c0bc32e7561774af72d915"
+      },
+      "stdout": {
+        "bytes": 162306,
+        "file": "06-full-matrix.stdout",
+        "sha256": "68485f49a6b7c5641674dbd029bf1fdf4ee9f20567d1884e33c5420250c6c75a"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 4,
+          "measured": 0,
+          "passed": 740,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 0,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 0,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 0,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 0,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 0,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 12,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 9,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 5,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 5,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 6,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 5,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 6,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 5,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 8,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 9,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 5,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 10,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 20,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 149,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 8,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 26,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 26,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 8,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 6,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 17,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 20,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 26,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 32,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 8,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 9,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 21,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 15,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 6,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 86,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 6,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 2,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 17,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 1,
+          "measured": 0,
+          "passed": 6,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 10,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 13,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 22,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 17,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 28,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 31,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 19,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 12,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 10,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 35,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 13,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 16,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 26,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 8,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 3,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 27,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 46,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 32,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 9,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 740,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 4,
+          "status": "ok"
+        },
+        {
+          "failed": 0,
+          "filtered": 0,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 48,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "build",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--lib"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_kib": 35332,
+      "child_ru_maxrss_before_kib": 0,
+      "command_plan_sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+      "cwd": "/opt/cgjob/r1-r3-src",
+      "driver_exit": 0,
+      "driver_sha256": "001c03838061c192669661c68e5e15d7342b56085f5efc807fc08f098968bcfb",
+      "elapsed_seconds": 0.07654396300131339,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/opt/cgjob/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/opt/cgjob/target",
+        "HOME": "/opt/cgjob/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/rg-rust-1.99.0/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/opt/cgjob/ctxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "fd7bc500e6fd9e6312b8b2fbf386f0fef7ff1ca6b236fe137771bdeb1f5d4bd0",
+      "guest_free_bytes_before_phase": 5144023040,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_pid": 63475,
+      "own_child_waited": true,
+      "own_session_pgrp": 63475,
+      "phase": "07-non-test-release-build",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "Linux ru_maxrss of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 62,
+        "file": "07-non-test-release-build.stderr",
+        "sha256": "9576f1f7e73fc2bb1ec2336aae60cb485c591eadc60a1b998573411c34057e08"
+      },
+      "stdout": {
+        "bytes": 0,
+        "file": "07-non-test-release-build.stdout",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "test_exit": 0,
+      "test_summaries": [],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/usr/bin/python3",
+        "-I",
+        "/opt/r1-final-control/non_test_symbols.py"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_kib": 38624,
+      "child_ru_maxrss_before_kib": 0,
+      "command_plan_sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+      "cwd": "/opt/cgjob/r1-r3-src",
+      "driver_exit": 0,
+      "driver_sha256": "001c03838061c192669661c68e5e15d7342b56085f5efc807fc08f098968bcfb",
+      "elapsed_seconds": 0.16667157700067037,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/opt/cgjob/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/opt/cgjob/target",
+        "HOME": "/opt/cgjob/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/rg-rust-1.99.0/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/opt/cgjob/ctxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "6fece983173fbfb71c9ac69204bfb7b079131747fa43b91b18c66ec48a60dda6",
+      "guest_free_bytes_before_phase": 5165285376,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_pid": 63488,
+      "own_child_waited": true,
+      "own_session_pgrp": 63488,
+      "phase": "08-non-test-gate-absence",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "Linux ru_maxrss of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 0,
+        "file": "08-non-test-gate-absence.stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stdout": {
+        "bytes": 283,
+        "file": "08-non-test-gate-absence.stdout",
+        "sha256": "12cfcb5bdfc7873c6a8687a4058c58d33583da69df3f473fe6a06a9c710b2b6f"
+      },
+      "test_exit": 0,
+      "test_summaries": [],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_payload",
+        "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_kib": 35588,
+      "child_ru_maxrss_before_kib": 0,
+      "command_plan_sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+      "cwd": "/opt/cgjob/r1-r3-src",
+      "driver_exit": 0,
+      "driver_sha256": "001c03838061c192669661c68e5e15d7342b56085f5efc807fc08f098968bcfb",
+      "elapsed_seconds": 0.07232735599973239,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/opt/cgjob/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/opt/cgjob/target",
+        "HOME": "/opt/cgjob/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/rg-rust-1.99.0/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/opt/cgjob/ctxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "8df12091980dea063ec13cfcc0156b350b4f85909a1ad39e4fcfae99e27387e7",
+      "guest_free_bytes_before_phase": 5164408832,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_pid": 63500,
+      "own_child_waited": true,
+      "own_session_pgrp": 63500,
+      "phase": "09-stack-exact-debug",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "Linux ru_maxrss of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 179,
+        "file": "09-stack-exact-debug.stderr",
+        "sha256": "a44a9b724126467d9466e09d1af8d8bb05d5c2bcda416199d154a1093473bcf5"
+      },
+      "stdout": {
+        "bytes": 197,
+        "file": "09-stack-exact-debug.stdout",
+        "sha256": "3abcb743fb10cdc3852fa0772e516dd6bae3cb5d61f3c7eac089770c32105f03"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 12,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_admission",
+        "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_kib": 35460,
+      "child_ru_maxrss_before_kib": 0,
+      "command_plan_sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+      "cwd": "/opt/cgjob/r1-r3-src",
+      "driver_exit": 0,
+      "driver_sha256": "001c03838061c192669661c68e5e15d7342b56085f5efc807fc08f098968bcfb",
+      "elapsed_seconds": 0.17489020799985155,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/opt/cgjob/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/opt/cgjob/target",
+        "HOME": "/opt/cgjob/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/rg-rust-1.99.0/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/opt/cgjob/ctxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "6ba1a702864b566be8cc5c0423628f22274e89e9427218547cd0b32c7f287662",
+      "guest_free_bytes_before_phase": 5163528192,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_pid": 63517,
+      "own_child_waited": true,
+      "own_session_pgrp": 63517,
+      "phase": "10-stack-exact-debug",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "Linux ru_maxrss of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 183,
+        "file": "10-stack-exact-debug.stderr",
+        "sha256": "c2e765e1184ed01babda93e2dab257c64242f78308182546960c46708504d2f6"
+      },
+      "stdout": {
+        "bytes": 194,
+        "file": "10-stack-exact-debug.stdout",
+        "sha256": "8fb8dfd62168c8e14c497236b6c514070d8099c7f2c12f3dcad3efa8cd2987a1"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 16,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_semantic_cut",
+        "complete_candidate_depth64_success_late_error_repeat_drop_and_65_refusal_on_256_kib",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_kib": 35588,
+      "child_ru_maxrss_before_kib": 0,
+      "command_plan_sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+      "cwd": "/opt/cgjob/r1-r3-src",
+      "driver_exit": 0,
+      "driver_sha256": "001c03838061c192669661c68e5e15d7342b56085f5efc807fc08f098968bcfb",
+      "elapsed_seconds": 0.17135872300059418,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/opt/cgjob/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/opt/cgjob/target",
+        "HOME": "/opt/cgjob/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/rg-rust-1.99.0/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/opt/cgjob/ctxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "fa369d8e5cc0d783bfea832372b5914e08777cda1785ac8e8067382fd8527426",
+      "guest_free_bytes_before_phase": 5162647552,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_pid": 63536,
+      "own_child_waited": true,
+      "own_session_pgrp": 63536,
+      "phase": "11-stack-exact-debug",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "Linux ru_maxrss of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 189,
+        "file": "11-stack-exact-debug.stderr",
+        "sha256": "2677778a2b0134c290c575ec4dd5995c2a25acf6e9f5a4abb2ab3f19777fbca9"
+      },
+      "stdout": {
+        "bytes": 209,
+        "file": "11-stack-exact-debug.stdout",
+        "sha256": "92b1833bf67ac4de592e480b99b4064b1b626ed9aa2e36f7a478cf510170de84"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 16,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_semantic_cut",
+        "complete_fold_depth64_on_actual_256_kib_stack",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_kib": 35464,
+      "child_ru_maxrss_before_kib": 0,
+      "command_plan_sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+      "cwd": "/opt/cgjob/r1-r3-src",
+      "driver_exit": 0,
+      "driver_sha256": "001c03838061c192669661c68e5e15d7342b56085f5efc807fc08f098968bcfb",
+      "elapsed_seconds": 0.06883349599957,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/opt/cgjob/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/opt/cgjob/target",
+        "HOME": "/opt/cgjob/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/rg-rust-1.99.0/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/opt/cgjob/ctxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "628f2856456a88cc568afad4f518732d7e6300388bb19c6e426b36d38494e3e9",
+      "guest_free_bytes_before_phase": 5161762816,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_pid": 63554,
+      "own_child_waited": true,
+      "own_session_pgrp": 63554,
+      "phase": "12-stack-exact-debug",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "Linux ru_maxrss of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 189,
+        "file": "12-stack-exact-debug.stderr",
+        "sha256": "2677778a2b0134c290c575ec4dd5995c2a25acf6e9f5a4abb2ab3f19777fbca9"
+      },
+      "stdout": {
+        "bytes": 171,
+        "file": "12-stack-exact-debug.stdout",
+        "sha256": "67b2746c8ea478b65311ddb85e483565a2753c23a3d4fb42bd450797d550cca7"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 16,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_generation_depth64_success_late_error_repeat_drop_on_actual_256_kib",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_kib": 35460,
+      "child_ru_maxrss_before_kib": 0,
+      "command_plan_sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+      "cwd": "/opt/cgjob/r1-r3-src",
+      "driver_exit": 0,
+      "driver_sha256": "001c03838061c192669661c68e5e15d7342b56085f5efc807fc08f098968bcfb",
+      "elapsed_seconds": 3.4183745460013597,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/opt/cgjob/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/opt/cgjob/target",
+        "HOME": "/opt/cgjob/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/rg-rust-1.99.0/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/opt/cgjob/ctxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "4fa7dd9c45602a061ad8015c957cba4b20d5733fe009de91c785fbaf4b8ddd85",
+      "guest_free_bytes_before_phase": 5160882176,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_pid": 63571,
+      "own_child_waited": true,
+      "own_session_pgrp": 63571,
+      "phase": "13-stack-exact-debug",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "Linux ru_maxrss of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 205,
+        "file": "13-stack-exact-debug.stderr",
+        "sha256": "2b662d307b481132dc9ac5c1123a7049c1c7979eb1c2c6cce9be1d3921b652df"
+      },
+      "stdout": {
+        "bytes": 202,
+        "file": "13-stack-exact-debug.stdout",
+        "sha256": "ceaab6c8bf7799a18dbc0e82ece50d93a1ef5ebde725561aed2244737c8e68ac"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 21,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_generation_depth65_refuses_before_crypto_on_actual_256_kib",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_kib": 35460,
+      "child_ru_maxrss_before_kib": 0,
+      "command_plan_sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+      "cwd": "/opt/cgjob/r1-r3-src",
+      "driver_exit": 0,
+      "driver_sha256": "001c03838061c192669661c68e5e15d7342b56085f5efc807fc08f098968bcfb",
+      "elapsed_seconds": 1.7618988630001695,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/opt/cgjob/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/opt/cgjob/target",
+        "HOME": "/opt/cgjob/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/rg-rust-1.99.0/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/opt/cgjob/ctxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "06744bd8a4794baf6a98741ff5c90c543782f6e386c3b0b956cbedd16b1c6186",
+      "guest_free_bytes_before_phase": 5160001536,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_pid": 63588,
+      "own_child_waited": true,
+      "own_session_pgrp": 63588,
+      "phase": "14-stack-exact-debug",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "Linux ru_maxrss of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 205,
+        "file": "14-stack-exact-debug.stderr",
+        "sha256": "64ca8722a3c882f023725f7f50d08754829fd27d4a2e3818bf64f7d83ac7172c"
+      },
+      "stdout": {
+        "bytes": 193,
+        "file": "14-stack-exact-debug.stdout",
+        "sha256": "4b6d04d847dce18960e1ada19200024b181f97996368e7f2d60bb8baf468c85c"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 21,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_wrap_depth64_success_error_repeat_drop_on_actual_256_kib",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_kib": 35460,
+      "child_ru_maxrss_before_kib": 0,
+      "command_plan_sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+      "cwd": "/opt/cgjob/r1-r3-src",
+      "driver_exit": 0,
+      "driver_sha256": "001c03838061c192669661c68e5e15d7342b56085f5efc807fc08f098968bcfb",
+      "elapsed_seconds": 3.4709667910010467,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/opt/cgjob/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/opt/cgjob/target",
+        "HOME": "/opt/cgjob/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/rg-rust-1.99.0/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/opt/cgjob/ctxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "de402f59b22e486fd9989f937aac015431c9febba724fde7d048f05af97b5bf5",
+      "guest_free_bytes_before_phase": 5159120896,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_pid": 63604,
+      "own_child_waited": true,
+      "own_session_pgrp": 63604,
+      "phase": "15-stack-exact-debug",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "Linux ru_maxrss of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 205,
+        "file": "15-stack-exact-debug.stderr",
+        "sha256": "2b662d307b481132dc9ac5c1123a7049c1c7979eb1c2c6cce9be1d3921b652df"
+      },
+      "stdout": {
+        "bytes": 191,
+        "file": "15-stack-exact-debug.stdout",
+        "sha256": "4ad06fd36ff35e59edc773938e3f8104cb436460ec99dc431dff2ac6b8c086fe"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 21,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_payload",
+        "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_kib": 233460,
+      "child_ru_maxrss_before_kib": 0,
+      "command_plan_sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+      "cwd": "/opt/cgjob/r1-r3-src",
+      "driver_exit": 0,
+      "driver_sha256": "001c03838061c192669661c68e5e15d7342b56085f5efc807fc08f098968bcfb",
+      "elapsed_seconds": 1.940896726999199,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/opt/cgjob/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/opt/cgjob/target",
+        "HOME": "/opt/cgjob/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/rg-rust-1.99.0/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/opt/cgjob/ctxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "45fcfcf443b72b595d10ea7ebd88a92c5fa2a244d290d7108ef5c0fd6a989328",
+      "guest_free_bytes_before_phase": 5158240256,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_pid": 63621,
+      "own_child_waited": true,
+      "own_session_pgrp": 63621,
+      "phase": "16-stack-exact-release",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "Linux ru_maxrss of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 237,
+        "file": "16-stack-exact-release.stderr",
+        "sha256": "d036297d7de9dd13eb7ee6771fac76bbe3e9be62e2ac93a3cc5e8eca2f116416"
+      },
+      "stdout": {
+        "bytes": 197,
+        "file": "16-stack-exact-release.stdout",
+        "sha256": "56c051b13f82686fb5fd08d32cc52f11bde85a0157eee0f6766404abadbd5816"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 12,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_admission",
+        "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_kib": 274768,
+      "child_ru_maxrss_before_kib": 0,
+      "command_plan_sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+      "cwd": "/opt/cgjob/r1-r3-src",
+      "driver_exit": 0,
+      "driver_sha256": "001c03838061c192669661c68e5e15d7342b56085f5efc807fc08f098968bcfb",
+      "elapsed_seconds": 3.9238045739984955,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/opt/cgjob/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/opt/cgjob/target",
+        "HOME": "/opt/cgjob/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/rg-rust-1.99.0/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/opt/cgjob/ctxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "b5e4408b4a155e1060b45d6d3ce27366e2fcafe422d3105f5d5f507482998b89",
+      "guest_free_bytes_before_phase": 5157359616,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_pid": 63668,
+      "own_child_waited": true,
+      "own_session_pgrp": 63668,
+      "phase": "17-stack-exact-release",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "Linux ru_maxrss of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 241,
+        "file": "17-stack-exact-release.stderr",
+        "sha256": "55aca8929bce99a4268313ecf5dd77c232b939be50d903de7140618aa820d698"
+      },
+      "stdout": {
+        "bytes": 194,
+        "file": "17-stack-exact-release.stdout",
+        "sha256": "3b7e3cb224e7a690a44f1040699ad02b2253a71ae5729ed1b52c37e5440b1205"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 16,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_semantic_cut",
+        "complete_candidate_depth64_success_late_error_repeat_drop_and_65_refusal_on_256_kib",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_kib": 284684,
+      "child_ru_maxrss_before_kib": 0,
+      "command_plan_sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+      "cwd": "/opt/cgjob/r1-r3-src",
+      "driver_exit": 0,
+      "driver_sha256": "001c03838061c192669661c68e5e15d7342b56085f5efc807fc08f098968bcfb",
+      "elapsed_seconds": 4.728267976999632,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/opt/cgjob/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/opt/cgjob/target",
+        "HOME": "/opt/cgjob/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/rg-rust-1.99.0/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/opt/cgjob/ctxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "10add643b8af8cfb027e95572eee731fe40933fd395e0b0f83e0baad69a31417",
+      "guest_free_bytes_before_phase": 5156478976,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_pid": 63729,
+      "own_child_waited": true,
+      "own_session_pgrp": 63729,
+      "phase": "18-stack-exact-release",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "Linux ru_maxrss of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 247,
+        "file": "18-stack-exact-release.stderr",
+        "sha256": "0d2f49279018276a646234714b2548067b29c8ce6399787441f6013c19724342"
+      },
+      "stdout": {
+        "bytes": 209,
+        "file": "18-stack-exact-release.stdout",
+        "sha256": "36046cfb2e08b78119e7e3c9055c2cd3dbefd14032e7808793d647b5f5876880"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 16,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_semantic_cut",
+        "complete_fold_depth64_on_actual_256_kib_stack",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_kib": 35460,
+      "child_ru_maxrss_before_kib": 0,
+      "command_plan_sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+      "cwd": "/opt/cgjob/r1-r3-src",
+      "driver_exit": 0,
+      "driver_sha256": "001c03838061c192669661c68e5e15d7342b56085f5efc807fc08f098968bcfb",
+      "elapsed_seconds": 0.06736217100115027,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/opt/cgjob/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/opt/cgjob/target",
+        "HOME": "/opt/cgjob/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/rg-rust-1.99.0/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/opt/cgjob/ctxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "4b8187020c959239664877f1baa47ad343335f1e34c517e8309dab255c8d01f0",
+      "guest_free_bytes_before_phase": 5155594240,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_pid": 63789,
+      "own_child_waited": true,
+      "own_session_pgrp": 63789,
+      "phase": "19-stack-exact-release",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "Linux ru_maxrss of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 192,
+        "file": "19-stack-exact-release.stderr",
+        "sha256": "561d2e8411d2ae8dd028e1c17e021f1349b10a62695e6e7424cd17dc70da450b"
+      },
+      "stdout": {
+        "bytes": 171,
+        "file": "19-stack-exact-release.stdout",
+        "sha256": "c32651ca5191b442f5fee38543a475015a433b10ef28207b8932778cad49e001"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 16,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_generation_depth64_success_late_error_repeat_drop_on_actual_256_kib",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_kib": 288124,
+      "child_ru_maxrss_before_kib": 0,
+      "command_plan_sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+      "cwd": "/opt/cgjob/r1-r3-src",
+      "driver_exit": 0,
+      "driver_sha256": "001c03838061c192669661c68e5e15d7342b56085f5efc807fc08f098968bcfb",
+      "elapsed_seconds": 5.034467224999389,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/opt/cgjob/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/opt/cgjob/target",
+        "HOME": "/opt/cgjob/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/rg-rust-1.99.0/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/opt/cgjob/ctxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "5657795665ee8e67d1ef1c7570703ab94709c5cdbbd3756160056be09ca34564",
+      "guest_free_bytes_before_phase": 5154713600,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_pid": 63805,
+      "own_child_waited": true,
+      "own_session_pgrp": 63805,
+      "phase": "20-stack-exact-release",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "Linux ru_maxrss of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 263,
+        "file": "20-stack-exact-release.stderr",
+        "sha256": "db3205ed4bb8b9ab6c97b4d91896a6f174335afc1516101ae5296936326e8287"
+      },
+      "stdout": {
+        "bytes": 202,
+        "file": "20-stack-exact-release.stdout",
+        "sha256": "738fc8c829db61ba16efe3e46ca841b917ab724a9e7c8a320869073a1d0ae1b8"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 21,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_generation_depth65_refuses_before_crypto_on_actual_256_kib",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_kib": 35460,
+      "child_ru_maxrss_before_kib": 0,
+      "command_plan_sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+      "cwd": "/opt/cgjob/r1-r3-src",
+      "driver_exit": 0,
+      "driver_sha256": "001c03838061c192669661c68e5e15d7342b56085f5efc807fc08f098968bcfb",
+      "elapsed_seconds": 0.11853166000037163,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/opt/cgjob/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/opt/cgjob/target",
+        "HOME": "/opt/cgjob/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/rg-rust-1.99.0/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/opt/cgjob/ctxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "4dec070f83e976a069263293246faa93aba89a0cff1a28f1ffd08be8c71fcd16",
+      "guest_free_bytes_before_phase": 5153832960,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_pid": 63864,
+      "own_child_waited": true,
+      "own_session_pgrp": 63864,
+      "phase": "21-stack-exact-release",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "Linux ru_maxrss of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 208,
+        "file": "21-stack-exact-release.stderr",
+        "sha256": "b267063ef5e1d98cfde21a81c3b636930cff9defb67c189603de608530cb469a"
+      },
+      "stdout": {
+        "bytes": 193,
+        "file": "21-stack-exact-release.stdout",
+        "sha256": "9276e97f3d545e5d56d76ecb8aba9cb81ccdb0ef6c118e919d50eb16d138c1e0"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 21,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_wrap_depth64_success_error_repeat_drop_on_actual_256_kib",
+        "--",
+        "--exact"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_kib": 35460,
+      "child_ru_maxrss_before_kib": 0,
+      "command_plan_sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+      "cwd": "/opt/cgjob/r1-r3-src",
+      "driver_exit": 0,
+      "driver_sha256": "001c03838061c192669661c68e5e15d7342b56085f5efc807fc08f098968bcfb",
+      "elapsed_seconds": 0.16713866099962615,
+      "exactly_one_test_passed": true,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/opt/cgjob/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/opt/cgjob/target",
+        "HOME": "/opt/cgjob/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/rg-rust-1.99.0/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/opt/cgjob/ctxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "fb96bd8ce570297526d63a466490f7a8eb45626a77410c3b1e49dd80c1214801",
+      "guest_free_bytes_before_phase": 5152952320,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_pid": 63880,
+      "own_child_waited": true,
+      "own_session_pgrp": 63880,
+      "phase": "22-stack-exact-release",
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "Linux ru_maxrss of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 208,
+        "file": "22-stack-exact-release.stderr",
+        "sha256": "b267063ef5e1d98cfde21a81c3b636930cff9defb67c189603de608530cb469a"
+      },
+      "stdout": {
+        "bytes": 191,
+        "file": "22-stack-exact-release.stdout",
+        "sha256": "59a9cb3906e36f858854bad61e2868f144d4cf41945e63e595e9c6cc58c3de98"
+      },
+      "test_exit": 0,
+      "test_summaries": [
+        {
+          "failed": 0,
+          "filtered": 21,
+          "ignored": 0,
+          "measured": 0,
+          "passed": 1,
+          "status": "ok"
+        }
+      ],
+      "timeout": false
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "tree",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "-e",
+        "features"
+      ],
+      "assurance": "own direct child/session and saved observations only",
+      "cancel_signal": null,
+      "child_ru_maxrss_after_kib": 35580,
+      "child_ru_maxrss_before_kib": 0,
+      "command_plan_sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a",
+      "cwd": "/opt/cgjob/r1-r3-src",
+      "driver_exit": 0,
+      "driver_sha256": "001c03838061c192669661c68e5e15d7342b56085f5efc807fc08f098968bcfb",
+      "elapsed_seconds": 0.03607122099856497,
+      "failure_class": null,
+      "fixed_env": {
+        "CARGO_BUILD_JOBS": "1",
+        "CARGO_HOME": "/opt/cgjob/cargo-home",
+        "CARGO_INCREMENTAL": "0",
+        "CARGO_NET_OFFLINE": "true",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_RELEASE_DEBUG": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_TARGET_DIR": "/opt/cgjob/target",
+        "HOME": "/opt/cgjob/home",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "OPENSSL_NO_VENDOR": "1",
+        "PATH": "/opt/rg-rust-1.99.0/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        "RUST_BACKTRACE": "0",
+        "TMPDIR": "/opt/cgjob/ctxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "full_receipt_sha256": "8349f94b959ad1a6d9208fd2547fe6bdccfeb82dbb8a3fac71591ba809172277",
+      "guest_free_bytes_before_phase": 5152071680,
+      "identity": {
+        "proc_status": {
+          "CapAmb": "0000000000000000",
+          "CapBnd": "0000000000000000",
+          "CapEff": "0000000000000000",
+          "CapInh": "0000000000000000",
+          "CapPrm": "0000000000000000",
+          "NoNewPrivs": "1"
+        },
+        "resgid": [
+          2100,
+          2100,
+          2100
+        ],
+        "resuid": [
+          2100,
+          2100,
+          2100
+        ],
+        "supplementary_groups": []
+      },
+      "own_child_pid": 63897,
+      "own_child_waited": true,
+      "own_session_pgrp": 63897,
+      "phase": "23-features-after",
+      "raw_value_feature_present": false,
+      "remaining_assigned_uid_processes": [],
+      "rss_scope": "Linux ru_maxrss of waited child/its waited descendants; not RSS sum, isolated key-stage cost, enforced quota or Oracle capacity",
+      "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+      "source_after_match": true,
+      "source_before_match": true,
+      "source_file_count": 1519,
+      "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+      "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+      "source_map_canonical_sha256": "dc8f53c7a15da26e54e2b0972f6fbe40aaee4d2bb9127121a8f2c17e0cc26a23",
+      "stderr": {
+        "bytes": 0,
+        "file": "23-features-after.stderr",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stdout": {
+        "bytes": 41364,
+        "file": "23-features-after.stdout",
+        "sha256": "6d374b3d0b30497f84484f82e3b89479403c73d0daa7b92f52afadeb362f25b2"
+      },
+      "test_exit": 0,
+      "test_summaries": [],
+      "timeout": false
+    }
+  ],
+  "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+  "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+  "source_maps": "full46maps remain in immutable archive; exact receipt hashes bind summaries"
+}

@@ -1,0 +1,476 @@
+{
+  "Astra_disposition_preserved": {
+    "historical_provisioning_linkage": "ESTABLISHED",
+    "individual10PID_custody": "UNRESOLVED / original native HOLD unchanged",
+    "next": "one dated attributable actual Root allocator custody/allocation/retention statement; no execution or fresh generic permission required by this DATA task",
+    "whole_VM_stop_restart": "NOTREADY"
+  },
+  "P_evidence_binding_records_matched": 26,
+  "actual_collector": "gpt-6.1-sol / ultra, native same-provider child",
+  "checked_records": [
+    {
+      "binding": "decision explicit hash table",
+      "bytes": 8437,
+      "mode": 420,
+      "path": "/tmp/zeropw-mac-vm-history-disposition-astra-20261108.md",
+      "sha256": "119733ffd6e815d841baebb5c67db4f8da559206d5f8c60901fb86e90c7316e8"
+    },
+    {
+      "binding": "decision explicit hash table",
+      "bytes": 3921,
+      "mode": 420,
+      "path": "/Users/ys/.t3/worktrees/zeropw/t3-068aa58f/AGENTS.md",
+      "sha256": "08c4fbc5a439a1344d3ad309455483f3aa755438bbd626062256469d8f508b93"
+    },
+    {
+      "binding": "decision explicit hash table",
+      "bytes": 9048,
+      "mode": 420,
+      "path": "/Users/ys/.t3/worktrees/zeropw/t3-068aa58f/docs/product-intent.md",
+      "sha256": "79dd92c5459a5f76180810fabc02083e4f0d19bfa4d9e44a14ea9e98dfc8020d"
+    },
+    {
+      "binding": "decision explicit hash table",
+      "bytes": 9731,
+      "mode": 420,
+      "path": "/Users/ys/.t3/worktrees/zeropw/t3-068aa58f/docs/security-design.md",
+      "sha256": "20a151a1b563a8c6a6c2ca3c1c2caaef0a27b098764cd01deba208f14ec036d0"
+    },
+    {
+      "binding": "decision explicit hash table",
+      "bytes": 6219,
+      "mode": 420,
+      "path": "/Users/ys/.t3/worktrees/zeropw/t3-068aa58f/docs/harness.md",
+      "sha256": "feab029523480dd8f1b7cf2c969685de5da52f8f96531ccafec6668ab446e6f6"
+    },
+    {
+      "binding": "decision explicit hash table",
+      "bytes": 8784,
+      "mode": 420,
+      "path": "/Users/ys/.t3/worktrees/zeropw/t3-068aa58f/harness/README.md",
+      "sha256": "92bb2ff8dce48c15d434d5a12c6cfebb2358b4c83c08f20c7d9138870c08f121"
+    },
+    {
+      "binding": "decision explicit hash table",
+      "bytes": 5332,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/mac-vm-provenance-data-20261108/REPORT.md",
+      "sha256": "5402b13a415633350e0ff0842e341736cc405c45ccd820df8477e34c6f7fb0d0"
+    },
+    {
+      "binding": "decision explicit hash table",
+      "bytes": 12214,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/mac-vm-provenance-data-20261108/evidence-bindings.json",
+      "sha256": "2391af81c501288842a87d9c04a0969e21dcfd9abef1fc32ab7648186b3ed50e"
+    },
+    {
+      "binding": "decision explicit hash table",
+      "bytes": 879,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/mac-vm-recovered-history-20261108/FREEZE.json",
+      "sha256": "96c0b7153aa1b98bf25f79bc27f16518b864d674566ebf103ab158c3f6e4dd98"
+    },
+    {
+      "binding": "decision explicit hash table",
+      "bytes": 17050,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/mac-vm-recovered-history-20261108/recorded-calls.json",
+      "sha256": "e96b7cee449cbee868b1874a5eb3ba91d808dd831154384abb008a06db284ac8"
+    },
+    {
+      "binding": "decision explicit hash table",
+      "bytes": 1269,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/mac-vm-recovered-history-20261108/macos-vm-clone.log",
+      "sha256": "cc79412fa2a74f56c95d6feda9bf4c99696e941ffa1d4160ff6711259f1a4f66"
+    },
+    {
+      "binding": "decision explicit hash table",
+      "bytes": 15,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/mac-vm-recovered-history-20261108/macos-vm-run.log",
+      "sha256": "608364f77893b5e00c5454006d467f655bc5827746b8430897a14e6b82b192f0"
+    },
+    {
+      "binding": "decision explicit hash table",
+      "bytes": 0,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/mac-vm-recovered-history-20261108/macos-vm-run-builddisk.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "binding": "decision explicit hash table",
+      "bytes": 352,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/mac-vm-recovered-history-20261108/macos-vm-builddisk.log",
+      "sha256": "c4c044bae7de49c2897ad9322a74cf45bc6005d660455929324c3b8c43f07b78"
+    },
+    {
+      "binding": "decision explicit hash table",
+      "bytes": 3111,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/compaction-heads-sol-20261108/t3-bb0cec73/FREEZE.json",
+      "sha256": "c13e5ff0953522cc25f1e7e1bc5866286dfdbef07db2ef715e1170cf49e7ea84"
+    },
+    {
+      "binding": "decision explicit hash table",
+      "bytes": 15227,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/compaction-heads-sol-20261108/t3-bb0cec73/OWN-RESOURCE-HOLD.json",
+      "sha256": "6d74313d87dd7badb8417c43b70734305d2502c9f20aefd1bdf8ab0e6b659542"
+    },
+    {
+      "binding": "decision explicit hash table",
+      "bytes": 8467,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/compaction-heads-hold-data-20261108/REPORT.md",
+      "sha256": "615aa53362dffe382c38d10bba2b814e0c5198187d0e052b139589ab8e417ce9"
+    },
+    {
+      "binding": "decision explicit hash table",
+      "bytes": 10143,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/compaction-heads-native-grant-20261108/native-grant.md",
+      "sha256": "3bc554a84b6422d571b4999207c1728c98f6c6b4cf14fdf6cb00db8d31e4a2f0"
+    },
+    {
+      "binding": "decision explicit hash table",
+      "bytes": 17579,
+      "mode": 420,
+      "path": "/Users/ys/.t3/worktrees/zeropw/t3-068aa58f/docs/evidence/2026-11-07-macos-v2-final.json",
+      "sha256": "653d4e44538ebc8144115762d832dd6567a898a64fc7d1aa6d2a60b3933af051"
+    },
+    {
+      "binding": "decision explicit hash table",
+      "bytes": 2453,
+      "mode": 420,
+      "path": "/Users/ys/.t3/worktrees/zeropw/t3-068aa58f/docs/evidence/2026-11-07-link-native-final.json",
+      "sha256": "ca1349081ceaf6524db48c5dc42dd9a8d195e53bb3001cacac377e1f5dc5a89e"
+    },
+    {
+      "binding": "decision explicit hash table",
+      "bytes": 3660,
+      "mode": 420,
+      "path": "/Users/ys/.t3/worktrees/zeropw/t3-068aa58f/docs/evidence/2026-11-08-compaction-heads-0d3fdc5/independent-collection.md",
+      "sha256": "9d759ca1126421532cd5a2ba05c19f8d0911512c527cb738110d124661e903a9"
+    },
+    {
+      "binding": "decision explicit hash table",
+      "bytes": 7097,
+      "mode": 420,
+      "path": "/Users/ys/.t3/worktrees/zeropw/t3-068aa58f/docs/evidence/2026-11-08-compaction-heads-0d3fdc5/independent-collection.json",
+      "sha256": "c53c10eb71120fee203397ee7b2f41f52e85334561e65475fefa2948a6204b6c"
+    },
+    {
+      "binding": "P/evidence-bindings.json",
+      "bytes": 1269,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/macos-vm-clone.log",
+      "sha256": "cc79412fa2a74f56c95d6feda9bf4c99696e941ffa1d4160ff6711259f1a4f66"
+    },
+    {
+      "binding": "P/evidence-bindings.json",
+      "bytes": 15,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/macos-vm-run.log",
+      "sha256": "608364f77893b5e00c5454006d467f655bc5827746b8430897a14e6b82b192f0"
+    },
+    {
+      "binding": "P/evidence-bindings.json",
+      "bytes": 0,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/macos-vm-run-builddisk.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "binding": "P/evidence-bindings.json",
+      "bytes": 352,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/macos-vm-builddisk.log",
+      "sha256": "c4c044bae7de49c2897ad9322a74cf45bc6005d660455929324c3b8c43f07b78"
+    },
+    {
+      "binding": "P/evidence-bindings.json",
+      "bytes": 3763,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/macos/DURABLE-HANDOFF-20261107.md",
+      "sha256": "38854495ef0296d378e471bbf535f5345399ed39e54658475cb044411ee25a32"
+    },
+    {
+      "binding": "P/evidence-bindings.json",
+      "bytes": 3209,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/macos/DURABLE-HANDOFF-20261107-v2.md",
+      "sha256": "a52a0b21b5366029226aa156f691e65c5a11515c6d242186f19c358845545358"
+    },
+    {
+      "binding": "P/evidence-bindings.json",
+      "bytes": 4742,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/macos/durable-handoff-20261107.json",
+      "sha256": "d153aa5f0b09a935f49152299707d9faed7f0dfb9d483d0cbd8c49e436af2296"
+    },
+    {
+      "binding": "P/evidence-bindings.json",
+      "bytes": 3466,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/macos/durable-handoff-20261107-v2.json",
+      "sha256": "76747c3520608141eab4a055528a9a448163ac02d0bfd7b5e9899fe11609a369"
+    },
+    {
+      "binding": "P/evidence-bindings.json",
+      "bytes": 282,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/macos/CURRENT-RUN.json",
+      "sha256": "3fdfe7b4746914951de8f5a91bbe827e1166e1fa5737596dc7ec94a5d6f5535b"
+    },
+    {
+      "binding": "P/evidence-bindings.json",
+      "bytes": 565,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/m1-native-real-link-20261107/t3-1876922e/native-ownership.json",
+      "sha256": "b3f49f0ebdee27293f6d0093087b18668d6035cddfe44295985ba82f3140b810"
+    },
+    {
+      "binding": "P/evidence-bindings.json",
+      "bytes": 1203,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/m2b2a-native-20261108/t3-cfeda263/resource-release.json",
+      "sha256": "1cad0425b794815477dfe6bbf10c4a2244acc176eff74ae5ba97c6423899154a"
+    },
+    {
+      "binding": "P/evidence-bindings.json",
+      "bytes": 775,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/m2b2a-native-prestaged-20261108/t3-f0e2d05c/resource-release.json",
+      "sha256": "73abf6b167ef486fcc3c616f9d117690467e163ff458277698ab3e7a55d2efaf"
+    },
+    {
+      "binding": "P/evidence-bindings.json",
+      "bytes": 1132,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/m2b2a-native-frozen-driver-20261108/t3-134681c5/resource-release.json",
+      "sha256": "13ea3de38100206ac7c24af3a2bcaaaf4635b721de9afda108e70a557a9fca05"
+    },
+    {
+      "binding": "P/evidence-bindings.json",
+      "bytes": 44337,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/m2-required-generation-sol-20261108/t3-7128fc4e/native-resource-release.json",
+      "sha256": "db8a0fef9331db5603448b943c937fe00cad5a02bfa5f46e25914ef3d7885cf9"
+    },
+    {
+      "binding": "P/evidence-bindings.json",
+      "bytes": 480,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/m2b2a-native-cache-preparation-20261108/preregistration.json",
+      "sha256": "233152c940dbce71367bf5a442d40141c706ceb0e2c7fe0dce3acee8a74143d7"
+    },
+    {
+      "binding": "P/evidence-bindings.json",
+      "bytes": 2493,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/m2b2a-native-cache-preparation-20261108/REPORT.md",
+      "sha256": "1bb3cddb48b1e0374f7d20e7bb72596aa9a855e52e28f28ce058653ac4557236"
+    },
+    {
+      "binding": "P/evidence-bindings.json",
+      "bytes": 1185,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/required-generation-native-preparation-20261108/preregistration.json",
+      "sha256": "19629b41478f4936a5d0e21d24a59fe8c7de485bfa42b6f46fd692e29abc7975"
+    },
+    {
+      "binding": "P/evidence-bindings.json",
+      "bytes": 3078,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/required-generation-native-preparation-20261108/assignment.json",
+      "sha256": "421b2659cd9005a2d032e50bde843a58ef332478a616119500ed344f35822115"
+    },
+    {
+      "binding": "P/evidence-bindings.json",
+      "bytes": 1361,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/compaction-heads-native-preparation-20261108/execution-status.json",
+      "sha256": "b5d4d5dc4cf67ca5b9d887c37e009917137f7dacb03dd9cdb42bdf7a716599ef"
+    },
+    {
+      "binding": "P/evidence-bindings.json",
+      "bytes": 266,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/compaction-heads-native-preparation-20261108/planned-job.json",
+      "sha256": "900b59bd9f5bb524c027023bb1c0d88799b3e6c8632e15bc4d9a708ffc320b6f"
+    },
+    {
+      "binding": "P/evidence-bindings.json",
+      "bytes": 284,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/compaction-heads-native-preparation-20261108/01-known-volume-metadata.json",
+      "sha256": "2e5e1001085fe2a026d220e125df66c29bf639f2ca202b45050e6ea274124946"
+    },
+    {
+      "binding": "P/evidence-bindings.json",
+      "bytes": 1681,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/compaction-heads-native-grant-20261108/assignment.json",
+      "sha256": "3dbc111ebe96b85e284b8a827fd18eae9e800d6f81ba538d8ce97814ba8ea440"
+    },
+    {
+      "binding": "P/evidence-bindings.json",
+      "bytes": 15227,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/compaction-heads-sol-20261108/t3-bb0cec73/OWN-RESOURCE-HOLD.json",
+      "sha256": "6d74313d87dd7badb8417c43b70734305d2502c9f20aefd1bdf8ab0e6b659542"
+    },
+    {
+      "binding": "P/evidence-bindings.json",
+      "bytes": 8467,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/compaction-heads-hold-data-20261108/REPORT.md",
+      "sha256": "615aa53362dffe382c38d10bba2b814e0c5198187d0e052b139589ab8e417ce9"
+    },
+    {
+      "binding": "P/evidence-bindings.json",
+      "bytes": 16190,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-tools/native-macos-driver-20261107.py",
+      "sha256": "9ad6919575fc583d8852922ebc42baab06f9a9f089ba715b8f48c5a7fec0f34a"
+    },
+    {
+      "binding": "P/evidence-bindings.json",
+      "bytes": 17768,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-tools/native-macos-driver-20261107-v2.py",
+      "sha256": "ca197b102230ff2434fe81c6a486a9c40f57a9f37b1d62c17147f12af79b320f"
+    },
+    {
+      "binding": "R/FREEZE.json",
+      "bytes": 352,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/mac-vm-recovered-history-20261108/macos-vm-builddisk.log",
+      "sha256": "c4c044bae7de49c2897ad9322a74cf45bc6005d660455929324c3b8c43f07b78"
+    },
+    {
+      "binding": "R/FREEZE.json",
+      "bytes": 1269,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/mac-vm-recovered-history-20261108/macos-vm-clone.log",
+      "sha256": "cc79412fa2a74f56c95d6feda9bf4c99696e941ffa1d4160ff6711259f1a4f66"
+    },
+    {
+      "binding": "R/FREEZE.json",
+      "bytes": 0,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/mac-vm-recovered-history-20261108/macos-vm-run-builddisk.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "binding": "R/FREEZE.json",
+      "bytes": 15,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/mac-vm-recovered-history-20261108/macos-vm-run.log",
+      "sha256": "608364f77893b5e00c5454006d467f655bc5827746b8430897a14e6b82b192f0"
+    },
+    {
+      "binding": "R/FREEZE.json",
+      "bytes": 17050,
+      "mode": 420,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/mac-vm-recovered-history-20261108/recorded-calls.json",
+      "sha256": "e96b7cee449cbee868b1874a5eb3ba91d808dd831154384abb008a06db284ac8"
+    }
+  ],
+  "distinct_checked_paths": 46,
+  "documents": {
+    "decision.md": {
+      "bytes": 16089,
+      "sha256": "40032138a9d5baa14c4a096a91ae896744ba03eb7de025f7301a43efe7913e7a"
+    },
+    "implementation-task.md": {
+      "bytes": 7908,
+      "sha256": "ffc1a89d0ca319a384890c1f91f7ca8dffe3ecf3e437a32dda1e30868b7b277f"
+    }
+  },
+  "documents_combined_bytes": 23997,
+  "documents_exact_count": 2,
+  "documents_limit_bytes": 24576,
+  "explicit_table_rows_matched": 22,
+  "future_lifecycle_boundary": {
+    "after_positive_reconciliation": "separate finite Root-only plan under priorauthorization, protect against newallocations/identitychange/stalefacts",
+    "immediate": "NOTREADY; no executable stop/restart recipe or action authorized",
+    "original_HOLD": "whole-objectepochretirement cannot manufacture historical guest waits or rewrite JOINED/RELEASED, physicalerasure or product/test/review/release resolution",
+    "preservation": "keepdisks/source/evidence and failures/timeouts/originalHOLD; no secret-bearingHOME/runtimeDB/memory/diskimage collection",
+    "prohibited": "unknownPID/PGIDsignal/adoption; historicalTartprocesshandleadoption; globalstop/pkill/purge; baseimageoverwrite/diskdelete/resize/networkpackagepermissionchange/otherVM; automaticrestart/reuse/resume/newcampaign"
+  },
+  "later_optional_metadata_not_dispatched": {
+    "allowed_fields": [
+      "canonicalTART_HOME/name",
+      "trusted name-resolved config path and publicID/UUID ifexposed",
+      "declared disk paths/type/symlink status/logicalsize",
+      "share/clipboard/audio/USB flags",
+      "publicowner/allocation identifier/capturetime",
+      "power state only if same surface returns it; not custody proof"
+    ],
+    "bounds": "oneattempt/oneobject,60seconds,64KiB,oneknownconfig/directlydeclareddiskreferences only; no guess/recursive otherVM scan",
+    "host_identity": "only later exactknown-hosts public algorithm/fingerprint projection against retained historical public comparator if endpoint reconciliation needs it; noSSH/keyscan/TOFU/replacement/fulltruststoredump. HOST_IDENTITY_BASELINE_MISSING blocks unprovedSSHbinding, not independently established host-sidewholeobjectdisposition.",
+    "known_target": {
+      "TART_HOME": "/Volumes/susudi/zeropw-mlp-macos-tart",
+      "expected_logical_bytes": 85899345920,
+      "extra_disk": "/Volumes/susudi/zeropw-mlp-macos-tart/build-target-20261107.raw",
+      "name": "zeropw-mlp-macos"
+    },
+    "preconditions": "saved Root registration/config DATA insufficient and separate bounded Root observation scope; not this task",
+    "refusals": [
+      "CONFIG_PATH_BINDING_MISSING if exact config path/trusted name-resolved publicrecord absent",
+      "unexplainedsymlink/outside-rootresolution/collision/replacement",
+      "unknowncontinuity/transfer/sharedownedobject/conflictinglease/retentiongap",
+      "timeout/excess/unclassifiedoutput: preserve andstop, no widening/polling/retry/cleanup"
+    ]
+  },
+  "limits": [
+    "No current object continuity/exclusivity/retention fact or authority is independently established by this collector.",
+    "Original T3 thread provenance was not queried; verified packet and statuses are retained DATA.",
+    "Historical assignment/releases were hash-checked where cited, not a current exhaustive allocation census.",
+    "No private keys/trust-store bytes/credentials/environment/source helpers inspected or executed.",
+    "All nativeHOLD/Go quarantine/review/M2/runtime/physical/Oracle/release holds unchanged."
+  ],
+  "next_Root_DATA_statement_fields": [
+    "dated attributable actual allocator identity/as-of point and basis",
+    "exact TART_HOME/name/builddisk tuple linked to original Root allocation; any replacement/rename/import/transfer",
+    "whether Root remains sole allocator; exhaustive current users/workers/services/reservations/shared-disk interests, or authoritatively none",
+    "reconcile saved allocation endpoints including v2 finished summary; preserve current compaction HOLD without retrospective RELEASED",
+    "nonsecret evidence/state retention needs before whole-object stop; whether retained host copies meet them"
+  ],
+  "packet": {
+    "all_textTruncated_false": true,
+    "items": 15,
+    "numeric_exit_wait_exposure": "not supplied; completed is not exit0",
+    "positions": [
+      654,
+      767,
+      768,
+      773,
+      800,
+      806,
+      837,
+      845,
+      854,
+      856,
+      857,
+      859,
+      870,
+      875,
+      882
+    ],
+    "server_identity_baseline": "not supplied; client public fingerprint is not server identity",
+    "statuses": {
+      "completed": 14,
+      "running": 1
+    },
+    "synthetic_client_public_fingerprint_match": true
+  },
+  "recovered_freeze_files_matched": 5,
+  "schema": "mac-vm-history-disposition-independent-DATA-collection-v1",
+  "scope": "own stdlib DATA reads/parsing/hashing only; no runtime/VM/currentprocess/thread/lease query or actions, no submitted code or source execution",
+  "source_integrity_scope": "Astra reports232 scoped regular source/config/doc files + full Git index-entry listing unchanged; NOT all1426 source files. Baseline/end raw row manifests are not delivered in these two docs; collector does not recreate historical before/after proof from hashes alone. Explicit published source-document hashes were matched."
+}

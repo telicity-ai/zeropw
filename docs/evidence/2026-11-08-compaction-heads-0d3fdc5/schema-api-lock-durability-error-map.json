@@ -1,0 +1,83 @@
+{
+  "cache": {
+    "canonical_boundary": "Whole cache spelling must equal pyjson::dumps(parsed, pretty_sorted); embedded commit/record canonical representations equal unchanged constructors. Prospective image uses same decode path before publication. No parser/features/helpers changed.",
+    "caps": {
+      "disk_read_limit": 16777217,
+      "heads": 256,
+      "serialized_utf8_bytes": 16777216
+    },
+    "closed_head_fields": [
+      "author",
+      "author_seq",
+      "hlc",
+      "commit_hash",
+      "device",
+      "commit"
+    ],
+    "closed_root_fields": [
+      "format",
+      "env_id",
+      "vector",
+      "heads"
+    ],
+    "format": "zeropw-team-compaction-heads-v1",
+    "hlc": "Exact original signed Commit.hlc string, including legacy accepted padding; numeric Hlc::parse only for monotonic comparison.",
+    "monotonicity": "Every prior positive author retained componentwise; exact same-slot originals/full record; increasing parsed HLC for a higher slot. Missing exact live/cache head or local record refuses without fallback.",
+    "originals": "Complete Commit::to_dict with original sig and full self-signed DeviceRecord::to_dict; canonical unsigned and signed bytes retained.",
+    "path": "team/{env_id}/compaction_heads.json",
+    "vector": "Exactly positive PyInt snapshot components; zero omitted; negative refused; sorted exact author heads."
+  },
+  "new_fixed_StateError_reasons": {
+    "team_compaction_head_invalid": "Malformed/corrupt/unsupported/canonical/signature/hash/env/slot/full-record conflict or vector/HLC regression.",
+    "team_compaction_head_limit_exceeded": "Head/serialized cap or unsupported prospective cache depth under unchanged pyjson helper.",
+    "team_compaction_head_persist_failed": "Required barrier/cache write/readback/binding failure.",
+    "team_compaction_head_unavailable": "Missing exact original or full local record; legacy loss has no synthesis/lower/newer fallback.",
+    "team_compaction_lock_required": "Private helper without actual state lock."
+  },
+  "non_effects": [
+    "Cache never advances live vector or grants authority/admission/receipt/readiness.",
+    "No new runtime/onboarding/capability/approval/READY/ACK/installer/DEK unwrap/getter/DB overwrite.",
+    "HTTP gateway, separate SSH signer, all original wire/snapshot/record/numeric/crypto formats and supported CLI semantics unchanged.",
+    "Backup continues to omit cache; absent/corrupt cache grants nothing and cannot reconstruct lost originals.",
+    "Cache holds only original signed public/ciphertext evidence; no decrypt/private key/raw DEK/plaintext writes or new logs.",
+    "All M2-G01-G10, DOS-1 HIGH, Opus3eb interrupted, ca01275 and physical/Oracle/runtime/release holds remain OPEN."
+  ],
+  "private_api": {
+    "PreparedHeads": "Private fields/constructor; no Clone/Debug/Serialize/getter/public export; env/vector/total/state-path and exact snapshot image binding.",
+    "lock": "Both helpers require actual StateDir::locked_by_current_thread(), no supplied Boolean/callback authority.",
+    "module": "rust/src/team/compaction_heads.rs, private declaration only in team/mod.rs",
+    "persist": "persist_before_prune(&StateDir, env_id, &PyInt, PreparedHeads) -> Result<()>",
+    "prepare": "prepare(&StateDir, env_id, &FoldResult, &[Commit], &Value) -> Result<PreparedHeads>",
+    "production_caller": "Only TeamSync::compact."
+  },
+  "real_compact": {
+    "age_peer_gate": "Original age cutoff/order/active-peer vector gate and result fields preserved. No-old/blocked attempts publish no cache and prune nothing.",
+    "before_writes": "All cache shape/signature/canonical/size/round-trip/coverage/regression checks finish before compact writes snapshot/cache.",
+    "failure_meaning": "Evidence refusal precedes new snapshot/cache/prune. Persistence failure can leave metadata, but no new unlink before completed barrier. Existing load_facts maintenance is not rolled back. No multi-file import transaction/journal claim.",
+    "fresh_inputs": "load_facts, CommitStore::all_commits, fold_with_snapshot for current membership; fact-free fold for full public signature records, including inactive/removed.",
+    "lock_order": "StateDir before fresh facts/commits/members; short envs lock for copied peer vectors and last_snapshot_total update. No disk/fold/network while holding envs in new compact path.",
+    "mixed_commits": "Any commit containing a retained kind remains live byte-identically; successful unlink counting unchanged.",
+    "publication_order": [
+      "unchanged save_snapshot",
+      "unchanged snapshot_record(Some(fresh_facts), full_live_slice) and save_snapshot_record",
+      "record canonical readback equals computed record",
+      "snapshot image/vector/total readback binding",
+      "safe directory File::open(...).sync_all from snapshot dir and record dir through StateDir root",
+      "atomic StateDir::write_json cache (file sync+rename)",
+      "cache parent/ancestors through StateDir root sync",
+      "bounded exact cache reload/canonical/signature checks plus snapshot/record readback",
+      "original best-effort unlink loop",
+      "last_snapshot_total update under short envs lock",
+      "release outer StateDir lock, existing refold/audit/result handling"
+    ],
+    "retained_whole_commit_kinds": [
+      "env.init",
+      "member.add",
+      "member.set_role",
+      "member.remove",
+      "owner.transfer",
+      "dek.rotate"
+    ]
+  },
+  "schema": "zeropw-compaction-heads-implementation-map-v1"
+}

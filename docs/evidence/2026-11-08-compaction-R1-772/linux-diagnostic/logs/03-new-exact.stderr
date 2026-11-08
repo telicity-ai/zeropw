@@ -1,0 +1,3 @@
+   Compiling zeropw v0.2.0 (/opt/cgjob/r1-r3-src/rust)
+    Finished `test` profile [unoptimized] target(s) in 12.35s
+     Running unittests src/lib.rs (/opt/cgjob/target/debug/deps/zeropw-007970ffd6770fca)

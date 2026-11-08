@@ -1,0 +1,171 @@
+{
+  "actual_model": "gpt-6.1-sol / ultra; effective service tier unexposed",
+  "all_fixed_source_git_modes_unchanged": true,
+  "base": "1a20a2dd03229925a5657ec011bb337542e5b4e1",
+  "before4_files_match_base": true,
+  "before_manifest_all_entries_match_base": true,
+  "before_manifest_sha256": "06aa86bafba035140d4f657dd97711e4b71422a4d3cc5a87ddbed762a8183f5c",
+  "changed_file_bindings": {
+    "rust/src/team/commit.rs": {
+      "base_blob": "df020578f1e3a94b1600d494f4c8e588edf4010d",
+      "base_bytes": 154246,
+      "base_sha256": "a3e71f52af051364c60e8d751d3f15a80652c7ce56e93b447489fd5471d551e7",
+      "git_mode": "100644",
+      "head_blob": "fc2b3fad874e716b6ff1b77419b37cc06abcb1ca",
+      "head_bytes": 165547,
+      "head_sha256": "8c5f7a6340c8eb6d35cbe7bae1860212493283b232cb3b413057ef95f287dfb9"
+    },
+    "rust/src/team/compaction_heads.rs": {
+      "base_blob": "1053714a2dfa7e3571fc3ac2ecf19e7ae5a339ca",
+      "base_bytes": 51940,
+      "base_sha256": "43d3471fdfd3cd6f25cfd57d06145bb4ea4a33f2af44b2701a68758eb6bc7f9f",
+      "git_mode": "100644",
+      "head_blob": "441866e5edd3d405f509463ccba13c124ddaacf4",
+      "head_bytes": 52656,
+      "head_sha256": "83a68f0b1727375366fafbd2a063f643d389c4d8140cad7027af3f1e1a52ba3b"
+    },
+    "rust/src/team/sync.rs": {
+      "base_blob": "09e7ddcac98a6cf3e951727301ab7a103c02d0b6",
+      "base_bytes": 439565,
+      "base_sha256": "dfaad3e08226c8193335703f858ce0ecd37fba557230fafc568c6b02c5016390",
+      "git_mode": "100644",
+      "head_blob": "9068c2d01470de8f8811819829b8890f7c91890f",
+      "head_bytes": 499862,
+      "head_sha256": "7548c6d16a738c98338ba168662640eacdcd5386497108546132175be79395c0"
+    },
+    "rust/tests/team_compaction_heads.rs": {
+      "base_blob": "a0d3b08a259f52136e389d719f976ac9e1c677b5",
+      "base_bytes": 70375,
+      "base_sha256": "f59f6b34f8886f198372d3276a3b3f4229b93253b1508d71cff818159d417b5c",
+      "git_mode": "100644",
+      "head_blob": "341bf00fb39f8b399aba699e21ce3209d4b39f58",
+      "head_bytes": 78249,
+      "head_sha256": "eecb11ec516e94ed331d570017eef91e903012db8b6cefb9f0e542092ce3f6dd"
+    }
+  },
+  "changed_paths": [
+    "rust/src/team/commit.rs",
+    "rust/src/team/compaction_heads.rs",
+    "rust/src/team/sync.rs",
+    "rust/tests/team_compaction_heads.rs"
+  ],
+  "checks": {
+    "all_test_attribute_and_function_counts_add_exactly_the_seven_named_tests": {
+      "rust/src/team/commit.rs": {
+        "added": 2,
+        "new_test_attributes": 50,
+        "old_test_attributes": 48
+      },
+      "rust/src/team/compaction_heads.rs": {
+        "added": 0,
+        "new_test_attributes": 9,
+        "old_test_attributes": 9
+      },
+      "rust/src/team/sync.rs": {
+        "added": 4,
+        "new_test_attributes": 98,
+        "old_test_attributes": 94
+      },
+      "rust/tests/team_compaction_heads.rs": {
+        "added": 1,
+        "new_test_attributes": 28,
+        "old_test_attributes": 27
+      }
+    },
+    "commit_old_test_module_prefix_exact": true,
+    "commit_old_whole_file_insertion_only": true,
+    "commit_three_insertions": [
+      {
+        "base_line": 2128,
+        "lines": 40
+      },
+      {
+        "base_line": 2334,
+        "lines": 34
+      },
+      {
+        "base_line": 2735,
+        "lines": 219
+      }
+    ],
+    "compaction_heads_whole_old_file_exact_after_checked_cache_and_comment_reversion": true,
+    "corrected_octal_literal_exact": true,
+    "corrected_owner_wrap_Root03_scoped_gates_protected_by_old_prefix_and_old_test_preservation": true,
+    "dependency_CI_harness_schema_permission_policy_files_unchanged": true,
+    "f80_delta_only_new_commit_and_sync_tests_production_and_integration_exact": true,
+    "integration_whole_old_source_restored_by_only_approved_earlier_Y2_block_and_removing_append": true,
+    "new_external_public_API_suppression_unsafe_or_production_hook_found": false,
+    "new_internal_pub_super_helpers": 2,
+    "old_earlier_compaction_refusal_and_later_false_branch_exact": true,
+    "sync_entire_old_prefix_exact_added_tail_inside_existing_cfgtest_module": true
+  },
+  "decision_documents": {
+    "decision.md": {
+      "bytes": 13214,
+      "sha256": "f691999d0c84ccb89f2f1590075dbba2f51549573a14d916ddecfdd7fb5b01e1"
+    },
+    "implementation-task.md": {
+      "bytes": 19148,
+      "sha256": "ef0a06a85cfd695ad4b7f89afbe71eee856d30c0096cf5d4b425687dbfadc292"
+    }
+  },
+  "exact_old_function_sha256": {
+    "cached_hlc_not_above_previous": "f756dc916da88b967c5bd9ebddba68d55f9b161556f21f567f97b16f3a5a1000",
+    "device_registry": "2e37988d10d817fa548e32ff9278544c3ea799bdd38f1f9d427c7f016e8d7906",
+    "observe_cached_hlcs": "17d17e1e241256129c661e22b5688793491254c65cefbe14fe522627da4da1d3",
+    "prepare": "e88f7c54384158593ab98061ef133961e0194524809b680973525c0dcd1bb393",
+    "retained_device_registry": "53b90e2760c42dbd229926f5cb093f06974e5840f85dfaff2eedb57c242c0782"
+  },
+  "f80_delta": {
+    "changed_paths": [
+      "rust/src/team/commit.rs",
+      "rust/src/team/sync.rs"
+    ],
+    "mapping": [
+      "Invalid expected self-signature negative assertion added in existing new matcher test.",
+      "Alias-only files asserted empty before canonical huge-sequence file is written in existing new sparse-file test.",
+      "Absent-evidence mutation row expects zero member.add audit rounds after deleting the sole operation; exact new audit length assertion added."
+    ],
+    "production_changes": false,
+    "test_definition_names_changed": false
+  },
+  "fixed_source_paths": 1519,
+  "head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+  "head_full_tree": "43ccc017c0336a9d1d90d494705ec40ab4865c6d",
+  "head_rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+  "independent_blob_objects_read": 1354,
+  "limits": [
+    "Only fixed Git bytes, blobs and modes audited; worktree metadata is a separate non-atomic observation.",
+    "No product, helper, compiler, formatter, test, dependency or project validator executed. No runtime, process, cache, VM, SSH, network or credential queried.",
+    "Test source mapped only; no assertion execution, policy effectiveness, replay or security PASS claimed. No source, index or ref writes.",
+    "Original f649 invalid_member_name failure and f80 diagnostic status remain supplied context; no runtime/result audit performed.",
+    "ZPCHEAD-OPUS-R1-01 HIGH, original findings and all global validation, review, runtime, physical-Mac, Oracle and release holds remain OPEN. Actual Opus review and Astra acceptance remain separate."
+  ],
+  "mode": "DATA preservation/scope mapping only; no implementation, planning, semantic review, acceptance or runtime replay",
+  "new_test_names": {
+    "rust/src/team/commit.rs": [
+      "compaction_heads_r1_exact_announcements_include_nonfirst_ops",
+      "compaction_heads_r1_retained_matches_use_canonical_sparse_files"
+    ],
+    "rust/src/team/sync.rs": [
+      "compaction_heads_r1_other_author_receipt_handle_and_compaction",
+      "compaction_heads_r1_deferred_release_preserves_clock_and_evidence",
+      "compaction_heads_r1_owner_data_removal_and_both_fact_paths",
+      "compaction_heads_r1_local_failures_and_authority_remain_closed"
+    ],
+    "rust/tests/team_compaction_heads.rs": [
+      "compaction_heads_r1_prior_conflicts_identical_and_absence_controls"
+    ]
+  },
+  "observed_root_worktree_metadata": {
+    "atomic_or_frozen_worktree_claim": false,
+    "head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+    "status_porcelain": ""
+  },
+  "prior_audit_json_sha256": "5e70179c36f775a725f9dbe6dbd8210b8d99e4beda35c3ba739cf3936e13636a",
+  "prior_head": "f80baa0e6a1fe94a46cc0b7228f61e32f944333d",
+  "protected_bytes_blobs_modes_exact": true,
+  "protected_paths": 1515,
+  "schema": "Sol-read-only-fixed-source-scope-audit-v2",
+  "time_utc": "2026-11-08T12:15:36.401106+00:00"
+}

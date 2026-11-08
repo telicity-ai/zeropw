@@ -1,0 +1,2028 @@
+{
+  "failed_or_stopped_DATA_attempts": [
+    "00-native-preflight.transport.json",
+    "host-data-audit-attempt1.json",
+    "host-data-finalize-attempt1.json"
+  ],
+  "final_collection": {
+    "exit": 0,
+    "no_further_runtime_calls": true,
+    "path": "32-hold-final-collect.transport.json",
+    "ssh_joined": true
+  },
+  "later_grant": "exact native Mac job only while implementation still active; Linux remains NOT_ASSIGNED/NOTRUN",
+  "launch": "SOURCE_ONLY; both OS NOT_ASSIGNED/NOTRUN at launch",
+  "overlapping_counts": "Focused runs/exact selectors are reported separately and never added to full verifier totals.",
+  "release_attempt": {
+    "exit": 1,
+    "path": "30-own-release-collect.transport.json",
+    "status": "HOLD_UNEXPLAINED_SURVIVOR_RELEASE_NOT_CLAIMED"
+  },
+  "runtime_phases": [
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "tree",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "-e",
+          "features"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 0.8063647747039795,
+        "end_epoch": 1794107194.153074,
+        "exit": 0,
+        "guest_free_after_bytes": 50170363904,
+        "joined": true,
+        "label": "10-features-before",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 93771,
+        "remaining_own_session": [],
+        "source_manifest_after_sha256": "f00a439b93a1449009dcce3113f7eb05016611cde4660f84e9143ac786fbac59",
+        "source_manifest_before_sha256": "f00a439b93a1449009dcce3113f7eb05016611cde4660f84e9143ac786fbac59",
+        "start_epoch": 1794107193.3467112,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/cargo",
+          "tree",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "-e",
+          "features"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "tree",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "-e",
+          "features"
+        ],
+        "cap_seconds": 180,
+        "label": "10-features-before"
+      },
+      "receipt": "native-final/evidence/10-features-before.json",
+      "stage": "native-stage1.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/10-features-before.stderr",
+      "stdout": "native-final/evidence/10-features-before.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/rustfmt",
+          "--edition",
+          "2024",
+          "--config",
+          "skip_children=true",
+          "rust/src/team/mod.rs",
+          "rust/src/team/compaction_heads.rs",
+          "rust/src/team/sync.rs",
+          "rust/tests/team_compaction_heads.rs"
+        ],
+        "changed_source_paths": [
+          "rust/src/team/compaction_heads.rs",
+          "rust/src/team/sync.rs",
+          "rust/tests/team_compaction_heads.rs"
+        ],
+        "elapsed_seconds": 0.3578641414642334,
+        "end_epoch": 1794107194.514413,
+        "exit": 0,
+        "guest_free_after_bytes": 50169589760,
+        "joined": true,
+        "label": "11-format-allowed",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 93781,
+        "remaining_own_session": [],
+        "source_manifest_after_sha256": "f2997e7765ebe46c01f01ae7ffb97dce86f017d95953c78a8af2e464c489f3a1",
+        "source_manifest_before_sha256": "f00a439b93a1449009dcce3113f7eb05016611cde4660f84e9143ac786fbac59",
+        "start_epoch": 1794107194.15655,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/rustfmt",
+          "--edition",
+          "2024",
+          "--config",
+          "skip_children=true",
+          "rust/src/team/mod.rs",
+          "rust/src/team/compaction_heads.rs",
+          "rust/src/team/sync.rs",
+          "rust/tests/team_compaction_heads.rs"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/rustfmt",
+          "--edition",
+          "2024",
+          "--config",
+          "skip_children=true",
+          "rust/src/team/mod.rs",
+          "rust/src/team/compaction_heads.rs",
+          "rust/src/team/sync.rs",
+          "rust/tests/team_compaction_heads.rs"
+        ],
+        "cap_seconds": 180,
+        "format_allowed": true,
+        "label": "11-format-allowed"
+      },
+      "receipt": "native-final/evidence/11-format-allowed.json",
+      "stage": "native-stage1.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/11-format-allowed.stderr",
+      "stdout": "native-final/evidence/11-format-allowed.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--lib",
+          "compaction_heads"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 52.01936388015747,
+        "end_epoch": 1794107246.5364008,
+        "exit": 101,
+        "guest_free_after_bytes": 49881202688,
+        "joined": true,
+        "label": "12-lib-debug-attempt1",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 93786,
+        "remaining_own_session": [],
+        "source_manifest_after_sha256": "f2997e7765ebe46c01f01ae7ffb97dce86f017d95953c78a8af2e464c489f3a1",
+        "source_manifest_before_sha256": "f2997e7765ebe46c01f01ae7ffb97dce86f017d95953c78a8af2e464c489f3a1",
+        "start_epoch": 1794107194.517038,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--lib",
+          "compaction_heads"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--lib",
+          "compaction_heads"
+        ],
+        "cap_seconds": 1800,
+        "label": "12-lib-debug-attempt1"
+      },
+      "receipt": "native-final/evidence/12-lib-debug-attempt1.json",
+      "stage": "native-stage1.json",
+      "status": "FAILED_EXIT_101",
+      "stderr": "native-final/evidence/12-lib-debug-attempt1.stderr",
+      "stdout": "native-final/evidence/12-lib-debug-attempt1.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--lib",
+          "compaction_heads"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 55.8993022441864,
+        "end_epoch": 1794107408.764718,
+        "exit": 0,
+        "guest_free_after_bytes": 49852252160,
+        "joined": true,
+        "label": "13-lib-debug-attempt2",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 95070,
+        "remaining_own_session": [],
+        "source_manifest_after_sha256": "1b6803510ec56203b46067bab48b8a928dd8587d032b264566b825c456f67be8",
+        "source_manifest_before_sha256": "1b6803510ec56203b46067bab48b8a928dd8587d032b264566b825c456f67be8",
+        "start_epoch": 1794107352.865418,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--lib",
+          "compaction_heads"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--lib",
+          "compaction_heads"
+        ],
+        "cap_seconds": 1800,
+        "label": "13-lib-debug-attempt2"
+      },
+      "receipt": "native-final/evidence/13-lib-debug-attempt2.json",
+      "stage": "native-stage2.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/13-lib-debug-attempt2.stderr",
+      "stdout": "native-final/evidence/13-lib-debug-attempt2.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_compaction_heads"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 27.030138969421387,
+        "end_epoch": 1794107435.79708,
+        "exit": 0,
+        "guest_free_after_bytes": 49723293696,
+        "joined": true,
+        "label": "14-integration-debug-attempt1",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 95367,
+        "remaining_own_session": [],
+        "source_manifest_after_sha256": "1b6803510ec56203b46067bab48b8a928dd8587d032b264566b825c456f67be8",
+        "source_manifest_before_sha256": "1b6803510ec56203b46067bab48b8a928dd8587d032b264566b825c456f67be8",
+        "start_epoch": 1794107408.766942,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_compaction_heads"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_compaction_heads"
+        ],
+        "cap_seconds": 1800,
+        "label": "14-integration-debug-attempt1"
+      },
+      "receipt": "native-final/evidence/14-integration-debug-attempt1.json",
+      "stage": "native-stage2.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/14-integration-debug-attempt1.stderr",
+      "stdout": "native-final/evidence/14-integration-debug-attempt1.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "clippy",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 25.865792989730835,
+        "end_epoch": 1794107487.457278,
+        "exit": 101,
+        "guest_free_after_bytes": 49636708352,
+        "joined": true,
+        "label": "15-clippy-attempt1",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 95692,
+        "remaining_own_session": [],
+        "source_manifest_after_sha256": "1b6803510ec56203b46067bab48b8a928dd8587d032b264566b825c456f67be8",
+        "source_manifest_before_sha256": "1b6803510ec56203b46067bab48b8a928dd8587d032b264566b825c456f67be8",
+        "start_epoch": 1794107461.591487,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/cargo",
+          "clippy",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "clippy",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "cap_seconds": 1800,
+        "label": "15-clippy-attempt1"
+      },
+      "receipt": "native-final/evidence/15-clippy-attempt1.json",
+      "stage": "native-stage3.json",
+      "status": "FAILED_EXIT_101",
+      "stderr": "native-final/evidence/15-clippy-attempt1.stderr",
+      "stdout": "native-final/evidence/15-clippy-attempt1.stdout"
+    },
+    {
+      "exit": null,
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--lib",
+          "compaction_heads"
+        ],
+        "cap_seconds": 1800,
+        "label": "16-lib-release-attempt1"
+      },
+      "reason": "stage3 stopped at preceding 15-clippy-attempt1 exit101; later distinct final release runs do not relabel this plan",
+      "selected_tests": null,
+      "stage": "native-stage3.json",
+      "status": "NOTRUN"
+    },
+    {
+      "exit": null,
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--test",
+          "team_compaction_heads"
+        ],
+        "cap_seconds": 1800,
+        "label": "17-integration-release-attempt1"
+      },
+      "reason": "stage3 stopped at preceding 15-clippy-attempt1 exit101; later distinct final release runs do not relabel this plan",
+      "selected_tests": null,
+      "stage": "native-stage3.json",
+      "status": "NOTRUN"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/rustfmt",
+          "--edition",
+          "2024",
+          "--config",
+          "skip_children=true",
+          "rust/src/team/mod.rs",
+          "rust/src/team/compaction_heads.rs",
+          "rust/src/team/sync.rs",
+          "rust/tests/team_compaction_heads.rs"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 0.43806886672973633,
+        "end_epoch": 1794107562.561533,
+        "exit": 0,
+        "guest_free_after_bytes": 49636405248,
+        "joined": true,
+        "label": "18-format-allowed-final",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 96340,
+        "remaining_own_session": [],
+        "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "start_epoch": 1794107562.123465,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/rustfmt",
+          "--edition",
+          "2024",
+          "--config",
+          "skip_children=true",
+          "rust/src/team/mod.rs",
+          "rust/src/team/compaction_heads.rs",
+          "rust/src/team/sync.rs",
+          "rust/tests/team_compaction_heads.rs"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/rustfmt",
+          "--edition",
+          "2024",
+          "--config",
+          "skip_children=true",
+          "rust/src/team/mod.rs",
+          "rust/src/team/compaction_heads.rs",
+          "rust/src/team/sync.rs",
+          "rust/tests/team_compaction_heads.rs"
+        ],
+        "cap_seconds": 180,
+        "format_allowed": true,
+        "label": "18-format-allowed-final"
+      },
+      "receipt": "native-final/evidence/18-format-allowed-final.json",
+      "stage": "native-stage4.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/18-format-allowed-final.stderr",
+      "stdout": "native-final/evidence/18-format-allowed-final.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "clippy",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 27.34328532218933,
+        "end_epoch": 1794107589.908609,
+        "exit": 0,
+        "guest_free_after_bytes": 49626583040,
+        "joined": true,
+        "label": "19-clippy-attempt2",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 96351,
+        "remaining_own_session": [],
+        "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "start_epoch": 1794107562.565328,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/cargo",
+          "clippy",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "clippy",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--all-targets",
+          "--",
+          "-D",
+          "warnings"
+        ],
+        "cap_seconds": 1800,
+        "label": "19-clippy-attempt2"
+      },
+      "receipt": "native-final/evidence/19-clippy-attempt2.json",
+      "stage": "native-stage4.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/19-clippy-attempt2.stderr",
+      "stdout": "native-final/evidence/19-clippy-attempt2.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/rustc",
+          "--version"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 0.21599292755126953,
+        "end_epoch": 1794107671.302259,
+        "exit": 0,
+        "guest_free_after_bytes": 49626488832,
+        "joined": true,
+        "label": "20-rust-version",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 97055,
+        "remaining_own_session": [],
+        "selection_and_discovery_checks": {},
+        "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "start_epoch": 1794107671.086266,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/rustc",
+          "--version"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/rustc",
+          "--version"
+        ],
+        "cap_seconds": 180,
+        "label": "20-rust-version"
+      },
+      "receipt": "native-final/evidence/20-rust-version.json",
+      "stage": "native-stage5-final.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/20-rust-version.stderr",
+      "stdout": "native-final/evidence/20-rust-version.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "--version"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 0.17997407913208008,
+        "end_epoch": 1794107671.484514,
+        "exit": 0,
+        "guest_free_after_bytes": 49625735168,
+        "joined": true,
+        "label": "21-cargo-version",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 97060,
+        "remaining_own_session": [],
+        "selection_and_discovery_checks": {},
+        "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "start_epoch": 1794107671.30454,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/cargo",
+          "--version"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "--version"
+        ],
+        "cap_seconds": 180,
+        "label": "21-cargo-version"
+      },
+      "receipt": "native-final/evidence/21-cargo-version.json",
+      "stage": "native-stage5-final.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/21-cargo-version.stderr",
+      "stdout": "native-final/evidence/21-cargo-version.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/python3",
+          "--version"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 0.2537801265716553,
+        "end_epoch": 1794107671.7404811,
+        "exit": 0,
+        "guest_free_after_bytes": 49624956928,
+        "joined": true,
+        "label": "22-python-version",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 97065,
+        "remaining_own_session": [],
+        "selection_and_discovery_checks": {},
+        "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "start_epoch": 1794107671.486702,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/python3",
+          "--version"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/python3",
+          "--version"
+        ],
+        "cap_seconds": 180,
+        "label": "22-python-version"
+      },
+      "receipt": "native-final/evidence/22-python-version.json",
+      "stage": "native-stage5-final.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/22-python-version.stderr",
+      "stdout": "native-final/evidence/22-python-version.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--lib",
+          "compaction_heads"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 54.68832206726074,
+        "end_epoch": 1794107726.432205,
+        "exit": 0,
+        "guest_free_after_bytes": 49624182784,
+        "joined": true,
+        "label": "23-lib-debug-final",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 97074,
+        "remaining_own_session": [],
+        "selection_and_discovery_checks": {
+          "executed_passed": 13,
+          "test_selection": "MATCH"
+        },
+        "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "start_epoch": 1794107671.743883,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--lib",
+          "compaction_heads"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--lib",
+          "compaction_heads"
+        ],
+        "cap_seconds": 1800,
+        "label": "23-lib-debug-final",
+        "test_selection": "nonzero"
+      },
+      "receipt": "native-final/evidence/23-lib-debug-final.json",
+      "stage": "native-stage5-final.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/23-lib-debug-final.stderr",
+      "stdout": "native-final/evidence/23-lib-debug-final.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_compaction_heads"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 26.414594173431396,
+        "end_epoch": 1794107752.849024,
+        "exit": 0,
+        "guest_free_after_bytes": 49623416832,
+        "joined": true,
+        "label": "24-integration-debug-final",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 97371,
+        "remaining_own_session": [],
+        "selection_and_discovery_checks": {
+          "executed_passed": 11,
+          "test_selection": "MATCH"
+        },
+        "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "start_epoch": 1794107726.43443,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_compaction_heads"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_compaction_heads"
+        ],
+        "cap_seconds": 1800,
+        "label": "24-integration-debug-final",
+        "test_selection": "nonzero"
+      },
+      "receipt": "native-final/evidence/24-integration-debug-final.json",
+      "stage": "native-stage5-final.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/24-integration-debug-final.stderr",
+      "stdout": "native-final/evidence/24-integration-debug-final.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--lib",
+          "compaction_heads"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 165.31129384040833,
+        "end_epoch": 1794107918.162634,
+        "exit": 0,
+        "guest_free_after_bytes": 49306107904,
+        "joined": true,
+        "label": "25-lib-release-final",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 97550,
+        "remaining_own_session": [],
+        "selection_and_discovery_checks": {
+          "executed_passed": 13,
+          "test_selection": "MATCH"
+        },
+        "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "start_epoch": 1794107752.85134,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--lib",
+          "compaction_heads"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--lib",
+          "compaction_heads"
+        ],
+        "cap_seconds": 1800,
+        "label": "25-lib-release-final",
+        "test_selection": "nonzero"
+      },
+      "receipt": "native-final/evidence/25-lib-release-final.json",
+      "stage": "native-stage5-final.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/25-lib-release-final.stderr",
+      "stdout": "native-final/evidence/25-lib-release-final.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--test",
+          "team_compaction_heads"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 72.08230590820312,
+        "end_epoch": 1794107990.2481012,
+        "exit": 0,
+        "guest_free_after_bytes": 49250971648,
+        "joined": true,
+        "label": "26-integration-release-final",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 98849,
+        "remaining_own_session": [],
+        "selection_and_discovery_checks": {
+          "executed_passed": 11,
+          "test_selection": "MATCH"
+        },
+        "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "start_epoch": 1794107918.165796,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--test",
+          "team_compaction_heads"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--test",
+          "team_compaction_heads"
+        ],
+        "cap_seconds": 1800,
+        "label": "26-integration-release-final",
+        "test_selection": "nonzero"
+      },
+      "receipt": "native-final/evidence/26-integration-release-final.json",
+      "stage": "native-stage5-final.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/26-integration-release-final.stderr",
+      "stdout": "native-final/evidence/26-integration-release-final.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/bin/bash",
+          "rust/verify.sh"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 3633.3759281635284,
+        "end_epoch": 1794111623.627021,
+        "exit": 0,
+        "guest_free_after_bytes": 48232243200,
+        "joined": true,
+        "label": "27-full-verify-final",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 99269,
+        "remaining_own_session": [],
+        "selection_and_discovery_checks": {
+          "integration_targets": 107,
+          "verify_discovery_order": "MATCH",
+          "verify_steps": 112
+        },
+        "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "start_epoch": 1794107990.251093,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/bin/bash",
+          "rust/verify.sh"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/bin/bash",
+          "rust/verify.sh"
+        ],
+        "cap_seconds": 7200,
+        "full_verify": true,
+        "label": "27-full-verify-final"
+      },
+      "receipt": "native-final/evidence/27-full-verify-final.json",
+      "stage": "native-stage5-final.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/27-full-verify-final.stderr",
+      "stdout": "native-final/evidence/27-full-verify-final.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_checkpoint_payload",
+          "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+          "--",
+          "--exact"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 0.2994110584259033,
+        "end_epoch": 1794111623.928709,
+        "exit": 0,
+        "guest_free_after_bytes": 48231661568,
+        "joined": true,
+        "label": "28-exact-debug-1",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 22032,
+        "remaining_own_session": [],
+        "selection_and_discovery_checks": {
+          "executed_passed": 1,
+          "test_selection": "MATCH"
+        },
+        "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "start_epoch": 1794111623.629299,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_checkpoint_payload",
+          "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+          "--",
+          "--exact"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_checkpoint_payload",
+          "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+          "--",
+          "--exact"
+        ],
+        "cap_seconds": 1800,
+        "label": "28-exact-debug-1",
+        "test_selection": "exact_one"
+      },
+      "receipt": "native-final/evidence/28-exact-debug-1.json",
+      "stage": "native-stage5-final.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/28-exact-debug-1.stderr",
+      "stdout": "native-final/evidence/28-exact-debug-1.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_checkpoint_admission",
+          "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+          "--",
+          "--exact"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 0.41255807876586914,
+        "end_epoch": 1794111624.344239,
+        "exit": 0,
+        "guest_free_after_bytes": 48230707200,
+        "joined": true,
+        "label": "29-exact-debug-2",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 22037,
+        "remaining_own_session": [],
+        "selection_and_discovery_checks": {
+          "executed_passed": 1,
+          "test_selection": "MATCH"
+        },
+        "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "start_epoch": 1794111623.931682,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_checkpoint_admission",
+          "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+          "--",
+          "--exact"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_checkpoint_admission",
+          "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+          "--",
+          "--exact"
+        ],
+        "cap_seconds": 1800,
+        "label": "29-exact-debug-2",
+        "test_selection": "exact_one"
+      },
+      "receipt": "native-final/evidence/29-exact-debug-2.json",
+      "stage": "native-stage5-final.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/29-exact-debug-2.stderr",
+      "stdout": "native-final/evidence/29-exact-debug-2.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_checkpoint_semantic_cut",
+          "complete_candidate_depth64_success_late_error_repeat_drop_and_65_refusal_on_256_kib",
+          "--",
+          "--exact"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 0.39599180221557617,
+        "end_epoch": 1794111624.742982,
+        "exit": 0,
+        "guest_free_after_bytes": 48229937152,
+        "joined": true,
+        "label": "30-exact-debug-3",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 22044,
+        "remaining_own_session": [],
+        "selection_and_discovery_checks": {
+          "executed_passed": 1,
+          "test_selection": "MATCH"
+        },
+        "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "start_epoch": 1794111624.34699,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_checkpoint_semantic_cut",
+          "complete_candidate_depth64_success_late_error_repeat_drop_and_65_refusal_on_256_kib",
+          "--",
+          "--exact"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_checkpoint_semantic_cut",
+          "complete_candidate_depth64_success_late_error_repeat_drop_and_65_refusal_on_256_kib",
+          "--",
+          "--exact"
+        ],
+        "cap_seconds": 1800,
+        "label": "30-exact-debug-3",
+        "test_selection": "exact_one"
+      },
+      "receipt": "native-final/evidence/30-exact-debug-3.json",
+      "stage": "native-stage5-final.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/30-exact-debug-3.stderr",
+      "stdout": "native-final/evidence/30-exact-debug-3.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_checkpoint_semantic_cut",
+          "complete_fold_depth64_on_actual_256_kib_stack",
+          "--",
+          "--exact"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 0.29878902435302734,
+        "end_epoch": 1794111625.0440161,
+        "exit": 0,
+        "guest_free_after_bytes": 48229183488,
+        "joined": true,
+        "label": "31-exact-debug-4",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 22049,
+        "remaining_own_session": [],
+        "selection_and_discovery_checks": {
+          "executed_passed": 1,
+          "test_selection": "MATCH"
+        },
+        "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "start_epoch": 1794111624.745227,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_checkpoint_semantic_cut",
+          "complete_fold_depth64_on_actual_256_kib_stack",
+          "--",
+          "--exact"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_checkpoint_semantic_cut",
+          "complete_fold_depth64_on_actual_256_kib_stack",
+          "--",
+          "--exact"
+        ],
+        "cap_seconds": 1800,
+        "label": "31-exact-debug-4",
+        "test_selection": "exact_one"
+      },
+      "receipt": "native-final/evidence/31-exact-debug-4.json",
+      "stage": "native-stage5-final.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/31-exact-debug-4.stderr",
+      "stdout": "native-final/evidence/31-exact-debug-4.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_checkpoint_required_generations",
+          "required_generation_depth64_success_late_error_repeat_drop_on_actual_256_kib",
+          "--",
+          "--exact"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 4.516669034957886,
+        "end_epoch": 1794111629.563477,
+        "exit": 0,
+        "guest_free_after_bytes": 48228601856,
+        "joined": true,
+        "label": "32-exact-debug-5",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 22059,
+        "remaining_own_session": [],
+        "selection_and_discovery_checks": {
+          "executed_passed": 1,
+          "test_selection": "MATCH"
+        },
+        "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "start_epoch": 1794111625.046808,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_checkpoint_required_generations",
+          "required_generation_depth64_success_late_error_repeat_drop_on_actual_256_kib",
+          "--",
+          "--exact"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_checkpoint_required_generations",
+          "required_generation_depth64_success_late_error_repeat_drop_on_actual_256_kib",
+          "--",
+          "--exact"
+        ],
+        "cap_seconds": 1800,
+        "label": "32-exact-debug-5",
+        "test_selection": "exact_one"
+      },
+      "receipt": "native-final/evidence/32-exact-debug-5.json",
+      "stage": "native-stage5-final.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/32-exact-debug-5.stderr",
+      "stdout": "native-final/evidence/32-exact-debug-5.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_checkpoint_required_generations",
+          "required_generation_depth65_refuses_before_crypto_on_actual_256_kib",
+          "--",
+          "--exact"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 2.279006004333496,
+        "end_epoch": 1794111631.84593,
+        "exit": 0,
+        "guest_free_after_bytes": 48227844096,
+        "joined": true,
+        "label": "33-exact-debug-6",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 22086,
+        "remaining_own_session": [],
+        "selection_and_discovery_checks": {
+          "executed_passed": 1,
+          "test_selection": "MATCH"
+        },
+        "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "start_epoch": 1794111629.566925,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_checkpoint_required_generations",
+          "required_generation_depth65_refuses_before_crypto_on_actual_256_kib",
+          "--",
+          "--exact"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_checkpoint_required_generations",
+          "required_generation_depth65_refuses_before_crypto_on_actual_256_kib",
+          "--",
+          "--exact"
+        ],
+        "cap_seconds": 1800,
+        "label": "33-exact-debug-6",
+        "test_selection": "exact_one"
+      },
+      "receipt": "native-final/evidence/33-exact-debug-6.json",
+      "stage": "native-stage5-final.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/33-exact-debug-6.stderr",
+      "stdout": "native-final/evidence/33-exact-debug-6.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_checkpoint_required_generations",
+          "required_wrap_depth64_success_error_repeat_drop_on_actual_256_kib",
+          "--",
+          "--exact"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 4.415426969528198,
+        "end_epoch": 1794111636.263948,
+        "exit": 0,
+        "guest_free_after_bytes": 48227078144,
+        "joined": true,
+        "label": "34-exact-debug-7",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 22101,
+        "remaining_own_session": [],
+        "selection_and_discovery_checks": {
+          "executed_passed": 1,
+          "test_selection": "MATCH"
+        },
+        "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "start_epoch": 1794111631.848521,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_checkpoint_required_generations",
+          "required_wrap_depth64_success_error_repeat_drop_on_actual_256_kib",
+          "--",
+          "--exact"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--test",
+          "team_checkpoint_required_generations",
+          "required_wrap_depth64_success_error_repeat_drop_on_actual_256_kib",
+          "--",
+          "--exact"
+        ],
+        "cap_seconds": 1800,
+        "label": "34-exact-debug-7",
+        "test_selection": "exact_one"
+      },
+      "receipt": "native-final/evidence/34-exact-debug-7.json",
+      "stage": "native-stage5-final.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/34-exact-debug-7.stderr",
+      "stdout": "native-final/evidence/34-exact-debug-7.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--test",
+          "team_checkpoint_payload",
+          "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+          "--",
+          "--exact"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 3.1262261867523193,
+        "end_epoch": 1794111639.3948212,
+        "exit": 0,
+        "guest_free_after_bytes": 48223952896,
+        "joined": true,
+        "label": "35-exact-release-1",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 22130,
+        "remaining_own_session": [],
+        "selection_and_discovery_checks": {
+          "executed_passed": 1,
+          "test_selection": "MATCH"
+        },
+        "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "start_epoch": 1794111636.268595,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--test",
+          "team_checkpoint_payload",
+          "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+          "--",
+          "--exact"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--test",
+          "team_checkpoint_payload",
+          "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+          "--",
+          "--exact"
+        ],
+        "cap_seconds": 1800,
+        "label": "35-exact-release-1",
+        "test_selection": "exact_one"
+      },
+      "receipt": "native-final/evidence/35-exact-release-1.json",
+      "stage": "native-stage5-final.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/35-exact-release-1.stderr",
+      "stdout": "native-final/evidence/35-exact-release-1.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--test",
+          "team_checkpoint_admission",
+          "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+          "--",
+          "--exact"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 5.287840843200684,
+        "end_epoch": 1794111644.6852748,
+        "exit": 0,
+        "guest_free_after_bytes": 48218030080,
+        "joined": true,
+        "label": "36-exact-release-2",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 22155,
+        "remaining_own_session": [],
+        "selection_and_discovery_checks": {
+          "executed_passed": 1,
+          "test_selection": "MATCH"
+        },
+        "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "start_epoch": 1794111639.397434,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--test",
+          "team_checkpoint_admission",
+          "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+          "--",
+          "--exact"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--test",
+          "team_checkpoint_admission",
+          "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+          "--",
+          "--exact"
+        ],
+        "cap_seconds": 1800,
+        "label": "36-exact-release-2",
+        "test_selection": "exact_one"
+      },
+      "receipt": "native-final/evidence/36-exact-release-2.json",
+      "stage": "native-stage5-final.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/36-exact-release-2.stderr",
+      "stdout": "native-final/evidence/36-exact-release-2.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--test",
+          "team_checkpoint_semantic_cut",
+          "complete_candidate_depth64_success_late_error_repeat_drop_and_65_refusal_on_256_kib",
+          "--",
+          "--exact"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 6.136080980300903,
+        "end_epoch": 1794111650.8245382,
+        "exit": 0,
+        "guest_free_after_bytes": 48211722240,
+        "joined": true,
+        "label": "37-exact-release-3",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 22191,
+        "remaining_own_session": [],
+        "selection_and_discovery_checks": {
+          "executed_passed": 1,
+          "test_selection": "MATCH"
+        },
+        "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "start_epoch": 1794111644.688458,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--test",
+          "team_checkpoint_semantic_cut",
+          "complete_candidate_depth64_success_late_error_repeat_drop_and_65_refusal_on_256_kib",
+          "--",
+          "--exact"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--test",
+          "team_checkpoint_semantic_cut",
+          "complete_candidate_depth64_success_late_error_repeat_drop_and_65_refusal_on_256_kib",
+          "--",
+          "--exact"
+        ],
+        "cap_seconds": 1800,
+        "label": "37-exact-release-3",
+        "test_selection": "exact_one"
+      },
+      "receipt": "native-final/evidence/37-exact-release-3.json",
+      "stage": "native-stage5-final.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/37-exact-release-3.stderr",
+      "stdout": "native-final/evidence/37-exact-release-3.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--test",
+          "team_checkpoint_semantic_cut",
+          "complete_fold_depth64_on_actual_256_kib_stack",
+          "--",
+          "--exact"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 0.431243896484375,
+        "end_epoch": 1794111651.258328,
+        "exit": 0,
+        "guest_free_after_bytes": 48210964480,
+        "joined": true,
+        "label": "38-exact-release-4",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 22232,
+        "remaining_own_session": [],
+        "selection_and_discovery_checks": {
+          "executed_passed": 1,
+          "test_selection": "MATCH"
+        },
+        "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "start_epoch": 1794111650.827084,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--test",
+          "team_checkpoint_semantic_cut",
+          "complete_fold_depth64_on_actual_256_kib_stack",
+          "--",
+          "--exact"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--test",
+          "team_checkpoint_semantic_cut",
+          "complete_fold_depth64_on_actual_256_kib_stack",
+          "--",
+          "--exact"
+        ],
+        "cap_seconds": 1800,
+        "label": "38-exact-release-4",
+        "test_selection": "exact_one"
+      },
+      "receipt": "native-final/evidence/38-exact-release-4.json",
+      "stage": "native-stage5-final.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/38-exact-release-4.stderr",
+      "stdout": "native-final/evidence/38-exact-release-4.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--test",
+          "team_checkpoint_required_generations",
+          "required_generation_depth64_success_late_error_repeat_drop_on_actual_256_kib",
+          "--",
+          "--exact"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 8.023902177810669,
+        "end_epoch": 1794111659.292205,
+        "exit": 0,
+        "guest_free_after_bytes": 48204836864,
+        "joined": true,
+        "label": "39-exact-release-5",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 22237,
+        "remaining_own_session": [],
+        "selection_and_discovery_checks": {
+          "executed_passed": 1,
+          "test_selection": "MATCH"
+        },
+        "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "start_epoch": 1794111651.2683039,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--test",
+          "team_checkpoint_required_generations",
+          "required_generation_depth64_success_late_error_repeat_drop_on_actual_256_kib",
+          "--",
+          "--exact"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--test",
+          "team_checkpoint_required_generations",
+          "required_generation_depth64_success_late_error_repeat_drop_on_actual_256_kib",
+          "--",
+          "--exact"
+        ],
+        "cap_seconds": 1800,
+        "label": "39-exact-release-5",
+        "test_selection": "exact_one"
+      },
+      "receipt": "native-final/evidence/39-exact-release-5.json",
+      "stage": "native-stage5-final.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/39-exact-release-5.stderr",
+      "stdout": "native-final/evidence/39-exact-release-5.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--test",
+          "team_checkpoint_required_generations",
+          "required_generation_depth65_refuses_before_crypto_on_actual_256_kib",
+          "--",
+          "--exact"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 0.43976306915283203,
+        "end_epoch": 1794111659.73528,
+        "exit": 0,
+        "guest_free_after_bytes": 48204083200,
+        "joined": true,
+        "label": "40-exact-release-6",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 22318,
+        "remaining_own_session": [],
+        "selection_and_discovery_checks": {
+          "executed_passed": 1,
+          "test_selection": "MATCH"
+        },
+        "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "start_epoch": 1794111659.295517,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--test",
+          "team_checkpoint_required_generations",
+          "required_generation_depth65_refuses_before_crypto_on_actual_256_kib",
+          "--",
+          "--exact"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--test",
+          "team_checkpoint_required_generations",
+          "required_generation_depth65_refuses_before_crypto_on_actual_256_kib",
+          "--",
+          "--exact"
+        ],
+        "cap_seconds": 1800,
+        "label": "40-exact-release-6",
+        "test_selection": "exact_one"
+      },
+      "receipt": "native-final/evidence/40-exact-release-6.json",
+      "stage": "native-stage5-final.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/40-exact-release-6.stderr",
+      "stdout": "native-final/evidence/40-exact-release-6.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--test",
+          "team_checkpoint_required_generations",
+          "required_wrap_depth64_success_error_repeat_drop_on_actual_256_kib",
+          "--",
+          "--exact"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 0.9918220043182373,
+        "end_epoch": 1794111660.7310662,
+        "exit": 0,
+        "guest_free_after_bytes": 48203325440,
+        "joined": true,
+        "label": "41-exact-release-7",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 22326,
+        "remaining_own_session": [],
+        "selection_and_discovery_checks": {
+          "executed_passed": 1,
+          "test_selection": "MATCH"
+        },
+        "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "start_epoch": 1794111659.739245,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--test",
+          "team_checkpoint_required_generations",
+          "required_wrap_depth64_success_error_repeat_drop_on_actual_256_kib",
+          "--",
+          "--exact"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "test",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "--release",
+          "--test",
+          "team_checkpoint_required_generations",
+          "required_wrap_depth64_success_error_repeat_drop_on_actual_256_kib",
+          "--",
+          "--exact"
+        ],
+        "cap_seconds": 1800,
+        "label": "41-exact-release-7",
+        "test_selection": "exact_one"
+      },
+      "receipt": "native-final/evidence/41-exact-release-7.json",
+      "stage": "native-stage5-final.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/41-exact-release-7.stderr",
+      "stdout": "native-final/evidence/41-exact-release-7.stdout"
+    },
+    {
+      "actual": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "tree",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "-e",
+          "features"
+        ],
+        "changed_source_paths": [],
+        "elapsed_seconds": 0.3152430057525635,
+        "end_epoch": 1794111661.0520608,
+        "exit": 0,
+        "guest_free_after_bytes": 48202518528,
+        "joined": true,
+        "label": "42-features-after-final",
+        "max_rss_scope": "raw macOS /usr/bin/time -l of command including its child accounting; no capacity inference",
+        "pid": 22337,
+        "remaining_own_session": [],
+        "selection_and_discovery_checks": {
+          "features_exact_bytes": "MATCH"
+        },
+        "source_manifest_after_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "source_manifest_before_sha256": "9f577a30a57a920cc46bbbefa5b106e4ac67ef4090449a952e28f61c6e469809",
+        "start_epoch": 1794111660.736819,
+        "stop_reason": null,
+        "timed_argv": [
+          "/usr/bin/time",
+          "-l",
+          "/opt/homebrew/bin/cargo",
+          "tree",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "-e",
+          "features"
+        ]
+      },
+      "planned": {
+        "argv": [
+          "/opt/homebrew/bin/cargo",
+          "tree",
+          "--locked",
+          "--manifest-path",
+          "rust/Cargo.toml",
+          "-e",
+          "features"
+        ],
+        "cap_seconds": 180,
+        "feature_after": true,
+        "label": "42-features-after-final"
+      },
+      "receipt": "native-final/evidence/42-features-after-final.json",
+      "stage": "native-stage5-final.json",
+      "status": "EXIT_0",
+      "stderr": "native-final/evidence/42-features-after-final.stderr",
+      "stdout": "native-final/evidence/42-features-after-final.stdout"
+    }
+  ],
+  "source_bound_final_summary": "native-final/evidence/FINAL-NATIVE-SUMMARY.json"
+}

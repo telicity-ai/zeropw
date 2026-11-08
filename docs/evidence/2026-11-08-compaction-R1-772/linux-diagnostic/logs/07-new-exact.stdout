@@ -1,0 +1,7 @@
+
+running 1 test
+test team::sync::compaction_heads_tests::compaction_heads_r1_owner_data_removal_and_both_fact_paths has been running for over 60 seconds
+test team::sync::compaction_heads_tests::compaction_heads_r1_owner_data_removal_and_both_fact_paths ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 743 filtered out; finished in 132.45s
+

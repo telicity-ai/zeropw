@@ -1,0 +1,309 @@
+{
+  "schema": "source-only-test-oracle-map-v1",
+  "status": "WRITTEN_NOTRUN; source/static DATA is not behavior validation",
+  "original_findings": {
+    "ZPCHEAD-OPUS-01": "medium OPEN",
+    "ZPCHEAD-OPUS-02": "medium OPEN",
+    "ZPCHEAD-OPUS-03": "low OPEN; Root03 preserved and unvalidated"
+  },
+  "new_unit_test_functions": 10,
+  "new_integration_test_functions": 13,
+  "new_tests": [
+    {
+      "path": "rust/src/team/compaction_heads.rs",
+      "line": 1207,
+      "name": "compaction_heads_clock_helpers_lock_absence_and_atomic_observation",
+      "status": "WRITTEN_NOTRUN"
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "line": 10137,
+      "name": "compaction_heads_submit_and_actual_handle_commit_share_receipt_clocks_and_local_errors",
+      "status": "WRITTEN_NOTRUN"
+    },
+    {
+      "path": "rust/src/team/sync.rs",
+      "line": 10198,
+      "name": "compaction_heads_compact_serializes_direct_receipt_deferred_release_and_author_clock",
+      "status": "WRITTEN_NOTRUN"
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "line": 2529,
+      "name": "compaction_heads_registry_literal_numeric_author_stable_sequence_and_op_order",
+      "status": "WRITTEN_NOTRUN"
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "line": 2562,
+      "name": "compaction_heads_direct_receipt_holds_entry_lock_through_rejection_audit",
+      "status": "WRITTEN_NOTRUN"
+    },
+    {
+      "path": "rust/src/team/commit.rs",
+      "line": 2588,
+      "name": "compaction_heads_retained_registry_sparse_huge_and_alternate_stems_use_only_canonical_files",
+      "status": "WRITTEN_NOTRUN"
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "line": 1797,
+      "name": "compaction_heads_local_author_clock_reset_after_reopen_observes_all_cached_authors",
+      "status": "WRITTEN_NOTRUN"
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "line": 1819,
+      "name": "compaction_heads_both_authorized_fact_clocks_and_remembered_team_clock",
+      "status": "WRITTEN_NOTRUN"
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "line": 1834,
+      "name": "compaction_heads_cached_public_keys_do_not_bypass_roles_or_generation_checks",
+      "status": "WRITTEN_NOTRUN"
+    },
+    {
+      "path": "rust/src/team/membership.rs",
+      "line": 1868,
+      "name": "compaction_heads_local_signing_errors_precede_candidate_storage_and_keep_vault_reads",
+      "status": "WRITTEN_NOTRUN"
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "line": 879,
+      "name": "compaction_heads_01_receipt_skipped_and_demoted_announcements_keep_exact_public_heads",
+      "status": "WRITTEN_NOTRUN"
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "line": 940,
+      "name": "compaction_heads_02_receipt_and_live_receipt_reject_deleted_predecessor_regression",
+      "status": "WRITTEN_NOTRUN"
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "line": 985,
+      "name": "compaction_heads_02_real_deferred_release_uses_cache_and_preserves_local_error_original",
+      "status": "WRITTEN_NOTRUN"
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "line": 1032,
+      "name": "compaction_heads_02_existing_regression_is_preserved_and_new_receipt_exceeds_both_clocks",
+      "status": "WRITTEN_NOTRUN"
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "line": 1061,
+      "name": "compaction_heads_02_evidence_failures_are_local_errors_without_peer_quarantine",
+      "status": "WRITTEN_NOTRUN"
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "line": 1123,
+      "name": "compaction_heads_02_older_cache_requires_live_exact_predecessor_and_preserves_legacy_absence",
+      "status": "WRITTEN_NOTRUN"
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "line": 1152,
+      "name": "compaction_heads_02_cache_does_not_change_gap_unknown_duplicate_or_deferred_statuses",
+      "status": "WRITTEN_NOTRUN"
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "line": 1196,
+      "name": "compaction_heads_01_later_conflicting_record_cannot_override_and_earlier_arrival_refuses",
+      "status": "WRITTEN_NOTRUN"
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "line": 1246,
+      "name": "compaction_heads_02_removed_author_receipt_preserves_status_and_cache_time_boundary",
+      "status": "WRITTEN_NOTRUN"
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "line": 1272,
+      "name": "compaction_heads_02_already_regressed_removed_idle_history_remains_an_explicit_refusal",
+      "status": "WRITTEN_NOTRUN"
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "line": 1301,
+      "name": "compaction_heads_02_genuine_legacy_prune_without_cache_keeps_live_only_receipt",
+      "status": "WRITTEN_NOTRUN"
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "line": 1322,
+      "name": "compaction_heads_02_receipt_refuses_identical_content_and_dangling_cache_symlinks",
+      "status": "WRITTEN_NOTRUN"
+    },
+    {
+      "path": "rust/tests/team_compaction_heads.rs",
+      "line": 1347,
+      "name": "compaction_heads_02_unreadable_cache_requires_unprivileged_isolated_uid",
+      "status": "WRITTEN_NOTRUN"
+    }
+  ],
+  "regression_rows": [
+    {
+      "row": 1,
+      "finding": "ZPCHEAD-OPUS-01",
+      "status": "WRITTEN_NOTRUN",
+      "tests": [
+        "compaction_heads_01_receipt_skipped_and_demoted_announcements_keep_exact_public_heads",
+        "compaction_heads_01_later_conflicting_record_cannot_override_and_earlier_arrival_refuses",
+        "compaction_heads_registry_literal_numeric_author_stable_sequence_and_op_order",
+        "compaction_heads_retained_registry_sparse_huge_and_alternate_stems_use_only_canonical_files"
+      ],
+      "primary_oracles": [
+        "Literal A:4/B:1/Y:1 cut and removed2; demotion variant A:5/B:1/Y:1",
+        "Pre-operation signed/hashed bytes and signature-bearing canonical dict preserved for Y; original skipped announcement file bytes unchanged",
+        "Y absent members, DEK wraps, derived secrets/vault; actual unreceipted Y fact refused",
+        "Reopen/recompact removed0; legitimate local advance preserves idle Y",
+        "Numeric HLC, author, stable ascending-sequence tie and original op order select literal full first record",
+        "Extra public fields and array/base64 coercions preserved in signed op; cached device normalized to full to_dict",
+        "Later conflicting agreement key cannot override; real earlier-in-order X:1 arrival refuses with old cache and originals preserved"
+      ]
+    },
+    {
+      "row": 2,
+      "finding": "ZPCHEAD-OPUS-02",
+      "status": "WRITTEN_NOTRUN",
+      "tests": [
+        "compaction_heads_02_receipt_and_live_receipt_reject_deleted_predecessor_regression",
+        "compaction_heads_submit_and_actual_handle_commit_share_receipt_clocks_and_local_errors",
+        "compaction_heads_02_removed_author_receipt_preserves_status_and_cache_time_boundary"
+      ],
+      "primary_oracles": [
+        "Actual bootstrap and data receipt at 1000000-0000/1000001-0007; real compact removed1 and live2 absent",
+        "Equal1000001-0007/lower1000000-0009 receipt3 rejected; one audit and literal reason; quarantine canonical original; metadata/V/data/deferred unchanged",
+        "1000001-0008 accepted; real compact advances exact3 with original canonical bytes; reopen data/settings",
+        "Actual submit_commit and handle_commit exercise equal/newer/corrupt outcomes; synthetic observer asserts sends occur outside state lock",
+        "Removed author remains removed; valid signature material never changes fold authority or data"
+      ]
+    },
+    {
+      "row": 3,
+      "finding": "ZPCHEAD-OPUS-02",
+      "status": "WRITTEN_NOTRUN",
+      "tests": [
+        "compaction_heads_02_real_deferred_release_uses_cache_and_preserves_local_error_original",
+        "compaction_heads_02_cache_does_not_change_gap_unknown_duplicate_or_deferred_statuses",
+        "compaction_heads_02_unreadable_cache_requires_unprivileged_isolated_uid"
+      ],
+      "primary_oracles": [
+        "Actual future/gapped3 received before2; still-gap stays deferred; receive2 and real compact prune2",
+        "Due equal/lower rejects with one HLC audit and deferred removal; due newer releases exact original once",
+        "Corrupt/unreadable local cache errors retain exact deferred file, do not quarantine/audit/prune; exact saved fixture restoration and Context reopen before repeat",
+        "Matching live duplicate and conflicting duplicate; pruned deferred drops while pruned receipt equivocates"
+      ]
+    },
+    {
+      "row": 4,
+      "finding": "ZPCHEAD-OPUS-02",
+      "status": "WRITTEN_NOTRUN_WITH_PRESERVED_EXISTING_ISSUE28_52_TESTS",
+      "tests": [
+        "compaction_heads_02_cache_does_not_change_gap_unknown_duplicate_or_deferred_statuses",
+        "compaction_heads_direct_receipt_holds_entry_lock_through_rejection_audit"
+      ],
+      "primary_oracles": [
+        "Live sequence gap/unknown author early without writes; requested receipt uses original gap/unknown rejection reasons",
+        "Future gap defers before append; waits_on_deferred true without sequence advancement",
+        "Matching live duplicate vs conflicting live duplicate; pruned receipt equivocation vs pruned deferred drop",
+        "No ACK, admission receipt or peer vector created to make compaction pass",
+        "Existing issue28/52 test bodies remain byte-exact; added direct receipt audit callback observes outer entry lock"
+      ]
+    },
+    {
+      "row": 5,
+      "finding": "ZPCHEAD-OPUS-02",
+      "status": "WRITTEN_NOTRUN",
+      "tests": [
+        "compaction_heads_02_existing_regression_is_preserved_and_new_receipt_exceeds_both_clocks",
+        "compaction_heads_02_already_regressed_removed_idle_history_remains_an_explicit_refusal",
+        "compaction_heads_02_genuine_legacy_prune_without_cache_keeps_live_only_receipt",
+        "compaction_heads_02_older_cache_requires_live_exact_predecessor_and_preserves_legacy_absence"
+      ],
+      "primary_oracles": [
+        "Labeled trusted append reproduces pre-fix regression only; repeated/reopened compact refuses and preserves regressed original/cache",
+        "New4 must exceed both regressed live3 and cached2; legitimate aged replacement advances without rewriting prior signatures",
+        "Idle removed author keeps explicit refusal; ordinary document/version reads remain",
+        "Genuine legacy snapshot/prune without cache constructed separately from real-compaction/cache-loss fixture; legacy receipt kept",
+        "Existing missing idle legacy-head refusal test preserved; no guessed HLC, omitted vector author, repair, reset or recovery feature"
+      ]
+    },
+    {
+      "row": 6,
+      "finding": "ZPCHEAD-OPUS-02",
+      "status": "WRITTEN_NOTRUN",
+      "tests": [
+        "compaction_heads_02_evidence_failures_are_local_errors_without_peer_quarantine",
+        "compaction_heads_02_older_cache_requires_live_exact_predecessor_and_preserves_legacy_absence",
+        "compaction_heads_local_signing_errors_precede_candidate_storage_and_keep_vault_reads",
+        "compaction_heads_clock_helpers_lock_absence_and_atomic_observation",
+        "compaction_heads_02_receipt_refuses_identical_content_and_dangling_cache_symlinks",
+        "compaction_heads_02_unreadable_cache_requires_unprivileged_isolated_uid"
+      ],
+      "primary_oracles": [
+        "Corrupt JSON, nonfile/directory, oversize, identical/dangling symlink, unreadable regular cache",
+        "Full-record agreement-key mismatch, exact live/cache original conflict, missing S coverage, cache ahead of S/V",
+        "Fixed State reason/empty detail; no candidate live write, quarantine or team_commit_rejected; exact evidence retained",
+        "Older valid cache plus newer live predecessor accepted; missing later exact predecessor/head unavailable",
+        "Atomic clock observation on local evidence error; ordinary reads/vault access unaffected; Context reopen covered",
+        "Unreadable regular-file test fails its resource precondition explicitly if allocated UID bypasses mode000; no silent pass or skip"
+      ]
+    },
+    {
+      "row": 7,
+      "finding": "ZPCHEAD-OPUS-02",
+      "status": "PARTIAL_WRITTEN_NOTRUN",
+      "tests": [
+        "compaction_heads_local_author_clock_reset_after_reopen_observes_all_cached_authors",
+        "compaction_heads_both_authorized_fact_clocks_and_remembered_team_clock",
+        "compaction_heads_cached_public_keys_do_not_bypass_roles_or_generation_checks",
+        "compaction_heads_local_signing_errors_precede_candidate_storage_and_keep_vault_reads",
+        "compaction_heads_compact_serializes_direct_receipt_deferred_release_and_author_clock",
+        "compaction_heads_direct_receipt_holds_entry_lock_through_rejection_audit"
+      ],
+      "primary_oracles": [
+        "Reopened actual author_commit with/without TeamSync and authored wall1 gives literal1000001-0008/seq3",
+        "Later remote cached head gives literal1000004-0012/seq5; ordinary seen vector preserved",
+        "Both authorized fact-signing paths; remembered TeamSync clock advances counter without lowering",
+        "Non-admin and removed member denied; wrong generation returns team_rekey_pending before storage",
+        "Joined scoped threads and channel/barrier gates cover compact vs direct receipt using separate StateDir, deferred release and local signing",
+        "StateDir entry lock is observed through rejection audit; envs available during compaction I/O; actual send observer asserts no send under lock"
+      ],
+      "not_implemented": [
+        "A deterministic test forcing the unlocked deferred gap prefilter to become stale specifically before the fresh locked sequence recheck. The new recheck is written; existing still-gap/no-lock and new compact/release tests do not establish that exact interleaving. No new release-entry instrumentation was added outside the closed test-hook scope.",
+        "A dedicated pause inside authorized TeamSync fact-signing disk I/O that independently proves envs availability at that exact I/O point. Production order collects/validates disk state before the envs guard; compact-I/O envs availability and no-send-under-lock tests are written, but do not substitute for this exact fact-signing pause. Only the permitted three authored-wall test inputs were added."
+      ]
+    },
+    {
+      "row": 8,
+      "finding": "ZPCHEAD-OPUS-01/02; Root03 preservation",
+      "status": "WRITTEN_AND_PRESERVED_NOTRUN",
+      "tests": [
+        "compaction_heads_registry_literal_numeric_author_stable_sequence_and_op_order",
+        "compaction_heads_retained_registry_sparse_huge_and_alternate_stems_use_only_canonical_files",
+        "compaction_heads_clock_helpers_lock_absence_and_atomic_observation"
+      ],
+      "primary_oracles": [
+        "Sparse huge PyInt new walker only; no huge legacy all_commits loop in sparse test; canonical alternate Unicode/leading-zero stems and digit_stems errors",
+        "Literal registry order primary; finite-history parity secondary",
+        "All 160 pre-existing test bodies in the five files preserved, including original11 integration and Root03 nine",
+        "Original caps, exact huge integers, strict HLC/vector/same-slot/corruption/opaque tests preserved",
+        "Existing six authority-exclusion, mixed bytes, deletion/version revocation, backup exclusion, barrier/fault tests preserved",
+        "Protected 1445 files, Cargo/dependencies/goldens/helpers/CI/harness/verify.sh/AGENTS/docs and Desktop unchanged",
+        "Full verification and unchanged seven exact debug/release selectors are NOTRUN on both OSes; no old pass imported"
+      ]
+    }
+  ],
+  "known_test_gaps": [
+    "A deterministic test forcing the unlocked deferred gap prefilter to become stale specifically before the fresh locked sequence recheck. The new recheck is written; existing still-gap/no-lock and new compact/release tests do not establish that exact interleaving. No new release-entry instrumentation was added outside the closed test-hook scope.",
+    "A dedicated pause inside authorized TeamSync fact-signing disk I/O that independently proves envs availability at that exact I/O point. Production order collects/validates disk state before the envs guard; compact-I/O envs availability and no-send-under-lock tests are written, but do not substitute for this exact fact-signing pause. Only the permitted three authored-wall test inputs were added."
+  ]
+}

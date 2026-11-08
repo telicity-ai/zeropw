@@ -11,6 +11,7 @@ use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 use super::commit::{self, Commit, CommitStore, Hlc};
+use super::compaction_heads;
 use super::envelope;
 use super::fold::{self, FoldResult};
 use super::identity::{DeviceKey, DeviceRecord};
@@ -348,16 +349,22 @@ pub fn author_commit(
     }
     let store = CommitStore::new(ctx.state, env_id);
     let mut hlc = Hlc::new(0, 0);
-    for observed in store.all_commits()? {
+    let live = store.all_commits()?;
+    for observed in &live {
         hlc.observe(&observed.hlc)?;
     }
+    compaction_heads::observe_cached_hlcs(&store, &live, &mut hlc)?;
     let seq = &store.last_seq(&device.fingerprint()?)? + 1;
     if seq > 1
         && let Some(previous) = store.get(&device.fingerprint()?, &seq - 1)?
     {
         hlc.observe(&previous.hlc)?;
     }
-    let commit = commit::sign_commit(&device, env_id, seq, &hlc.tick(None), &store.vector()?, ops)?;
+    #[cfg(not(test))]
+    let wall = None;
+    #[cfg(test)]
+    let wall = compaction_heads::testing::author_wall();
+    let commit = commit::sign_commit(&device, env_id, seq, &hlc.tick(wall), &store.vector()?, ops)?;
     if let Some(facts) = standing {
         // Read again: a rekey repair above may have stored rotations.
         refuse_unauthorized_ops(ctx, env_id, &facts, store.all_commits()?, &commit)?;
@@ -431,10 +438,17 @@ fn sign_authorized_fact(
     // Like `TeamSync::publish_fact`: the fact sorts after every commit this
     // node has seen, so a removal never cuts off work it already accepted.
     let mut hlc = Hlc::new(0, 0);
-    for observed in CommitStore::new(ctx.state, env_id).all_commits()? {
+    let store = CommitStore::new(ctx.state, env_id);
+    let live = store.all_commits()?;
+    for observed in &live {
         hlc.observe(&observed.hlc)?;
     }
-    sync::sign_fact(&device, env_id, kind, target, &hlc.tick(None))
+    compaction_heads::observe_cached_hlcs(&store, &live, &mut hlc)?;
+    #[cfg(not(test))]
+    let wall = None;
+    #[cfg(test)]
+    let wall = compaction_heads::testing::author_wall();
+    sync::sign_fact(&device, env_id, kind, target, &hlc.tick(wall))
 }
 
 /// Store, apply and (through a running `serve`) send a fact that
@@ -1715,6 +1729,421 @@ pub fn share_environment(
         ],
     );
     Ok(json!({"env_id":env_id,"not_shared":not_shared}))
+}
+
+#[cfg(test)]
+mod compaction_heads_tests {
+    use super::*;
+    use crate::context::Config;
+    use crate::team::compaction_heads::testing;
+    use crate::team::transport::{InProcessTransport, MembershipCheck};
+    use tempfile::TempDir;
+
+    struct WallReset;
+    impl Drop for WallReset {
+        fn drop(&mut self) {
+            testing::set_author_wall(None);
+        }
+    }
+
+    struct Fixture {
+        _root: TempDir,
+        ctx: Arc<Context>,
+        team: Arc<TeamSync>,
+        device: DeviceKey,
+        env: String,
+        fp: String,
+    }
+    impl Fixture {
+        fn new(remote_later: bool) -> Self {
+            let root = TempDir::new().unwrap();
+            let ctx = Arc::new(
+                Context::initialize(
+                    root.path().join("state"),
+                    "synthetic-admin",
+                    "synthetic-recovery",
+                    Config::default(),
+                    crate::clock::system(),
+                )
+                .unwrap(),
+            );
+            let device = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+            let fp = device.fingerprint().unwrap();
+            let env = format!("{fp}-0123456789abcdef0123456789abcdef");
+            let wrap = envelope::wrap_dek(
+                &[7; 32],
+                &env,
+                "0123456789abcdef",
+                &device.record().unwrap(),
+            )
+            .unwrap();
+            let init = commit::sign_commit(&device, &env, 1, "1000000-0000", &BTreeMap::new(), vec![json!({
+                "op":"env.init","owner_device":device.record().unwrap().to_dict(),"owner_name":"synthetic-owner",
+                "generation_id":"0123456789abcdef","wraps":{fp.clone():wrap}})]).unwrap();
+            let ciphertext = envelope::encrypt_secret(
+                &[7; 32],
+                &env,
+                "s",
+                "0011223344556677",
+                b"synthetic-clock-value",
+            )
+            .unwrap();
+            let put = commit::sign_commit(&device, &env, 2, "1000001-0007", &BTreeMap::from([(fp.clone(), 1.into())]), vec![json!({
+                "op":"secret.put_version","secret_id":"s","kind":"api_key","version_id":"0011223344556677",
+                "generation_id":"0123456789abcdef","ciphertext":ciphertext,"public":{}})]).unwrap();
+            let store = CommitStore::new(ctx.state, &env);
+            for entry in [&init, &put] {
+                assert_eq!(
+                    commit::receive_commit(&store, entry, 1_000_010, Some(ctx.audit)).unwrap(),
+                    "accepted"
+                );
+            }
+            if remote_later {
+                let remote = DeviceKey::generate();
+                let rfp = remote.fingerprint().unwrap();
+                let wrap = envelope::wrap_dek(
+                    &[7; 32],
+                    &env,
+                    "0123456789abcdef",
+                    &remote.record().unwrap(),
+                )
+                .unwrap();
+                let add = commit::sign_commit(&device, &env, 3, "1000002-0000", &store.vector().unwrap(), vec![json!({
+                    "op":"member.add","device":remote.record().unwrap().to_dict(),"name":"synthetic-peer","role":"user",
+                    "wraps":{"0123456789abcdef":wrap}})]).unwrap();
+                assert_eq!(
+                    commit::receive_commit(&store, &add, 1_000_010, Some(ctx.audit)).unwrap(),
+                    "accepted"
+                );
+                let remove = commit::sign_commit(
+                    &device,
+                    &env,
+                    4,
+                    "1000003-0000",
+                    &store.vector().unwrap(),
+                    vec![json!({"op":"member.remove","fingerprint":rfp})],
+                )
+                .unwrap();
+                assert_eq!(
+                    commit::receive_commit(&store, &remove, 1_000_010, Some(ctx.audit)).unwrap(),
+                    "accepted"
+                );
+                let later = commit::sign_commit(
+                    &remote,
+                    &env,
+                    1,
+                    "1000004-0011",
+                    &store.vector().unwrap(),
+                    vec![json!({"op":"settings.update","sync_interval_seconds":17})],
+                )
+                .unwrap();
+                assert_eq!(
+                    commit::receive_commit(&store, &later, 1_000_010, Some(ctx.audit)).unwrap(),
+                    "accepted"
+                );
+            }
+            let empty: MembershipCheck = Arc::new(|_, _| None);
+            let transport = Arc::new(InProcessTransport::new(device.clone(), empty));
+            let team = TeamSync::new(ctx.clone(), transport, device.clone());
+            team.register_env(&env).unwrap();
+            assert_eq!(
+                team.compact(&env).unwrap()["removed"],
+                if remote_later { 2 } else { 1 }
+            );
+            Self {
+                _root: root,
+                ctx,
+                team,
+                device,
+                env,
+                fp,
+            }
+        }
+    }
+
+    #[test]
+    fn compaction_heads_local_author_clock_reset_after_reopen_observes_all_cached_authors() {
+        let _reset = WallReset;
+        for remote_later in [false, true] {
+            for attached in [false, true] {
+                let f = Fixture::new(remote_later);
+                let reopened = Arc::new(
+                    Context::open(&f.ctx.state.path, Config::default(), crate::clock::system())
+                        .unwrap(),
+                );
+                let empty: MembershipCheck = Arc::new(|_, _| None);
+                let transport = Arc::new(InProcessTransport::new(f.device.clone(), empty));
+                let team = TeamSync::new(reopened.clone(), transport, f.device.clone());
+                team.register_env(&f.env).unwrap();
+                testing::set_author_wall(Some(1));
+                let authored = author_commit(
+                    &reopened,
+                    if attached { Some(team.as_ref()) } else { None },
+                    &f.env,
+                    vec![json!({"op":"settings.update","sync_interval_seconds":19})],
+                )
+                .unwrap();
+                assert_eq!(
+                    authored.hlc,
+                    if remote_later {
+                        "1000004-0012"
+                    } else {
+                        "1000001-0008"
+                    }
+                );
+                assert_eq!(
+                    authored.author_seq,
+                    PyInt::from(if remote_later { 5 } else { 3 })
+                );
+                assert_eq!(
+                    authored.seen[&f.fp],
+                    PyInt::from(if remote_later { 4 } else { 2 })
+                );
+                assert_eq!(
+                    load_environment(&reopened, &f.env).unwrap().document["settings"]["sync_interval_seconds"],
+                    19
+                );
+                assert_eq!(
+                    reopened
+                        .vault
+                        .secret_for_trusted_use("s", Some(1.into()))
+                        .unwrap()
+                        .expose(),
+                    b"synthetic-clock-value"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn compaction_heads_both_authorized_fact_clocks_and_remembered_team_clock() {
+        let _reset = WallReset;
+        let f = Fixture::new(false);
+        testing::set_author_wall(Some(1));
+        let standalone = sign_authorized_fact(
+            &f.ctx,
+            None,
+            &f.env,
+            "secret_deleted",
+            json!({"secret_id":"s"}),
+        )
+        .unwrap();
+        assert_eq!(standalone.hlc, "1000001-0008");
+        assert!(sync::verify_fact(&standalone, &f.device.record().unwrap()));
+        let first = sign_authorized_fact(
+            &f.ctx,
+            Some(f.team.as_ref()),
+            &f.env,
+            "secret_deleted",
+            json!({"secret_id":"s"}),
+        )
+        .unwrap();
+        let second = sign_authorized_fact(
+            &f.ctx,
+            Some(f.team.as_ref()),
+            &f.env,
+            "secret_deleted",
+            json!({"secret_id":"s"}),
+        )
+        .unwrap();
+        assert_eq!(first.hlc, "1000001-0008");
+        assert_eq!(second.hlc, "1000001-0009");
+        assert!(
+            !f.ctx
+                .state
+                .path
+                .join(format!("team/{}/facts.jsonl", f.env))
+                .exists()
+        );
+    }
+
+    #[test]
+    fn compaction_heads_cached_public_keys_do_not_bypass_roles_or_generation_checks() {
+        let _reset = WallReset;
+        for removed in [false, true] {
+            let f = Fixture::new(false);
+            let remote = DeviceKey::generate();
+            let rfp = remote.fingerprint().unwrap();
+            let store = CommitStore::new(f.ctx.state, &f.env);
+            let wrap = envelope::wrap_dek(
+                &[7; 32],
+                &f.env,
+                "0123456789abcdef",
+                &remote.record().unwrap(),
+            )
+            .unwrap();
+            let add = commit::sign_commit(&f.device, &f.env, 3, "1000002-0000", &store.vector().unwrap(), vec![json!({
+                "op":"member.add","device":remote.record().unwrap().to_dict(),"name":"synthetic-peer","role":"admin",
+                "wraps":{"0123456789abcdef":wrap}})]).unwrap();
+            assert_eq!(
+                commit::receive_commit(&store, &add, 1_000_010, Some(f.ctx.audit)).unwrap(),
+                "accepted"
+            );
+            let transfer = commit::sign_commit(
+                &f.device,
+                &f.env,
+                4,
+                "1000003-0000",
+                &store.vector().unwrap(),
+                vec![json!({"op":"owner.transfer","fingerprint":rfp})],
+            )
+            .unwrap();
+            assert_eq!(
+                commit::receive_commit(&store, &transfer, 1_000_010, Some(f.ctx.audit)).unwrap(),
+                "accepted"
+            );
+            let role = if removed {
+                json!({"op":"member.remove","fingerprint":f.fp})
+            } else {
+                json!({"op":"member.set_role","fingerprint":f.fp,"role":"user"})
+            };
+            let demote = commit::sign_commit(
+                &remote,
+                &f.env,
+                1,
+                "1000004-0000",
+                &store.vector().unwrap(),
+                vec![role],
+            )
+            .unwrap();
+            assert_eq!(
+                commit::receive_commit(&store, &demote, 1_000_010, Some(f.ctx.audit)).unwrap(),
+                "accepted"
+            );
+            testing::set_author_wall(Some(1));
+            assert_eq!(
+                load_environment(&f.ctx, &f.env).unwrap().document["members"][&f.fp]["status"],
+                if removed { "removed" } else { "active" }
+            );
+            for attached in [false, true] {
+                let team = if attached {
+                    Some(f.team.as_ref())
+                } else {
+                    None
+                };
+                assert_eq!(
+                    author_commit(
+                        &f.ctx,
+                        team,
+                        &f.env,
+                        vec![json!({"op":"settings.update","sync_interval_seconds":29})]
+                    )
+                    .unwrap_err()
+                    .reason,
+                    "not_admin"
+                );
+                assert_eq!(
+                    sign_authorized_fact(
+                        &f.ctx,
+                        team,
+                        &f.env,
+                        "secret_deleted",
+                        json!({"secret_id":"s"})
+                    )
+                    .unwrap_err()
+                    .reason,
+                    "team_fact_not_authorized"
+                );
+            }
+            assert!(store.get(&f.fp, 5).unwrap().is_none());
+        }
+        let f = Fixture::new(false);
+        let error = author_commit(&f.ctx, None, &f.env, vec![json!({"op":"secret.put_version","secret_id":"s","kind":"api_key",
+            "version_id":"8899aabbccddeeff","generation_id":"fedcba9876543210","ciphertext":"synthetic-unused","public":{}})]).unwrap_err();
+        assert_eq!(error.reason, "team_rekey_pending");
+        assert!(
+            CommitStore::new(f.ctx.state, &f.env)
+                .get(&f.fp, 3)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn compaction_heads_local_signing_errors_precede_candidate_storage_and_keep_vault_reads() {
+        let _reset = WallReset;
+        for missing in [false, true] {
+            let f = Fixture::new(false);
+            let store = CommitStore::new(f.ctx.state, &f.env);
+            if missing {
+                let mut snapshot = f
+                    .ctx
+                    .state
+                    .read_json(&format!("team/{}/snapshots/2.json", f.env), Value::Null)
+                    .unwrap();
+                snapshot["vector"][&f.fp] = json!(3);
+                f.ctx
+                    .state
+                    .write_json(&format!("team/{}/snapshots/3.json", f.env), &snapshot)
+                    .unwrap();
+            } else {
+                std::fs::write(
+                    f.ctx
+                        .state
+                        .path
+                        .join(format!("team/{}/compaction_heads.json", f.env)),
+                    b"{corrupt-cache",
+                )
+                .unwrap();
+            }
+            testing::set_author_wall(Some(1));
+            let expected = if missing {
+                "team_compaction_head_unavailable"
+            } else {
+                "team_compaction_head_invalid"
+            };
+            let next = if missing { 4 } else { 3 };
+            for attached in [false, true] {
+                let team = if attached {
+                    Some(f.team.as_ref())
+                } else {
+                    None
+                };
+                let error = author_commit(
+                    &f.ctx,
+                    team,
+                    &f.env,
+                    vec![json!({"op":"settings.update","sync_interval_seconds":23})],
+                )
+                .unwrap_err();
+                assert_eq!(error.reason, expected);
+                assert!(error.detail.is_empty());
+                let error = sign_authorized_fact(
+                    &f.ctx,
+                    team,
+                    &f.env,
+                    "secret_deleted",
+                    json!({"secret_id":"s"}),
+                )
+                .unwrap_err();
+                assert_eq!(error.reason, expected);
+                assert!(error.detail.is_empty());
+                assert!(store.get(&f.fp, next).unwrap().is_none());
+                assert_eq!(
+                    f.ctx
+                        .vault
+                        .secret_for_trusted_use("s", Some(1.into()))
+                        .unwrap()
+                        .expose(),
+                    b"synthetic-clock-value"
+                );
+            }
+            assert!(
+                !f.ctx
+                    .state
+                    .path
+                    .join(format!("team/{}/rejected", f.env))
+                    .exists()
+            );
+            assert!(
+                !f.ctx
+                    .state
+                    .path
+                    .join(format!("team/{}/deferred", f.env))
+                    .exists()
+            );
+        }
+    }
 }
 
 #[cfg(test)]

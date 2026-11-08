@@ -1,0 +1,92 @@
+{
+  "actual_model": "gpt-6.1-sol",
+  "all_previous_review_acceptance_M2_runtime_physical_Oracle_release_holds": "UNCHANGED_OPEN",
+  "base_head": "65a3105c1ff4b491a613b2e27631cf9df56727f4",
+  "bindings": {
+    "ARTIFACT-CATALOGUE.json": {
+      "bytes": 85884,
+      "mode": 420,
+      "sha256": "0b648b1d45ea8b8bd784883db8d6795dd1bab4e75dad1f76c003b26584cba68f"
+    },
+    "OWN-RESOURCE-HOLD.json": {
+      "bytes": 15227,
+      "mode": 420,
+      "sha256": "6d74313d87dd7badb8417c43b70734305d2502c9f20aefd1bdf8ab0e6b659542"
+    },
+    "SHA256SUMS": {
+      "bytes": 51678,
+      "mode": 420,
+      "sha256": "330498f9a3248a9c958fe285bf378f00750ccdeeecfe21abe39d21533d351720"
+    },
+    "WORKER-REPORT.md": {
+      "bytes": 13422,
+      "mode": 420,
+      "sha256": "933bbf29198ae5c44e13c0dfb6cb1f993339416cf28ed873b1a75df2dbda3d78"
+    },
+    "artifact-bindings.json": {
+      "bytes": 8610,
+      "mode": 420,
+      "sha256": "93bad5464a20fb0ade22a4cab9027cfab97834895d5ec773371f4c291b7b7185"
+    },
+    "final-source.json": {
+      "bytes": 367655,
+      "mode": 420,
+      "sha256": "6d671db58e54fa2d31b13c010942b251032a484d0c782329db84ae6ff97b05f1"
+    },
+    "full-source.tar.gz": {
+      "bytes": 7574592,
+      "mode": 420,
+      "sha256": "8e4cb2530cc274f5c6f9d4dfda150e58411d34260ea901e85ca82f97952b0915"
+    },
+    "implementation.patch": {
+      "bytes": 84352,
+      "mode": 420,
+      "sha256": "c3721a7e8cd51aeec8808e48ec5b41c3165132f7e13e0f3c89c5c092d278b23c"
+    },
+    "native-final/evidence/FINAL-NATIVE-SUMMARY.json": {
+      "bytes": 47310,
+      "mode": 420,
+      "sha256": "4be73b158c25b67c600b5dcfaa187747310edf5a4689f66ecdb82f428b0931a0"
+    }
+  },
+  "changed_paths": [
+    "rust/src/team/compaction_heads.rs",
+    "rust/src/team/mod.rs",
+    "rust/src/team/sync.rs",
+    "rust/tests/team_compaction_heads.rs"
+  ],
+  "desktop_tree_DATA": "2413844c89265a3e239be2372d34b1e6e1b2d4bb",
+  "direct_SSH_transports_joined": 33,
+  "effective_provider_service_tier": "NOT_INDEPENDENTLY_EXPOSED",
+  "epoch": 1794111969.73578,
+  "exact_selectors": {
+    "actual_tests_each": 1,
+    "commands": 14
+  },
+  "final_full_tree_DATA": "fbf13d73d270e441dd574cf592609d7d8b38dc6d",
+  "final_rust_tree_DATA": "afc41fcb5d55aaec2bc2fead7c7d8a94f312cc9f",
+  "focused_per_profile": {
+    "integration": 11,
+    "library": 13
+  },
+  "known_Popen_phase_children_joined": 31,
+  "linux": "NOT_ASSIGNED / NOTRUN",
+  "minimal_unexplained_identity_count": 10,
+  "native_full": {
+    "failed": 0,
+    "ignored": 5,
+    "integration_targets": 107,
+    "passed": 1843,
+    "steps": 112
+  },
+  "no_further_runtime_calls_after_final_collection": true,
+  "overall_two_platform_validation": "INCOMPLETE",
+  "own_resources": "HOLD_UNEXPLAINED_SURVIVOR_RELEASE_NOT_CLAIMED",
+  "protected_existing_exact": 1370,
+  "reasoning_effort": "ultra",
+  "requested_service_tier": "default",
+  "schema": "zeropw-compaction-heads-uncommitted-source-native-hold-freeze-v1",
+  "source_files": 1374,
+  "staged_committed_published_changes": false,
+  "status": "SOURCE_IMPLEMENTED_NATIVE_REQUIRED_MATRIX_PASS_RESOURCE_HOLD_OVERALL_INCOMPLETE"
+}

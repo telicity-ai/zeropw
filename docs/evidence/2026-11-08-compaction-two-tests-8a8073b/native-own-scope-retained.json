@@ -1,0 +1,15 @@
+{
+  "schema": "Root-native8a-own-scope-final-v1",
+  "as_of_utc": "2026-11-08T10:40:15.151964+00:00",
+  "product_head": "8a8073b3d876bb3f83a628a7fdbd2902e8b40851",
+  "state": "OWN_PHASE_TRANSPORT_SCOPE_JOINED;VM_ROOT_RETAINED_IDLE",
+  "phase_driver_child_waited": true,
+  "root_launcher_child_waited": true,
+  "host_SSH_controller62583_exit": 1,
+  "last_assigned_UID502_processes": [],
+  "Tart_64637": "ownRoot hypervisor handle retained, exact named dedicatedVM still running; no stop/adoption/new source stage",
+  "old10identity_HOLD": "unchanged, no old501query or individual wait/erasure claim",
+  "next_native563": "NOTASSIGNED/NOTRUN; preparedR3plan superseded pending HIGH fix, no extra baseline full run issued",
+  "all_findings": "newR1HIGH plus original findings/globalholdsOPEN",
+  "limits": "Own recorded waits/empty assigned-UID observation, not whole-machine erasure or release of oldHOLD"
+}

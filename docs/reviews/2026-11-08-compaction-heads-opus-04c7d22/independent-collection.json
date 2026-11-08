@@ -1,0 +1,131 @@
+{
+  "actual_collector": "gpt-6.1-sol / ultra, native same-provider child; ownstdlibDATA only",
+  "brief_sha256": "638b4210e06d994c57963fb6426e38af2dfc3e8b82540ae36133ae4fbb7a9b90",
+  "collector_DATA_errors": [
+    {
+      "before_any_output_write": true,
+      "cause": "assumed saved auxiliary before/after JSON and report projection had identical field names; raw uses mismatches:[] while report uses mismatch_count:0",
+      "correction": "strict projection only: raw empty list required; every other field unchanged; report mismatch_count exactly len(raw mismatches)",
+      "exception": "AssertionError",
+      "phase": "initial collector DATA comparison",
+      "runtime_or_product_retry": false,
+      "source_or_expected_hash_change": false
+    }
+  ],
+  "coverage": {
+    "declared_full_changed_diff": "all fourchangedhunks/newfiles and complete compact body; mod diff1 line, sync complete productdiff+8private tests",
+    "declared_selective_dependencies": "store/fold/commit/sync/audit related regions; exact COVERAGE.md unchanged",
+    "declared_skips": "remaining oldsync/fold/commit/store/vault; identity/PyInt/pyjson internals; membership/load_facts/refold/checkpoint/gateway/signer/desktop and most evidence/rawLinux; see coverage",
+    "independent_read_trace_audit": "NOT PERFORMED; source-read coverage is reviewer disclosure, not independently proven all line-read events",
+    "new_integration_actual_lines": 680,
+    "new_module_actual_lines": 881
+  },
+  "current_independent_file_record_comparisons": 1426,
+  "current_reviewer_checkout_clean": true,
+  "evidence_integrity_gaps": [],
+  "findings_preserved": [
+    {
+      "file": "rust/src/team/compaction_heads.rs",
+      "id": "ZPCHEAD-OPUS-01",
+      "line": 277,
+      "severity": "medium",
+      "status": "OPEN/not adjudicated by DATA collector"
+    },
+    {
+      "file": "rust/src/team/compaction_heads.rs",
+      "id": "ZPCHEAD-OPUS-02",
+      "line": 320,
+      "severity": "medium",
+      "status": "OPEN/not adjudicated by DATA collector"
+    },
+    {
+      "file": "rust/src/team/compaction_heads.rs",
+      "id": "ZPCHEAD-OPUS-03",
+      "line": 402,
+      "severity": "low",
+      "status": "OPEN/not adjudicated by DATA collector"
+    }
+  ],
+  "git_tracked_index_bytes_blobs_modes_match": true,
+  "historical_before_after_projection": "Exact strict projection of empty mismatches list to mismatch_count0; other fields unchanged; both saved raw summaries identical",
+  "input_manifest_sha256": "9c319540f14a443e1ad275749956e93c3781639124d054bf227db972577b230a",
+  "limits": [
+    "No source/product/helper/compiler/build/test/generator/formatter execution, SSH/VM/currentprocess/network/secrets/admin query, source/ref/index/master mutation or subagent.",
+    "Saved historical before/after are reviewer aggregate observations; collector independently rehashed current1426 files/index/tree, not retrospective full read/runtime transcript.",
+    "No reviewer script executed; auxiliary saved JSONs were DATA only.",
+    "Does not adjudicate findings/review proof, reproduce scenarios, perform Astra acceptance or resolve any finding.",
+    "Native1843/Linux1840 remain external runtime evidence, not this reviewer/collector execution.",
+    "Native10unexplainedidentityHOLD and all global/M2/runtime/physical/Oracle/capacity/release/oldGoquarantine holds unchanged; snapshot onboarding unsupported."
+  ],
+  "output_bindings": {
+    "COVERAGE.md": {
+      "bytes": 3182,
+      "mode": 420,
+      "sha256": "a55f63c7c8cb99e5c4b9209bf9c23ae362ec671be6dbdc1bdd3bd0e0ccd658fb"
+    },
+    "input-verification.json": {
+      "bytes": 2185,
+      "mode": 420,
+      "sha256": "41b914a68958d7a32f74486eafaa0d8315737d7ad2391d7ee43c06e18bbe939d"
+    },
+    "report.json": {
+      "bytes": 7399,
+      "mode": 420,
+      "sha256": "4e7296a50f281a3e066eb91998a7c3e79f6767b8ee8d17fcd60d77219bcb8ec0"
+    },
+    "report.md": {
+      "bytes": 7202,
+      "mode": 420,
+      "sha256": "fd53253fe211a80c2debc87ac6893d617e638a85cd295cf3fb4529b97da419b1"
+    }
+  },
+  "output_freeze": "No standalone freeze/catalogue file; input-verification pins other3output hashes and its own supplied out-of-band hash matches. All4frozen artifacts match.",
+  "recorded_review_nature": "static only; no product/helper/compiler/build/test/formatter/generator execution; no SSH/VM/network/secret/admin/PR/commit",
+  "recorded_reviewer": "Claude Opus claude-opus-5-5 (actual), Claude Code harness in T3 Code; effort/thinking/tier not exposed; no subagents/workflow/alternate model",
+  "saved_auxiliary_summaries": {
+    "after": {
+      "raw": {
+        "head": "04c7d22ae3f4317e9f203e5d7ca703974f8f1f69",
+        "head_tree": "07136533e9ec885ec414ffd44f7db18f7aac8de5",
+        "manifest_files": 1426,
+        "mismatches": [],
+        "ok": true,
+        "rust_tree": "afc41fcb5d55aaec2bc2fead7c7d8a94f312cc9f",
+        "status_porcelain": "",
+        "tracked": 1426
+      },
+      "sha256": "966e7d78047f0b5cf87c6e461492051048eb991d82cab9bc8f71e3be3c1ecd4c"
+    },
+    "before": {
+      "raw": {
+        "head": "04c7d22ae3f4317e9f203e5d7ca703974f8f1f69",
+        "head_tree": "07136533e9ec885ec414ffd44f7db18f7aac8de5",
+        "manifest_files": 1426,
+        "mismatches": [],
+        "ok": true,
+        "rust_tree": "afc41fcb5d55aaec2bc2fead7c7d8a94f312cc9f",
+        "status_porcelain": "",
+        "tracked": 1426
+      },
+      "sha256": "966e7d78047f0b5cf87c6e461492051048eb991d82cab9bc8f71e3be3c1ecd4c"
+    }
+  },
+  "schema": "compaction-heads-opus-independent-data-collection-v1",
+  "schema_sha256": "1bf6caf7edf8548ea2c653937cd130c5e2db7a217f7fa1dadd0ce7696e9be5a0",
+  "schema_validation": "PASS manual recursive stdlib DATA; no harness/reviewer validator execution",
+  "source": {
+    "Rust_product_to_review_HEAD_diff": "empty",
+    "changed_product_paths": [
+      "rust/src/team/compaction_heads.rs",
+      "rust/src/team/mod.rs",
+      "rust/src/team/sync.rs",
+      "rust/tests/team_compaction_heads.rs"
+    ],
+    "desktop_tree": "2413844c89265a3e239be2372d34b1e6e1b2d4bb",
+    "full_tree": "07136533e9ec885ec414ffd44f7db18f7aac8de5",
+    "head": "04c7d22ae3f4317e9f203e5d7ca703974f8f1f69",
+    "product_commit": "0d3fdc54bff8f0e527df2f29f2b0d04e1fe41059",
+    "rust_tree": "afc41fcb5d55aaec2bc2fead7c7d8a94f312cc9f"
+  },
+  "verdict_preserved": "REVISE"
+}

@@ -1,0 +1,1 @@
+{"artifact": "/Volumes/ZeroPWBuild/cg-native-r1/target/release/libzeropw.rlib", "sha256": "6001a42e3d58416aea785329136c84d8aeb4882b3dab8f6f6b341abb1576e4e8", "object_members_checked": 16, "forbidden_gate_symbols": [], "scope": "non-test release library object symbols, optimized unit tests intentionally cfg(test)"}

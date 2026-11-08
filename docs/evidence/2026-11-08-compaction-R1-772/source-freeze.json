@@ -1,0 +1,17 @@
+{
+  "final_runtime": "Linux87592/native58271ACTIVE;source772;RootwholeVMallocationsretained; nolegacyHOLDreleased",
+  "original_baseline": "1a20a2dd03229925a5657ec011bb337542e5b4e1",
+  "protected_paths": 1515,
+  "publication": "documentation-only adaptation; old exact code execution not promoted to new whole-head PASS",
+  "review": "actualOpusBLOCKED/zeroNEW/sourcefixedstatic; allfourfindingsOPEN, actualAstraacceptancepending",
+  "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+  "source_count": 1519,
+  "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+  "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+  "source_paths_changed": [
+    "rust/src/team/commit.rs",
+    "rust/src/team/compaction_heads.rs",
+    "rust/src/team/sync.rs",
+    "rust/tests/team_compaction_heads.rs"
+  ]
+}

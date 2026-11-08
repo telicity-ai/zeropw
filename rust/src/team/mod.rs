@@ -12,6 +12,7 @@
 
 pub mod checkpoint;
 pub mod commit;
+mod compaction_heads;
 pub mod envelope;
 pub mod fold;
 pub mod humanview;

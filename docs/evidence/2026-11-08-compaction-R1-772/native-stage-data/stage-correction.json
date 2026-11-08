@@ -1,0 +1,6 @@
+{
+  "original_failure": "DATA staging stopped before path creation at ps rc==0 assertion; no product execution",
+  "correction": "Accept Darwin ps no-match exit1 only with empty stdout AND stderr; any row still parsed strictly and causes UID502_NOT_EXCLUSIVE; original failure retained",
+  "old_sha256": "245ab5b60e001bc8210dd39b0e7b6305091c9429177a96671549d5f59f33efbf",
+  "new_sha256": "2a969be4738d7ed14725c4537a6bea7dc597bd5e5365c5100577550c163d0916"
+}

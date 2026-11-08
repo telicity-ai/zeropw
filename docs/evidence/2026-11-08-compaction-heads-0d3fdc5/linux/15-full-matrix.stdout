@@ -1,0 +1,2651 @@
+VERIFY_STEP_BEGIN=fmt
+VERIFY_STEP_END=fmt exit=0
+VERIFY_STEP_BEGIN=clippy
+VERIFY_STEP_END=clippy exit=0
+VERIFY_STEP_BEGIN=lib-and-bins
+
+running 720 tests
+test admin_cli::tests::integer_parsers_match_the_original_admin_cli_helpers ... ok
+test admin_cli::tests::parser_accepts_equals_repeated_values_and_positional_terminator ... ok
+test admin_cli::tests::ttl_matches_python_units_and_rejects_bad_or_overflowing_forms ... ok
+test admin_cli::tests::require_admin_parses_only_with_the_input_envelope ... ok
+test agent_cli::tests::payloads_and_bad_args ... ok
+test admin_cli::tests::user_path_matches_pathlib_expanduser_through_system_nss ... ok
+test argparse::tests::optional_positional_takes_zero_or_one_argument ... ok
+test agent_cli::tests::response_framing_and_bounds ... ok
+test argparse::tests::suppressed_options_and_hidden_parsers_leave_help_and_errors_unchanged ... ok
+test argparse::tests::textwrap_matches_the_recorded_lines_for_hyphenated_and_long_words ... ok
+test argparse::tests::parsing_help_and_errors_match_the_recorded_outcomes ... ok
+test audit::oracle_tests::python_scalar_str_matches_python_for_overflowing_float_literal ... ok
+test audit::oracle_tests::record_and_alert_lines_are_byte_identical_to_python ... ok
+test audit::oracle_tests::incident_alert_detail_matches_python_for_scope_and_reason_kinds ... ok
+test audit::tests::alerts_for_revoked_use_reflection_and_repeated_denials ... ok
+test audit::tests::alerts_for_exposure_failures_and_unauthenticated_floods ... ok
+test audit::tests::listener_calling_record_does_not_deadlock ... ok
+test audit::tests::listener_calling_subscribe_does_not_deadlock ... ok
+test audit::tests::empty_string_caller_is_treated_as_unauthenticated ... ok
+test audit::tests::round_3dp_matches_python_examples ... ok
+test audit::tests::records_are_whitelisted_and_bounded ... ok
+test audit::tests::subscribe_sees_durable_records_and_swallows_panics ... ok
+test audit::tests::tail_and_alerts_limit_zero_returns_everything ... ok
+test audit::tests::tail_returns_parsed_records ... ok
+test audit::tests::write_failure_raises_audit_unavailable ... ok
+test context::tests::create_private_dir_result_is_0700 ... ok
+test context::tests::create_private_dir_suffix_length_is_eight_like_mkdtemp ... ok
+test context::tests::mkdir_private_0700_sets_mode_atomically_with_no_wider_window ... ok
+test context::tests::resolve_lenient_for_loop_then_dotdot_then_symlink ... ok
+test audit::tests::team_events_and_extra_keys_are_accepted ... ok
+test crypto::chacha20poly1305::tests::aad_is_not_included_in_output ... ok
+test crypto::chacha20poly1305::tests::aad_mismatch_rejected ... ok
+test crypto::chacha20poly1305::tests::block_accepts_max_counter ... ok
+test crypto::chacha20poly1305::tests::block_counter_changes_output ... ok
+test crypto::chacha20poly1305::tests::block_function_rfc_2_3_2 ... ok
+test crypto::chacha20poly1305::tests::block_function_zero_key_appendix_a1 ... ok
+test crypto::chacha20poly1305::tests::block_rejects_bad_sizes ... ok
+test crypto::chacha20poly1305::tests::ciphertext_bit_flip_rejected ... ok
+test crypto::chacha20poly1305::tests::ciphertext_differs_from_plaintext ... ok
+test crypto::chacha20poly1305::tests::counter_overflow_rejected ... ok
+test crypto::chacha20poly1305::tests::decrypt_appendix_a5 ... ok
+test crypto::chacha20poly1305::tests::decrypt_rejects_wrong_key_size_with_authentication_error ... ok
+test crypto::chacha20poly1305::tests::decrypt_rejects_wrong_nonce_size_with_authentication_error ... ok
+test crypto::chacha20poly1305::tests::decrypt_rfc_2_8_2 ... ok
+test crypto::chacha20poly1305::tests::decrypt_stream_rfc_2_4_2_is_symmetric ... ok
+test crypto::chacha20poly1305::tests::empty_data ... ok
+test crypto::chacha20poly1305::tests::encrypt_appendix_a5_reproduces_vector ... ok
+test crypto::chacha20poly1305::tests::encrypt_rejects_wrong_key_size ... ok
+test crypto::chacha20poly1305::tests::encrypt_rejects_wrong_nonce_size ... ok
+test crypto::chacha20poly1305::tests::encrypt_rfc_2_8_2 ... ok
+test crypto::chacha20poly1305::tests::encrypt_stream_rfc_2_4_2 ... ok
+test crypto::chacha20poly1305::tests::encryption_is_deterministic_and_nonce_dependent ... ok
+test crypto::chacha20poly1305::tests::every_tag_bit_flip_rejected ... ok
+test crypto::chacha20poly1305::tests::input_shorter_than_tag_rejected ... ok
+test crypto::chacha20poly1305::tests::key_gen_rfc_2_6_2 ... ok
+test crypto::chacha20poly1305::tests::key_gen_rfc_2_8_2_one_time_key ... ok
+test crypto::chacha20poly1305::tests::key_gen_zero_appendix_a4 ... ok
+test crypto::chacha20poly1305::tests::key_mismatch_rejected ... ok
+test crypto::chacha20poly1305::tests::mac_all_zero_key_appendix_a3_vector_1 ... ok
+test crypto::chacha20poly1305::tests::mac_empty_message ... ok
+test crypto::chacha20poly1305::tests::mac_rejects_wrong_key_size ... ok
+test crypto::chacha20poly1305::tests::mac_rfc_2_5_2 ... ok
+test crypto::chacha20poly1305::tests::mac_with_r_zero_returns_s_appendix_a3_vector_2 ... ok
+test crypto::chacha20poly1305::tests::nonce_mismatch_rejected ... ok
+test crypto::chacha20poly1305::tests::one_mebibyte_round_trips ... ok
+test crypto::chacha20poly1305::tests::oracle_ciphertext_round_trips_both_directions ... ok
+test crypto::chacha20poly1305::tests::partial_block_matches_prefix_of_keystream ... ok
+test crypto::chacha20poly1305::tests::round_trip_empty_aad_default ... ok
+test crypto::chacha20poly1305::tests::round_trip_empty_plaintext ... ok
+test crypto::chacha20poly1305::tests::round_trip_empty_plaintext_and_empty_aad ... ok
+test crypto::chacha20poly1305::tests::round_trip_various_lengths_with_aad ... ok
+test crypto::chacha20poly1305::tests::sizes_match_rfc ... ok
+test crypto::chacha20poly1305::tests::sunscreen_plaintext_length ... ok
+test crypto::chacha20poly1305::tests::swapped_ciphertext_and_tag_rejected ... ok
+test crypto::chacha20poly1305::tests::tag_only_input_rejected_when_plaintext_was_not_empty ... ok
+test crypto::chacha20poly1305::tests::truncated_ciphertext_rejected ... ok
+test crypto::chacha20poly1305::tests::zero_key_appendix_a2 ... ok
+test crypto::ed25519::tests::bad_seed_errors_do_not_leak_seed ... ok
+test crypto::ed25519::tests::flipped_message_bit_rejected ... ok
+test crypto::ed25519::tests::flipped_signature_bits_rejected ... ok
+test crypto::ed25519::tests::generate_seed_is_random ... ok
+test crypto::ed25519::tests::large_message ... ok
+test crypto::ed25519::tests::message_extension_and_truncation_rejected ... ok
+test crypto::ed25519::tests::non_canonical_scalar_s_plus_l_rejected ... ok
+test crypto::ed25519::tests::openssh_interop::derived_public_key_matches_openssh ... ok
+test crypto::ed25519::tests::openssh_interop::ssh_keygen_accepts_our_signature ... ok
+test crypto::ed25519::tests::openssh_interop::verify_signature_made_by_ssh_keygen ... ok
+test crypto::ed25519::tests::oracle_signature_matches_python ... ok
+test crypto::ed25519::tests::point_not_on_curve_rejected ... ok
+test crypto::ed25519::tests::public_key_derivation_matches_rfc_vectors ... ok
+test crypto::ed25519::tests::public_key_y_not_below_p_rejected ... ok
+test crypto::ed25519::tests::r_y_not_below_p_rejected ... ok
+test crypto::ed25519::tests::random_round_trips ... ok
+test crypto::ed25519::tests::scalar_all_ones_rejected ... ok
+test crypto::ed25519::tests::scalar_equal_to_l_rejected ... ok
+test crypto::ed25519::tests::sign_and_verify_under_50ms ... ok
+test crypto::ed25519::tests::signature_swapped_between_messages_rejected ... ok
+test crypto::ed25519::tests::signatures_are_deterministic ... ok
+test crypto::ed25519::tests::signatures_match_rfc_vectors ... ok
+test crypto::ed25519::tests::sizes ... ok
+test crypto::ed25519::tests::small_order_public_key_does_not_panic ... ok
+test crypto::ed25519::tests::vector_signatures_verify ... ok
+test crypto::ed25519::tests::verify_never_panics_on_random_garbage ... ok
+test crypto::ed25519::tests::wrong_lengths_return_false ... ok
+test crypto::ed25519::tests::wrong_public_key_rejected ... ok
+test crypto::ed25519::tests::x_zero_with_sign_bit_rejected ... ok
+test crypto::x25519::tests::clamp_scalar_matches_generate_private_clamping ... ok
+test crypto::x25519::tests::clamp_scalar_short_errors_and_crypto_entrypoints_remain_strict ... ok
+test crypto::x25519::tests::generate_private_is_clamped_and_usable ... ok
+test crypto::x25519::tests::oracle_clamp_scalar_matches_python_for_every_length_boundary ... ok
+test crypto::x25519::tests::oracle_low_order_point_rejected_identically ... ok
+test crypto::x25519::tests::oracle_public_key_and_shared_secret_match_python ... ok
+test crypto::x25519::tests::oracle_scalarmult_matches_python ... ok
+test crypto::x25519::tests::shared_secret_matches_both_directions ... ok
+test crypto::x25519::tests::shared_secret_normal_case_matches_scalarmult ... ok
+test crypto::x25519::tests::shared_secret_refuses_all_zero_low_order_point ... ok
+test crypto::x25519::tests::sizes_and_base_point ... ok
+test crypto::x25519::tests::test_diffie_hellman_6_1 ... ok
+test crypto::x25519::tests::test_iteration_1 ... ok
+test crypto::x25519::tests::test_iteration_1000 ... ok
+test crypto::x25519::tests::test_vector_1 ... ok
+test crypto::x25519::tests::test_vector_2 ... ok
+test crypto::x25519::tests::wrong_size_inputs_rejected ... ok
+test envfile::tests::ambiguous_lines_stop_with_line_numbers_only ... ok
+test envfile::tests::default_selection ... ok
+test envfile::tests::edges_and_line_ends_the_tools_read_differently_are_refused ... ok
+test envfile::tests::file_level_limits ... ok
+test envfile::tests::key_ids_follow_the_id_rules ... ok
+test envfile::tests::reads_the_forms_the_tools_agree_on ... ok
+test envfile::tests::shell_syntax_is_never_run ... ok
+test errors::tests::default_reason_and_message ... ok
+test errors::tests::structured_detail_prints_as_an_object ... ok
+test errors::tests::subclass_keeps_base_class_for_matching ... ok
+test fake_upstream::tests::repos_issues_prefix_suffix_overlap_clamps_to_empty ... ok
+test fake_upstream::tests::unquote_plus_matches_python_for_probed_cases ... ok
+test context::tests::shutdown_registry_never_adopts_configured_dirs_or_creates_after_cleanup ... ok
+test gateway::header_parsing_tests::bad_header_name_drops_every_later_header ... ok
+test gateway::header_parsing_tests::doubled_trailing_cr_does_not_end_the_header_block_early ... ok
+test gateway::header_parsing_tests::embedded_bare_cr_splits_one_physical_line_into_two_headers ... ok
+test gateway::header_parsing_tests::folded_continuation_keeps_the_original_wire_terminator ... ok
+test gateway::header_parsing_tests::folded_continuation_with_lf_only_terminators_keeps_lf_not_crlf ... ok
+test gateway::header_parsing_tests::from_envelope_line_is_skipped_without_ending_recognition ... ok
+test gateway::header_parsing_tests::leading_colon_is_dropped_without_ending_recognition ... ok
+test gateway::http_framing_fuzz::read_status_and_headers_body_mode_read_body_never_panic ... ok
+test gateway::percent_decode_lossy_canonicalization_tests::percent_decode_lossy_old_implementation_matches_canonical_unquote_over_the_double_decode_pass_corpus ... ok
+test gateway::socket_timeout_tests::socket_timeout_accepts_ordinary_values_and_refuses_unusable_ones ... ok
+test gateway::stored_header_tests::stored_header_pairs_load_unchanged ... ok
+test handles::oracle_tests::huge_finite_issue_round_trips_both_directions ... ok
+test handles::oracle_tests::issue_output_is_byte_identical_with_same_jti ... ok
+test handles::oracle_tests::token_issued_by_python_verifies_in_rust ... ok
+test handles::oracle_tests::token_issued_by_rust_has_the_python_payload ... ok
+test handles::tests::expiry_signature_and_format ... ok
+test handles::tests::float_exp_exactly_two_pow_63_matches_the_integer_literal ... ok
+test handles::tests::handle_carries_no_secret_material ... ok
+test handles::tests::issue_and_verify ... ok
+test handles::tests::issue_and_verify_accept_now_beyond_i64 ... ok
+test handles::tests::issue_rejects_non_finite_now ... ok
+test handles::tests::issue_round_trips_an_unbounded_policy_version ... ok
+test handles::tests::issue_widens_when_issued_plus_ttl_exceeds_i64 ... ok
+test handles::tests::non_ascii_segments_raise_the_python_builtin_in_python_order ... ok
+test handles::tests::shared_issuer_rotation_invalidates_existing_handles ... ok
+test handles::tests::signed_payload_with_unbounded_policy_version_keeps_the_exact_integer ... ok
+test handles::tests::verify_rejects_wrong_version ... ok
+test input_envelope::tests::anything_but_an_object_of_known_strings_is_refused ... ok
+test input_envelope::tests::escaped_values_decode_exactly ... ok
+test input_envelope::tests::known_string_fields_parse_and_values_decode ... ok
+test input_envelope::tests::reader_matches_serde_json_on_generated_documents ... ok
+test kms::tests::create_os_failures_fail_closed ... ok
+test kms::tests::create_rejects_existing_path ... ok
+test kms::tests::create_rejects_non_ascii_key_id_without_writing_anything ... ok
+test kms::tests::create_sets_permissions ... ok
+test kms::tests::create_then_load_round_trip ... ok
+test kms::tests::from_dict_coerces_scalar_key_id_like_python_str ... ok
+test kms::tests::from_dict_lenient_base64_matches_finding_b2_examples ... ok
+test kms::tests::from_dict_rejects_malformed ... ok
+test kms::tests::key_id_used_as_associated_data ... ok
+test kms::tests::load_accepts_lenient_base64_and_crlf_like_python ... ok
+test kms::tests::load_corrupt_file_is_kms_corrupt ... ok
+test kms::tests::load_crlf_key_id_line_keeps_trailing_cr_like_python ... ok
+test kms::tests::load_missing_file_is_kms_missing ... ok
+test kms::tests::new_rejects_wrong_master_key_size ... ok
+test kms::tests::oracle_load_lenient_base64_matches_python ... ok
+test kms::tests::python_created_kms_loads_and_unwraps_in_rust ... ok
+test kms::tests::rust_created_kms_has_the_python_file_layout_and_unwraps ... ok
+test kms::tests::to_dict_from_dict_round_trip ... ok
+test kms::tests::unwrap_rejects_key_id_mismatch ... ok
+test kms::tests::unwrap_rejects_non_ascii_key_id_after_key_id_match ... ok
+test kms::tests::unwrap_rejects_other_master_key_with_same_key_id ... ok
+test kms::tests::wrap_rejects_non_ascii_key_id ... ok
+test notify::uid_tests::secure_file_owner_is_compared_with_the_real_uid_without_spawning ... ok
+test policy::tests::approval_bound_to_digest_caller_connection_and_one_shot ... ok
+test policy::tests::approval_expires ... ok
+test policy::tests::approval_is_bound_to_grant_and_policy_version_and_dies_with_them ... ok
+test policy::tests::approval_refused_under_another_grant_or_version ... ok
+test policy::tests::check_grant_compares_two_array_valued_uses_and_max_uses_like_python_list_ordering ... ok
+test policy::tests::connection_validation_rejects_bad_targets ... ok
+test policy::tests::consume_approval_on_unhashable_stored_grant_fails_atomically_unlike_hashable_non_string ... ok
+test policy::tests::consume_at_i64_max_uses_widens_exactly_matching_pythons_success ... ok
+test policy::tests::consume_in_another_thread_still_rechecks_control ... ok
+test policy::tests::consume_reapplies_the_evaluated_scope_and_policy_version ... ok
+test policy::tests::consume_rechecks_control_principal_and_connection_committed_after_evaluate ... ok
+test policy::tests::disable_connection_on_unhashable_secret_id_writes_then_fails_like_python ... ok
+test policy::tests::disabled_connection_denied ... ok
+test policy::tests::disabled_principal_cannot_authenticate_or_use ... ok
+test policy::tests::exact_grant_limit_rejects_bool_and_nonpositive_but_keeps_huge_integer ... ok
+test policy::tests::expiry_is_enforced_at_evaluation_time ... ok
+test policy::tests::global_stop_blocks_everything_until_resume ... ok
+test policy::tests::grant_is_bound_to_caller_and_connection ... ok
+test policy::tests::grant_limits_validated ... ok
+test policy::tests::grant_public_view_expires_at_is_exact_past_f64_53_bit_precision ... ok
+test policy::tests::grant_records_credential_version_and_activation_rebinds_unpinned_connections ... ok
+test policy::tests::http_target_checks_allow_private_network_before_ca_file_like_python ... ok
+test policy::tests::list_approvals_items_keep_python_dict_keys ... ok
+test policy::tests::mixed_integer_float_ordering_keeps_python_integer_precision ... ok
+test policy::tests::narrowing_or_rotation_reevaluates_in_place ... ok
+test policy::tests::no_grant_is_denied ... ok
+test policy::tests::number_is_python_int_matches_json_literal_form ... ok
+test policy::tests::one_connection_many_operations_without_registration ... ok
+test policy::tests::principal_token_authenticates_and_is_hashed ... ok
+test policy::tests::public_view_hides_secret_reference_and_others ... ok
+test policy::tests::python_int_from_str_accepts_i64_min ... ok
+test policy::tests::reapply_revocations_on_unparseable_grants_file_fails_even_with_empty_revocation_set ... ok
+test policy::tests::regrant_rejects_ttl_beyond_max_grant_ttl_like_pythons_create_grant ... ok
+test policy::tests::regrant_remaining_uses_is_exact_past_f64_53_bit_precision ... ok
+test policy::tests::request_approval_past_i64_max_cycle_continues_like_python ... ok
+test policy::tests::request_approval_propagates_corrupt_state_instead_of_writing_a_grantless_approval ... ok
+test policy::tests::restore_pending_blocks_until_acknowledged ... ok
+test policy::tests::resume_incident_open_float_detail_matches_pythons_str_not_json_literal_text ... ok
+test policy::tests::revocation_applies_immediately_and_notifies ... ok
+test policy::tests::revocations_are_ledgered_and_reapplied ... ok
+test gateway::annotate_approval_tests::annotate_approval_fails_closed_on_corrupt_state_instead_of_swallowing_the_error ... ok
+test policy::tests::scope_method_and_path_enforced ... ok
+test policy::tests::revoke_all_marks_everything ... ok
+test policy::tests::ssh_action_requires_matching_username ... ok
+test policy::tests::ssh_target_rejects_multiline_host_keys_and_trailing_newline_usernames ... ok
+test policy::tests::ssh_consume_rechecks_username_and_stop ... ok
+test policy::tests::target_change_is_widening ... ok
+test policy::tests::unknown_caller_and_connection_denied ... ok
+test policy::tests::update_connection_on_unhashable_secret_id_writes_then_fails_like_python ... ok
+test policy::tests::update_connection_past_i64_max_policy_version_continues_like_python ... ok
+test policy::tests::trust_anchor_and_secret_changes_are_widening ... ok
+test policy::tests::usage_cap_consumed_atomically ... ok
+test policy::tests::used_approval_starts_a_new_cycle_with_history ... ok
+test projects::oracle_tests::validate_name_matches_the_name_re_table ... ok
+test policy::tests::widening_change_makes_grants_stale_no_inheritance ... ok
+test projects::tests::create_defaults_to_dev_staging_prod ... ok
+test projects::tests::create_array_document_ignores_non_string_elements_for_containment ... ok
+test projects::tests::create_rejects_duplicate_and_empty_environments ... ok
+test projects::tests::create_rejects_invalid_names ... ok
+test projects::tests::create_project_exists_on_truthy_non_dict_document_when_name_is_contained ... ok
+test projects::tests::get_missing_is_not_found ... ok
+test projects::tests::get_treats_null_entry_as_not_found ... ok
+test projects::tests::falsy_non_dict_document_is_treated_as_empty ... ok
+test projects::tests::list_on_empty_store_is_empty ... ok
+test projects::tests::list_is_sorted_by_name ... ok
+test projects::tests::require_environment_checks_membership ... ok
+test projects::tests::noniterable_or_missing_project_fields_are_state_corrupt ... ok
+test projects::tests::validate_name_accepts_and_rejects ... ok
+test projects::tests::validate_name_accepts_exactly_one_trailing_newline ... ok
+test pybase64::tests::all_padding_decodes_empty ... ok
+test pybase64::tests::data_after_padding_ignored ... ok
+test pybase64::tests::embedded_whitespace_ignored ... ok
+test pybase64::tests::excess_padding_accepted ... ok
+test pybase64::tests::lone_data_character_rejected ... ok
+test pybase64::tests::missing_padding_rejected ... ok
+test pybase64::tests::non_ascii_str_rejected ... ok
+test pybase64::tests::non_canonical_trailing_bits_accepted ... ok
+test pybase64::tests::pad_after_short_quad_rejected ... ok
+test pybase64::tests::round_trip_basic ... ok
+test pybase64::tests::strict_decode_accepts_only_canonical_padding ... ok
+test pybase64::tests::urlsafe_bytes_variant_matches_str_variant ... ok
+test pybase64::tests::urlsafe_translates_dash_underscore ... ok
+test pyidna::tests::idna2003_encodes_representative_host_names ... ok
+test pyjson::oracle_tests::big_int_matches_python_str ... ok
+test pyjson::oracle_tests::compact_sorted_matches_python_json_dumps_for_audit_style_records ... ok
+test projects::tests::truthy_non_dict_document_is_state_corrupt_and_create_does_not_overwrite ... ok
+test pyjson::oracle_tests::ensure_ascii_matches_python_for_non_bmp_and_control_chars ... ok
+test pyjson::oracle_tests::dumps_matches_python_json_dumps_for_finding_values_in_every_option_combination ... ok
+test pyjson::oracle_tests::loads_matches_python_for_probed_nesting_depths ... ok
+test pyjson::oracle_tests::loads_matches_python_json_loads_round_trip ... ok
+test pyjson::oracle_tests::plain_preserves_insertion_order_matching_python_error_to_dict_shape ... ok
+test pyjson::oracle_tests::pretty_sorted_matches_python_json_dump_indent_2 ... ok
+test pyjson::oracle_tests::python_accepts_depths_past_max_json_depth_that_rust_now_rejects ... ok
+test pyjson::oracle_tests::python_accepts_what_rust_rejects_lone_surrogate_and_overflow_literal ... ok
+test pyjson::tests::big_int_round_trips ... ok
+test pyjson::tests::compact_sorted_matches_audit_style ... ok
+test pyjson::tests::control_chars_and_quotes_are_escaped ... ok
+test pyjson::tests::dedicated_stack_path_parses_up_to_max_json_depth ... ok
+test pyjson::oracle_tests::float_repr_matches_python_for_a_representative_sample ... ok
+test pyjson::tests::default_sorted_has_spaces ... ok
+test pyjson::tests::depth_past_max_json_depth_is_rejected ... ok
+test pyjson::tests::dedicated_stack_result_is_safe_to_drop_on_a_small_stack ... ok
+test pyjson::tests::dumps_rejects_one_level_past_max_json_depth_without_aborting ... ok
+test pyjson::tests::empty_containers_are_compact_even_with_indent ... ok
+test pyjson::tests::ensure_ascii_escapes_non_bmp_as_surrogate_pair ... ok
+test pyjson::tests::float_repr_known_values ... ok
+test pyjson::tests::float_repr_non_finite_does_not_panic ... ok
+test pyjson::tests::float_vs_int_distinction_round_trips ... ok
+test pyjson::tests::inline_path_is_safe_on_a_small_stack_thread ... ok
+test pyjson::tests::loads_and_dumps_reject_overflowing_float_literals ... ok
+test pyjson::tests::loads_rejects_lone_surrogate_escapes ... ok
+test pyjson::tests::dumps_at_max_json_depth_does_not_abort_with_1_7mib_of_caller_stack_already_held ... ok
+test pyjson::tests::max_depth_document_is_safe_to_dump_clone_compare_and_drop_on_a_small_stack ... ok
+test pyjson::tests::pretty_sorted_matches_store_style ... ok
+test pystr::tests::default_tempdir_candidate_selection ... ok
+test pystr::tests::float_from_str_table ... ok
+test pystr::tests::int_from_str_known_cases ... ok
+test pystr::tests::int_from_str_radix_checked_matches_saturating_below_the_boundary_and_diverges_at_it ... ok
+test pystr::tests::is_int_space_is_the_narrow_ascii_set ... ok
+test pystr::tests::is_printable_matches_known_categories ... ok
+test pystr::tests::is_space_matches_known_cases ... ok
+test pystr::tests::posix_normpath_table ... ok
+test pystr::tests::repr_number_for_overflowing_literal ... ok
+test pystr::tests::repr_str_tricky_strings ... ok
+test pystr::tests::repr_value_table ... ok
+test pystr::tests::urlsplit_table ... ok
+test secret::tests::debug_is_redacted ... ok
+test pyjson::tests::max_depth_document_is_safe_to_dump_clone_compare_and_drop_on_a_stack_with_prior_usage ... ok
+test server::tests::handler_panic_answers_500_and_frees_the_connection_slot ... ok
+test server::tests::replay_status_line_keeps_unbounded_decimal_value ... ok
+test server::tests::poisoned_server_locks_do_not_cascade ... ok
+test signer::tests::accept_latency_is_not_bound_by_a_fixed_poll_interval ... ok
+test server::tests::request_cut_at_the_deadline_is_never_acted_on ... ok
+test signer::tests::active_bindings_and_release_for_grant_preserve_insertion_order ... ok
+test signer::tests::arbitrary_data_never_signed ... ok
+test signer::tests::bind_failure_is_the_escaping_python_os_error ... ok
+test signer::tests::bind_private_creates_the_socket_file_at_0600_before_any_chmod ... ok
+test signer::tests::audit_failure_refuses_signature ... ok
+test signer::tests::bind_refuses_non_ssh_connection_and_denied_grant ... ok
+test signer::tests::choose_socket_dir_is_idempotent_for_an_existing_directory ... ok
+test signer::tests::choose_socket_dir_normalizes_like_python_pathlib_at_the_boundary ... ok
+test signer::tests::choose_socket_dir_sets_leaf_mode_0700_immediately_after_creation ... ok
+test signer::tests::bind_then_sign_produces_valid_signature ... ok
+test signer::tests::client_slot_shares_the_accepted_stream_with_its_worker_thread ... ok
+test signer::tests::close_after_socket_file_removed_returns_promptly_and_accept_thread_exits ... ok
+test signer::tests::close_is_not_blocked_by_a_client_thread_wedged_on_the_state_lock ... ok
+test signer::tests::concurrent_clients_are_capped_and_refusal_audited ... ok
+test signer::tests::close_releases_the_listener_even_with_a_client_thread_wedged_on_the_state_lock ... ok
+test signer::tests::destination_binding ... ok
+test signer::tests::extension_query_advertises_session_bind ... ok
+test signer::tests::forwarding_bind_refused ... ok
+test signer::tests::identities_lists_only_the_bound_key_without_touching_plaintext ... ok
+test signer::tests::idle_cpu_with_one_and_nine_live_bindings ... ignored
+test signer::tests::idle_listener_backlog_caps_pending_connects_like_python ... ok
+test signer::tests::finished_client_threads_are_pruned ... ok
+test signer::tests::listener_shutdown_refuses_and_wakes_like_a_closed_python_socket ... ok
+test signer::tests::key_management_messages_refused ... ok
+test signer::tests::make_temp_dir_suffix_matches_mkdtemp ... ok
+test signer::tests::m1_deleted_identity_refuses_next_signature_on_already_bound_socket ... ok
+test signer::tests::normalize_pathlib_string_matches_pathlib_str ... ok
+test signer::tests::per_binding_fd_cost_matches_python_ratio_of_one ... ignored
+test signer::tests::per_client_fd_cost_matches_python_ratio_of_one ... ignored
+test signer::tests::malformed_and_oversized_messages_do_not_crash_server ... ok
+test signer::tests::policy_checked_at_bind_and_sign_time ... ok
+test signer::tests::release_ends_live_client_connections ... ok
+test signer::tests::release_for_grant_bulk_after_socket_files_removed_completes_promptly ... ok
+test signer::tests::rlimit_probe_served_clients_and_accept_loop_survival ... ignored
+test signer::tests::release_removes_socket ... ok
+test signer::tests::session_binding_and_reuse ... ok
+test signer::tests::sign_without_bind_refused ... ok
+test signer::tests::socket_directory_actual_basename_budget_binds_through_exact_boundary ... ok
+test signer::tests::socket_directory_fallback_cleanup_never_recursively_removes_contents ... ok
+test signer::tests::socket_directory_context_defaults_remain_owned_until_final_context_drop ... ok
+test signer::tests::socket_directory_fallback_lives_through_shutdown_rebind_and_last_manager ... ok
+test signer::tests::socket_directory_one_over_budget_falls_back_without_creating_preferred ... ok
+test signer::tests::socket_directory_post_mkdir_failure_cleans_only_fresh_fallback ... ok
+test signer::tests::socket_directory_multibyte_selection_keeps_character_count_and_os_refusal ... ok
+test signer::tests::socket_directory_preferred_prefix_and_created_leaf_remain_caller_owned ... ok
+test signer::tests::socket_is_private ... ok
+test signer::tests::ssh_add_lists_key_but_cannot_sign_random_data_or_delete ... ok
+test signer::tests::ssh_audit_records_carry_policy_version ... ok
+test signer::tests::teardown_leaves_no_socket_file_listener_or_signer_created_directory ... ok
+test signer::tests::usage_cap_enforced_per_signature ... ok
+test smtp::hostname_tests::getfqdn_of_an_unresolvable_name_is_the_name ... ok
+test smtp::hostname_tests::local_hostname_is_a_dotted_name_or_an_address_literal ... ok
+test smtp::mailbox_tests::generated_comment_boundaries_match_python_transport ... ok
+test smtp::mailbox_tests::supported_comment_forms_match_python_envelope_oracle ... ok
+test smtp::message_tests::body_transfer_encoding_matches_python_bytes ... ok
+test smtp::message_tests::encoded_word_headers_match_python_bytes ... ok
+test smtp::message_tests::flattened_message_matches_python_bytes ... ok
+test smtp::message_tests::generated_header_shapes_match_python_bytes ... ok
+test smtp::message_tests::groups_and_domain_literals_match_python_headers_and_envelopes ... ok
+test smtp::message_tests::unsupported_address_shapes_are_written_as_configured ... ok
+test sshwire::tests::authorized_keys_dollar_leniency_matches_python_for_reviewer_probes ... ok
+test sshwire::tests::encode_string_over_length_is_a_bare_value_error ... ok
+test sshwire::tests::malformed_inputs_rejected_with_the_prototype_messages ... ok
+test sshwire::tests::mpint_round_trip_matches_python_for_large_values ... ok
+test sshwire::tests::openssh_private_key_pem_round_trips ... ok
+test sshwire::tests::parse_public_key_blob_unsupported_type_repr_matches_python_for_cn_cf_codepoints ... ok
+test sshwire::tests::parse_userauth_request_unexpected_service_repr_matches_python_for_cn_cf_codepoints ... ok
+test sshwire::tests::pem_blank_lines_and_missing_trailing_newline_match_python ... ok
+test sshwire::tests::pem_line_boundaries_match_python_splitlines ... ok
+test sshwire::tests::pem_trailing_x1f_is_stripped_but_not_a_line_boundary ... ok
+test sshwire::tests::pem_unsupported_header_with_trailing_x1f_matches_python ... ok
+test sshwire::tests::public_key_blob_and_fingerprint_match_python ... ok
+test sshwire::tests::public_key_derivation_matches_python ... ok
+test sshwire::tests::python_generated_private_key_parses_in_rust ... ok
+test sshwire::tests::signature_matches_python ... ok
+test sshwire::tests::ssh_keygen_accepts_our_generated_private_key ... ok
+test sshwire::tests::to_authorized_key_bad_comment_is_a_bare_value_error_not_wire_error ... ok
+test sshwire::tests::verify_rejects_tampered_signatures ... ok
+test store::tests::append_and_read_lines_with_limit ... ok
+test store::tests::append_line_rejects_embedded_newline ... ok
+test store::tests::create_and_subdir_apply_dir_mode_under_various_umasks ... ok
+test store::tests::create_twice_is_state_exists ... ok
+test store::tests::dir_and_file_modes ... ok
+test store::tests::exists_reflects_filesystem ... ok
+test store::tests::iso_formats_like_python_gmtime_and_floors_fractional_seconds ... ok
+test store::tests::iso_matches_platform_strftime_year_width ... ok
+test store::tests::lock_is_reentrant_same_thread ... ok
+test store::tests::lock_serialises_across_threads ... ok
+test store::tests::mkdir_p_does_not_chmod_pre_existing_directories ... ok
+test store::tests::normalize_join_name_matches_pathlib_shape ... ok
+test store::tests::pathlib_join_normalization_cases ... ok
+test store::tests::read_json_corrupt_raises_state_corrupt ... ok
+test store::tests::read_lines_limit_zero_returns_everything ... ok
+test store::tests::read_lines_splits_on_any_universal_newline_terminator ... ok
+test store::tests::require_missing_is_state_missing ... ok
+test store::tests::state_dir_operations_normalize_a_trailing_slash_like_pathlib ... ok
+test store::tests::subdir_creates_and_is_idempotent ... ok
+test store::tests::subdir_with_missing_parent_does_not_create_it ... ok
+test store::tests::uncaught_store_failures_fail_closed ... ok
+test store::tests::write_json_cleans_tmp_on_failure_but_write_bytes_does_not ... ok
+test store::tests::write_json_is_atomic_no_tmp_left_behind ... ok
+test store::tests::write_json_one_level_past_max_json_depth_is_state_write_failed ... ok
+test store::tests::write_json_then_read_json_round_trips_at_max_json_depth ... ok
+test store::tests::write_read_bytes_round_trip_and_missing ... ok
+test store::tests::write_read_json_round_trip_and_default ... ok
+test team::checkpoint::admission::oracle_tests::every_original_op_matches_the_literal_role_owner_and_skip_table ... ok
+test team::checkpoint::semantics::literal_trace_tests::complete_shared_trace_matches_every_literal_original_operation_and_pre_cut_view ... ok
+test team::checkpoint::semantics::required_generations::tests::empty_required_does_no_unwrap_or_decrypt_and_nonempty_counts_every_blob ... ok
+test team::checkpoint::strict_json::callback_tests::both_directions_of_some_none_callback_disagreement_refuse ... ok
+test team::checkpoint::strict_json::callback_tests::duplicate_never_invokes_a_second_value_seed_or_materializer ... ok
+test team::checkpoint::strict_json::gate_tests::all_36_new_object_preserving_oracles_and_legacy_record_equality ... ok
+test team::checkpoint::strict_json::gate_tests::count_before_children_and_across_reordered_components ... ok
+test team::checkpoint::strict_json::gate_tests::duplicate_before_value_and_non_normalized_keys ... ok
+test team::checkpoint::strict_json::gate_tests::golden_component_spans_and_hash_scopes ... ok
+test signer::tests::username_algorithm_key_and_flags_bound ... ok
+test team::checkpoint::strict_json::gate_tests::small_stack_alternating_wrapped_success_errors_and_drop ... ok
+test team::checkpoint::strict_json::gate_tests::syntax_unicode_and_grammar_mutations ... ok
+test team::checkpoint::strict_json::gate_tests::uint_source_tokens_exact_integers_and_finite_legacy_numbers ... ok
+test team::checkpoint::strict_json::metadata_shape_tests::metadata_strings_refuse_containers_before_child_decoding ... ok
+test team::checkpoint::strict_json::tests::d64_on_small_stack ... ok
+test team::commit::tests::a_connection_id_derive_refuses_is_stored_but_not_signed ... ok
+test team::commit::tests::a_deferred_commit_another_took_the_sequence_of_is_rejected ... ok
+test team::commit::tests::a_deferred_commit_stored_since_is_dropped ... ok
+test team::commit::tests::a_deferred_commit_waiting_for_its_sequence_takes_no_lock ... ok
+test team::commit::tests::a_released_commit_is_decided_under_the_state_lock ... ok
+test team::commit::tests::a_released_commit_keeps_its_authors_hlc_order ... ok
+test team::commit::tests::an_op_nested_too_deep_is_stored_but_not_signed ... ok
+test team::commit::tests::append_enforces_contiguous_sequence ... ok
+test team::commit::tests::clock_skew_defers_then_releases ... ok
+test team::commit::tests::conflicting_commit_at_same_slot_is_equivocation ... ok
+test team::commit::tests::connection_create_accepts_valid_shape ... ok
+test team::commit::tests::connection_create_rejects_bad_host ... ok
+test team::commit::tests::connection_update_rejects_unknown_field ... ok
+test team::commit::tests::connection_update_requires_a_field ... ok
+test team::commit::tests::dek_rotate_shape ... ok
+test team::commit::tests::exact_duplicate_is_silently_accepted_as_duplicate ... ok
+test team::commit::tests::forged_early_bootstrap_from_non_owner_rejected ... ok
+test team::commit::tests::from_dict_reports_a_non_string_op_key_as_the_later_uncaught_typeerror ... ok
+test team::commit::tests::hash_changes_with_sig ... ok
+test team::commit::tests::int_strip_space_rejects_the_four_separator_controls ... ok
+test team::commit::tests::malformed_ops_refused_at_sign_time ... ok
+test team::commit::tests::member_add_shape ... ok
+test team::commit::tests::non_dict_op_rejected ... ok
+test team::commit::tests::non_monotone_hlc_rejected ... ok
+test team::commit::tests::observe_raises_clock_and_causal_tick_sorts_after ... ok
+test team::commit::tests::observe_tie_takes_max_counter ... ok
+test team::commit::tests::parse_rejects_malformed ... ok
+test team::commit::tests::receive_commit_rejects_an_hlc_not_above_the_previous_one ... ok
+test team::commit::tests::receive_commit_rejects_bad_signature ... ok
+test team::commit::tests::receive_commit_rejects_env_id_mismatch ... ok
+test team::commit::tests::receive_commit_rejects_replayed_seq_after_bootstrap ... ok
+test team::commit::tests::receive_commit_rejects_unknown_author ... ok
+test team::commit::tests::second_bootstrap_from_same_author_rejected_by_sequence ... ok
+test team::commit::tests::secret_put_version_shape ... ok
+test team::commit::tests::sign_then_verify ... ok
+test team::commit::tests::tampered_op_fails_verification ... ok
+test team::commit::tests::tick_advances_and_zeroes_counter_on_wall_advance ... ok
+test team::commit::tests::tick_increments_beyond_any_fixed_width ... ok
+test team::commit::tests::tick_increments_counter_when_wall_does_not_advance ... ok
+test team::commit::tests::to_dict_from_dict_roundtrip ... ok
+test team::commit::tests::total_order_numeric_not_lexicographic ... ok
+test team::commit::tests::unicode_decimal_digit_matches_python_for_the_previously_missing_blocks ... ok
+test team::commit::tests::unknown_op_rejected ... ok
+test team::commit::tests::vector_and_all_commits ... ok
+test team::commit::tests::wrong_signer_fails_verification ... ok
+test team::compaction_heads::tests::compaction_heads_at_256_and_over_256_are_exact_without_sequence_enumeration ... ok
+test team::compaction_heads::tests::compaction_heads_exact_huge_pyint_slots_hlc_monotonicity_and_vector_regression ... ok
+test team::compaction_heads::tests::compaction_heads_helpers_require_real_lock_and_bind_snapshot_plan ... ok
+test team::compaction_heads::tests::compaction_heads_reserved_number_normalization_refuses_before_publication ... ok
+test team::checkpoint::strict_json::gate_tests::measured_wide_input_and_long_numeric_work ... ok
+test team::envelope::tests::invalid_dek_size_rejected ... ok
+test team::envelope::tests::malformed_wrap_rejected ... ok
+test team::envelope::tests::rfc5869_case_1 ... ok
+test team::envelope::tests::secret_roundtrip ... ok
+test team::envelope::tests::two_wraps_use_independent_ephemeral_keys ... ok
+test team::envelope::tests::unwrap_refuses_low_order_ephemeral_point ... ok
+test team::envelope::tests::wrap_refuses_low_order_recipient_point ... ok
+test team::envelope::tests::wrap_unwrap_roundtrip ... ok
+test team::envelope::tests::wrong_device_cannot_unwrap ... ok
+test team::envelope::tests::wrong_env_or_generation_id_fails ... ok
+test team::envelope::tests::wrong_key_fails ... ok
+test team::envelope::tests::wrong_secret_id_fails_aad_check ... ok
+test team::envelope::tests::wrong_version_id_fails_aad_check ... ok
+test team::fold::tests::a_backdated_self_removal_fact_erases_nothing ... ok
+test team::fold::tests::a_broken_older_snapshot_gives_way_to_a_fold_from_scratch ... ok
+test team::fold::tests::a_commit_sorting_inside_the_snapshot_refolds_from_scratch ... ok
+test team::fold::tests::a_compacted_history_without_its_snapshot_fails_closed ... ok
+test team::fold::tests::a_compaction_cut_before_an_earlier_one_fails_closed ... ok
+test team::fold::tests::a_compaction_places_removals_from_every_stored_commit ... ok
+test team::fold::tests::a_fallback_does_not_audit_covered_skips_again ... ok
+test team::fold::tests::a_fallback_needs_every_commit_since_the_first ... ok
+test team::fold::tests::a_fallback_past_two_snapshots_audits_no_covered_skip_again ... ok
+test team::fold::tests::a_first_compaction_past_a_refold_snapshot_folds_its_prefix ... ok
+test team::fold::tests::a_fold_checks_one_unrecorded_snapshot_at_most ... ok
+test team::fold::tests::a_gap_anywhere_past_a_snapshot_passes_it_over ... ok
+test team::fold::tests::a_leave_commit_after_its_fact_refolds_from_scratch ... ok
+test team::fold::tests::a_null_snapshot_gives_way_to_an_older_one ... ok
+test team::fold::tests::a_removal_learned_after_the_snapshot_refolds_from_scratch ... ok
+test team::fold::tests::a_second_compaction_builds_on_a_base_without_a_later_member ... ok
+test team::fold::tests::a_second_compaction_builds_on_the_first ... ok
+test team::fold::tests::a_second_compaction_places_removals_from_every_stored_commit ... ok
+test team::fold::tests::a_second_snapshot_still_covers_idle_authors ... ok
+test team::fold::tests::a_self_removal_commit_that_cannot_apply_still_bounds_the_device ... ok
+test team::fold::tests::a_snapshot_does_not_remove_a_member_ahead_of_its_cut ... ok
+test team::fold::tests::a_snapshot_missing_a_compacted_commit_it_does_not_cover_fails_closed ... ok
+test team::fold::tests::a_snapshot_without_a_record_refolds_from_scratch ... ok
+test team::fold::tests::admin_can_create_connection ... ok
+test team::fold::tests::all_permutations_small_set_converge ... ok
+test team::fold::tests::an_attestation_after_an_unrecorded_snapshot_refolds_from_scratch ... ok
+test team::fold::tests::an_attestation_after_its_removal_fact_refolds_from_scratch ... ok
+test team::fold::tests::an_owner_signs_nothing_after_its_skipped_self_removal ... ok
+test team::fold::tests::an_unrecorded_snapshot_that_matches_is_used_and_recorded ... ok
+test team::fold::tests::an_unrecorded_snapshot_with_another_version_order_is_passed_over ... ok
+test team::fold::tests::another_admins_rotation_does_not_attest_a_removal ... ok
+test team::fold::tests::backdated_self_removal_fact_does_not_move_the_cut ... ok
+test team::fold::tests::base_documents_own_version_order_wins_over_the_argument_and_is_popped_from_the_result ... ok
+test team::fold::tests::commit_time_at_the_gmtime_boundary ... ok
+test team::fold::tests::commit_time_uses_one_correctly_rounded_division ... ok
+test team::fold::tests::compaction_keeps_work_before_a_later_removal ... ok
+test team::fold::tests::connection_create_by_admin_applies ... ok
+test team::fold::tests::connection_create_with_hlc_at_gmtime_range_boundary_still_folds ... ok
+test team::fold::tests::connection_create_with_hlc_past_gmtime_range_aborts_the_whole_fold ... ok
+test team::fold::tests::connection_create_with_hlc_wall_ms_beyond_i128_also_aborts_the_whole_fold ... ok
+test team::fold::tests::connection_disable_for_missing_id_skips_even_with_hlc_past_gmtime_range ... ok
+test team::fold::tests::derive_vault_missing_kind_aborts_the_whole_derive_like_pythons_keyerror ... ok
+test team::fold::tests::derive_vault_skips_the_secrets_type_check_when_there_is_nothing_to_derive ... ok
+test team::fold::tests::derive_version_index_iterates_raw_strings_and_objects ... ok
+test team::fold::tests::disable_then_later_create_same_id_skipped_within_one_fold ... ok
+test team::fold::tests::disabled_fact_blocks_create_regardless_of_order ... ok
+test team::fold::tests::env_init_from_wrong_owner_skipped ... ok
+test team::fold::tests::env_init_only_valid_as_first_commit ... ok
+test team::fold::tests::env_init_sets_owner_and_generation ... ok
+test team::fold::tests::far_future_commit_deferred_then_released ... ok
+test team::fold::tests::fold_from_snapshot_matches_full_fold ... ok
+test team::fold::tests::lowest_attestation_bounds_a_member_removed_twice ... ok
+test team::fold::tests::malformed_secret_entry_shapes_fail_closed_instead_of_panicking ... ok
+test team::fold::tests::member_removed_fact_blocks_readd ... ok
+test team::fold::tests::nine_over_strict_shapes_now_fold_successfully ... ok
+test team::fold::tests::owner_cannot_be_removed_by_admin ... ok
+test team::fold::tests::owner_transfer_only_by_owner ... ok
+test team::fold::tests::ownership_does_not_pass_to_a_removed_member ... ok
+test team::fold::tests::parse_stray_version_order_fails_closed_matching_pythons_touched_behaviour ... ok
+test team::fold::tests::random_arrival_orders_converge ... ok
+test team::fold::tests::removal_keeps_the_removed_admins_earlier_work ... ok
+test team::fold::tests::removal_without_its_rotation_cuts_at_the_fact ... ok
+test team::fold::tests::removed_admins_password_rotation_stays_active ... ok
+test team::fold::tests::removed_member_is_not_readmitted_after_its_removal ... ok
+test team::fold::tests::removed_members_later_or_backdated_work_is_skipped ... ok
+test team::fold::tests::revoked_version_fact_blocks_activate ... ok
+test team::fold::tests::self_removal_folds_the_same_from_a_snapshot ... ok
+test team::fold::tests::self_removal_is_placed_by_its_own_commit ... ok
+test team::fold::tests::seven_more_unconditionally_indexed_fields_fail_closed_instead_of_fail_open ... ok
+test team::fold::tests::snapshot_author_sequence_compares_integer_to_float_exactly ... ok
+test team::fold::tests::snapshot_document_null_folds_from_a_fresh_document ... ok
+test team::fold::tests::snapshot_fold_places_removals_like_a_full_fold ... ok
+test team::fold::tests::snapshot_non_object_fails_closed ... ok
+test team::fold::tests::snapshot_vector_entry_types_compare_numerically ... ok
+test team::fold::tests::snapshot_version_order_bad_shapes_fail_closed ... ok
+test team::fold::tests::the_earliest_self_removal_commit_places_it ... ok
+test team::fold::tests::unrelated_op_does_not_eagerly_validate_an_untouched_bad_entry ... ok
+test team::fold::tests::user_can_remove_self ... ok
+test team::fold::tests::user_cannot_add_member ... ok
+test team::fold::tests::user_cannot_create_connection ... ok
+test team::humanview::tests::nested_connections_key_off_document_root_never_renders_as_a_tuple ... ok
+test team::humanview::tests::number_display_matches_python_on_an_overflowing_float_literal ... ok
+test team::humanview::tests::strip_document_removes_secrets_and_keeps_shape ... ok
+test team::humanview::tests::to_yaml_connection_tuple_rendering_depends_on_freshness ... ok
+test team::humanview::tests::to_yaml_nested_structures ... ok
+test team::humanview::tests::to_yaml_scalars_and_quoting ... ok
+test team::humanview::tests::yaml_needs_quoting_over_every_isspace_codepoint_and_position ... ok
+test team::identity::tests::create_persists_wrapped_and_no_export ... ok
+test team::identity::tests::create_refuses_when_already_exists ... ok
+test team::identity::tests::generate_and_record_roundtrip ... ok
+test team::identity::tests::load_missing_raises ... ok
+test team::identity::tests::load_or_create_is_idempotent ... ok
+test team::identity::tests::malformed_record_dict_rejected ... ok
+test team::identity::tests::record_roundtrips_through_dict ... ok
+test team::identity::tests::sign_produces_verifiable_signature ... ok
+test team::identity::tests::tampered_agree_pub_fails_verification ... ok
+test team::link::tests::a_blocked_accept_ends_when_stopped ... ok
+test team::link::tests::a_missing_or_relative_socket_fails_closed ... ok
+test team::link::tests::a_reply_line_leaves_the_stream_bytes_after_it ... ok
+test team::link::tests::daemon_errors_map_to_fixed_reasons_and_never_echo ... ok
+test team::link::tests::link_addresses_are_zpl_and_26_base32_characters ... ok
+test team::link::tests::replies_parse_strictly ... ok
+test team::link::tests::reply_lines_are_bounded_complete_and_timely ... ok
+test team::link::tests::the_client_sends_one_contract_request_line ... ok
+test team::membership::invite_compat_tests::base32_padding_and_malformed_inputs ... ok
+test team::membership::invite_compat_tests::invite_addresses_accept_well_formed_link_addresses_only ... ok
+test team::membership::invite_compat_tests::saved_invite_expiry_numeric_and_iso_utc_forms ... ok
+test team::pairing::tests::fingerprint_and_id_shapes ... ok
+test team::pairing::tests::invite_status_follows_the_listing_rules ... ok
+test team::sync::compaction_heads_tests::compaction_heads_actual_corrupt_readback_refuses_and_ordinary_load_ignores_cache ... ok
+test team::sync::compaction_heads_tests::compaction_heads_every_successful_unlink_follows_both_durable_images_and_readback ... ok
+test team::sync::compaction_heads_tests::compaction_heads_fresh_admitted_facts_override_stale_env_cache ... ok
+test team::compaction_heads::tests::compaction_heads_serialized_16_mib_boundary_and_bounded_disk_read ... ok
+test team::sync::compaction_heads_tests::compaction_heads_lagging_peer_blocks_until_exact_original_vector_coverage ... ok
+test team::sync::compaction_heads_tests::compaction_heads_real_snapshot_record_and_cache_rename_failures_precede_unlink ... ok
+test team::sync::compaction_heads_tests::compaction_heads_real_state_holders_and_two_compactors_serialize_without_lost_heads ... ok
+test team::sync::compaction_heads_tests::compaction_heads_rotation_and_self_removal_witnesses_and_fact_records_stay_live ... ok
+test team::sync::retry_tests::a_dial_that_loses_the_tie_break_leaves_no_mark ... ok
+test team::sync::retry_tests::a_fact_is_announced_although_its_refold_failed ... ok
+test team::sync::retry_tests::a_failed_dial_moves_the_peer_to_its_next_address_and_success_keeps_it ... ok
+test team::sync::retry_tests::a_failed_pickup_refold_is_retried_until_it_succeeds ... ok
+test team::sync::retry_tests::a_failed_refold_after_a_removal_fact_is_retried ... ok
+test team::sync::compaction_heads_tests::compaction_heads_real_compactor_fault_prefixes_reopen_without_losing_data ... ok
+test team::sync::retry_tests::a_failing_environment_closes_due_sessions_and_asks_nothing ... ok
+test team::sync::retry_tests::a_failing_environment_closes_expired_sessions ... ok
+test team::sync::retry_tests::a_failing_environment_dials_no_one ... ok
+test team::sync::retry_tests::a_failing_environment_holds_up_no_other_environment ... ok
+test team::sync::retry_tests::a_failing_environment_is_audited_once_per_failure ... ok
+test team::sync::retry_tests::a_failing_refold_holds_up_no_other_step_or_the_sync ... ok
+test team::sync::retry_tests::a_failing_refold_is_retried_with_backoff ... ok
+test team::sync::retry_tests::a_joiner_removed_mid_batch_gets_none_of_the_rest ... ok
+test team::sync::retry_tests::a_failure_after_a_load_failure_is_audited ... ok
+test team::sync::retry_tests::a_poll_returns_the_first_failure ... ok
+test team::sync::retry_tests::a_joiner_removed_while_held_gets_only_its_removal_notice ... ok
+test team::sync::retry_tests::a_refold_failing_at_registration_after_a_load_failure_is_audited ... ok
+test team::sync::retry_tests::a_refold_records_an_unrecorded_snapshot ... ok
+test team::sync::retry_tests::a_refold_records_an_unrecorded_snapshot_while_replacing_a_stale_one ... ok
+test team::sync::retry_tests::a_refold_replaces_a_stale_snapshot ... ok
+test team::sync::retry_tests::a_refused_dial_also_moves_to_the_next_address ... ok
+test team::sync::retry_tests::a_removal_fact_refuses_the_device_while_its_refold_fails ... ok
+test team::sync::retry_tests::a_replaced_or_dropped_session_takes_its_hold_along ... ok
+test team::sync::retry_tests::a_session_whose_handshake_preceded_a_removal_fact_is_refused ... ok
+test team::sync::retry_tests::a_session_the_poll_closes_is_redialed_from_the_next_tick ... ok
+test team::sync::retry_tests::admission_observes_future_commits_and_send_waits_for_unlock ... ok
+test team::sync::retry_tests::an_accepted_dial_dropped_by_a_failed_send_backs_off ... ok
+test team::sync::retry_tests::an_environment_whose_first_refold_fails_is_retried ... ok
+test team::sync::retry_tests::an_environment_that_cannot_load_holds_up_no_other ... ok
+test team::sync::retry_tests::an_inbound_session_resets_the_backoff ... ok
+test team::sync::retry_tests::an_interrupted_answer_audits_what_it_sent ... ok
+test team::sync::retry_tests::an_unreadable_deferred_entry_keeps_an_early_commit_waiting ... ok
+test team::sync::retry_tests::cold_loader_rejects_unadmitted_removed_admin_fact ... ok
+test team::sync::retry_tests::commit_removal_blocks_writes_under_old_wrapped_generation ... ok
+test team::sync::retry_tests::concurrent_rotations_cannot_leave_removed_device_in_current_wraps ... ok
+test team::sync::retry_tests::concurrent_store_fact_has_exactly_one_insert_winner ... ok
+test team::sync::retry_tests::corrupt_rotation_flags_fail_the_incident ... ok
+test team::sync::retry_tests::draining_admin_cannot_send_a_non_reciprocal_removal ... ok
+test team::sync::retry_tests::discovery_returns_the_first_failure_and_start_refuses ... ok
+test team::sync::retry_tests::early_commits_wait_for_a_deferred_admission ... ok
+test team::sync::retry_tests::early_live_commits_wait_for_their_history ... ok
+test team::sync::retry_tests::fact_replay_stops_on_session_replacement_and_receive_only_drain ... ok
+test team::sync::retry_tests::idle_fact_pickup_skips_admission_and_concurrent_cli_appends_survive ... ok
+test team::sync::retry_tests::historical_revocations_survive_unreceipted_author_role_changes ... ok
+test team::sync::retry_tests::incident_retry_stops_once_the_admin_drains ... ok
+test team::sync::retry_tests::joiner_gets_history_in_total_order_before_live_traffic ... ok
+test team::sync::retry_tests::lru_seen_set_refreshes_on_hit_and_evicts_least_recent ... ok
+test team::sync::retry_tests::live_pickup_preserves_receipted_revocation_after_role_change ... ok
+test team::sync::retry_tests::m1_advertisement_is_not_authority_and_persists_unsupported_gate ... ok
+test team::sync::retry_tests::m1_checked_adoption_does_not_report_success_after_caps_send_failure ... ok
+test team::sync::retry_tests::m1_concurrent_deletions_require_union_and_lost_ack_retries ... ok
+test team::sync::retry_tests::m1_delayed_control_from_replaced_session_cannot_negotiate_its_successor ... ok
+test team::sync::retry_tests::m1_dialed_link_status_is_complete_before_capability_send ... ok
+test team::sync::retry_tests::m1_empty_capable_peer_needs_exact_current_session_ack_and_legacy_does_not ... ok
+test team::sync::retry_tests::m1_feature_deadline_survives_a_failing_environment_step ... ok
+test team::sync::retry_tests::m1_initial_capability_send_cannot_be_overtaken_by_data ... ok
+test team::sync::retry_tests::m1_legacy_quiet_status_keeps_its_original_bytes_and_inode ... ok
+test team::sync::retry_tests::m1_new_delete_closes_established_legacy_session_without_partial_fact_delivery ... ok
+test team::sync::retry_tests::m1_replacing_a_ready_session_clears_persisted_cli_agreement_immediately ... ok
+test team::sync::retry_tests::m1_no_ack_after_derive_or_storage_failure_and_no_unauthorized_deletion ... ok
+test team::sync::retry_tests::member_removal_forgets_dial_backoff_state ... ok
+test team::sync::retry_tests::member_removal_forgets_the_dial_cursor ... ok
+test team::sync::retry_tests::ordinary_admin_removal_also_blocks_stale_generation_writes ... ok
+test team::sync::retry_tests::peer_state_documents_load ... ok
+test team::sync::retry_tests::peer_vector_ints_are_exact ... ok
+test team::sync::retry_tests::peers_gossip_carries_link_addresses_within_the_bound ... ok
+test team::sync::retry_tests::persistent_rekey_failure_does_not_stop_another_environment ... ok
+test team::sync::retry_tests::received_ordinary_removal_rekeys_and_duplicate_confirmation_does_not_repeat_it ... ok
+test team::sync::retry_tests::refused_dials_back_off ... ok
+test team::sync::retry_tests::relaxed_document_is_cached_by_store_vector ... ok
+test team::sync::retry_tests::removal_repair_sorts_after_a_received_future_rotation ... ok
+test team::sync::retry_tests::retained_admin_role_does_not_authorize_a_removed_author ... ok
+test team::sync::retry_tests::removed_admin_cannot_remove_unrelated_member_on_receive_replay_or_publish ... ok
+test team::sync::retry_tests::stale_live_process_cannot_admit_after_standalone_removal ... ok
+test team::sync::retry_tests::self_removal_rekeys_on_receipt_and_after_restart_without_repeat_rotation ... ok
+test team::sync::retry_tests::stop_joins_the_poll_thread_before_closing_the_transport ... ok
+test team::sync::retry_tests::successful_retry_resets_backoff_before_next_disconnect ... ok
+test team::sync::retry_tests::unreachable_addresses_are_tried_in_turn_with_the_usual_backoff ... ok
+test team::sync_status::tests::malformed_peers_fail_closed ... ok
+test team::sync_status::tests::states_follow_the_table ... ok
+test team::sync_status::tests::written_peers_hide_session_fields_without_a_session ... ok
+test team::tests::verified_signature_memo_is_exact ... ok
+test team::tests::verified_signature_memo_starts_over_when_full ... ok
+test team::tombstone_gate::tests::control_bounds_types_unknown_features_and_duplicate_keys ... ok
+test team::transport::address_tests::dialer_resolves_the_bracketed_ipv6_forms_an_invite_may_carry ... ok
+test team::transport::capture_tests::concurrent_capture_records_are_whole ... ok
+test team::transport::deadline_tests::slow_drip_cannot_extend_absolute_read_deadline ... ok
+test team::transport::unix_channel_tests::a_buffered_frame_survives_peer_close_and_truncation_still_fails ... ok
+test team::transport::unix_channel_tests::a_unix_stream_channel_frames_bounds_and_times_out_like_tcp ... ok
+test team::sync::retry_tests::the_poll_rejects_a_released_commit_out_of_its_authors_hlc_order ... ok
+test team::transport::version_tests::handshake_version_check_accepts_only_numeric_one ... ok
+test vault::tests::active_version_values_equal_still_treats_true_equality_as_equal ... ok
+test vault::tests::active_version_values_equal_uses_exact_integer_comparison_not_f64 ... ok
+test vault::tests::active_version_values_equal_uses_structural_equality_for_non_numeric_shapes ... ok
+test vault::tests::python_str_scalar_overflowing_number_matches_python_inf ... ok
+test team::transport::unix_channel_tests::m1_pending_requires_receiving_the_authenticated_frame_before_send_failure ... ok
+
+test result: ok. 716 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 175.50s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+VERIFY_STEP_END=lib-and-bins exit=0
+VERIFY_STEP_BEGIN=test:admin_expanduser_parity
+
+running 1 test
+test home_user_unknown_user_and_non_home_paths_expand_like_the_original_cli ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+VERIFY_STEP_END=test:admin_expanduser_parity exit=0
+VERIFY_STEP_BEGIN=test:admin_input_envelope
+
+running 12 tests
+test envelope_is_the_only_passphrase_source_when_given ... ok
+test help_and_usage_do_not_list_the_new_option_or_command ... ok
+test envelope_passphrases_drive_init_reveal_incident_close_and_recover ... ok
+test native_e2e::leakcheck_finds_raw_encoded_and_embedded_secrets ... ok
+test native_e2e::parse_message_decodes_encoded_subject_and_base64_body ... ok
+test malformed_envelopes_are_refused_without_echo ... ok
+test require_admin_gates_team_invite_and_serve ... ok
+test require_admin_on_an_already_gated_command_still_closes_once ... ok
+test require_admin_gates_commands_the_cli_does_not ... ok
+test status_reads_the_control_state_without_changing_it ... ok
+test require_admin_without_the_envelope_is_a_usage_error ... ok
+test stdin_value_comes_from_value_b64_only ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.46s
+
+VERIFY_STEP_END=test:admin_input_envelope exit=0
+VERIFY_STEP_BEGIN=test:admin_secret_import
+
+running 9 tests
+test a_batch_that_fails_on_a_later_item_writes_nothing ... ok
+test a_changed_value_stops_the_import_until_update ... ok
+test a_cli_profile_carrying_a_value_refuses_the_whole_import ... ok
+test ids_elsewhere_collisions_and_prefixes ... ok
+test native_e2e::leakcheck_finds_raw_encoded_and_embedded_secrets ... ok
+test native_e2e::parse_message_decodes_encoded_subject_and_base64_body ... ok
+test include_exclude_and_forced_entries ... ok
+test the_input_envelope_and_parse_errors_carry_no_value ... ok
+test preview_then_import_creates_only_the_keys ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.58s
+
+VERIFY_STEP_END=test:admin_secret_import exit=0
+VERIFY_STEP_BEGIN=test:admin_sigint_cleanup_boundaries
+
+running 3 tests
+test cli_pty::keeper_entry ... ok
+test active_prompt_sigint_restores_terminal_and_removes_owned_context_directories ... ok
+test ordinary_exit_and_interrupt_remove_only_owned_context_directories ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.13s
+
+VERIFY_STEP_END=test:admin_sigint_cleanup_boundaries exit=0
+VERIFY_STEP_BEGIN=test:admin_sigint_exit
+
+running 4 tests
+test administrator_serve_keeps_its_graceful_signal_stop ... ok
+test cli_pty::keeper_entry ... ok
+test administrator_prompt_signal_status_matches_the_original_and_restores_terminal ... ok
+test ordinary_non_prompt_command_catches_sigint_as_exit_130 ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.80s
+
+VERIFY_STEP_END=test:admin_sigint_exit exit=0
+VERIFY_STEP_BEGIN=test:agent_help
+
+running 2 tests
+test unknown_command_still_fails_and_exec_tail_help_stays_literal ... ok
+test root_and_each_subcommand_help_match_the_recorded_text_without_gateway_config ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+VERIFY_STEP_END=test:agent_help exit=0
+VERIFY_STEP_BEGIN=test:agent_proxy_parity
+
+running 4 tests
+test default_request_headers_match_urllib_value_order_and_multiplicity ... ok
+test http_gateway_goes_through_the_http_proxy_like_urllib ... ok
+test no_proxy_bypasses_the_proxy_like_urllib ... ok
+test https_gateway_is_tunnelled_and_a_refused_tunnel_is_reported_like_urllib ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+VERIFY_STEP_END=test:agent_proxy_parity exit=0
+VERIFY_STEP_BEGIN=test:astra_cleanup_publication_order
+
+running 1 test
+test cancelled_run_can_still_be_running_after_cleanup_closes_resource ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.67s
+
+VERIFY_STEP_END=test:astra_cleanup_publication_order exit=0
+VERIFY_STEP_BEGIN=test:astra_cli_runtime_round2
+
+running 4 tests
+test ar_runtime_05_unrelated_inheritable_descriptor_is_closed_in_agent_child ... ok
+test ar_cli_01_terminal_prompts_hide_both_passphrases ... ok
+test cli_pty::keeper_entry ... ok
+test ar_runtime_06_http_execution_accepts_uncreated_configured_socket_directory ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.35s
+
+VERIFY_STEP_END=test:astra_cli_runtime_round2 exit=0
+VERIFY_STEP_BEGIN=test:astra_cli_runtime_round3
+
+running 5 tests
+test ar_cli_02_interrupt_restores_original_terminal_modes ... ok
+test cli_pty::keeper_entry ... ok
+test terminal_eof_restores_original_terminal_modes ... ok
+test terminal_keeper_detects_unrestored_modes_and_overstaying_commands ... ok
+test ar_runtime_07_terminal_status_never_precedes_captured_output_publication ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.69s
+
+VERIFY_STEP_END=test:astra_cli_runtime_round3 exit=0
+VERIFY_STEP_BEGIN=test:astra_cli_runtime_round4
+
+running 5 tests
+test cli_pty::keeper_entry ... ok
+test finish_audit_callback_can_cancel_another_live_run ... ok
+test native_agent_help_is_a_successful_offline_operation ... ok
+test active_terminal_prompt_restores_modes_on_sigterm ... ok
+test terminal_prompt_completion_preserves_later_interrupt_and_termination ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.34s
+
+VERIFY_STEP_END=test:astra_cli_runtime_round4 exit=0
+VERIFY_STEP_BEGIN=test:astra_projects_final
+
+running 2 tests
+test missing_or_noniterable_fields_fail_closed_and_do_not_rewrite_state ... ok
+test ordinary_projects_keep_their_environments_and_creation_time ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.87s
+
+VERIFY_STEP_END=test:astra_projects_final exit=0
+VERIFY_STEP_BEGIN=test:astra_pty_portability
+
+running 2 tests
+test cli_pty::keeper_entry ... ok
+test prompt_abort_fixture_is_independent_of_runner_interrupt_disposition ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.17s
+
+VERIFY_STEP_END=test:astra_pty_portability exit=0
+VERIFY_STEP_BEGIN=test:astra_response_acceptance
+
+running 1 test
+test empty_and_quoted_comment_mailboxes_match_original_transport ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.83s
+
+VERIFY_STEP_END=test:astra_response_acceptance exit=0
+VERIFY_STEP_BEGIN=test:astra_response_final
+
+running 1 test
+test comment_inside_domain_preserves_original_transport_envelope ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.66s
+
+VERIFY_STEP_END=test:astra_response_final exit=0
+VERIFY_STEP_BEGIN=test:astra_response_final_recheck
+
+running 1 test
+test local_and_domain_comment_boundaries_preserve_transport_envelopes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.81s
+
+VERIFY_STEP_END=test:astra_response_final_recheck exit=0
+VERIFY_STEP_BEGIN=test:astra_response_review
+
+running 6 tests
+test incident_document_roundtrip_fills_the_original_defaults ... ok
+test installed_detector_survives_dropped_return_value ... ok
+test corrupted_incident_is_not_treated_as_missing ... ok
+test large_accepted_weak_weights_do_not_poison_detection ... ok
+test notify_secure_mode_includes_special_bits ... ok
+test smtp_python_interoperability_matrix ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.43s
+
+VERIFY_STEP_END=test:astra_response_review exit=0
+VERIFY_STEP_BEGIN=test:astra_response_round2
+
+running 5 tests
+test hand_edited_notification_attempt_counts_do_not_panic_delivery ... ok
+test assessment_merges_shared_secrets_and_excludes_ungranted_secrets ... ok
+test smtp_remaining_address_capability_and_completion_parity ... ok
+test tls_client_child ... ok
+test smtp_tls_verified_starttls_smtps_and_untrusted_cert_parity ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.43s
+
+VERIFY_STEP_END=test:astra_response_round2 exit=0
+VERIFY_STEP_BEGIN=test:astra_response_round3
+
+running 3 tests
+test smtp_reply_timeout_identity_matches_python ... ok
+test smtp_supported_comment_mailbox_forms_match_python ... ok
+test successful_notification_with_hand_edited_numeric_attempts_is_sent ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.66s
+
+VERIFY_STEP_END=test:astra_response_round3 exit=0
+VERIFY_STEP_BEGIN=test:astra_response_round4
+
+running 2 tests
+test supported_comments_inside_mailbox_match_python ... ok
+test smtp_data_reply_timeout_matches_original_error_identity ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.91s
+
+VERIFY_STEP_END=test:astra_response_round4 exit=0
+VERIFY_STEP_BEGIN=test:astra_run_context_lease
+
+running 1 test
+test supervisor_lease_outlives_caller_then_releases_without_cycle ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.62s
+
+VERIFY_STEP_END=test:astra_run_context_lease exit=0
+VERIFY_STEP_BEGIN=test:astra_runtime_final
+
+running 2 tests
+test cli_pty::keeper_entry ... ok
+test repeated_prompt_restores_terminal_on_eof_invalid_utf8_and_signals ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+VERIFY_STEP_END=test:astra_runtime_final exit=0
+VERIFY_STEP_BEGIN=test:astra_runtime_review
+
+running 6 tests
+test ar_runtime_01_installation_survives_discarded_return_value ... ok
+test ar_runtime_02_child_leads_a_new_session ... ok
+test ar_runtime_03_head_framing_error_has_no_response_body ... ok
+test relay_filters_non_ascii_headers_before_server_serialization ... ok
+test session_probe::session_probe_entry ... ok
+test server_shutdown_closes_idle_keepalive_and_listener ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.23s
+
+VERIFY_STEP_END=test:astra_runtime_review exit=0
+VERIFY_STEP_BEGIN=test:astra_sigint_cleanup
+
+running 2 tests
+test cli_pty::keeper_entry ... ok
+test ordinary_sigint_removes_context_owned_runtime_directories ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.85s
+
+VERIFY_STEP_END=test:astra_sigint_cleanup exit=0
+VERIFY_STEP_BEGIN=test:astra_sigint_cleanup_final
+
+running 3 tests
+test cli_pty::keeper_entry ... ok
+test pre_context_validation_errors_do_not_create_owned_directories ... ok
+test interrupt_preserves_unowned_same_prefix_directories_and_their_contents ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.82s
+
+VERIFY_STEP_END=test:astra_sigint_cleanup_final exit=0
+VERIFY_STEP_BEGIN=test:astra_team_fact_catchup
+
+running 1 test
+test offline_fact_reaches_authenticated_replacement_and_remains_monotone ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.48s
+
+VERIFY_STEP_END=test:astra_team_fact_catchup exit=0
+VERIFY_STEP_BEGIN=test:astra_team_fact_duplicate_diagnostic
+
+running 1 test
+test simultaneous_duplicate_fact_has_one_application_audit ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.27s
+
+VERIFY_STEP_END=test:astra_team_fact_duplicate_diagnostic exit=0
+VERIFY_STEP_BEGIN=test:astra_team_reconnect_diagnostic
+
+running 1 test
+test offline_fact_catches_up_after_reconnect_and_deduplicates_with_live_fact ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.76s
+
+VERIFY_STEP_END=test:astra_team_reconnect_diagnostic exit=0
+VERIFY_STEP_BEGIN=test:astra_team_review
+
+running 5 tests
+test astra_t1_untrusted_unicode_inviter_cannot_panic_join ... ok
+test astra_t3_padded_base32_invites_match_python ... ok
+test astra_t4_fact_target_dict_string_pairs_match_python ... ok
+test astra_t2_live_fact_publication_records_apply_audit ... ok
+test astra_t5_iso_expiry_invite_state_matches_python ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.44s
+
+VERIFY_STEP_END=test:astra_team_review exit=0
+VERIFY_STEP_BEGIN=test:astra_team_round2
+
+running 8 tests
+test incident_sanitizer_and_fact_conversion_boundary_corpus_match_python ... ok
+test raw_tcp_canonical_deep_json_and_frame_tamper_boundaries ... ok
+test raw_tcp_rejects_nonmember_wrong_env_invalid_env_and_low_order_without_response ... ok
+test raw_tcp_replayed_responder_message_is_rejected_in_new_session ... ok
+test raw_tcp_wrong_role_signature_is_rejected ... ok
+test tcp_connection_cap_is_released_after_session_close ... ok
+test invite_expiry_transcript_and_concurrent_single_consumption ... ok
+test user_authority_incident_retry_restart_and_admin_removal_dek_isolation ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.93s
+
+VERIFY_STEP_END=test:astra_team_round2 exit=0
+VERIFY_STEP_BEGIN=test:astra_team_round3
+
+running 9 tests
+test conflict_override_alert_is_exactly_once_and_only_on_loser_including_restart ... ok
+test facts_replay_deduplicates_and_restore_cannot_undo_later_revocation ... ok
+test concurrent_third_party_removals_are_visible_and_reconciled_by_active_owner ... ok
+test incident_mandatory_rotation_is_monotone_and_nonadmin_never_acks ... ok
+test mutual_removal_converges_when_second_fact_arrives_on_draining_peer ... ok
+test removed_peer_drain_is_receive_only_and_accepts_self_removal ... ok
+test removed_by_third_party_cannot_remove_an_unrelated_admin ... ok
+test snapshots_refuse_lagging_member_preserve_history_and_allow_gap_append ... ok
+test snapshot_is_created_at_production_threshold_and_not_before ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.21s
+
+VERIFY_STEP_END=test:astra_team_round3 exit=0
+VERIFY_STEP_BEGIN=test:astra_team_round4
+
+running 2 tests
+test original_user_role_self_removal_is_authored_and_propagated ... ok
+test original_local_mutual_removal_rotates_only_before_author_is_removed ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.49s
+
+VERIFY_STEP_END=test:astra_team_round4 exit=0
+VERIFY_STEP_BEGIN=test:base_cli_error_parity
+
+running 5 tests
+test an_unusable_tmpdir_falls_back_and_a_second_init_is_refused ... ok
+test damaged_audit_log_or_lock_file_fails_closed ... ok
+test operational_failures_keep_the_original_error_json ... ok
+test tampered_backup_manifest_is_refused ... ok
+test damaged_administrator_record_never_reveals_a_secret ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 35.54s
+
+VERIFY_STEP_END=test:base_cli_error_parity exit=0
+VERIFY_STEP_BEGIN=test:canonical_helpers
+
+running 4 tests
+test no_base64_engine_decode_outside_pybase64 ... ok
+test no_number_is_f64_repr_bypass_outside_pystr ... ok
+test no_int_from_str_reimplementation_outside_pystr ... ok
+test no_number_to_string_outside_pyjson ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+VERIFY_STEP_END=test:canonical_helpers exit=0
+VERIFY_STEP_BEGIN=test:cli_commands
+
+running 10 tests
+test admin_nonterminal_missing_passphrase_is_redacted ... ok
+test agent_binary_body_and_refusal_go_to_stderr ... ok
+test agent_finishes_content_length_response_before_keepalive_close ... ok
+test agent_posts_json_without_redirect_or_token_echo ... ok
+test admin_local_flow_and_value_hygiene ... ok
+test native_democli_matches_whoami_issue_and_exposure_contract ... ok
+test demo_passes_without_printing_credentials ... ok
+test rotation_activate_keeps_previous_integer_version_in_next_command ... ok
+test serve_and_agent_list_roundtrip ... ok
+test team_share_and_member_views_are_value_free ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.89s
+
+VERIFY_STEP_END=test:cli_commands exit=0
+VERIFY_STEP_BEGIN=test:cli_grant_limits_parity
+
+running 2 tests
+test zero_and_negative_limits_are_refused_without_a_grant ... ok
+test large_max_uses_is_printed_and_persisted_as_the_exact_decimal ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.04s
+
+VERIFY_STEP_END=test:cli_grant_limits_parity exit=0
+VERIFY_STEP_BEGIN=test:cli_parity
+
+running 1 test
+test native_cli_reproduces_the_recorded_command_line_contract ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 41.31s
+
+VERIFY_STEP_END=test:cli_parity exit=0
+VERIFY_STEP_BEGIN=test:democli_parity
+
+running 4 tests
+test steal_report_matches_the_original_cli ... ok
+test business_output_and_upstream_request_match_the_original_cli ... ok
+test unreachable_gateway_reports_the_socket_error_like_urllib ... ok
+test usage_and_validation_errors_match_the_original_cli ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+VERIFY_STEP_END=test:democli_parity exit=0
+VERIFY_STEP_BEGIN=test:escaped_builtin_http_parity
+
+running 2 tests
+test escaped_os_error_in_a_tool_call_answers_the_fixed_500 ... ok
+test non_ascii_handle_segments_answer_the_fixed_500 ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.68s
+
+VERIFY_STEP_END=test:escaped_builtin_http_parity exit=0
+VERIFY_STEP_BEGIN=test:fake_upstream
+
+running 20 tests
+test basic_and_header_modes ... ok
+test business_endpoints ... ok
+test empty_basic_username_child ... ok
+test base64_embedded_leak_moves_the_credential_across_alignments ... ok
+test every_response_carries_server_and_date_headers ... ok
+test huge_streams_more_than_eight_mib ... ok
+test invalid_modes_are_refused_like_python ... ok
+test issue_counter_counts_created_issues ... ok
+test encoded_leak_emits_every_named_form ... ok
+test leak_endpoints_really_leak ... ok
+test post_repos_issues_with_no_repo_name_matches_python_clamp ... ok
+test query_percent_followed_by_raw_high_byte_does_not_panic ... ok
+test replies_match_the_python_fixture_byte_for_byte ... ok
+test slow_endpoint_does_not_panic_on_nan_seconds ... ok
+test slow_endpoint_echoes_the_unclamped_min_only_seconds_value ... ok
+test stop_is_idempotent_and_reusable_after_restart ... ok
+test stream_large_and_slow ... ok
+test url_and_recording ... ok
+test urlencoded_leak_emits_both_hex_casings ... ok
+test malformed_requests_leave_the_fixture_serving ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.61s
+
+VERIFY_STEP_END=test:fake_upstream exit=0
+VERIFY_STEP_BEGIN=test:gateway
+
+running 149 tests
+test address_classes ... ok
+test approval_does_not_survive_a_changed_target_or_policy_version ... ok
+test address_refusal_spends_no_grant_use_approval_or_credential ... ok
+test audit_unavailable_refuses_before_credential_use ... ok
+test base64_patterns_find_the_credential_at_any_offset ... ok
+test audit_and_alerts_are_value_free ... ok
+test bearer_credential_ending_in_newline_is_accepted_then_fails_after_transmission ... ok
+test basic_mode ... ok
+test chunk_size_of_only_information_separator_control_chars_is_a_protocol_error ... ok
+test ca_file_unavailable_takes_priority_over_an_unreachable_target ... ok
+test chunk_size_with_pep515_underscore_is_parsed_like_python_int ... ok
+test chunk_terminator_bytes_are_consumed_without_validation ... ok
+test chunk_terminator_lf_only_framing_is_a_protocol_error ... ok
+test chunked_body_ending_at_eof_after_terminal_chunk_is_relayed_normally ... ok
+test chunked_stream_is_buffered ... ok
+test completed_request_is_replayed_without_upstream_contact ... ok
+test content_encoding_with_information_separator_prefix_is_still_accepted ... ok
+test content_length_larger_than_bytes_sent_relays_the_short_body ... ok
+test content_length_with_information_separator_control_char_is_not_a_valid_int ... ok
+test content_length_with_pep515_underscore_is_parsed_like_python_int ... ok
+test continue_interim_response_is_skipped_and_the_real_response_relayed ... ok
+test credential_patterns_cover_both_percent_encoding_casings ... ok
+test credential_embedded_in_base64_blob_is_blocked_at_every_alignment ... ok
+test credential_reflection_is_caught_via_latin1_bytes_not_utf8 ... ok
+test delete_requires_one_shot_approval_bound_to_digest ... ok
+test dns_change_between_requests_takes_effect_on_the_next_request ... ok
+test dropped_listener_is_forgotten_without_explicit_unregister ... ok
+test doubled_trailing_cr_in_header_block_does_not_leak_a_header_into_the_body ... ok
+test duplicate_content_encoding_headers_are_joined_before_checking ... ok
+test embedded_bare_cr_inside_one_physical_line_splits_into_two_headers ... ok
+test expired ... ok
+test every_credential_encoding_in_upstream_body_is_blocked ... ok
+test folded_continuation_response_with_a_real_crlf_fold_is_relayed_normally ... ok
+test folded_header_continuation_line_does_not_error ... ok
+test from_envelope_line_is_skipped_without_ending_recognition ... ok
+test global_stop_and_resume ... ok
+test handle_is_bound_to_its_connection_caller_and_grant ... ok
+test head_and_no_content_responses ... ok
+test head_request_still_forces_an_empty_body_even_when_chunked ... ok
+test header_block_ended_by_eof_is_relayed_normally ... ok
+test header_line_with_leading_colon_is_dropped_without_ending_recognition ... ok
+test header_line_without_colon_ends_recognised_headers_without_erroring ... ok
+test header_mode ... ok
+test header_name_with_a_del_character_ends_recognition ... ok
+test header_name_with_a_space_ends_recognition_and_drops_every_later_header ... ok
+test header_value_ending_in_newline_is_accepted_then_fails_after_transmission ... ok
+test hostname_resolving_to_loopback_is_refused_without_opt_in ... ok
+test https_with_pinned_ca_succeeds_and_untrusted_or_wrong_name_fails ... ok
+test invalid_bracketed_public_url_does_not_false_positive_self_referential ... ok
+test in_flight_duplicate_is_rejected_then_replayed ... ok
+test invalid_inputs_are_explicit ... ok
+test ipv4_embedded_in_ipv6_answers_are_judged_by_the_ipv4_address ... ok
+test large_ok_and_huge_rejected ... ok
+test large_replay_body_is_not_stored ... ok
+test ledger_corruption_fails_closed_before_reaching_upstream ... ok
+test ledger_file_is_bounded_and_value_free ... ok
+test ledger_non_numeric_updated_at_fails_closed_before_reaching_upstream ... ok
+test ledger_save_fails_closed_for_a_corrupted_entry_of_a_different_request_id ... ok
+test ledger_save_fails_closed_for_a_corrupted_unrelated_caller ... ok
+test invalid_upstream_timeout_escapes_relay_like_python ... ok
+test ledger_wrong_typed_caller_entry_fails_closed_before_reaching_upstream ... ok
+test letters_of_the_credential_keep_their_case ... ok
+test ledger_wrong_typed_request_entry_fails_closed_before_reaching_upstream ... ok
+test lowercase_percent_encoded_reflection_is_blocked ... ok
+test m1_deleted_identity_refuses_next_http_request_with_existing_handle ... ok
+test malformed_chunk_size_is_a_protocol_error_not_connection_lost ... ok
+test max_uses ... ok
+test metadata_answer_is_refused_even_for_private_opt_in ... ok
+test method_and_header_name_strip_information_separator_control_chars ... ok
+test missing_credential_is_explicit ... ok
+test mixed_answer_is_refused_as_a_whole ... ok
+test more_than_max_headers_is_a_protocol_error ... ok
+test normalize_path_accepts_a_single_trailing_newline_like_python ... ok
+test normalize_path_percent_decoding_never_panics ... ok
+test normalize_path_representative_outcomes ... ok
+test no_content_status_with_chunked_transfer_encoding_still_decodes_the_body ... ok
+test one_connection_two_operations_placeholder_replaced ... ok
+test only_http_1_x_and_0_9_versions_are_accepted ... ok
+test opt_in_connects_to_the_checked_address_and_resolves_once_per_request ... ok
+test oversized_header_line_is_a_protocol_error ... ok
+test path_traversal_and_smuggling_rejected ... ok
+test peer_check_catches_a_dns_resolved_self_reference ... ok
+test pending_approval_shows_what_the_digest_binds ... ok
+test pre_transmission_failure_releases_claim ... ok
+test principal_and_connection_disabled ... ok
+test private_network_opt_in_is_a_widening_change ... ok
+test query_forwarded_untouched_but_never_audited ... ok
+test raw_ca_file_truthiness_fails_closed_without_default_trust_fallback ... ok
+test redirects_are_not_followed_and_location_never_forwarded ... ok
+test reflection_in_body_and_headers_is_blocked ... ok
+test refuse_unauthenticated_audits_stripped_path_unconditionally_and_untrimmed_method ... ok
+test relay_result_json_returns_none_instead_of_panicking_on_malformed_body ... ok
+test relay_for_caller_without_handle ... ok
+test replay_decodes_body_b64_leniently_like_python_b64decode ... ok
+test replay_fails_closed_for_a_truthy_non_mapping_response ... ok
+test replay_fails_closed_for_genuinely_undecodable_body_b64 ... ok
+test replay_fails_closed_for_non_string_body_b64 ... ok
+test replay_keeps_a_non_string_reason_and_reports_it_as_blocked ... ok
+test replay_renders_a_stored_float_reason_via_cpython_repr ... ok
+test replay_status_preserves_persisted_integer_statuses ... ok
+test replay_treats_a_truthy_non_bool_body_stored_as_stored ... ok
+test replay_unpacks_a_two_character_string_header_element ... ok
+test resolution_failure_is_explicit ... ok
+test response_header_filter_and_upstream_401 ... ok
+test restore_pending ... ok
+test revoked ... ok
+test same_id_different_request_is_rejected ... ok
+test scope_method_and_path_denied_with_reason ... ok
+test self_reference_via_registered_listener ... ok
+test self_referential_target_treats_public_url_port_zero_as_unspecified ... ok
+test self_referential_target_via_bracketed_public_url_with_empty_port ... ok
+test self_referential_target_via_public_url_is_case_insensitive ... ok
+test self_referential_target_via_scheme_relative_public_url ... ok
+test server_ambiguous_request_framing_is_refused ... ok
+test server_client_cannot_change_target ... ok
+test server_closed_listener_is_forgotten ... ok
+test server_concurrent_connections_are_capped ... ok
+test server_handle_in_url_route ... ok
+test server_header_handle_route ... ok
+test server_keep_alive_works_and_unread_or_short_bodies_never_frame_a_request ... ok
+test server_idle_and_dribbling_clients_are_dropped ... ok
+test server_logs_never_contain_handles_or_queries ... ok
+test server_peer_that_resolves_to_zeropw_is_refused_before_transmission ... ok
+test server_relayed_request_marker_is_refused_by_the_server ... ok
+test server_stop_does_not_wait_for_idle_keep_alive_clients ... ok
+test server_target_that_is_zeropw_itself_is_refused_before_use ... ok
+test server_tools_caller_authentication_failures_are_audited_and_alerted ... ok
+test space_in_password_covers_plus_and_percent20_forms ... ok
+test slow_upstream_read_is_a_timeout_not_connection_lost ... ok
+test stale_policy_version_on_handle_after_narrowing_change ... ok
+test status_code_outside_100_999_is_a_protocol_error ... ok
+test status_code_with_pep515_underscore_is_parsed_like_python_int ... ok
+test status_line_then_immediate_eof_is_relayed_as_empty_ok ... ok
+test status_line_with_an_information_separator_in_the_status_is_a_protocol_error ... ok
+test stored_metadata_literal_loads_and_is_refused_at_use ... ok
+test tab_separated_status_line_is_accepted ... ok
+test tampered_or_foreign_handles_are_unauthorized ... ok
+test tls_cert_with_ip_cn_but_no_san_is_rejected ... ok
+test tls_is_verified_against_the_configured_name_not_the_pinned_address ... ok
+test transfer_encoding_value_is_compared_without_trimming ... ok
+test unbracketed_ipv6_like_public_url_does_not_false_positive_self_referential ... ok
+test uncertain_outcome_is_not_retried_blindly ... ok
+test unsupported_auth_mode_and_unsafe_credential_fail_closed ... ok
+test unsupported_auth_mode_via_corrupted_stored_document ... ok
+test upstream_down_and_timeout ... ok
+test usage_consumed_only_after_policy_pass ... ok
+test widening_change_makes_grant_stale_until_regrant ... ok
+test write_request_rejects_agent_controlled_request_line_injection ... ok
+test zeropw_authority_is_never_a_business_credential ... ok
+
+test result: ok. 149 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 129.39s
+
+VERIFY_STEP_END=test:gateway exit=0
+VERIFY_STEP_BEGIN=test:gateway_oracle
+
+running 3 tests
+test credential_patterns_match_the_python_fixture ... ok
+test relay_reaches_a_live_fake_upstream_with_the_stored_credential ... ok
+test request_bytes_match_the_python_fixture_across_shapes ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 21.38s
+
+VERIFY_STEP_END=test:gateway_oracle exit=0
+VERIFY_STEP_BEGIN=test:gateway_replay_status_parity
+
+running 2 tests
+test persisted_integer_status_replays_unchanged ... ok
+test malformed_replay_status_fails_closed ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+VERIFY_STEP_END=test:gateway_replay_status_parity exit=0
+VERIFY_STEP_BEGIN=test:gateway_tls_parity
+
+running 8 tests
+test client_hello_matches_the_python_fixture ... ok
+test common_name_fallback_applies_to_dns_names_only ... ok
+test non_ca_leaf_purpose_decisions ... ok
+test p521_server_certificate_is_verified ... ok
+test handshake_failures_map_to_fixed_reasons ... ok
+test pinned_ca_with_unhandled_critical_extension_is_refused ... ok
+test pinned_ca_decisions ... ok
+test pinned_self_signed_ca_certificate_decisions ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 11.18s
+
+VERIFY_STEP_END=test:gateway_tls_parity exit=0
+VERIFY_STEP_BEGIN=test:gateway_x1_credential_e2e
+
+running 1 test
+test peer_op_basic_container_username_folds_derives_and_refuses_to_relay_without_touching_upstream ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.65s
+
+VERIFY_STEP_END=test:gateway_x1_credential_e2e exit=0
+VERIFY_STEP_BEGIN=test:ledger_float_parity
+
+running 2 tests
+test non_numeric_updated_at_fails_the_claim_closed ... ok
+test persisted_float_updated_at_drives_the_ttl_sweep ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.69s
+
+VERIFY_STEP_END=test:ledger_float_parity exit=0
+VERIFY_STEP_BEGIN=test:native_admin_cli
+
+running 26 tests
+test approvals_list_and_approve ... ok
+test backup_restore_and_restore_ack ... ok
+test connection_create_http_validations_and_port_defaults ... ok
+test connection_create_ssh ... ok
+test connection_http_lifecycle_and_scope_changes ... ok
+test connection_update_gives_an_ssh_connection_without_one_its_ssh ... ok
+test help_subprocess ... ok
+test grant_lifecycle ... ok
+test init_rejects_weak_or_missing_passphrases ... ok
+test init_creates_state_and_reports_kms_key ... ok
+test native_e2e::leakcheck_finds_raw_encoded_and_embedded_secrets ... ok
+test native_e2e::parse_message_decodes_encoded_subject_and_base64_body ... ok
+test principal_create_prints_token_once_and_list_hides_it ... ok
+test m1_delete_command_requires_fresh_admin_is_idempotent_and_rejects_reuse ... ok
+test project_create_and_list ... ok
+test reveal_of_binary_value_uses_base64 ... ok
+test recover_rotates_kms_and_revokes_grants ... ok
+test rotation_start_activate_finish ... ok
+test reveal_requires_passphrase_and_is_audited ... ok
+test rotation_then_secret_put_keeps_the_connection_working ... ok
+test secret_put_via_file_and_stdin_lists_metadata_only ... ok
+test secret_retire_and_revoke ... ok
+test stop_all_and_resume_reflected_in_policy ... ok
+test unknown_state_dir_exits_1 ... ok
+test usage_errors_exit_2_with_json ... ok
+test switch_credential_validates_version_state ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.80s
+
+VERIFY_STEP_END=test:native_admin_cli exit=0
+VERIFY_STEP_BEGIN=test:native_admin_cli_more
+
+running 26 tests
+test audit_limit_validation_and_unparseable_lines ... ok
+test a_new_short_value_against_existing_cli_envs ... ok
+test backup_ignores_planted_tmp_symlink_and_keeps_0600 ... ok
+test audit_tail_and_alerts_are_json ... ok
+test cli_env_holding_any_vault_value_is_refused_at_save_time ... ok
+test cli_env_holding_the_credential_is_refused_at_save_time ... ok
+test connection_create_requires_a_usable_secret_version ... ok
+test cli_restore_keeps_revocations_and_used_approvals ... ok
+test connection_target_malformed_bracket_hosts_are_invalid_host ... ok
+test native_e2e::leakcheck_finds_raw_encoded_and_embedded_secrets ... ok
+test native_e2e::parse_message_decodes_encoded_subject_and_base64_body ... ok
+test grant_ttl_rejects_non_ascii_digits ... ok
+test new_secret_matching_any_connection_cli_env_is_refused ... ok
+test new_secret_version_matching_existing_cli_env_is_refused ... ok
+test private_network_opt_in_flag ... ok
+test only_reveal_prints_a_secret_value_across_the_command_surface ... ok
+test restore_keeps_a_global_stop_and_restore_ack_does_not_lift_it ... ok
+test secret_listings_carry_no_value_derived_metadata ... ok
+test secret_value_on_argv_is_a_usage_error_and_never_echoed ... ok
+test semantically_corrupt_state_reports_state_corrupt ... ok
+test restore_refuses_an_archive_the_current_kms_cannot_open ... ok
+test serve_refuses_ipv6_loopback_explicitly ... ok
+test serve_refuses_non_loopback_and_bad_listen ... ok
+test short_values_in_a_new_cli_env ... ok
+test serve_subprocess_smoke ... ok
+test ssh_host_keys_are_stored_in_canonical_form ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.19s
+
+VERIFY_STEP_END=test:native_admin_cli_more exit=0
+VERIFY_STEP_BEGIN=test:native_agent_cli
+
+running 8 tests
+test errors_exit_1_with_json_and_never_print_token ... ok
+test exec_status_cancel_roundtrip ... ok
+test native_e2e::leakcheck_finds_raw_encoded_and_embedded_secrets ... ok
+test native_e2e::parse_message_decodes_encoded_subject_and_base64_body ... ok
+test list_connections ... ok
+test refused_blocked_or_unsupported_relays_exit_1_on_stderr ... ok
+test request_through_gateway ... ok
+test server_maps_tool_errors_and_refuses_bad_json ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.29s
+
+VERIFY_STEP_END=test:native_agent_cli exit=0
+VERIFY_STEP_BEGIN=test:native_atomic_cli
+
+running 1 test
+test native_connection_and_secret_writers_cannot_both_commit_a_vault_value_in_cli_env ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.33s
+
+VERIFY_STEP_END=test:native_atomic_cli exit=0
+VERIFY_STEP_BEGIN=test:native_cli_e2e
+
+running 6 tests
+test native_e2e::leakcheck_finds_raw_encoded_and_embedded_secrets ... ok
+test native_e2e::parse_message_decodes_encoded_subject_and_base64_body ... ok
+test test_http_connection_through_admin_serve_and_agent_processes ... ok
+test test_auto_lockdown_exposure_assessment_email_and_recovery ... ok
+test test_ssh_connection_without_its_ssh_is_repaired_in_place ... ok
+test test_ssh_connection_through_admin_serve_agent_processes_and_real_sshd ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.69s
+
+VERIFY_STEP_END=test:native_cli_e2e exit=0
+VERIFY_STEP_BEGIN=test:native_response_cli
+
+running 17 tests
+test native_e2e::leakcheck_finds_raw_encoded_and_embedded_secrets ... ok
+test native_e2e::parse_message_decodes_encoded_subject_and_base64_body ... ok
+test test_a_pointer_to_a_closed_incident_does_not_refuse_resume ... ok
+test test_a_declare_over_a_pointer_to_a_closed_incident_opens_a_new_one ... ok
+test test_declare_absorbs_a_narrower_or_equal_request_without_extra_lockdown ... ok
+test test_closed_pending_incident_is_not_retried_by_live_serve ... ok
+test test_declare_widens_an_open_incident_when_the_new_scope_is_wider ... ok
+test test_external_manual_incident_cancels_live_native_execution ... ok
+test test_incident_close_requires_admin_reauth ... ok
+test test_incident_show_and_list_carry_the_assessment_and_no_values ... ok
+test test_notify_test_sends_through_the_configured_path ... ok
+test test_live_serve_retries_pending_then_widening_sends_new_scope ... ok
+test test_notify_test_without_config_reports_not_configured ... ok
+test test_restore_from_before_an_open_incident_keeps_resume_refused ... ok
+test test_restore_from_during_a_closed_incident_does_not_restore_its_lock ... ok
+test test_resume_reports_the_open_incident_id ... ok
+test test_scope_all_without_the_admin_passphrase_is_refused ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.82s
+
+VERIFY_STEP_END=test:native_response_cli exit=0
+VERIFY_STEP_BEGIN=test:native_team_cli
+
+running 20 tests
+test connection_create_secret_put_are_commits_with_propagated_to ... ok
+test cli_commits_and_facts_visible_on_second_node_after_poll ... ok
+test native_e2e::leakcheck_finds_raw_encoded_and_embedded_secrets ... ok
+test native_e2e::parse_message_decodes_encoded_subject_and_base64_body ... ok
+test connection_disable_and_secret_revoke_are_facts ... ok
+test shared_rotation_then_secret_put_keeps_the_connection_working ... ok
+test shared_secret_put_rebinds_following_connections ... ok
+test shared_ssh_connection_gets_its_ssh_on_every_node ... ok
+test team_compact_no_op_when_too_young ... ok
+test team_init_refuses_second_time ... ok
+test team_diff_between_two_commits ... ok
+test team_invite_warns_and_join_rejects_malformed_invite ... ok
+test team_peers_add_and_list ... ok
+test team_share_cli_reports_not_shared_connection ... ok
+test team_set_role_and_transfer_owner_are_commits ... ok
+test team_share_status_members_log_show ... ok
+test team_share_under_umask_022_keeps_every_state_directory_private ... ok
+test team_show_yaml_has_no_ciphertext_or_wraps ... ok
+test user_device_cannot_give_a_shared_ssh_connection_its_ssh ... ok
+test user_device_editing_commands_fail_before_any_commit ... ok
+
+test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 27.73s
+
+VERIFY_STEP_END=test:native_team_cli exit=0
+VERIFY_STEP_BEGIN=test:native_team_e2e
+
+running 3 tests
+test native_e2e::leakcheck_finds_raw_encoded_and_embedded_secrets ... ok
+test native_e2e::parse_message_decodes_encoded_subject_and_base64_body ... ok
+test full_team_lifecycle ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.19s
+
+VERIFY_STEP_END=test:native_team_e2e exit=0
+VERIFY_STEP_BEGIN=test:policy_oracle
+
+running 26 tests
+test address_block_reason_over_an_address_table ... ok
+test approval_mismatch_treats_present_non_string_grant_as_grant_changed ... ok
+test authenticate_and_revoke_all_fail_closed_on_a_malformed_entry ... ok
+test authenticate_fails_closed_on_a_non_ascii_stored_token_hash ... ok
+test approvals_setdefault_fails_closed_on_truthy_non_object_like_pythons_setdefault ... ok
+test canonical_host_key_over_a_table_of_lines ... ok
+test connection_from_value_matches_python_over_a_table_of_malformed_documents ... ok
+test control_document_truthy_non_object_fails_closed_like_python_attributeerror ... ok
+test control_flag_truthiness_stops_for_non_boolean_values ... ok
+test credential_versions_changed_validates_every_grant_before_deciding_any_mismatch ... ok
+test disable_principal_fails_closed_on_a_non_object_entry_instead_of_silently_succeeding ... ok
+test grant_from_value_rejects_unknown_keys_like_pythons_kwarg_unpacking ... ok
+test hash_token_and_approval_digest_are_byte_identical_with_python ... ok
+test http_target_and_http_auth_reject_unknown_keys_like_pythons_kwarg_unpacking ... ok
+test list_grants_fails_closed_when_filtering_by_principal_on_malformed_entries ... ok
+test public_view_scope_treats_empty_methods_as_all_like_python ... ok
+test authorization_scenarios_deny_with_the_expected_reason ... ok
+test reevaluate_grants_fails_closed_on_malformed_entries_like_python ... ok
+test read_doc_matches_pythons_read_json_or_default_falsy_truthy_split ... ok
+test revoke_all_skips_a_present_non_string_status_but_still_revokes_the_rest ... ok
+test resume_gates_on_truthiness_of_any_incident_open_type_like_python ... ok
+test revoke_grant_closes_approvals_by_none_to_none_match_before_its_own_error ... ok
+test revoke_grant_ledger_line_survives_a_non_object_entry_shape_failure ... ok
+test state_written_by_python_authorizes_identically_in_rust ... ok
+test state_written_by_rust_matches_the_python_layout_and_authorizes ... ok
+test vault_doc_corrupt_file_propagates_state_corrupt_through_create_grant ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+VERIFY_STEP_END=test:policy_oracle exit=0
+VERIFY_STEP_BEGIN=test:policy_parity_close
+
+running 1 test
+test evaluated_memo_is_scoped_per_instance_and_thread ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+VERIFY_STEP_END=test:policy_parity_close exit=0
+VERIFY_STEP_BEGIN=test:python_numeric_comparison_parity
+
+running 1 test
+test bigint_float_comparison_is_exact_at_the_boundaries ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+VERIFY_STEP_END=test:python_numeric_comparison_parity exit=0
+VERIFY_STEP_BEGIN=test:relay_escape_parity
+
+running 4 tests
+test invalid_upstream_timeouts_fail_closed ... ok
+test hand_edited_ledger_shapes_never_leak_and_corrupt_claims_fail_closed ... ok
+test negative_chunk_sizes_fail_closed ... ok
+test zeropw_errors_escaping_relay_fail_closed_at_every_boundary ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 45.96s
+
+VERIFY_STEP_END=test:relay_escape_parity exit=0
+VERIFY_STEP_BEGIN=test:response
+
+running 32 tests
+test a_short_vault_value_redacts_no_incident_and_blocks_no_message ... ok
+test a_leak_check_that_cannot_scan_holds_delivery ... ok
+test an_incident_opened_while_the_vault_cannot_be_scanned_keeps_its_assessment ... ok
+test all_scope_marks_every_active_secret_mandatory ... ok
+test assessment_ignores_audit_use_before_principal_creation ... ok
+test audit_use_makes_secret_mandatory_and_incident_file_has_no_value ... ok
+test burst_fires_once_when_crossing_limit_not_on_every_later_record ... ok
+test closing_while_the_vault_cannot_be_scanned_keeps_the_assessment ... ok
+test config_merges_thresholds_and_rejects_disabled_strong_rule ... ok
+test concurrent_detector_trips_open_one_incident_without_reentrancy ... ok
+test detector_install_is_idempotent_and_decision_failure_is_counted ... ok
+test email_render_has_ordered_sections_and_no_detail_or_value ... ok
+test enumeration_counts_first_uses_and_burst_ignores_status_polling ... ok
+test failed_smtp_delivery_goes_pending_and_due_retry_sends ... ok
+test insecure_notify_config_is_pending_and_never_sends ... ok
+test lockdown_reapplication_is_idempotent_and_rotation_failure_continues ... ok
+test notify_config_rejects_header_and_smtp_command_injection ... ok
+test principal_lockdown_cancels_only_its_live_run ... ok
+test principal_scope_disables_only_selected_and_keeps_other_handle_key ... ok
+test rendered_value_leak_blocks_delivery_without_opening_socket ... ok
+test revoked_grant_beside_an_exhausted_one_is_revoked_use_in_either_id_order ... ok
+test runtime_scope_rotates_key_and_stops_only_when_covering_every_active_principal ... ok
+test smtp_delivery_uses_password_file_and_marks_sent_without_logging_password ... ok
+test signer_signal_and_unattributed_forgery_scopes ... ok
+test smtp_plain_auth_only_server_is_supported ... ok
+test ssh_assessment_carries_fingerprint_target_and_mandatory_tier ... ok
+test strong_detector_is_synchronous_and_scope_aware ... ok
+test two_callers_with_http_signals_escalate_to_runtime ... ok
+test weak_signals_accumulate_but_global_stop_does_not_score ... ok
+test widening_adds_principals_and_close_does_not_resume ... ok
+test smtp_transport_failure_names_track_the_failing_phase ... ok
+test widening_keeps_previously_held_secret_recommended ... ok
+
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 33.30s
+
+VERIFY_STEP_END=test:response exit=0
+VERIFY_STEP_BEGIN=test:response_contract
+
+running 8 tests
+test all_scope_email_bodies_match_english_contract_exactly ... ok
+test assessment_merges_two_principals_into_one_mandatory_secret ... ok
+test assessment_distinguishes_used_held_and_never_granted_secrets ... ok
+test every_rule_combination_matches_original_python_table_and_nonmatches ... ok
+test invalid_threshold_variants_never_disable_required_rules ... ok
+test normal_business_use_and_status_polling_never_score_as_burst ... ok
+test enumeration_first_use_is_lifetime_and_combined_signals_still_trip ... ok
+test weak_window_expiry_and_unattributed_expired_handle_preserve_boundaries ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.01s
+
+VERIFY_STEP_END=test:response_contract exit=0
+VERIFY_STEP_BEGIN=test:response_integer_boundaries
+
+running 2 tests
+test detector_mapping_retains_python_integer_types_and_decimal_json ... ok
+test combined_large_weak_weights_cross_exact_large_threshold ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.62s
+
+VERIFY_STEP_END=test:response_integer_boundaries exit=0
+VERIFY_STEP_BEGIN=test:response_parity_gaps
+
+running 9 tests
+test declare_principal_scope_without_principal_matches_original_cli ... ok
+test detector_config_reports_each_invalid_field_with_the_original_reason ... ok
+test email_rendering_matches_english_contract_for_loaded_incidents ... ok
+test english_incident_subject_is_neutral_and_recovery_precedes_close ... ok
+test close_with_unavailable_audit_records_the_step_without_a_prior_list ... ok
+test incident_delivery_failures_record_what_python_records ... ok
+test notify_test_cli_fails_closed_on_escaping_errors ... ok
+test panic_inside_the_decision_is_counted_and_detection_keeps_working ... ok
+test smtp_sessions_match_english_transcripts_outcomes_and_audit ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.02s
+
+VERIFY_STEP_END=test:response_parity_gaps exit=0
+VERIFY_STEP_BEGIN=test:runs
+
+running 21 tests
+test ack_socket_boundary_child ... ok
+test atomic_idempotency_has_one_creator_and_detects_reuse ... ok
+test ack_socket_respects_short_sandbox_tmpdir_and_survives_long_tmpdir ... ok
+test audit_failure_at_start_prevents_child_and_finish_hides_output ... ok
+test audit_listener_can_cancel_before_spawn_without_deadlock ... ok
+test bounded_capture_drains_both_pipes ... ok
+test cancellation_escalates_and_preserves_reason ... ok
+test cancellation_signals_descendants_in_the_new_process_group ... ok
+test cancellation_targets_new_session_group_not_coordinator_group ... ok
+test finish_cleanup_happens_before_completion ... ok
+test finish_listener_can_query_and_cancel_without_publishing_partial_result ... ok
+test installed_registry_retains_history_without_return_owner_and_drops_without_cycle ... ok
+test installed_registry_without_worker_has_no_context_cycle ... ok
+test output_encodings_block_both_streams ... ok
+test patterns_match_python_oracle_for_binary_and_alignment_cases ... ok
+test owners_cannot_enumerate_or_cancel_other_runs ... ok
+test queued_cancellation_prevents_spawn_and_cleans_once ... ok
+test session_probe::session_probe_entry ... ok
+test revocation_targets_grant_and_global_stop_cancels_rest ... ok
+test state_transitions_and_value_free_audit ... ok
+test timeout_and_spawn_failure_are_terminal ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.29s
+
+VERIFY_STEP_END=test:runs exit=0
+VERIFY_STEP_BEGIN=test:runtime_fix_boundaries
+
+running 2 tests
+test head_errors_after_a_valid_method_have_no_wire_body ... ok
+test optional_logs_redact_handle_and_query_while_default_is_quiet ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.70s
+
+VERIFY_STEP_END=test:runtime_fix_boundaries exit=0
+VERIFY_STEP_BEGIN=test:runtime_parity_gaps
+
+running 15 tests
+test credential_patterns_strip_like_bytes_strip ... ok
+test cancel_of_a_finishing_run_reports_its_terminal_state ... ok
+test file_without_an_executable_format_fails_spawn_without_running ... ok
+test grant_revoke_without_an_id_cancels_every_run ... ok
+test path_search_skips_candidates_the_kernel_refuses ... ok
+test random_bytes_and_bad_interpreters_fail_spawn_without_running ... ok
+test resolve_program_child ... ok
+test resolve_program_matches_python ... ok
+test server_framing_matches_python_byte_for_byte ... ok
+test set_public_url_feeds_the_self_reference_precheck ... ok
+test each_output_reader_gets_its_own_wait ... ok
+test shebang_scripts_and_native_programs_still_run ... ok
+test shutdown_joins_a_run_that_is_finishing ... ok
+test start_keeps_its_context_for_the_whole_start ... ok
+test tools_request_header_names_and_values_match_python ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.70s
+
+VERIFY_STEP_END=test:runtime_parity_gaps exit=0
+VERIFY_STEP_BEGIN=test:serve_request_log
+
+running 2 tests
+test quiet_serve_prints_no_request_log ... ok
+test serve_request_log_masks_queries_and_handles ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.55s
+
+VERIFY_STEP_END=test:serve_request_log exit=0
+VERIFY_STEP_BEGIN=test:server_accept_resilience
+
+running 1 test
+test accept_loop_keeps_serving_after_descriptor_exhaustion ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.97s
+
+VERIFY_STEP_END=test:server_accept_resilience exit=0
+VERIFY_STEP_BEGIN=test:signer_e2e
+
+running 6 tests
+test exec_tool_after_revocation_is_denied_before_ssh_starts ... ok
+test exec_tool_runs_two_remote_commands_on_one_connection ... ok
+test real_ssh_client_authenticates_through_signer_without_private_key ... ok
+test revoked_grant_cannot_authenticate ... ok
+test teardown_leaves_no_socket_file_or_signer_created_directory ... ok
+test wrong_destination_host_key_is_refused ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.30s
+
+VERIFY_STEP_END=test:signer_e2e exit=0
+VERIFY_STEP_BEGIN=test:signer_oracle
+
+running 4 tests
+test oversized_message_closes_connection_without_a_reply ... ok
+test non_ascii_socket_dir_length_is_measured_in_characters ... ok
+test rust_encoders_build_the_python_request_messages ... ok
+test signer_replies_match_the_python_signer ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.54s
+
+VERIFY_STEP_END=test:signer_oracle exit=0
+VERIFY_STEP_BEGIN=test:sshwire
+
+running 86 tests
+test test_agent_connection_truncated_peer_message ... ok
+test test_agent_connection_over_socketpair ... ok
+test test_arbitrary_data_is_rejected ... ok
+test test_authorized_key_line ... ok
+test test_blob_parse_rejections ... ok
+test test_blob_round_trip ... ok
+test test_bool ... ok
+test test_boolean_is_strict ... ok
+test test_build_matches_layout ... ok
+test test_checkint_is_random ... ok
+test test_constants ... ok
+test test_each_field_wrong_is_rejected ... ok
+test test_encrypted_keys_unsupported ... ok
+test test_every_truncation_is_rejected ... ok
+test test_comment_with_spaces ... ok
+test test_extension_parse ... ok
+test test_extension_query ... ok
+test test_fingerprint_format ... ok
+test test_fingerprint_matches_ssh_keygen ... ok
+test test_frame ... ok
+test test_from_seed_and_generate ... ok
+test test_frozen_and_hashable ... ok
+test test_hand_built_container_parses ... ok
+test test_identities_answer_non_utf8_comment_is_decoded_leniently ... ok
+test test_identities_answer_rejections ... ok
+test test_identities_answer_round_trip ... ok
+test test_length_validation ... ok
+test test_line_without_comment_and_with_whitespace ... ok
+test test_malformed_containers ... ok
+test test_malformed_lines ... ok
+test test_malformed_pem_wrapping ... ok
+test test_max_size_accepted ... ok
+test test_mpint_negative_minimal_encoding ... ok
+test test_mpint_rfc4251_vectors ... ok
+test test_mpint_round_trip ... ok
+test test_mpint_strictness ... ok
+test test_multi_line_input_rejected ... ok
+test test_non_ed25519_key_unsupported ... ok
+test test_non_utf8_comment_is_decoded_leniently ... ok
+test test_only_ascii_space_and_tab_separate_fields ... ok
+test test_options_prefix ... ok
+test test_other_algorithms_parse_but_are_reported ... ok
+test test_other_key_types_unsupported ... ok
+test test_other_pem_labels_unsupported ... ok
+test test_our_private_key_accepted_by_ssh_keygen_y ... ok
+test test_oversize_rejected_before_reading_payload ... ok
+test test_padding_lengths_all_accepted ... ok
+test test_parse_hostbound ... ok
+test test_parse_key_made_by_ssh_keygen ... ok
+test test_parse_key_made_by_ssh_keygen_with_non_utf8_comment ... ok
+test test_parse_plain ... ok
+test test_pem_shape ... ok
+test test_plain_line ... ok
+test test_read_agent_message_retries_on_eintr ... ok
+test test_read_round_trip_with_callable ... ok
+test test_read_with_object_having_recv ... ok
+test test_read_with_short_recv_chunks ... ok
+test test_recv_returning_too_much_rejected ... ok
+test test_repr_hides_seed ... ok
+test test_reserialised_ssh_keygen_key_prints_same_public_line ... ok
+test test_round_trip ... ok
+test test_sequential_reads_and_eof ... ok
+test test_session_bind_rejections ... ok
+test test_session_bind_round_trip ... ok
+test test_sign_and_verify_self_consistent ... ok
+test test_sign_request_rejections ... ok
+test test_sign_request_round_trip ... ok
+test test_sign_response_round_trip ... ok
+test test_signature_rejections ... ok
+test test_signature_round_trip ... ok
+test test_ssh_keygen_signs_and_verifies_with_our_key_file ... ok
+test test_string ... ok
+test test_text_requires_utf8 ... ok
+test test_trailing_bytes_detected ... ok
+test test_truncated_length_prefix ... ok
+test test_truncated_payload ... ok
+test test_truncated_primitives_raise ... ok
+test test_truncated_string_raises ... ok
+test test_type_mismatch_between_line_and_blob ... ok
+test test_uint32 ... ok
+test test_unknown_key_type_followed_by_blob_is_unsupported ... ok
+test test_validation ... ok
+test test_write_with_callable_and_object ... ok
+test test_zero_length_frame ... ok
+test wire_error_is_a_std_error ... ok
+test test_exotic_whitespace_handling_agrees_with_ssh_keygen ... ok
+
+test result: ok. 86 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+VERIFY_STEP_END=test:sshwire exit=0
+VERIFY_STEP_BEGIN=test:state_dir_cross_language
+
+running 6 tests
+test projects_json_written_by_python_loads_in_rust ... ok
+test read_lines_handles_universal_newlines ... ok
+test projects_json_written_by_rust_is_byte_identical_to_python ... ok
+test write_json_past_the_prototype_ceiling_is_refused ... ok
+test write_json_pretty_output_is_byte_identical_across_languages ... ok
+test write_json_boundary_at_the_depth_cap ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+VERIFY_STEP_END=test:state_dir_cross_language exit=0
+VERIFY_STEP_BEGIN=test:store_cross_process_lock
+
+running 3 tests
+test raw_flock_blocks_until_rust_lock_releases ... ok
+test state_dir_lock_is_reusable_after_release ... ok
+test rust_lock_blocks_until_a_raw_flock_holder_releases ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.60s
+
+VERIFY_STEP_END=test:store_cross_process_lock exit=0
+VERIFY_STEP_BEGIN=test:store_oracle
+
+running 2 tests
+test iso_out_of_range_and_non_finite_timestamps ... ok
+test iso_formats_a_timestamp_table ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+VERIFY_STEP_END=test:store_oracle exit=0
+VERIFY_STEP_BEGIN=test:team_checkpoint_admission
+
+running 17 tests
+test a_skipped_grant_cannot_supply_historical_fact_authority ... ok
+test exact_heads_seen_and_retained_gap_hlc_consistency ... ok
+test every_removal_fact_scope_is_explicitly_unsupported_after_original_checks ... ok
+test fact_historical_basis_requires_an_actual_role_interval_not_a_clock_or_table ... ok
+test full_device_copies_include_agreement_key_self_signature_and_dictionary ... ok
+test known_original_same_id_omissions_and_independent_restrictions_cannot_be_cleared ... ok
+test local_known_originals_bind_full_records_and_wrong_tombstone_digest_is_not_vector_equality ... ok
+test genesis_authority_set_named_admission_and_projection ... ok
+test original_signatures_schema_environment_and_canonical_identity ... ok
+test semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal ... ok
+test ordinary_loader_keeps_its_receipt_boundary_for_historical_deletions ... ok
+test skipped_authority_and_intra_commit_role_order_never_grant_permission ... ok
+test stage_pairing_revision_immutability_and_false_final_overlay ... ok
+test successful_rotation_and_complete_generation_projection_match_ordinary_fold ... ok
+test valid_remote_attestation_cannot_override_existing_state_or_scoped_collisions ... ok
+test wrap_source_operation_must_actually_supply_the_generation ... ok
+test semantic_phase_work_and_memory_are_measured_separately ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.29s
+
+VERIFY_STEP_END=test:team_checkpoint_admission exit=0
+VERIFY_STEP_BEGIN=test:team_checkpoint_authority_oracle
+
+running 3 tests
+test complete_uncompacted_fold_version_order_and_m1_irreversible_overlay ... ok
+test deterministic_input_permutations_preserve_every_original_hash ... ok
+test deterministic_original_histories_and_literal_oracles ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.27s
+
+VERIFY_STEP_END=test:team_checkpoint_authority_oracle exit=0
+VERIFY_STEP_BEGIN=test:team_checkpoint_generation_oracle
+
+running 7 tests
+test authenticated_malformed_ssh_is_not_signing_ready_and_arbitrary_bytes_are_allowed ... ok
+test all_eight_cases_match_literal_crypto_and_ordinary_fold_oracles ... ok
+test generate_required_generation_fixtures ... ignored, explicit synthetic fixture generation only in assigned isolation
+test identical_deks_under_distinct_labels_keep_secret_aad_limit_and_original_wrap_requirement ... ok
+test frozen_catalog_and_every_original_canonical_byte_remain_bound ... ok
+test original_fixture_catalogues_are_still_145_149_97_exact_entries ... ok
+test legacy_hkdf_boundaries_lenient_base64_and_aad_assurance_are_preserved ... ok
+
+test result: ok. 6 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 31.15s
+
+VERIFY_STEP_END=test:team_checkpoint_generation_oracle exit=0
+VERIFY_STEP_BEGIN=test:team_checkpoint_legacy_parser_regression
+
+running 1 test
+test all_36_complete_baseline_outcomes_for_both_legacy_paths ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+VERIFY_STEP_END=test:team_checkpoint_legacy_parser_regression exit=0
+VERIFY_STEP_BEGIN=test:team_checkpoint_manifest
+
+running 10 tests
+test debug_and_errors_are_redacted ... ok
+test every_request_approval_session_binding_refuses_even_when_resigned ... ok
+test closed_schema_features_signature_and_source_integers ... ok
+test exact_wall_freshness_and_overflow_boundaries ... ok
+test frozen_fixture_consistency::tests::deletion_variants_retain_unflushed_encrypted_versions ... ok
+test frozen_fixture_consistency::tests::deterministic_regeneration_and_complete_inventory ... ok
+test frozen_fixture_consistency::tests::byte_corruption_is_detected_by_consistency_check ... ok
+test pinned_baseline_has_literal_canonical_hash_signature_cut_and_counts ... ok
+test raw_size_partition_and_declared_count_boundaries ... ok
+test frozen_fixture_consistency::tests::stored_crypto_and_literal_goldens ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+VERIFY_STEP_END=test:team_checkpoint_manifest exit=0
+VERIFY_STEP_BEGIN=test:team_checkpoint_payload
+
+running 13 tests
+test baseline_exact_component_spans_and_original_record_hash_goldens ... ok
+test chunk_binding_sizes_canonical_base64_and_stateless_duplicates ... ok
+test complete_distinct_fact_sets_and_sorted_reference_collections ... ok
+test counts_hash_sets_tombstones_and_removal_order_are_independently_enforced ... ok
+test every_frozen_candidate_variant_reaches_only_the_limited_stage ... ok
+test exact_huge_headers_hlc_and_original_numeric_record_hashes ... ok
+test full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack ... ok
+test magic_objects_floats_malformed_m1_targets_and_false_roles_remain_only_candidates ... ok
+test original_bytes_duplicates_grammar_and_whitespace_scope ... ok
+test original_wrap_selectors_and_opaque_ciphertext_integrity ... ok
+test reattested_original_header_tokens_and_unique_author_sequences ... ok
+test reattested_structural_and_closed_schema_negatives ... ok
+test exact_16_mib_raw_payload_limit ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.18s
+
+VERIFY_STEP_END=test:team_checkpoint_payload exit=0
+VERIFY_STEP_BEGIN=test:team_checkpoint_provenance
+
+running 4 tests
+test exact_candidate_golden_and_immutable_inspection ... ok
+test another_attestation_cannot_be_paired_even_with_identical_payload ... ok
+test exact_per_fact_and_tombstone_candidate_bindings ... ok
+test source_has_no_production_runtime_caller_or_authority_conversion ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+VERIFY_STEP_END=test:team_checkpoint_provenance exit=0
+VERIFY_STEP_BEGIN=test:team_checkpoint_removal_oracle
+
+running 1 test
+test literal_ordinary_and_original_primitive_oracles ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 20.54s
+
+VERIFY_STEP_END=test:team_checkpoint_removal_oracle exit=0
+VERIFY_STEP_BEGIN=test:team_checkpoint_required_generations
+
+running 22 tests
+test all_selected_required_wraps_must_authenticate_and_agree_with_effective_dek ... ok
+test bounded_work_measurements_separate_setup_complete_and_key_stage has been running for over 60 seconds
+test every_required_ciphertext_and_last_unconnected_staged_version_is_checked ... ok
+test exact_full_recipient_and_both_private_lengths_are_required_even_for_empty ... ok
+test full_local_record_and_approved_role_mismatch_stay_upstream_refusals ... ok
+test inactive_deleted_history_and_no_version_tombstones_are_retained_unassessed ... ok
+test isolated_removal_keeps_observed_original_m1_tombstone_and_support_requirements ... ok
+test later_required_wrap_tag_failure_is_not_an_available_prefix_result ... ok
+test malformed_wrap_fields_low_order_wrong_aad_tags_and_non32_deks_fail_closed has been running for over 60 seconds
+test malformed_wrap_fields_low_order_wrong_aad_tags_and_non32_deks_fail_closed ... ok
+test near_limit_original_record_distribution_authenticates_required_ciphertexts has been running for over 60 seconds
+test bounded_work_measurements_separate_setup_complete_and_key_stage ... ok
+test near_limit_required_wrap_distribution_authenticates_every_distinct_key_and_version has been running for over 60 seconds
+test near_limit_required_wrap_distribution_authenticates_every_distinct_key_and_version ... ok
+test original_member_add_wrap_for_absent_generation_is_not_applicable_evidence ... ok
+test prior_generations_admitted_to_new_exact_recipient_and_new_owner_attestor ... ok
+test privacy_early_late_repeat_and_drop_do_not_mutate_public_inputs ... ok
+test required_generation_depth64_success_late_error_repeat_drop_on_actual_256_kib ... ok
+test required_generation_depth65_refuses_before_crypto_on_actual_256_kib ... ok
+test required_transition_preserves_original_bytes_and_fact_hashes_but_requires_missing_key ... ok
+test required_wrap_depth64_success_error_repeat_drop_on_actual_256_kib ... ok
+test selected_source_errors_remain_upstream_and_image_only_wrap_is_insufficient ... ok
+test success_observes_only_fixed_stage_binding_digests_and_aggregate_counts ... ok
+test supported_isolated_removal_preserves_old_new_keys_and_m1_restrictions ... ok
+test unavailable_missing_all_or_older_required_wraps_never_fall_back_to_current ... ok
+test near_limit_original_record_distribution_authenticates_required_ciphertexts ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1043.50s
+
+VERIFY_STEP_END=test:team_checkpoint_required_generations exit=0
+VERIFY_STEP_BEGIN=test:team_checkpoint_semantic_cut
+
+running 17 tests
+test complete_candidate_depth64_success_late_error_repeat_drop_and_65_refusal_on_256_kib ... ok
+test complete_fold_depth64_on_actual_256_kib_stack ... ok
+test coherent_document_and_order_mutations_cannot_be_attested_into_success ... ok
+test earlier_same_author_witness_repairs_multiple_ops_and_equal_hlc_rules ... ok
+test generation_summary_is_public_only_and_key_unavailability_is_a_later_gate ... ok
+test independent_local_facts_restrictions_binding_and_collisions_remain_deny_only ... ok
+test known_policy_pin_identity_and_container_relationships_are_checked ... ok
+test old_gapped_and_false_final_digest_contract_stays_limited ... ok
+test original_authentication_huge_slot_gaps_numeric_spelling_and_pairing_are_not_bypassed ... ok
+test every_frozen_complete_case_has_its_exact_finite_result ... ok
+test removal_chain_is_not_resolved_by_filtering_and_one_admin_can_remove_two_targets ... ok
+test removal_metadata_witness_and_bound_contradictions_are_exact ... ok
+test removal_requires_nonowner_target_and_current_pre_cut_admin_not_any_historical_interval ... ok
+test resource_many_original_same_target_witnesses_and_minimum_bound has been running for over 60 seconds
+test resource_near_payload_limit_complete_records_and_large_legacy_snapshot has been running for over 60 seconds
+test resource_near_payload_limit_complete_records_and_large_legacy_snapshot ... ok
+test retained_contradictions_pre_cut_target_basis_skipped_rotation_and_self_placement ... ok
+test self_placement_bare_mixed_and_original_order_remain_fail_closed ... ok
+test resource_many_original_same_target_witnesses_and_minimum_bound ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 175.61s
+
+VERIFY_STEP_END=test:team_checkpoint_semantic_cut exit=0
+VERIFY_STEP_BEGIN=test:team_compaction_heads
+
+running 11 tests
+test conflicting_live_original_at_the_cached_slot_refuses_without_fallback ... ok
+test all_six_authority_kinds_and_mixed_commits_stay_byte_identical ... ok
+test final_data_head_is_deleted_live_but_original_bytes_hlc_and_version_order_survive ... ok
+test deletion_and_version_revocation_survive_real_compaction_restart_and_cache_loss ... ok
+test legacy_float_opaque_and_deeper_than_checkpoint_values_preserve_original_bytes ... ok
+test legacy_missing_idle_head_refuses_before_new_images_and_preserves_ordinary_reads ... ok
+test newer_live_head_cannot_replace_the_exact_old_cutoff_slot ... ok
+test no_old_and_fresh_active_member_gate_keep_original_result_schema_and_no_cache ... ok
+test one_axis_cache_corruption_and_full_record_substitution_never_publish_or_prune ... ok
+test reserved_number_legacy_head_refuses_real_compaction_before_new_publication ... ok
+test second_compaction_after_context_reopen_preserves_idle_removed_author_and_next_sequence ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.66s
+
+VERIFY_STEP_END=test:team_compaction_heads exit=0
+VERIFY_STEP_BEGIN=test:team_derive_lazy_parity
+
+running 1 test
+test derive_local_fails_closed_exactly_where_python_raised ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.09s
+
+VERIFY_STEP_END=test:team_derive_lazy_parity exit=0
+VERIFY_STEP_BEGIN=test:team_envelope_parity_edges
+
+running 1 test
+test non_string_base64_fields_fail_with_the_documented_reason ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+VERIFY_STEP_END=test:team_envelope_parity_edges exit=0
+VERIFY_STEP_BEGIN=test:team_fold
+
+running 31 tests
+test a_document_holding_a_connection_id_derive_refuses_derives_the_rest ... ok
+test a_connection_id_derive_refuses_is_skipped ... ok
+test a_version_that_does_not_decrypt_is_not_derived ... ok
+test a_recover_that_stops_at_the_team_keys_is_recorded_and_completed_again ... ok
+test connection_create_referencing_undeclared_secret_skipped ... ok
+test an_op_nested_too_deep_is_skipped_and_one_at_the_bound_is_kept ... ok
+test count_is_commits_folded_not_ops_skipped ... ok
+test derive_connections_represents_container_value_prefix_for_every_mode_and_derives_both_connections ... ok
+test derive_local_count_is_the_exact_python_sum_beyond_any_fixed_width ... ok
+test derive_local_does_not_panic_with_two_large_author_seq_totals ... ok
+test derive_vault_non_object_secrets_field_fails_closed_without_overwriting ... ok
+test disable_invalidates_grants ... ok
+test derive_connections_preserves_every_ca_file_shape_like_python ... ok
+test each_generation_decrypts_under_its_own_key_file ... ok
+test generation_key_decrypts_local_dek_does_not ... ok
+test hand_edit_is_overwritten_on_next_fold ... ok
+test late_insert_monotonic_policy_version ... ok
+test local_connection_survives_colliding_shared_id ... ok
+test local_secret_survives_colliding_shared_secret_id ... ok
+test narrow_reevaluates_in_place ... ok
+test no_leak_across_commits_documents_snapshots_state ... ok
+test placeholder_names_are_valid_and_listable ... ok
+test recover_keeps_the_device_key_and_generation_keys ... ok
+test recover_again_rewraps_team_keys_an_earlier_one_left ... ok
+test renumbered_credentials_still_rebind_pinned_and_following_connections ... ok
+test seq_gap_rejected_through_receive_commit ... ok
+test unknown_generation_id_skipped_at_fold_time ... ok
+test unwrappable_generation_excluded_and_does_not_break_scan_or_exec ... ok
+test state_dir_with_deeply_nested_secret_public_field_reopens ... ok
+test values_for_trusted_scan_includes_shared_secret ... ok
+test widen_marks_grants_stale ... ok
+
+test result: ok. 31 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 31.80s
+
+VERIFY_STEP_END=test:team_fold exit=0
+VERIFY_STEP_BEGIN=test:team_fold_lazy_parity
+
+running 1 test
+test fold_over_malformed_documents_fails_closed_without_panicking ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+VERIFY_STEP_END=test:team_fold_lazy_parity exit=0
+VERIFY_STEP_BEGIN=test:team_invite_link
+
+running 19 tests
+test cli_join_reads_the_invite_from_stdin_and_checks_it_first ... ok
+test cli_invite_link_list_revoke_and_preview ... ok
+test cli_join_through_an_enveloped_link_records_the_joiner ... ok
+test cli_plain_invite_addresses_follow_the_join_rule ... ok
+test creation_and_join_apply_one_address_rule ... ok
+test invite_list_never_exposes_secrets ... ok
+test legacy_invite_entries_list_and_are_consumed ... ok
+test link_and_invite_string_round_trip ... ok
+test link_creation_rules ... ok
+test link_invite_expires_exactly_one_day_after_creation ... ok
+test malformed_links_are_rejected_without_echo ... ok
+test native_e2e::leakcheck_finds_raw_encoded_and_embedded_secrets ... ok
+test native_e2e::parse_message_decodes_encoded_subject_and_base64_body ... ok
+test link_invite_is_single_use_and_records_the_joiner ... ok
+test project_list_survives_an_unreadable_team_mapping ... ok
+test project_list_names_shared_and_joined_environments ... ok
+test revoke_and_consume_race_has_exactly_one_winner ... ok
+test untrusted_invite_fields_are_bounded ... ok
+test revoked_invite_is_refused_and_revoking_is_idempotent ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 25.30s
+
+VERIFY_STEP_END=test:team_invite_link exit=0
+VERIFY_STEP_BEGIN=test:team_link_transport
+
+running 12 tests
+test an_absent_killed_or_restarted_daemon_is_survived ... ok
+test an_inbound_link_session_teaches_the_dial_back_address ... ok
+test dials_rotate_between_tcp_and_link_addresses_in_both_directions ... ok
+test cli_serve_and_join_through_link_sockets ... ok
+test link_wire_and_daemon_bytes_carry_no_plaintext ... ok
+test native_e2e::leakcheck_finds_raw_encoded_and_embedded_secrets ... ok
+test native_e2e::parse_message_decodes_encoded_subject_and_base64_body ... ok
+test sync_state_reports_link_sessions_and_link_dial_failures ... ok
+test tcp_and_link_inbound_share_one_connection_cap ... ok
+test the_accept_pool_is_bounded_backs_off_and_stops ... ok
+test malformed_daemon_replies_fail_closed ... ok
+test two_nodes_replicate_commits_and_facts_over_link_addresses_only ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.60s
+
+VERIFY_STEP_END=test:team_link_transport exit=0
+VERIFY_STEP_BEGIN=test:team_membership_sync
+
+running 10 tests
+test a_second_compact_keeps_what_the_first_compacted ... ok
+test compact_preserves_membership_history_and_snapshot_document ... ok
+test fact_canonical_bytes_and_hash_match_python ... ok
+test fact_sign_verify_and_sanitize ... ok
+test join_leaves_no_rejected_commit_on_the_joiner ... ok
+test a_removed_device_backs_off_redialing_its_remover ... ok
+test live_emergency_facts_each_record_one_apply_audit ... ok
+test join_through_a_second_admin_gets_history_in_total_order ... ok
+test share_invite_join_and_secret_derivation ... ok
+test user_device_cannot_author_editing_commits ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.83s
+
+VERIFY_STEP_END=test:team_membership_sync exit=0
+VERIFY_STEP_BEGIN=test:team_oracle
+
+running 35 tests
+test build_cli_profile_check_order_matches_python_over_a_sweep ... ok
+test cli_profile_program_checked_before_base_url_env_matches_python ... ok
+test cli_profile_truthy_container_program_matches_python ... ok
+test ca_file_and_value_prefix_pass_through_verbatim_in_folded_document ... ok
+test commit_from_dict_coerces_non_string_scalar_fields_like_python_str ... ok
+test commit_from_dict_seen_pair_key_hashability_and_collisions_match_python ... ok
+test commit_ops_element_accepts_pair_list_like_python_dict_op ... ok
+test commit_ops_element_with_non_string_pair_key_is_pythons_uncaught_typeerror ... ok
+test commit_from_dict_accepts_seen_pairs_and_large_author_seq ... ok
+test commit_store_vector_fails_closed_on_isdigit_but_unparsable_filename ... ok
+test commit_store_vector_reads_non_ascii_nd_digit_filename_like_python ... ok
+test device_record_from_dict_container_field_coercion_matches_python ... ok
+test device_record_matches_python_for_a_fixed_seed_pair ... ok
+test envelope_null_field_matches_python_reason ... ok
+test extra_env_key_before_value_order_matches_python_when_not_key_sorted ... ok
+test extra_env_truthy_string_is_pythons_uncaught_valueerror ... ok
+test fold_matches_python_for_a_fixed_commit_history ... ok
+test commit_store_and_snapshot_files_match_python_bytes ... ok
+test header_name_and_basic_username_truthy_non_string_is_pythons_uncaught_typeerror ... ok
+test fold_vector_preserves_author_seq_beyond_i64_like_python ... ok
+test history_signs_byte_identically_to_python ... ok
+test http_auth_container_header_name_matches_python_for_non_header_mode ... ok
+test http_auth_truthy_container_basic_username_matches_python ... ok
+test humanview_matches_python_for_the_folded_history ... ok
+test hlc_parse_leniency_matches_python_receive_commit_outcome ... ok
+test humanview_nested_connections_key_off_root_matches_python ... ok
+test humanview_tuple_vs_list_matches_python_across_a_snapshot_seeded_fold ... ok
+test op_validation_reason_sweep_matches_python ... ok
+test path_prefixes_non_string_element_is_pythons_uncaught_attributeerror ... ok
+test settings_update_accepts_arbitrary_precision_positive_int ... ok
+test sign_commit_matches_python_byte_for_byte ... ok
+test member_add_device_record_with_array_wrapped_field_matches_python_receive_commit ... ok
+test wrap_in_python_unwrap_in_rust ... ok
+test snapshot_floor_beyond_i64_still_refuses_a_replayed_commit ... ok
+test wrap_in_rust_has_the_python_shape_and_round_trips ... ok
+
+test result: ok. 35 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+VERIFY_STEP_END=test:team_oracle exit=0
+VERIFY_STEP_BEGIN=test:team_pairing_approval
+
+running 13 tests
+test approval_flow_end_to_end ... ok
+test another_device_stays_pending_after_approval ... ok
+test approval_needs_a_request_and_a_usable_invitation ... ok
+test corrupt_request_files_fail_closed ... ok
+test cli_pairing_commands_end_to_end ... ok
+test deny_revokes_the_invitation ... ok
+test invalid_proofs_record_nothing ... ok
+test native_e2e::leakcheck_finds_raw_encoded_and_embedded_secrets ... ok
+test native_e2e::parse_message_decodes_encoded_subject_and_base64_body ... ok
+test normal_invitations_are_unchanged ... ok
+test join_pending_reaches_only_invitation_holders ... ok
+test requests_and_approvals_survive_restarts ... ok
+test requests_are_bounded_per_invitation_newest_kept ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 25.22s
+
+VERIFY_STEP_END=test:team_pairing_approval exit=0
+VERIFY_STEP_BEGIN=test:team_parity_gaps
+
+running 16 tests
+test cli_commit_written_before_a_submitted_commit_is_still_picked_up_once ... ok
+test cli_commit_written_before_a_received_commit_is_still_picked_up_once ... ok
+test falsy_peers_document_is_an_empty_dict ... ok
+test failed_broadcast_send_drops_the_session_immediately ... ok
+test incident_from_unknown_author_is_audited_like_python ... ok
+test join_with_non_dict_peers_document_fails_before_dialing ... ok
+test member_add_audit_records_role_like_python ... ok
+test non_dict_peers_document_is_never_sent ... ok
+test parse_invite_accepts_every_shape_python_accepts ... ok
+test outbound_receiver_belongs_to_the_adopting_instance ... ok
+test peers_frame_is_filtered_and_sorted_like_python ... ok
+test released_deferred_commit_is_broadcast_once_across_polls ... ok
+test share_environment_invalid_retired_version_key_fails_before_mutation ... ok
+test share_environment_rejects_unhashable_connection_versions_before_mutation ... ok
+test stop_join_is_bounded_like_python ... ok
+test stop_joins_receiver_threads ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 25.49s
+
+VERIFY_STEP_END=test:team_parity_gaps exit=0
+VERIFY_STEP_BEGIN=test:team_remaining_contract
+
+running 26 tests
+test actual_tcp_capture_contains_neither_secret_nor_unwrapped_dek ... ok
+test explicit_empty_membership_refuses_inprocess_and_tcp_handshakes ... ok
+test catchup_keeps_current_role_authorization_after_offline_demotion ... ok
+test inprocess_refusal_can_return_before_responder_hook_finishes ... ok
+test leak_scanner_finds_encoded_and_embedded_secrets ... ok
+test full_team_sync_tcp_wire_uses_original_encoding_leak_scanner ... ok
+test m1_two_node_offline_deletes_and_late_put_converge_inprocess ... ok
+test m1_two_node_offline_deletes_and_late_put_converge_tcp ... ok
+test native_serve_with_team_listen_accepts_tcp ... ok
+test native_serve_without_team_listen_does_not_start_team_tcp ... ok
+test offline_fact_reconnect_cancels_live_native_signer_and_run ... ok
+test offline_facts_catch_up_after_sender_restart_in_bounded_batches ... ok
+test old_session_is_closed_then_replaced_by_a_new_authenticated_session ... ok
+test original_two_node_convergence_inprocess ... ok
+test original_two_node_convergence_tcp ... ok
+test remote_connection_disabled_fact_closes_existing_signer_socket ... ok
+test remote_widening_commit_cancels_existing_http_run_with_grant_stale ... ok
+test removed_member_keeps_old_version_but_cannot_get_new_generation_version ... ok
+test removed_member_session_drains_then_fresh_tcp_dial_is_refused ... ok
+test removed_offline_peer_gets_no_fact_replay_or_authenticated_session ... ok
+test share_converts_existing_connection_and_stales_its_grant ... ok
+test share_leaves_revoked_and_cross_project_secret_connections_local ... ok
+test share_refuses_duplicate_and_wrong_admin_passphrase ... ok
+test shared_admin_fact_commands_do_not_author_commits_or_emit_secret_fields ... ok
+test shared_admin_secret_put_and_connection_update_author_commits ... ok
+test user_member_cannot_publish_connection_disabled_fact_to_live_team ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 47.68s
+
+VERIFY_STEP_END=test:team_remaining_contract exit=0
+VERIFY_STEP_BEGIN=test:team_secret_import
+
+running 3 tests
+test native_e2e::leakcheck_finds_raw_encoded_and_embedded_secrets ... ok
+test native_e2e::parse_message_decodes_encoded_subject_and_base64_body ... ok
+test an_import_into_a_shared_environment_is_one_commit_every_device_receives ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.31s
+
+VERIFY_STEP_END=test:team_secret_import exit=0
+VERIFY_STEP_BEGIN=test:team_share_policy_version_parity
+
+running 1 test
+test share_policy_version_bump ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.68s
+
+VERIFY_STEP_END=test:team_share_policy_version_parity exit=0
+VERIFY_STEP_BEGIN=test:team_snapshot_total_parity
+
+running 1 test
+test snapshot_scheduling_follows_exact_integer_totals_and_fails_closed ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 22.56s
+
+VERIFY_STEP_END=test:team_snapshot_total_parity exit=0
+VERIFY_STEP_BEGIN=test:team_snapshot_version_order_parity
+
+running 3 tests
+test raw_version_order_valid_target_appends_without_touching_bad_sibling ... ok
+test snapshot_categories_are_validated_only_when_an_operation_reaches_them ... ok
+test snapshot_version_order_successes_and_saved_bytes_match_python ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+VERIFY_STEP_END=test:team_snapshot_version_order_parity exit=0
+VERIFY_STEP_BEGIN=test:team_sync_status
+
+running 8 tests
+test a_session_dialed_at_a_link_address_reports_the_link ... ok
+test a_restarted_serve_remembers_contact ... ok
+test a_stopped_serve_leaves_no_retry_scheduled ... ok
+test native_e2e::leakcheck_finds_raw_encoded_and_embedded_secrets ... ok
+test native_e2e::parse_message_decodes_encoded_subject_and_base64_body ... ok
+test cli_sync_status_merges_the_file_with_the_store ... ok
+test serve_writes_metadata_only_and_states_follow_the_sessions ... ok
+test writes_are_throttled_and_capable_agreement_is_refreshed ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 39.08s
+
+VERIFY_STEP_END=test:team_sync_status exit=0
+VERIFY_STEP_BEGIN=test:team_transport
+
+running 3 tests
+test nonmember_is_refused_without_session ... ok
+test inprocess_mutual_handshake_and_messages ... ok
+test tcp_mutual_handshake_and_messages ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+VERIFY_STEP_END=test:team_transport exit=0
+VERIFY_STEP_BEGIN=test:team_uncaught_scope_parity
+
+running 3 tests
+test escaping_validation_exceptions_fail_at_python_scope ... ok
+test non_string_op_key_commit_raises_in_receive_commit_like_python ... ok
+test escaping_receive_exceptions_drop_the_session_like_python ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 35.00s
+
+VERIFY_STEP_END=test:team_uncaught_scope_parity exit=0
+VERIFY_STEP_BEGIN=test:tools_server
+
+running 27 tests
+test a_short_own_credential_in_the_profile_is_refused_before_handle_or_child ... ok
+test another_short_vault_value_is_refused_only_whole_or_in_longer_forms ... ok
+test any_vault_value_in_profile_is_refused_before_handle_or_child ... ok
+test auth_failures_are_audited_and_unread_body_closes ... ok
+test connection_limit_refuses_extra_client_without_spawning_work ... ok
+test corrupt_policy_during_setup_fails_the_registered_run_and_cleans_resources ... ok
+test dispatch_validation_refuses_wrong_shapes_before_business_work ... ok
+test duplicate_concurrent_tool_exec_runs_the_fixed_program_once ... ok
+test handle_output_is_blocked_and_revocation_denies_new_work ... ok
+test keepalive_frames_multiple_responses_and_head_suppresses_body ... ok
+test native_exec_isolated_environment_output_status_and_replay ... ok
+test one_connection_supports_multiple_api_operations_without_registration ... ok
+test original_audit_failure_refuses_each_tool_before_side_effects ... ok
+test original_cli_preflight_missing_profiles_and_programs_never_spawn ... ok
+test original_dispatch_shape_limits_are_enforced ... ok
+test original_exec_policy_denials_are_precise_and_audited ... ok
+test original_fixed_program_and_fresh_private_run_directories ... ok
+test original_list_ownership_stop_and_revocation_contract ... ok
+test original_request_normalization_binary_body_and_header_filter_contract ... ok
+test original_public_url_and_expired_grant_contract ... ok
+test proxy_tunnels_absolute_targets_and_self_reference_are_refused ... ok
+test slow_clients_have_an_absolute_read_deadline ... ok
+test ssh_cli_keeps_private_key_in_signer_and_fixes_local_ssh_options ... ok
+test strict_base64_decodes_only_canonical_input ... ok
+test strict_framing_rejects_smuggling_variants ... ok
+test queued_work_rechecks_revocation_stop_and_exhaustion_before_spawn ... ok
+test tools_owner_scope_and_cancellation_survive_audit_failure ... ok
+
+test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 26.13s
+
+VERIFY_STEP_END=test:tools_server exit=0
+VERIFY_STEP_BEGIN=test:vault_context
+
+running 46 tests
+test backup_fails_closed_instead_of_an_unexpected_error_class_past_the_headroom ... ok
+test backup_fails_closed_for_a_document_at_the_writable_max_depth ... ok
+test backup_restore_blocks_until_ack_and_recovery_rewraps ... ok
+test backup_succeeds_when_document_leaves_two_levels_of_headroom ... ok
+test decrypt_shared_coerces_non_string_scalar_fields_like_pythons_str ... ok
+test kms_unwrap_rejects_other_master_key ... ok
+test new_active_version_rebinds_unpinned_connections_and_invalidates_handles ... ok
+test non_ssh_kinds_store_no_value_derived_metadata ... ok
+test open_requires_existing_state ... ok
+test put_and_trusted_use_never_persists_plaintext ... ok
+test put_secret_missing_secrets_key_is_state_corrupt_not_silently_created ... ok
+test put_secret_secrets_field_of_wrong_type_is_state_corrupt ... ok
+test reapply_revocations_aborts_when_versions_field_is_not_an_object ... ok
+test reapply_revocations_clears_active_version_stored_as_bool_true ... ok
+test reapply_revocations_skips_silently_when_versions_key_is_entirely_missing ... ok
+test recover_rotates_kms_revokes_grants_and_handles ... ok
+test restore_approval_history_falsy_value_becomes_empty_list ... ok
+test restore_approval_history_iterates_a_truthy_object_into_its_keys ... ok
+test restore_approval_history_iterates_a_truthy_string_into_characters ... ok
+test restore_approval_history_truthy_scalar_is_state_corrupt ... ok
+test restore_fails_and_leaves_handle_key_untouched_when_corrupt_connections_doc_has_a_pending_revocation ... ok
+test restore_reapplies_revocations_rotates_handle_key_and_never_reopens_approvals ... ok
+test restore_rejects_a_python_built_archive_whose_document_is_at_the_writable_max_depth ... ok
+test restore_replays_audit_revocations_when_the_ledger_is_missing ... ok
+test restore_succeeds_and_rotates_handle_key_when_corrupt_connections_doc_has_no_pending_revocation ... ok
+test restore_writes_control_restore_pending_before_other_documents_even_on_failure ... ok
+test reveal_requires_fresh_reauth_and_is_audited ... ok
+test secret_for_trusted_use_and_reveal_return_redacted_secret_bytes ... ok
+test secret_for_trusted_use_treats_explicit_null_secret_entry_as_absent ... ok
+test secret_value_limits ... ok
+test secret_version_unusable_keeps_truthy_string_status_detail ... ok
+test secret_version_unusable_suppresses_falsy_status_detail ... ok
+test set_version_status_activate_does_not_silently_skip_retire_on_f64_collision ... ok
+test set_version_status_reactivating_bool_true_active_version_as_one_succeeds ... ok
+test set_version_status_retire_does_not_clear_active_version_on_f64_collision ... ok
+test set_version_status_retiring_clears_active_version_stored_as_integral_float ... ok
+test set_version_status_versions_as_array_containing_the_key_is_state_corrupt ... ok
+test set_version_status_versions_as_empty_array_is_not_found ... ok
+test set_version_status_versions_as_string_uses_substring_membership ... ok
+test set_version_status_versions_missing_key_is_state_corrupt ... ok
+test signer_socket_dir_matches_configured_directory_under_this_machines_default_tmpdir ... ok
+test ssh_private_key_public_metadata_only ... ok
+test state_directory_permissions ... ok
+test versioning_and_status_transitions ... ok
+test versions_key_with_information_separator_padding_is_state_corrupt ... ok
+test versions_key_with_ordinary_space_padding_still_parses ... ok
+
+test result: ok. 46 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 41.08s
+
+VERIFY_STEP_END=test:vault_context exit=0
+VERIFY_STEP_BEGIN=test:vault_context_oracle
+
+running 32 tests
+test admin_passphrase_set_by_python_authenticates_in_rust ... ok
+test backup_made_by_python_restores_through_rust ... ok
+test admin_passphrase_set_by_rust_has_the_python_layout_and_authenticates ... ok
+test handle_issued_by_python_verifies_in_rust ... ok
+test backup_made_by_rust_has_the_python_archive_layout_and_restores ... ok
+test inside_state_matches_python_for_51_hop_symlink_chain_to_existing_dir ... ok
+test handle_issued_by_rust_has_the_python_payload_layout_and_verifies ... ok
+test inside_state_matches_python_for_51_hop_symlink_chain_with_nonexistent_leaf ... ok
+test inside_state_matches_python_for_dotdot_back_into_state ... ok
+test inside_state_matches_python_for_existing_leaf ... ok
+test inside_state_matches_python_for_loop_then_dotdot_then_symlink ... ok
+test inside_state_matches_python_for_nonexistent_leaf ... ok
+test inside_state_matches_python_for_self_symlink_loop ... ok
+test inside_state_matches_python_for_state_dir_itself ... ok
+test inside_state_matches_python_for_symlink_to_state ... ok
+test list_secrets_non_integer_version_key_is_state_corrupt_not_silently_dropped ... ok
+test list_secrets_public_non_pair_string_is_state_corrupt_in_both_languages ... ok
+test put_secret_missing_versions_field_is_state_corrupt_matching_python ... ok
+test put_secret_existing_entry_missing_project_field_is_state_corrupt_matching_python ... ok
+test put_secret_retire_step_fails_closed_for_a_version_key_active_version_disagrees_with ... ok
+test python_initialized_state_opens_in_rust_and_reads_the_same_secret ... ok
+test put_secret_next_version_accounts_for_non_canonical_version_keys ... ok
+test recover_of_a_python_state_names_files_like_python ... ok
+test restore_non_ascii_manifest_sha256_raises_the_python_typeerror ... ok
+test restore_reapply_revocations_connections_doc_corruption_matches_python_with_pending_revocation ... ok
+test restore_reapply_revocations_connections_doc_corruption_matches_python_without_pending_revocation ... ok
+test restore_rejects_overflowing_numeric_literal_in_manifest_python_parses_to_inf ... ok
+test restore_rejects_vault_doc_with_non_dict_dek_in_both_languages ... ok
+test rust_initialized_state_has_the_python_layout_and_reads_the_same_secret ... ok
+test secret_for_trusted_use_carries_wrong_type_status_into_notfound_detail_matching_python ... ok
+test versions_key_int_padding_matches_pythons_int_not_str_isspace ... ok
+test two_contexts_from_separate_configs_never_share_temp_dirs_unlike_pythons_shared_config ... ok
+
+test result: ok. 32 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 26.34s
+
+VERIFY_STEP_END=test:vault_context_oracle exit=0
+VERIFY_STEP_BEGIN=test:vault_public_parity
+
+running 1 test
+test public_metadata_falsy_is_empty_and_malformed_fails_closed_without_mutating_state ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.51s
+
+VERIFY_STEP_END=test:vault_public_parity exit=0
+VERIFY_STEP_BEGIN=test:whole_secret_tombstone
+
+running 9 tests
+test corrupted_deletion_ledger_fails_closed_before_authentication ... ok
+test backup_from_before_sharing_cannot_reclassify_deleted_identity_as_private ... ok
+test deletion_survives_share_compacted_prefix_late_put_and_fact_log_loss ... ok
+test deleted_private_identity_is_transferred_when_environment_is_shared ... ok
+test missing_compatibility_metadata_cannot_downgrade_admitted_deletions ... ok
+test private_delete_blocks_all_versions_reuse_and_stale_backup_across_restart ... ok
+test restore_before_remote_delete_preserves_known_shared_ownership ... ok
+test shared_tombstone_does_not_damage_a_colliding_unmarked_local_identity ... ok
+test unmarked_local_collision_in_same_project_is_preserved ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.21s
+
+VERIFY_STEP_END=test:whole_secret_tombstone exit=0
+VERIFY_STEP_BEGIN=signer-probes
+
+running 4 tests
+test signer::tests::idle_cpu_with_one_and_nine_live_bindings ... ok
+test signer::tests::per_binding_fd_cost_matches_python_ratio_of_one ... ok
+test signer::tests::per_client_fd_cost_matches_python_ratio_of_one ... ok
+test signer::tests::rlimit_probe_served_clients_and_accept_loop_survival ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 716 filtered out; finished in 18.49s
+
+VERIFY_STEP_END=signer-probes exit=0
+VERIFY_STEP_BEGIN=doc-tests
+
+running 48 tests
+test src/team/checkpoint/admission.rs - team::checkpoint::admission::RetainedAuthorityCandidate (line 377) - compile fail ... ok
+test src/team/checkpoint/admission.rs - team::checkpoint::admission::RetainedAuthorityCandidate (line 373) - compile fail ... ok
+test src/team/checkpoint/mod.rs - team::checkpoint (line 13) - compile fail ... ok
+test src/team/checkpoint/manifest.rs - team::checkpoint::manifest::ManifestAttestation (line 191) - compile fail ... ok
+test src/team/checkpoint/mod.rs - team::checkpoint (line 21) - compile fail ... ok
+test src/team/checkpoint/mod.rs - team::checkpoint (line 17) - compile fail ... ok
+test src/team/checkpoint/mod.rs - team::checkpoint (line 29) - compile fail ... ok
+test src/team/checkpoint/mod.rs - team::checkpoint (line 33) - compile fail ... ok
+test src/team/checkpoint/mod.rs - team::checkpoint (line 25) - compile fail ... ok
+test src/team/checkpoint/mod.rs - team::checkpoint (line 37) - compile fail ... ok
+test src/team/checkpoint/mod.rs - team::checkpoint (line 41) - compile fail ... ok
+test src/team/checkpoint/mod.rs - team::checkpoint (line 45) - compile fail ... ok
+test src/team/checkpoint/mod.rs - team::checkpoint (line 49) - compile fail ... ok
+test src/team/checkpoint/mod.rs - team::checkpoint (line 53) - compile fail ... ok
+test src/team/checkpoint/payload.rs - team::checkpoint::payload::CheckedChunk (line 21) - compile fail ... ok
+test src/team/checkpoint/payload.rs - team::checkpoint::payload::IntegrityCheckedPayload (line 55) - compile fail ... ok
+test src/team/checkpoint/provenance.rs - team::checkpoint::provenance::CandidateProvenanceV1 (line 8) - compile fail ... ok
+test src/team/checkpoint/semantics.rs - team::checkpoint::semantics::CompleteCutSemanticCandidate (line 34) - compile fail ... ok
+test src/team/checkpoint/semantics.rs - team::checkpoint::semantics::CompleteCutSemanticCandidate (line 38) - compile fail ... ok
+test src/team/checkpoint/semantics.rs - team::checkpoint::semantics::CompleteCutSemanticCandidate (line 42) - compile fail ... ok
+test src/team/checkpoint/semantics.rs - team::checkpoint::semantics::CompleteCutSemanticCandidate (line 46) - compile fail ... ok
+test src/team/checkpoint/semantics.rs - team::checkpoint::semantics::CompleteCutSemanticCandidate (line 50) - compile fail ... ok
+test src/team/checkpoint/semantics.rs - team::checkpoint::semantics::CompleteCutSemanticCandidate (line 54) - compile fail ... ok
+test src/team/checkpoint/semantics.rs - team::checkpoint::semantics::CompleteCutSemanticCandidate (line 58) - compile fail ... ok
+test src/team/checkpoint/semantics.rs - team::checkpoint::semantics::CompleteCutSemanticCandidate (line 62) - compile fail ... ok
+test src/team/checkpoint/semantics.rs - team::checkpoint::semantics::verify_complete_cut_semantics (line 149) - compile fail ... ok
+test src/team/checkpoint/semantics.rs - team::checkpoint::semantics::verify_complete_cut_semantics (line 153) - compile fail ... ok
+test src/team/checkpoint/semantics/required_generations.rs - team::checkpoint::semantics::required_generations::RequiredGenerationCandidate (line 27) - compile fail ... ok
+test src/team/checkpoint/semantics/required_generations.rs - team::checkpoint::semantics::required_generations::RequiredGenerationCandidate (line 31) - compile fail ... ok
+test src/team/checkpoint/semantics/required_generations.rs - team::checkpoint::semantics::required_generations::RequiredGenerationCandidate (line 35) - compile fail ... ok
+test src/team/checkpoint/semantics/required_generations.rs - team::checkpoint::semantics::required_generations::RequiredGenerationCandidate (line 39) - compile fail ... ok
+test src/team/checkpoint/semantics/required_generations.rs - team::checkpoint::semantics::required_generations::RequiredGenerationCandidate (line 43) - compile fail ... ok
+test src/team/checkpoint/semantics/required_generations.rs - team::checkpoint::semantics::required_generations::RequiredGenerationCandidate (line 47) - compile fail ... ok
+test src/team/checkpoint/semantics/required_generations.rs - team::checkpoint::semantics::required_generations::RequiredGenerationCandidate (line 51) - compile fail ... ok
+test src/team/checkpoint/semantics/required_generations.rs - team::checkpoint::semantics::required_generations::RequiredGenerationCandidate (line 55) - compile fail ... ok
+test src/team/checkpoint/semantics/required_generations.rs - team::checkpoint::semantics::required_generations::RequiredGenerationCandidate (line 59) - compile fail ... ok
+test src/team/checkpoint/semantics/required_generations.rs - team::checkpoint::semantics::required_generations::RequiredGenerationCandidate (line 63) - compile fail ... ok
+test src/team/checkpoint/semantics/required_generations.rs - team::checkpoint::semantics::required_generations::RequiredGenerationCandidate (line 67) - compile fail ... ok
+test src/team/checkpoint/semantics/required_generations.rs - team::checkpoint::semantics::required_generations::RequiredGenerationCandidate (line 71) - compile fail ... ok
+test src/team/checkpoint/semantics/required_generations.rs - team::checkpoint::semantics::required_generations::RequiredGenerationCandidate (line 75) - compile fail ... ok
+test src/team/checkpoint/semantics/required_generations.rs - team::checkpoint::semantics::required_generations::RequiredGenerationCandidate (line 79) - compile fail ... ok
+test src/team/checkpoint/semantics/required_generations.rs - team::checkpoint::semantics::required_generations::RequiredGenerationCandidate (line 83) - compile fail ... ok
+test src/team/checkpoint/semantics/required_generations.rs - team::checkpoint::semantics::required_generations::verify_required_generations (line 163) - compile fail ... ok
+test src/team/checkpoint/semantics/required_generations.rs - team::checkpoint::semantics::required_generations::verify_required_generations (line 167) - compile fail ... ok
+test src/team/checkpoint/semantics/required_generations.rs - team::checkpoint::semantics::required_generations::verify_required_generations (line 171) - compile fail ... ok
+test src/team/checkpoint/semantics/required_generations.rs - team::checkpoint::semantics::required_generations::verify_required_generations (line 179) - compile fail ... ok
+test src/team/checkpoint/semantics/required_generations.rs - team::checkpoint::semantics::required_generations::verify_required_generations (line 187) - compile fail ... ok
+test src/team/checkpoint/semantics/required_generations.rs - team::checkpoint::semantics::required_generations::verify_required_generations (line 197) - compile fail ... ok
+
+test result: ok. 48 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.84s
+
+VERIFY_STEP_END=doc-tests exit=0
+VERIFY_FAILED=

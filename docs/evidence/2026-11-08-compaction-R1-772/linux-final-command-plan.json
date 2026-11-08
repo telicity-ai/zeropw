@@ -1,0 +1,390 @@
+{
+  "schema": "RootR1FinalContinuation-linux-v1",
+  "source_head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+  "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+  "source_manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+  "driver_sha256": "001c03838061c192669661c68e5e15d7342b56085f5efc807fc08f098968bcfb",
+  "expected_source_files": 1519,
+  "expected_integration_targets": 107,
+  "expected_signer_tests": [
+    "signer::tests::idle_cpu_with_one_and_nine_live_bindings",
+    "signer::tests::per_client_fd_cost_matches_python_ratio_of_one",
+    "signer::tests::per_binding_fd_cost_matches_python_ratio_of_one",
+    "signer::tests::rlimit_probe_served_clients_and_accept_loop_survival"
+  ],
+  "phases": [
+    {
+      "phase": "01-features-before",
+      "kind": "features",
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "tree",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "-e",
+        "features"
+      ],
+      "timeout_seconds": 180
+    },
+    {
+      "phase": "02-scoped-exact-debug",
+      "kind": "exact",
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "team::sync::compaction_heads_tests::compaction_heads_deferred_prefilter_stale_forward_receipt_uses_locked_sequence",
+        "--",
+        "--exact"
+      ],
+      "timeout_seconds": 1800
+    },
+    {
+      "phase": "03-scoped-exact-debug",
+      "kind": "exact",
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "team::sync::compaction_heads_tests::compaction_heads_authorized_fact_cache_read_pause_keeps_envs_available",
+        "--",
+        "--exact"
+      ],
+      "timeout_seconds": 1800
+    },
+    {
+      "phase": "04-scoped-exact-release",
+      "kind": "exact",
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--lib",
+        "team::sync::compaction_heads_tests::compaction_heads_deferred_prefilter_stale_forward_receipt_uses_locked_sequence",
+        "--",
+        "--exact"
+      ],
+      "timeout_seconds": 1800
+    },
+    {
+      "phase": "05-scoped-exact-release",
+      "kind": "exact",
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--lib",
+        "team::sync::compaction_heads_tests::compaction_heads_authorized_fact_cache_read_pause_keeps_envs_available",
+        "--",
+        "--exact"
+      ],
+      "timeout_seconds": 1800
+    },
+    {
+      "phase": "06-full-matrix",
+      "kind": "full",
+      "argv": [
+        "/bin/bash",
+        "rust/verify.sh"
+      ],
+      "timeout_seconds": 7200
+    },
+    {
+      "phase": "07-non-test-release-build",
+      "kind": "build",
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "build",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--lib"
+      ],
+      "timeout_seconds": 1800
+    },
+    {
+      "phase": "08-non-test-gate-absence",
+      "kind": "artifact-check",
+      "argv": [
+        "/usr/bin/python3",
+        "-I",
+        "/opt/r1-final-control/non_test_symbols.py"
+      ],
+      "timeout_seconds": 180
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_payload",
+        "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+        "--",
+        "--exact"
+      ],
+      "kind": "exact",
+      "phase": "09-stack-exact-debug",
+      "timeout_seconds": 1800
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_admission",
+        "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+        "--",
+        "--exact"
+      ],
+      "kind": "exact",
+      "phase": "10-stack-exact-debug",
+      "timeout_seconds": 1800
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_semantic_cut",
+        "complete_candidate_depth64_success_late_error_repeat_drop_and_65_refusal_on_256_kib",
+        "--",
+        "--exact"
+      ],
+      "kind": "exact",
+      "phase": "11-stack-exact-debug",
+      "timeout_seconds": 1800
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_semantic_cut",
+        "complete_fold_depth64_on_actual_256_kib_stack",
+        "--",
+        "--exact"
+      ],
+      "kind": "exact",
+      "phase": "12-stack-exact-debug",
+      "timeout_seconds": 1800
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_generation_depth64_success_late_error_repeat_drop_on_actual_256_kib",
+        "--",
+        "--exact"
+      ],
+      "kind": "exact",
+      "phase": "13-stack-exact-debug",
+      "timeout_seconds": 1800
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_generation_depth65_refuses_before_crypto_on_actual_256_kib",
+        "--",
+        "--exact"
+      ],
+      "kind": "exact",
+      "phase": "14-stack-exact-debug",
+      "timeout_seconds": 1800
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_wrap_depth64_success_error_repeat_drop_on_actual_256_kib",
+        "--",
+        "--exact"
+      ],
+      "kind": "exact",
+      "phase": "15-stack-exact-debug",
+      "timeout_seconds": 1800
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_payload",
+        "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+        "--",
+        "--exact"
+      ],
+      "kind": "exact",
+      "phase": "16-stack-exact-release",
+      "timeout_seconds": 1800
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_admission",
+        "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+        "--",
+        "--exact"
+      ],
+      "kind": "exact",
+      "phase": "17-stack-exact-release",
+      "timeout_seconds": 1800
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_semantic_cut",
+        "complete_candidate_depth64_success_late_error_repeat_drop_and_65_refusal_on_256_kib",
+        "--",
+        "--exact"
+      ],
+      "kind": "exact",
+      "phase": "18-stack-exact-release",
+      "timeout_seconds": 1800
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_semantic_cut",
+        "complete_fold_depth64_on_actual_256_kib_stack",
+        "--",
+        "--exact"
+      ],
+      "kind": "exact",
+      "phase": "19-stack-exact-release",
+      "timeout_seconds": 1800
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_generation_depth64_success_late_error_repeat_drop_on_actual_256_kib",
+        "--",
+        "--exact"
+      ],
+      "kind": "exact",
+      "phase": "20-stack-exact-release",
+      "timeout_seconds": 1800
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_generation_depth65_refuses_before_crypto_on_actual_256_kib",
+        "--",
+        "--exact"
+      ],
+      "kind": "exact",
+      "phase": "21-stack-exact-release",
+      "timeout_seconds": 1800
+    },
+    {
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_checkpoint_required_generations",
+        "required_wrap_depth64_success_error_repeat_drop_on_actual_256_kib",
+        "--",
+        "--exact"
+      ],
+      "kind": "exact",
+      "phase": "22-stack-exact-release",
+      "timeout_seconds": 1800
+    },
+    {
+      "phase": "23-features-after",
+      "kind": "features",
+      "argv": [
+        "/opt/rg-rust-1.99.0/bin/cargo",
+        "tree",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "-e",
+        "features"
+      ],
+      "timeout_seconds": 180
+    }
+  ],
+  "dependency": "Same exact source diagnostic13 must all pass before this continuation starts; no source edits"
+}

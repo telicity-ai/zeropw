@@ -1,0 +1,54 @@
+{
+  "rust/src/team/compaction_heads.rs": {
+    "after": {
+      "blob": "c51693518a49c260e24b90787c71176f2fd293fe",
+      "bytes": 30361,
+      "git_mode": "100644",
+      "mode": 420,
+      "sha256": "706744e75c6f1703a2e10d58a4fa9f199bd1e9d81335cdff971503f90d6e5b9c"
+    },
+    "before": null
+  },
+  "rust/src/team/mod.rs": {
+    "after": {
+      "blob": "b6f3448b02f2f80f96aa67369708958573ba581e",
+      "bytes": 7905,
+      "git_mode": "100644",
+      "mode": 420,
+      "sha256": "3cb4f6fc79e18b76465731841f31b3407256308492c4f97208b5b4bdaf8c0723"
+    },
+    "before": {
+      "blob": "6b2d0fa0dae402c0ec836d1ce21dfa972eccf114",
+      "bytes": 7883,
+      "git_mode": "100644",
+      "mode": 420,
+      "sha256": "1902d781a57a11e63bd75e84422782312cc11d4bbe4e469c77980f19f23292c0"
+    }
+  },
+  "rust/src/team/sync.rs": {
+    "after": {
+      "blob": "cc06f2308aaa40f151f81ce68741f46d0f2bc7e0",
+      "bytes": 389837,
+      "git_mode": "100644",
+      "mode": 420,
+      "sha256": "444bad0d54e74ffde9c4a8aca42374fb511fa7d52d5341d13bb0ad64069bcbb8"
+    },
+    "before": {
+      "blob": "b652cc99e8cd9d8440ac0875f880344905a07e65",
+      "bytes": 365712,
+      "git_mode": "100644",
+      "mode": 420,
+      "sha256": "64582265ed3df0555968a5811b1c49c13e8eefbb1e96454e512782e37061ec4a"
+    }
+  },
+  "rust/tests/team_compaction_heads.rs": {
+    "after": {
+      "blob": "adef2f86af1b1264ee4bdbe4cbbbbbdda8466a7b",
+      "bytes": 23755,
+      "git_mode": "100644",
+      "mode": 420,
+      "sha256": "c72edd798d0e89ba7130532f8014311383b3e4efaae53619a86498ce30108795"
+    },
+    "before": null
+  }
+}

@@ -1,0 +1,110 @@
+{
+  "after": {
+    "head": "8a8073b3d876bb3f83a628a7fdbd2902e8b40851",
+    "index_sha256": "8e559c96ae396eb2ecc5c1b83a5e58bf7a0719a9dc2dc6818fe2dee6d89f19ff",
+    "status": ""
+  },
+  "artifact_checks": {
+    "CANONICAL-FREEZE.json": {
+      "bytes": 1905,
+      "sha256": "397e39d959596da808a3d653b958eb54cacbbeb6642046214e327dd4345bc7d0"
+    },
+    "canonical-source-manifest.json": {
+      "bytes": 394159,
+      "sha256": "c453a1c337c0870a96c1ca51e21785b313a317d13c892225bb8e97feefcfd4cd"
+    },
+    "canonical-source.tar": {
+      "bytes": 24954880,
+      "sha256": "5379b134fc5e2bd50aa14d802b7990d9962366144efe2c76ab41f80c6d6b3b38"
+    },
+    "canonical.patch": {
+      "bytes": 33028,
+      "sha256": "fb7d333caa8493c491cc8f0e3cc29aeaff81ac501eb27e1fdc5b2b46128927d8"
+    },
+    "implementation-unformatted.patch": {
+      "bytes": 28758,
+      "sha256": "4bc3d86d1c1c53f75cbcc32f9e034b1bdf33db06567e29db7b62cbdd7f580965"
+    },
+    "preservation.json": {
+      "bytes": 802,
+      "sha256": "856c829a52fde0d998fb06f3dc32aa7ec62ce9faa886e4255ca795d387be410f"
+    }
+  },
+  "as_of_utc": "2026-11-08T09:49:47.193199+00:00",
+  "astra_scope": {
+    "decision.md": {
+      "bytes": 7864,
+      "sha256": "26aa572e6c5df8826e065cbd79ed6bb001d0dad015303794cd70854bf6402562"
+    },
+    "implementation-task.md": {
+      "bytes": 15742,
+      "sha256": "9e4b377aee50610f83fd3c3871b11d527700f858490720ca451fd8b9d7f88ee2"
+    }
+  },
+  "base": "5f4d045f289c53c41178f3f062f6c6f74fb561e2",
+  "before": {
+    "head": "8a8073b3d876bb3f83a628a7fdbd2902e8b40851",
+    "index_sha256": "8e559c96ae396eb2ecc5c1b83a5e58bf7a0719a9dc2dc6818fe2dee6d89f19ff",
+    "status": ""
+  },
+  "changed_paths": [
+    "rust/src/team/commit.rs",
+    "rust/src/team/compaction_heads.rs",
+    "rust/src/team/sync.rs"
+  ],
+  "checks": {
+    "all_changed_lines": "INSERTIONS_ONLY",
+    "all_tracked_worktree_bytes_modes_blobs": "MATCH",
+    "archive_1464_regular_members_bytes_modes": "EXACT",
+    "canonical_patch_vs_git_diff": "EXACT",
+    "cfg_test_gates": 2,
+    "cfg_test_support_only": true,
+    "commit_rs_minus_one_gate": "BYTE_EXACT_BASE",
+    "compaction_heads_rs_minus_one_gate_two_variants_one_field_two_wrappers": "BYTE_EXACT_BASE",
+    "freeze_bindings": "MATCH",
+    "git_base_and_HEAD_same_1464_path_set": true,
+    "new_test_functions": [
+      "compaction_heads_deferred_prefilter_stale_forward_receipt_uses_locked_sequence",
+      "compaction_heads_authorized_fact_cache_read_pause_keeps_envs_available"
+    ],
+    "old_test_and_helper_bodies": "BYTE_EXACT_WITHIN_ORIGINAL_FILE_REGIONS",
+    "protected_1461_paths_bytes_modes_blobs": "EXACT",
+    "sync_rs_original_prefix_and_final_brace": "BYTE_EXACT_BASE",
+    "thread_channels_and_cleanup": "STATIC_INSPECTED_WITH_LIMITS"
+  },
+  "collector": {
+    "actual_model": "gpt-6.1-sol",
+    "effective_service_tier": "not independently exposed",
+    "no_subagents": true,
+    "reasoning_effort": "ultra",
+    "role": "read-only DATA collector"
+  },
+  "coverage": [
+    "Both full Astra documents",
+    "All changed-file diffs",
+    "All tracked-file bytes/modes/blob hashes against HEAD and canonical manifest",
+    "All canonical archive member bytes/modes",
+    "All freeze-bound artifact bytes/hashes",
+    "Literal removal comparison restoring original commit/compaction files and sync prefix",
+    "Narrow static channel lifetime/oracle/scope inspection"
+  ],
+  "head": "8a8073b3d876bb3f83a628a7fdbd2902e8b40851",
+  "limitations": [
+    "No Rust/parser/compiler/product/helper/dependency/formatter/test execution",
+    "No live process/VM/SSH/runtime/credentials inspected",
+    "No semantic adversarial-review verdict",
+    "cfg(test) artifact absence requires later non-test compiled-artifact evidence; not inferred as run",
+    "No full review of every protected source file; exact preservation is not semantic review",
+    "Runtime assertions/counts/latency/physical two-Mac/Oracle/acceptance not validated",
+    "Actual Opus re-review and Astra acceptance remain pending; findings retain original severities and OPEN status"
+  ],
+  "outcome": "DATA_BINDINGS_AND_PRESERVATION_MATCH; NO_REVIEW_OR_ACCEPTANCE_VERDICT",
+  "protected_exact_files": 1461,
+  "schema": "independent-source-DATA-collection-v1",
+  "source_files": 1464,
+  "trees": {
+    "desktop": "2413844c89265a3e239be2372d34b1e6e1b2d4bb",
+    "full": "a43f60ea5438355879c90f9bf4bb6c63cd0e6679",
+    "rust": "d63be7c07896e271bb48610463f4a6e027581f59"
+  }
+}

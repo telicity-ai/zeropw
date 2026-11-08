@@ -1971,7 +1971,7 @@ impl<'a> CommitStore<'a> {
     /// non-object snapshot document or `vector` has no `.get`/`.items`: the
     /// `AttributeError` CPython lets escape is `state_corrupt` here
     /// (PORTING.md §3.5), at the same point, aborting the same caller.
-    fn snapshot_floor(&self) -> Result<BTreeMap<String, PyInt>> {
+    pub(super) fn snapshot_floor(&self) -> Result<BTreeMap<String, PyInt>> {
         let directory = self.dir("snapshots");
         if !directory.is_dir() {
             return Ok(BTreeMap::new());
@@ -2089,6 +2089,82 @@ impl<'a> CommitStore<'a> {
         sort_total_order(commits)
     }
 
+    /// Receipt's public records, walking actual retained filenames only.
+    /// Canonical get() deliberately ignores alternate Unicode/zero-padded paths.
+    pub(super) fn retained_device_registry(
+        &self,
+    ) -> Result<std::collections::HashMap<String, DeviceRecord>> {
+        if !self.state.locked_by_current_thread() {
+            return Err(Error::state("team_compaction_lock_required"));
+        }
+        let commits_dir = self.dir("commits");
+        let mut retained = Vec::new();
+        if commits_dir.is_dir() {
+            let mut directories: Vec<PathBuf> = std::fs::read_dir(&commits_dir)
+                .map_err(|_| Error::state("state_corrupt"))?
+                .filter_map(|entry| entry.ok())
+                .map(|entry| entry.path())
+                .filter(|path| path.is_dir())
+                .collect();
+            directories.sort();
+            for directory in directories {
+                let author = directory
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("");
+                let mut seqs = digit_stems(&directory)?;
+                seqs.sort();
+                seqs.dedup();
+                for seq in seqs.into_iter().filter(|seq| *seq > 0) {
+                    if let Some(commit) = self.get(author, seq)? {
+                        retained.push(commit);
+                    }
+                }
+            }
+        }
+        Ok(device_registry(&sort_total_order(retained)?))
+    }
+
+    /// Exact public announcements in actual retained files, never sequence ranges.
+    pub(super) fn retained_matching_device_records(
+        &self,
+        expected: &std::collections::HashMap<String, DeviceRecord>,
+    ) -> Result<std::collections::HashSet<String>> {
+        if !self.state.locked_by_current_thread() {
+            return Err(Error::state("team_compaction_lock_required"));
+        }
+        let commits_dir = self.dir("commits");
+        let mut retained = Vec::new();
+        if commits_dir.is_dir() {
+            let mut directories: Vec<PathBuf> = std::fs::read_dir(&commits_dir)
+                .map_err(|_| Error::state("state_corrupt"))?
+                .filter_map(|entry| entry.ok())
+                .map(|entry| entry.path())
+                .filter(|path| path.is_dir())
+                .collect();
+            directories.sort();
+            for directory in directories {
+                let author = directory
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("");
+                let mut seqs = digit_stems(&directory)?;
+                seqs.sort();
+                seqs.dedup();
+                for seq in seqs.into_iter().filter(|seq| *seq > 0) {
+                    if let Some(commit) = self.get(author, seq)? {
+                        retained.push(commit);
+                    }
+                }
+            }
+        }
+        // Complete the same parsing/HLC validation even after finding a match.
+        Ok(matching_device_records(
+            &sort_total_order(retained)?,
+            expected,
+        ))
+    }
+
     // -------------------------------------------------------- reject / defer
     pub fn reject(&self, commit: &Commit, reason: &str) -> Result<()> {
         let hash = commit.hash()?;
@@ -2143,17 +2219,9 @@ impl<'a> CommitStore<'a> {
         Ok(commits)
     }
 
-    /// Whether `commit`'s HLC is not above its author's previous sequence,
-    /// when this store holds that one (section 5.4's
-    /// `team_hlc_not_monotone`).
-    fn hlc_not_above_previous(&self, commit: &Commit) -> Result<bool> {
-        if commit.author_seq <= 1 {
-            return Ok(false);
-        }
-        Ok(match self.get(&commit.author, &commit.author_seq - 1)? {
-            Some(previous) => Hlc::parse(&commit.hlc)? <= Hlc::parse(&previous.hlc)?,
-            None => false,
-        })
+    /// Check both retained and cached predecessor clocks under the state lock.
+    fn hlc_not_above_previous(&self, commit: &Commit, live: Option<&[Commit]>) -> Result<bool> {
+        super::compaction_heads::cached_hlc_not_above_previous(self, commit, live)
     }
 
     /// Move every deferred commit whose wall clock is no longer too far
@@ -2196,15 +2264,25 @@ impl<'a> CommitStore<'a> {
             if commit.author_seq > &last + 1 {
                 continue; // waits for the sequence before it
             }
+            #[cfg(test)]
+            super::compaction_heads::testing::hit_scoped(
+                super::compaction_heads::testing::Boundary::DeferredPrefilterPassed,
+                self.state,
+                &self.env_id,
+            )?;
             let _lock = self.state.lock()?;
+            let fresh_last = self.last_seq(&commit.author)?;
+            if commit.author_seq > &fresh_last + 1 {
+                continue;
+            }
             let target = self.state.path.join(self.deferred_path(&commit));
-            if commit.author_seq <= self.last_seq(&commit.author)? {
+            if commit.author_seq <= fresh_last {
                 if let Some(stored) = self.get(&commit.author, &commit.author_seq)?
                     && stored.hash()? != commit.hash()?
                 {
                     reject_commit(self, &commit, "team_author_equivocation", audit)?;
                 }
-            } else if self.hlc_not_above_previous(&commit)? {
+            } else if self.hlc_not_above_previous(&commit, None)? {
                 reject_commit(self, &commit, "team_hlc_not_monotone", audit)?;
             } else if self.append(&commit).is_err() {
                 continue; // still out of sequence; leave it deferred
@@ -2259,8 +2337,13 @@ pub(super) fn digit_stems(directory: &std::path::Path) -> Result<Vec<PyInt>> {
 
 // ------------------------------------------------------------- receipt pipeline
 /// Every device record announced so far, keyed by fingerprint (for
-/// signature checks only). Port of `_device_registry`.
-fn device_registry(commits: &[Commit]) -> std::collections::HashMap<String, DeviceRecord> {
+/// signature checks only, never membership or wrap authority). First verified
+/// full normalized record wins in the supplied total order, then original op
+/// order; fold-skipped and removed authors still supply signature material.
+/// Port of `_device_registry`.
+pub(super) fn device_registry(
+    commits: &[Commit],
+) -> std::collections::HashMap<String, DeviceRecord> {
     let mut registry = std::collections::HashMap::new();
     for commit in commits {
         for op in &commit.ops {
@@ -2288,6 +2371,40 @@ fn device_registry(commits: &[Commit]) -> std::collections::HashMap<String, Devi
         }
     }
     registry
+}
+
+/// Equal verified full public records, including nonfirst announcements.
+/// This is signature evidence only; it grants no membership or wrap authority.
+pub(super) fn matching_device_records(
+    commits: &[Commit],
+    expected: &std::collections::HashMap<String, DeviceRecord>,
+) -> std::collections::HashSet<String> {
+    let mut matching = std::collections::HashSet::new();
+    for commit in commits {
+        for op in &commit.ops {
+            let Some(object) = op.as_object() else {
+                continue;
+            };
+            let record_dict = match object.get("op").and_then(Value::as_str) {
+                Some("env.init") => object.get("owner_device"),
+                Some("member.add") => object.get("device"),
+                _ => None,
+            };
+            let Some(record_dict) = record_dict.filter(|value| value.is_object()) else {
+                continue;
+            };
+            let Ok(record) = DeviceRecord::from_dict(record_dict) else {
+                continue;
+            };
+            if record.verify() {
+                let fingerprint = record.fingerprint();
+                if expected.get(&fingerprint) == Some(&record) {
+                    matching.insert(fingerprint);
+                }
+            }
+        }
+    }
+    matching
 }
 
 /// `zeropw.team.commit.receive_commit`: validate and store one incoming
@@ -2372,6 +2489,7 @@ fn receive(
     audit: Option<&Audit>,
     quarantine_early: bool,
 ) -> Result<&'static str> {
+    let _lock = store.state.lock()?;
     let reject = |reason: &str| -> Result<&'static str> {
         reject_commit(store, commit, reason, audit)?;
         Ok("rejected")
@@ -2445,7 +2563,7 @@ fn receive(
         return reject("team_author_equivocation");
     }
 
-    if store.hlc_not_above_previous(commit)? {
+    if store.hlc_not_above_previous(commit, Some(&existing))? {
         return reject("team_hlc_not_monotone");
     }
 
@@ -2462,6 +2580,452 @@ fn receive(
         return reject(&exc.reason);
     }
     Ok("accepted")
+}
+
+#[cfg(test)]
+mod compaction_heads_tests {
+    use super::*;
+    use crate::secret::SecretBytes;
+    use tempfile::TempDir;
+
+    fn key(seed: u8, agreement: u8) -> DeviceKey {
+        DeviceKey {
+            sign_seed: SecretBytes::new(vec![seed; 32]),
+            agree_private: SecretBytes::new(vec![agreement; 32]),
+        }
+    }
+
+    fn announcement(
+        author: &DeviceKey,
+        env: &str,
+        seq: PyInt,
+        hlc: &str,
+        records: Vec<Value>,
+    ) -> Commit {
+        sign_commit(
+            author,
+            env,
+            seq,
+            hlc,
+            &BTreeMap::new(),
+            records
+                .into_iter()
+                .map(|device| {
+                    json!({"op":"member.add","device":device,
+                "name":"synthetic-record","role":"user","wraps":{}})
+                })
+                .collect(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn compaction_heads_registry_literal_numeric_author_stable_sequence_and_op_order() {
+        let tmp = TempDir::new().unwrap();
+        let state = StateDir::new(tmp.path().join("state"));
+        state.create().unwrap();
+        let _lock = state.lock().unwrap();
+        let mut authors = [key(11, 12), key(13, 14)];
+        authors.sort_by_key(|device| device.fingerprint().unwrap());
+        let env = format!(
+            "{}-0123456789abcdef0123456789abcdef",
+            authors[0].fingerprint().unwrap()
+        );
+        let first = key(15, 16);
+        let other = key(15, 17);
+        let fp = first.fingerprint().unwrap();
+        assert_eq!(other.fingerprint().unwrap(), fp);
+        let mut raw = first.record().unwrap().to_dict();
+        for field in ["sign_pub", "agree_pub", "sig"] {
+            raw[field] = json!([raw[field].clone()]);
+        }
+        raw["extra"] = json!(["public-ignored-field"]);
+        let a1 = announcement(
+            &authors[0],
+            &env,
+            1.into(),
+            "1000-0000",
+            vec![raw, other.record().unwrap().to_dict()],
+        );
+        let a2 = announcement(
+            &authors[0],
+            &env,
+            2.into(),
+            "1000-0000",
+            vec![other.record().unwrap().to_dict()],
+        );
+        let b1 = announcement(
+            &authors[1],
+            &env,
+            1.into(),
+            "1000-0000",
+            vec![other.record().unwrap().to_dict()],
+        );
+        let store = CommitStore::new(&state, &env);
+        for entry in [&b1, &a1, &a2] {
+            store.append(entry).unwrap();
+        }
+        // Literal first record: numeric HLC tie -> author -> stable ascending
+        // sequence traversal -> original op order. Not a fold/member rule.
+        assert_eq!(
+            store.retained_device_registry().unwrap()[&fp],
+            first.record().unwrap()
+        );
+        let earlier = announcement(
+            &authors[1],
+            &env,
+            1.into(),
+            "999-9999",
+            vec![other.record().unwrap().to_dict()],
+        );
+        state
+            .write_json(
+                &store.commit_path(&earlier.author, &1.into()),
+                &earlier.to_dict(),
+            )
+            .unwrap();
+        assert_eq!(
+            store.retained_device_registry().unwrap()[&fp],
+            other.record().unwrap()
+        );
+        // Finite-history parity is secondary to the literal expectations.
+        assert_eq!(
+            store.retained_device_registry().unwrap(),
+            device_registry(&store.all_commits().unwrap())
+        );
+    }
+
+    #[test]
+    fn compaction_heads_direct_receipt_holds_entry_lock_through_rejection_audit() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let tmp = TempDir::new().unwrap();
+        let state = Arc::new(StateDir::new(tmp.path().join("state")));
+        state.create().unwrap();
+        let author = key(27, 28);
+        let env = format!(
+            "{}-0123456789abcdef0123456789abcdef",
+            author.fingerprint().unwrap()
+        );
+        let mut incoming = announcement(
+            &author,
+            &env,
+            1.into(),
+            "1000-0000",
+            vec![author.record().unwrap().to_dict()],
+        );
+        incoming.format = "synthetic-unknown-format".into();
+        let audit = Audit::new(&state, crate::clock::system());
+        let held = Arc::new(AtomicBool::new(false));
+        let listener_state = state.clone();
+        let listener_held = held.clone();
+        audit.subscribe(move |entry| {
+            if entry.get("event").and_then(Value::as_str) == Some("team_commit_rejected") {
+                listener_held.store(listener_state.locked_by_current_thread(), Ordering::SeqCst);
+            }
+        });
+        assert_eq!(
+            receive_commit(
+                &CommitStore::new(&state, &env),
+                &incoming,
+                1000,
+                Some(&audit)
+            )
+            .unwrap(),
+            "rejected"
+        );
+        assert!(held.load(Ordering::SeqCst));
+        assert!(!state.locked_by_current_thread());
+    }
+
+    #[test]
+    fn compaction_heads_retained_registry_sparse_huge_and_alternate_stems_use_only_canonical_files()
+    {
+        let tmp = TempDir::new().unwrap();
+        let state = StateDir::new(tmp.path().join("state"));
+        state.create().unwrap();
+        let _lock = state.lock().unwrap();
+        let author = key(21, 22);
+        let target = key(23, 24);
+        let alternate = key(23, 25);
+        let fp = author.fingerprint().unwrap();
+        let target_fp = target.fingerprint().unwrap();
+        let env = format!("{fp}-0123456789abcdef0123456789abcdef");
+        let store = CommitStore::new(&state, &env);
+        let huge = PyInt::from_json_integer(
+            &pyjson::loads("1844674407370955161600000000000000000001").unwrap(),
+        )
+        .unwrap();
+        let original = announcement(
+            &author,
+            &env,
+            huge.clone(),
+            "1000-0000",
+            vec![target.record().unwrap().to_dict()],
+        );
+        // Synthetic sparse retained history: never call legacy all_commits on
+        // this vector, and never construct 1..huge as part of the new walker.
+        state
+            .write_json(&store.commit_path(&fp, &huge), &original.to_dict())
+            .unwrap();
+        let ignored = announcement(
+            &author,
+            &env,
+            1.into(),
+            "1-0000",
+            vec![alternate.record().unwrap().to_dict()],
+        );
+        for stem in ["01", "١", "0"] {
+            state
+                .write_json(
+                    &format!("{}/commits/{fp}/{stem}.json", store.root),
+                    &ignored.to_dict(),
+                )
+                .unwrap();
+        }
+        state
+            .write_json(&format!("{}/commits/{fp}/2.json", store.root), &Value::Null)
+            .unwrap();
+        assert_eq!(
+            store.retained_device_registry().unwrap()[&target_fp],
+            target.record().unwrap()
+        );
+        // A padded alias cannot override an existing canonical slot either.
+        state
+            .write_json(&store.commit_path(&fp, &1.into()), &original.to_dict())
+            .unwrap();
+        assert_eq!(
+            store.retained_device_registry().unwrap()[&target_fp],
+            target.record().unwrap()
+        );
+        state
+            .write_json(&format!("{}/commits/{fp}/².json", store.root), &Value::Null)
+            .unwrap();
+        assert_eq!(
+            store.retained_device_registry().unwrap_err().reason,
+            "state_corrupt"
+        );
+    }
+    #[test]
+    fn compaction_heads_r1_exact_announcements_include_nonfirst_ops() {
+        use std::collections::{HashMap, HashSet};
+        let author = key(81, 82);
+        let expected_key = key(83, 84);
+        let different = key(83, 85);
+        let unrelated = key(86, 87);
+        let fp = expected_key.fingerprint().unwrap();
+        let env = format!(
+            "{}-0123456789abcdef0123456789abcdef",
+            author.fingerprint().unwrap()
+        );
+        let equal = expected_key.record().unwrap();
+        let other = different.record().unwrap();
+        assert_eq!(different.fingerprint().unwrap(), fp);
+        assert_ne!(equal, other);
+        assert!(equal.verify() && other.verify());
+        let expected = HashMap::from([(fp.clone(), equal.clone())]);
+        let wanted = HashSet::from([fp.clone()]);
+        for records in [
+            vec![other.to_dict(), equal.to_dict()],
+            vec![equal.to_dict(), other.to_dict()],
+        ] {
+            let original = announcement(&author, &env, 1.into(), "1-0000", records.clone());
+            let before = original.canonical_json(true).unwrap();
+            assert_eq!(
+                matching_device_records(std::slice::from_ref(&original), &expected),
+                wanted
+            );
+            assert_eq!(
+                device_registry(std::slice::from_ref(&original))[&fp],
+                DeviceRecord::from_dict(&records[0]).unwrap()
+            );
+            assert_eq!(original.canonical_json(true).unwrap(), before);
+        }
+        let first = announcement(&author, &env, 1.into(), "1-0000", vec![other.to_dict()]);
+        let later = announcement(&author, &env, 2.into(), "2-0000", vec![equal.to_dict()]);
+        let ordered = vec![first, later];
+        assert_eq!(device_registry(&ordered)[&fp], other);
+        assert_eq!(matching_device_records(&ordered, &expected), wanted);
+        let mut normalized = equal.to_dict();
+        for field in ["sign_pub", "agree_pub", "sig"] {
+            normalized[field] = json!([normalized[field].clone()]);
+        }
+        normalized["ignored_extra"] = json!("public");
+        let matching_env = format!("{fp}-0123456789abcdef0123456789abcdef");
+        let wrap =
+            crate::team::envelope::wrap_dek(&[7; 32], &matching_env, "0123456789abcdef", &equal)
+                .unwrap();
+        for op in [
+            json!({"op":"env.init","owner_device":normalized,
+                "owner_name":"synthetic-record","generation_id":"0123456789abcdef","wraps":{fp.clone():wrap}}),
+            json!({"op":"member.add","device":normalized,
+                "name":"synthetic-record","role":"user","wraps":{}}),
+        ] {
+            let original = sign_commit(
+                &expected_key,
+                &matching_env,
+                1,
+                "1-0000",
+                &BTreeMap::new(),
+                vec![op],
+            )
+            .unwrap();
+            let signed = original.canonical_json(false).unwrap();
+            let hashed = original.canonical_json(true).unwrap();
+            assert_eq!(
+                matching_device_records(std::slice::from_ref(&original), &expected),
+                wanted
+            );
+            assert_eq!(device_registry(std::slice::from_ref(&original))[&fp], equal);
+            assert_eq!(original.canonical_json(false).unwrap(), signed);
+            assert_eq!(original.canonical_json(true).unwrap(), hashed);
+        }
+        let mut bad_record = equal.clone();
+        bad_record.sig[0] ^= 1;
+        assert!(!bad_record.verify());
+        let invalid_expected = HashMap::from([(fp.clone(), bad_record.clone())]);
+        let invalid = announcement(
+            &author,
+            &env,
+            1.into(),
+            "1-0000",
+            vec![bad_record.to_dict()],
+        );
+        assert_eq!(
+            matching_device_records(&[invalid], &invalid_expected),
+            HashSet::new()
+        );
+        let bad = bad_record.to_dict();
+        for record in [
+            other.to_dict(),
+            bad,
+            unrelated.record().unwrap().to_dict(),
+            json!({}),
+        ] {
+            let mut original =
+                announcement(&author, &env, 1.into(), "1-0000", vec![equal.to_dict()]);
+            // Malformed retained op DATA is tested independently of admission.
+            original.ops[0]["device"] = record;
+            assert_eq!(
+                matching_device_records(&[original], &expected),
+                HashSet::new()
+            );
+        }
+    }
+
+    #[test]
+    fn compaction_heads_r1_retained_matches_use_canonical_sparse_files() {
+        use std::collections::{HashMap, HashSet};
+        let tmp = TempDir::new().unwrap();
+        let state = StateDir::new(tmp.path().join("state"));
+        state.create().unwrap();
+        let author = key(88, 89);
+        let target = key(90, 91);
+        let different = key(90, 92);
+        let fp = author.fingerprint().unwrap();
+        let target_fp = target.fingerprint().unwrap();
+        let env = format!("{fp}-0123456789abcdef0123456789abcdef");
+        let store = CommitStore::new(&state, &env);
+        let expected = HashMap::from([(target_fp.clone(), target.record().unwrap())]);
+        assert_eq!(
+            store
+                .retained_matching_device_records(&expected)
+                .unwrap_err()
+                .reason,
+            "team_compaction_lock_required"
+        );
+        let _lock = state.lock().unwrap();
+        assert_eq!(
+            store.retained_matching_device_records(&expected).unwrap(),
+            HashSet::new()
+        );
+        let huge = PyInt::from_json_integer(
+            &pyjson::loads("1844674407370955161600000000000000000001").unwrap(),
+        )
+        .unwrap();
+        let original = announcement(
+            &author,
+            &env,
+            huge.clone(),
+            "2-0000",
+            vec![
+                different.record().unwrap().to_dict(),
+                target.record().unwrap().to_dict(),
+            ],
+        );
+        let canonical = store.commit_path(&fp, &huge);
+        let nonmatch = announcement(
+            &author,
+            &env,
+            1.into(),
+            "1-0000",
+            vec![different.record().unwrap().to_dict()],
+        );
+        state
+            .write_json(&store.commit_path(&fp, &1.into()), &nonmatch.to_dict())
+            .unwrap();
+        for name in ["01", "١", "0", "-1"] {
+            state
+                .write_json(
+                    &format!("{}/commits/{fp}/{name}.json", store.root),
+                    &original.to_dict(),
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            store.retained_matching_device_records(&expected).unwrap(),
+            HashSet::new()
+        );
+        state.write_json(&canonical, &original.to_dict()).unwrap();
+        let wanted = HashSet::from([target_fp]);
+        assert_eq!(
+            store.retained_matching_device_records(&expected).unwrap(),
+            wanted
+        );
+        assert_eq!(
+            matching_device_records(&[nonmatch, original.clone()], &expected),
+            wanted
+        );
+        let saved = state.read_bytes(&canonical).unwrap();
+        let mut corrupt = original.to_dict();
+        corrupt["hlc"] = json!("malformed");
+        state
+            .write_json(
+                &format!(
+                    "{}/commits/{fp}/9999999999999999999999999999999999999999.json",
+                    store.root
+                ),
+                &corrupt,
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .retained_matching_device_records(&expected)
+                .unwrap_err()
+                .reason,
+            "hlc_malformed"
+        );
+        std::fs::remove_file(state.path.join(format!(
+            "{}/commits/{fp}/9999999999999999999999999999999999999999.json",
+            store.root
+        )))
+        .unwrap();
+        state
+            .write_bytes(
+                &format!("{}/commits/{fp}/3.json", store.root),
+                b"{bad-owned-json",
+            )
+            .unwrap();
+        assert_eq!(
+            store
+                .retained_matching_device_records(&expected)
+                .unwrap_err()
+                .reason,
+            "state_corrupt"
+        );
+        assert_eq!(state.read_bytes(&canonical).unwrap(), saved);
+    }
 }
 
 #[cfg(test)]

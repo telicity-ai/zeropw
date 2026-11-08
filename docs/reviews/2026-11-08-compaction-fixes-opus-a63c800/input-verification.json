@@ -1,0 +1,91 @@
+{
+  "schema": "opus-static-review-input-verification-v1",
+  "reviewer": {
+    "provider": "claudeAgent",
+    "actual_model": "claude-opus-5-5",
+    "target_options": [],
+    "settings": "effort/thinking budget/service tier not exposed; none claimed",
+    "harness": "Claude Code (Claude Agent SDK) in T3 Code",
+    "subagents_workflows_other_models": "none"
+  },
+  "mode": "manual static Rust review only; no product/helper/compiler/formatter/build/test/dependency execution; no runtime/VM/process/SSH/network/credential query; not a Go Opus3eb continuation",
+  "first_action": {
+    "path": "/Users/ys/Code/zeropw-mlp-evidence/compaction-fixes-opus-rereview-preparation-20261108/review-brief.md",
+    "bytes": 8317,
+    "sha256": "1c15d823583371340bd6f862514c84e7919e1ea60cee11999d97ad92385bf370",
+    "required": "1c15d823583371340bd6f862514c84e7919e1ea60cee11999d97ad92385bf370",
+    "match": true,
+    "read_fully": true
+  },
+  "bindings": {
+    "input-bindings.json": {
+      "sha256": "d0efd69c2c548d5ed4ef94b0b9f02cb1397ea34b2cb8bd686aeb062805baa1d6",
+      "required": "d0efd69c2c548d5ed4ef94b0b9f02cb1397ea34b2cb8bd686aeb062805baa1d6"
+    },
+    "source-manifest.json": {
+      "sha256": "497a9ee728d5bac84335bf437b8e2cf1ac1832dc99f79727dfe488209e0351ae",
+      "required": "497a9ee728d5bac84335bf437b8e2cf1ac1832dc99f79727dfe488209e0351ae"
+    },
+    "REVIEW-INPUT-FREEZE.json": {
+      "sha256": "ca2108895767984c2a62d7c92608340ed1b9771530dbd4b07ee1fd32dbad4586"
+    },
+    "pr-body.md": {
+      "sha256": "758af68aad44f68c2e4f865770eef64cc2610faba490a10e24b7329f8fd2a2f5"
+    },
+    "original_report.json": {
+      "path": "docs/reviews/2026-11-08-compaction-heads-opus-04c7d22/report.json",
+      "sha256": "4e7296a50f281a3e066eb91998a7c3e79f6767b8ee8d17fcd60d77219bcb8ec0",
+      "required": "4e7296a50f281a3e066eb91998a7c3e79f6767b8ee8d17fcd60d77219bcb8ec0"
+    },
+    "harness/review.schema.json": {
+      "sha256": "1bf6caf7edf8548ea2c653937cd130c5e2db7a217f7fa1dadd0ce7696e9be5a0",
+      "unchanged_vs_HEAD": true
+    }
+  },
+  "checkout": {
+    "worktree": "/Users/ys/.t3/worktrees/zeropw/t3-894f74b1",
+    "head": "a63c800a51a46eea911aa1167f5c978c597e1d74",
+    "full_tree": "f0f332ffff67ed74a7775074e1dc2da1e7dbd2c6",
+    "rust_tree": "7cfa2b85d103b50bc5d941f3b6165fe38b51cbd5",
+    "desktop_tree": "2413844c89265a3e239be2372d34b1e6e1b2d4bb",
+    "tracked_status_clean_before_and_after": true,
+    "only_untracked": "review-output/ (these four outputs)"
+  },
+  "manifest_verification": {
+    "checks_per_file": [
+      "bytes",
+      "sha256",
+      "git_blob_computed_from_worktree",
+      "git_blob_from_ls_tree",
+      "git_mode",
+      "posix_mode",
+      "regular_file",
+      "path_set_equal"
+    ],
+    "before": {
+      "manifest_entries": 1483,
+      "git_entries": 1483,
+      "all_checks_pass": 1483,
+      "errors": []
+    },
+    "after": {
+      "manifest_entries": 1483,
+      "git_entries": 1483,
+      "all_checks_pass": 1483,
+      "errors": []
+    },
+    "result": "PASS",
+    "tool": "own python3.12 -I stdlib script /tmp/zp-opus-a63c800/verify.py + read-only git ls-tree"
+  },
+  "docs_only_adaptation": {
+    "from": "563de18b61b87b00e33faed955c43f14db43f681",
+    "paths_changed": 20,
+    "equal_to_binding_list": true,
+    "rust_tree_at_563_equals_head": true
+  },
+  "octal_delta_8a_to_563": "exactly rust/tests/team_compaction_heads.rs:1926 from_mode(0) -> from_mode(0o0)",
+  "evidence_sha256sums_8a8073b": "all 15 entries rehashed and matched",
+  "schema_check_report_json": "own closed-schema check passed; original three findings byte-equal to original report.json entries",
+  "runtime_status_claims_not_executed": "Frozen8a both OS new exact 1 each + focused 31+27 debug/release PASS (claimed); Linux8a full 1874/0/5 but overall FAIL strict Clippy 101 (raw stderr inspected); 563 Linux fmt/strictClippy/exact/focused PASS (claimed); Linux563 full ACTIVE; native8a full ACTIVE; native563 NOTASSIGNED/NOTRUN; no full PASS",
+  "time_utc": "2026-11-08T10:31:53.212489+00:00"
+}

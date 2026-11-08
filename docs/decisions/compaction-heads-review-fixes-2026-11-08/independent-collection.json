@@ -1,0 +1,197 @@
+{
+  "actual_collector": "gpt-6.1-sol / ultra native same-provider child; effective tier not exposed",
+  "bindings": {
+    "/Users/ys/.t3/worktrees/zeropw/t3-ea56bc5c/docs/decisions/compaction-heads-2026-11-08/controller-binding.md": {
+      "bytes": 3322,
+      "mode": 420,
+      "sha256": "66c8cac829faf257a6bb4f9b015e3a0b39b801d13521c3abcaf641d1ab0cb609"
+    },
+    "/Users/ys/.t3/worktrees/zeropw/t3-ea56bc5c/docs/decisions/compaction-heads-2026-11-08/decision.md": {
+      "bytes": 12039,
+      "mode": 420,
+      "sha256": "f9c6c1d19d7cca852d58d79eee4bd2712b550d0944dc9bd3bb4d3c47b51f16d6"
+    },
+    "/Users/ys/.t3/worktrees/zeropw/t3-ea56bc5c/docs/decisions/compaction-heads-2026-11-08/implementation-task.md": {
+      "bytes": 20178,
+      "mode": 420,
+      "sha256": "942a6a5cec0b28c2b186e7b33e496dd9203625c26d1eff1566061207a332bf1a"
+    },
+    "/Users/ys/.t3/worktrees/zeropw/t3-ea56bc5c/docs/reviews/2026-11-08-compaction-heads-opus-04c7d22/COVERAGE.md": {
+      "bytes": 3182,
+      "mode": 420,
+      "sha256": "a55f63c7c8cb99e5c4b9209bf9c23ae362ec671be6dbdc1bdd3bd0e0ccd658fb"
+    },
+    "/Users/ys/.t3/worktrees/zeropw/t3-ea56bc5c/docs/reviews/2026-11-08-compaction-heads-opus-04c7d22/input-verification.json": {
+      "bytes": 2185,
+      "mode": 420,
+      "sha256": "41b914a68958d7a32f74486eafaa0d8315737d7ad2391d7ee43c06e18bbe939d"
+    },
+    "/Users/ys/.t3/worktrees/zeropw/t3-ea56bc5c/docs/reviews/2026-11-08-compaction-heads-opus-04c7d22/report.json": {
+      "bytes": 7399,
+      "mode": 420,
+      "sha256": "4e7296a50f281a3e066eb91998a7c3e79f6767b8ee8d17fcd60d77219bcb8ec0"
+    },
+    "/Users/ys/.t3/worktrees/zeropw/t3-ea56bc5c/docs/reviews/2026-11-08-compaction-heads-opus-04c7d22/report.md": {
+      "bytes": 7202,
+      "mode": 420,
+      "sha256": "fd53253fe211a80c2debc87ac6893d617e638a85cd295cf3fb4529b97da419b1"
+    },
+    "/Users/ys/Code/zeropw-mlp-evidence/compaction-heads-fix-scope-preparation-20261108/source-manifest.json": {
+      "bytes": 405644,
+      "sha256": "2860c7e81cf10827ae47202a3c985c7fbea3b43f7056957602b6e4f471b63672"
+    },
+    "/Users/ys/Code/zeropw-mlp-evidence/compaction-heads-opus-collection-20261108/REPORT.md": {
+      "bytes": 3214,
+      "mode": 420,
+      "sha256": "6e38bfd1359488862993edd0c6e1182e8d6fadfc3d1ba5a181cec06093ffd84b"
+    },
+    "/Users/ys/Code/zeropw-mlp-evidence/compaction-heads-opus-preparation-20261108/review-input-manifest.json": {
+      "bytes": 403380,
+      "purpose": "independent reviewed04->Astrae8 documentation-only change-count comparison",
+      "sha256": "9c319540f14a443e1ad275749956e93c3781639124d054bf227db972577b230a"
+    },
+    "/Users/ys/Code/zeropw-mlp-evidence/compaction-heads-review-fix-scope-astra-20261108/decision.md": {
+      "bytes": 14016,
+      "mode": 420,
+      "sha256": "59d17e08875b8a3f844f579c22a1f37926ef8e162c9f1152be4db768f81aeab1"
+    },
+    "/Users/ys/Code/zeropw-mlp-evidence/compaction-heads-review-fix-scope-astra-20261108/implementation-task.md": {
+      "bytes": 18378,
+      "mode": 420,
+      "sha256": "71ebc802025c07e69d5b854d3276732e6a4ae28e4c2a7de396d0c29278341223"
+    },
+    "/tmp/zeropw-compaction-review-fix-scope-astra-20261108.md": {
+      "bytes": 10673,
+      "mode": 420,
+      "sha256": "4da057a6f58118daba6a665dd629ef704c52969dd125d2efae1e1d6a218aa508"
+    }
+  },
+  "collection_mode": "own Python3.9 standard-library DATA only; no Git executable, project/helper/compiler/test/runtime/VM/process/credential operation or source/ref/index/master mutation; no subagents",
+  "collector_errors": [],
+  "document_metadata_discrepancy": {
+    "actual_from_two_frozen_manifests": 10,
+    "all_docs_only": true,
+    "claim": "decision.md says11changedpaths beyond reviewed04c7",
+    "disposition": "Preserve original Astra document; coordinator addendum can correct count. No source-integrity gap or finding resolution inferred.",
+    "paths": [
+      "docs/evidence/2026-11-08-compaction-heads-0d3fdc5/README.md",
+      "docs/remote-sync-next-milestones.md",
+      "docs/reviews/2026-11-08-compaction-heads-opus-04c7d22/COVERAGE.md",
+      "docs/reviews/2026-11-08-compaction-heads-opus-04c7d22/README.md",
+      "docs/reviews/2026-11-08-compaction-heads-opus-04c7d22/finding-status.json",
+      "docs/reviews/2026-11-08-compaction-heads-opus-04c7d22/independent-collection.json",
+      "docs/reviews/2026-11-08-compaction-heads-opus-04c7d22/independent-collection.md",
+      "docs/reviews/2026-11-08-compaction-heads-opus-04c7d22/input-verification.json",
+      "docs/reviews/2026-11-08-compaction-heads-opus-04c7d22/report.json",
+      "docs/reviews/2026-11-08-compaction-heads-opus-04c7d22/report.md"
+    ],
+    "product_byte_or_scope_drift": false
+  },
+  "documents": {
+    "all_requested_hashes_match": true,
+    "combined_bytes": 32394,
+    "exact_files": 2,
+    "limit_bytes": 32768
+  },
+  "findings": [
+    {
+      "id": "ZPCHEAD-OPUS-01",
+      "severity": "medium",
+      "status": "OPEN"
+    },
+    {
+      "id": "ZPCHEAD-OPUS-02",
+      "severity": "medium",
+      "status": "OPEN"
+    },
+    {
+      "id": "ZPCHEAD-OPUS-03",
+      "severity": "low",
+      "status": "OPEN"
+    }
+  ],
+  "future_validation": "separate frozen isolated Linux AND macOS grants; unchanged fullverify, focused debug/release module+integration, fourteen exact one-test256KiB selectors perOS, features/source/dependencies/protected beforeafter; prior1843/1840 do not validate fixes; no runtime assigned by these documents",
+  "historical_limits": "Current before/after collection inventories and existing commit/index independently match. Astra historical before/after operations are statements in its documents; no historical script was executed and no absent raw receipts were fabricated. Parent Root mutable checkout was not inspected, avoiding Root03 overlap.",
+  "holds": "Mac10unknownidentityHOLD and Linuxch01 retired/unassigned unchanged; no Go resource or interrupted review touched; all M2/runtime/review/physical/Oracle/release/global finding holds OPEN; snapshot onboarding unsupported",
+  "integrity_gaps": [],
+  "recorded_at_utc": "2026-11-08T07:02:22.628402+00:00",
+  "root03": {
+    "API": "pub(super) preflight_layout(&StateDir,&str,&PyInt)->Result<()>; actual lock/validenv/component containment",
+    "allowed_paths": [
+      "rust/src/team/compaction_heads.rs",
+      "rust/src/team/sync.rs",
+      "rust/tests/team_compaction_heads.rs"
+    ],
+    "errors": {
+      "detail": "empty",
+      "missing_nonregular_symlink_snapshot_readback": "team_compaction_head_persist_failed",
+      "missing_root_or_IO": "team_compaction_head_persist_failed",
+      "type_or_containment": "team_compaction_layout_unsupported"
+    },
+    "freeze_before_handoff": "exact03 head/tree/diff/full manifest plus tests or NOTRUN; no silent base changes",
+    "implementer": "Root actual Sol personally; no extra03 implementation worker",
+    "placement": "after no-old/peer gates and cutoff/total, before prepare or publication; no noop schema change or rollback claim for .lock/load_facts",
+    "preflight": "Nonfollowing metadata, real root and existing root/team/env/snapshots/snapshot_records directories; inspect root without final slash/dot disguise; trust ancestors ABOVE root unchanged; missing prospective children allowed without mkdir; dangling symlink is not absence; existing snapshot/record/cache destinations regular nonsymlink.",
+    "readback": "regular snapshot type check BEFORE BOTH snapshot reads; retain existing record/cache/fsync barriers",
+    "tests": [
+      "real compact with symlink root/team/env, dangling and slash-dot spellings: exact refusal, all original files and metadata inventories unchanged/no unlink",
+      "missing prospective children and regular repeat paths: literal successful count/head/document",
+      "nondirectory ancestor/nonregular destination: refuse before publication",
+      "replace snapshot with identical-JSON symlink, directory or absence at readback: persist_failed/no unlink; keep rename/fsync tests"
+    ]
+  },
+  "schema": "independent-compaction-fix-decision-collection-v1",
+  "scope": "independent hash/source/binding/handoff extraction only, not product/adversarial review, acceptance or runtime authority",
+  "sol01_02": {
+    "cache_validation": "actual lock; absent cache legacy no-op; present strict bounded whole cache validates all full records/originals and positive C covered by unchanged S,V. Live same slots exact bytes; older cache allowed if newer originals live.",
+    "closed_paths": {
+      "rust/src/team/commit.rs": "device_registry/snapshot_floor visibility only (bodies preserved); retained-file registry method; receive entry state lock; hlc_not_above_previous + two callsites; fresh deferred gap check; separate new unit tests",
+      "rust/src/team/compaction_heads.rs": "prepare identity->typedrecord map; private checked-clock validator/reuse strict loader and tests; preserve Root03/schema/caps/strict monotonicity/barrier",
+      "rust/src/team/membership.rs": "author_commit reuse live/cached observation; authorized fact clock; narrow test-only walltime at authorized ticks/new tests; no standing/rotation/refold/publication rewrite",
+      "rust/src/team/sync.rs": "replace compactor identity fold with receipt registry; authorized fact-signing cached clock read outside envs then short merge/tick; new private compaction tests",
+      "rust/tests/team_compaction_heads.rs": "add real-path cases/helpers, preserve existing11 outcomes and Root03 tests"
+    },
+    "deferred": "retain unlocked due/gap prefilter then fresh locked lastseq gap/duplicate/equivocation/drop recheck; None helper uses retained registry, no all_commits range scan; local cache error leaves deferred original intact, no rejected candidate; true time failure existing audit/quarantine/removal",
+    "errors": "local evidence corrupt/unreadable/inconsistent -> fixed State errors/empty details/no valid-peer rejection; real HLC failure -> existing team_hlc_not_monotone quarantine/audit; unrelated errors remain",
+    "local_clocks": "validate before observing all cached HLCs then tick in actual author_commit and two authorized fact-signing paths; no I/O/state acquisition under envs; optional cfg(test) thread-local wall time only at three authorized tick sites",
+    "new_base": "Root separately freezes03; adaptation permits only exact enumerated03 hunks and recorded docs-only changes from e8fa. All other product bytes/modes same; future drift requires decision.",
+    "private_APIs": [
+      "pub(super) device_registry(live)->HashMap<String,DeviceRecord>",
+      "pub(super) CommitStore.snapshot_floor() body unchanged",
+      "pub(super) CommitStore.retained_device_registry() actual filename traversal only",
+      "prepare(... records:&HashMap<String,DeviceRecord>)->Result<PreparedHeads>",
+      "cached_hlc_not_above_previous(store,candidate,Option<&[Commit]>)->Result<bool>",
+      "observe_cached_hlcs(store,live,&mut Hlc)->Result<()>"
+    ],
+    "protected": "mod.rs unchanged; append/get/vector/all_commits/digit_stems/sign/verify bodies and all unlisted hunks/files/goldens/fixtures/dependencies/CI/harness/schema/verify.sh/AGENTS/docs protected; mechanical identity fixture type adaptation only without assertion relaxation",
+    "receipt": "lock at receive entry; preserve format/env/ops/bootstrap/unknown/signature/duplicate/future-before-gap order. Only n>1 exactlyV[A]+1 uses cache; HLC above live previous AND cached author head. Missing predecessor with present cache requires exactC[A]=V[A]=n-1 and S[A]>=n-1. Cache never advances floor or membership.",
+    "registry": "same first self-verifying normalized record as receipt, numericHLC/author/stable original store ties/op order; no active-member filter or authority promotion. Actual filenames/digit_stems/canonical get lookup only for deferred helper, no new 1..vector enumeration/history getter.",
+    "residuals": "already stored signed regression not rewritten; cache absent legacy/restore remains live-only, missing idle originals prevents compact; no antirollback or deleted signature/HLC recovery, no operator bypass/reset"
+  },
+  "source": {
+    "all_lengths_sha256_blobs_git_modes_POSIX_modes_match": true,
+    "checkout": "/Users/ys/.t3/worktrees/zeropw/t3-ea56bc5c",
+    "desktop_tree": "2413844c89265a3e239be2372d34b1e6e1b2d4bb",
+    "file_record_comparisons": 2868,
+    "full_tree": "de1323f3d23211f5e058c993df68430930cdd5cf",
+    "full_tree_matches_existing_commit_object": true,
+    "head": "e8fa90e74bab30088761d717f59fe8104ed3d670",
+    "index_HEAD_branch_ref_unchanged_during_collection": true,
+    "index_entries": 1434,
+    "index_entries_equal_manifest": true,
+    "index_sha256": "3860a5501d459723f5e19df903ee6d67868fb1b07f8d035b4348c9f95a644ad1",
+    "index_version": 2,
+    "inventory_passes": 2,
+    "rust_tree": "afc41fcb5d55aaec2bc2fead7c7d8a94f312cc9f",
+    "source_files": 1434,
+    "tree_reconstructed_without_Git": true
+  },
+  "stops": [
+    "base/manifest/additionalhunk drift",
+    "legacy/golden/canonical/record-order regressions",
+    "missing exact original or unclear error",
+    "lock inversion/new network wait",
+    "dependency/selector/budget/authority/secret failure"
+  ],
+  "verified_input_records": 13
+}

@@ -1,0 +1,810 @@
+zeropw v0.2.0 (/opt/cgjob/r1-r3-src/rust)
+├── scrypt v0.11.0
+│   ├── salsa20 v0.10.2
+│   │   └── cipher feature "default"
+│   │       └── cipher v0.4.4
+│   │           ├── zeroize v1.9.0
+│   │           │   └── zeroize_derive feature "default"
+│   │           │       └── zeroize_derive v1.5.0 (proc-macro)
+│   │           │           ├── proc-macro2 feature "default"
+│   │           │           │   ├── proc-macro2 v1.0.107
+│   │           │           │   │   └── unicode-ident feature "default"
+│   │           │           │   │       └── unicode-ident v1.0.24
+│   │           │           │   └── proc-macro2 feature "proc-macro"
+│   │           │           │       └── proc-macro2 v1.0.107 (*)
+│   │           │           ├── quote feature "default"
+│   │           │           │   ├── quote v1.0.47
+│   │           │           │   │   └── proc-macro2 v1.0.107 (*)
+│   │           │           │   └── quote feature "proc-macro"
+│   │           │           │       ├── quote v1.0.47 (*)
+│   │           │           │       └── proc-macro2 feature "proc-macro" (*)
+│   │           │           ├── syn feature "default"
+│   │           │           │   ├── syn v2.0.119
+│   │           │           │   │   ├── proc-macro2 v1.0.107 (*)
+│   │           │           │   │   ├── quote v1.0.47 (*)
+│   │           │           │   │   └── unicode-ident feature "default" (*)
+│   │           │           │   ├── syn feature "clone-impls"
+│   │           │           │   │   └── syn v2.0.119 (*)
+│   │           │           │   ├── syn feature "derive"
+│   │           │           │   │   └── syn v2.0.119 (*)
+│   │           │           │   ├── syn feature "parsing"
+│   │           │           │   │   └── syn v2.0.119 (*)
+│   │           │           │   ├── syn feature "printing"
+│   │           │           │   │   └── syn v2.0.119 (*)
+│   │           │           │   └── syn feature "proc-macro"
+│   │           │           │       ├── syn v2.0.119 (*)
+│   │           │           │       ├── proc-macro2 feature "proc-macro" (*)
+│   │           │           │       └── quote feature "proc-macro" (*)
+│   │           │           ├── syn feature "extra-traits"
+│   │           │           │   └── syn v2.0.119 (*)
+│   │           │           ├── syn feature "full"
+│   │           │           │   └── syn v2.0.119 (*)
+│   │           │           └── syn feature "visit"
+│   │           │               └── syn v2.0.119 (*)
+│   │           ├── crypto-common feature "default"
+│   │           │   └── crypto-common v0.1.7
+│   │           │       ├── generic-array feature "default"
+│   │           │       │   └── generic-array v0.14.7
+│   │           │       │       └── typenum feature "default"
+│   │           │       │           └── typenum v1.20.1
+│   │           │       │       [build-dependencies]
+│   │           │       │       └── version_check feature "default"
+│   │           │       │           └── version_check v0.9.5
+│   │           │       ├── generic-array feature "more_lengths"
+│   │           │       │   └── generic-array v0.14.7 (*)
+│   │           │       ├── typenum feature "default" (*)
+│   │           │       └── rand_core feature "default"
+│   │           │           └── rand_core v0.6.4
+│   │           │               └── getrandom feature "default"
+│   │           │                   └── getrandom v0.2.17
+│   │           │                       ├── libc v0.2.189
+│   │           │                       └── cfg-if feature "default"
+│   │           │                           └── cfg-if v1.0.4
+│   │           └── inout feature "default"
+│   │               └── inout v0.1.4
+│   │                   └── generic-array feature "default" (*)
+│   ├── sha2 v0.10.9
+│   │   ├── cfg-if feature "default" (*)
+│   │   ├── digest feature "default"
+│   │   │   ├── digest v0.10.7
+│   │   │   │   ├── subtle v2.6.1
+│   │   │   │   ├── crypto-common feature "default" (*)
+│   │   │   │   └── block-buffer feature "default"
+│   │   │   │       └── block-buffer v0.10.4
+│   │   │   │           └── generic-array feature "default" (*)
+│   │   │   └── digest feature "core-api"
+│   │   │       ├── digest v0.10.7 (*)
+│   │   │       └── digest feature "block-buffer"
+│   │   │           └── digest v0.10.7 (*)
+│   │   └── cpufeatures feature "default"
+│   │       └── cpufeatures v0.2.17
+│   │           └── libc v0.2.189
+│   └── pbkdf2 feature "default"
+│       ├── pbkdf2 v0.12.2
+│       │   ├── hmac v0.12.1
+│       │   │   ├── digest feature "default" (*)
+│       │   │   └── digest feature "mac"
+│       │   │       ├── digest v0.10.7 (*)
+│       │   │       └── digest feature "subtle"
+│       │   │           └── digest v0.10.7 (*)
+│       │   ├── digest feature "default" (*)
+│       │   └── digest feature "mac" (*)
+│       └── pbkdf2 feature "hmac"
+│           └── pbkdf2 v0.12.2 (*)
+├── base64 feature "default"
+│   ├── base64 v0.22.1
+│   └── base64 feature "std"
+│       ├── base64 v0.22.1
+│       └── base64 feature "alloc"
+│           └── base64 v0.22.1
+├── chacha20 feature "default"
+│   └── chacha20 v0.9.1
+│       ├── cfg-if feature "default" (*)
+│       └── cipher feature "default" (*)
+├── typenum feature "default" (*)
+├── getrandom feature "default" (*)
+├── libc feature "default"
+│   ├── libc v0.2.189
+│   └── libc feature "std"
+│       └── libc v0.2.189
+├── zeroize feature "default"
+│   ├── zeroize v1.9.0 (*)
+│   └── zeroize feature "alloc"
+│       └── zeroize v1.9.0 (*)
+├── zeroize feature "derive"
+│   ├── zeroize v1.9.0 (*)
+│   └── zeroize feature "zeroize_derive"
+│       └── zeroize v1.9.0 (*)
+├── chacha20poly1305 feature "default"
+│   ├── chacha20poly1305 v0.10.1
+│   │   ├── aead v0.5.2
+│   │   │   ├── generic-array v0.14.7 (*)
+│   │   │   └── crypto-common feature "default" (*)
+│   │   ├── zeroize v1.9.0 (*)
+│   │   ├── chacha20 feature "default" (*)
+│   │   ├── chacha20 feature "zeroize"
+│   │   │   ├── chacha20 v0.9.1 (*)
+│   │   │   └── cipher feature "zeroize"
+│   │   │       └── cipher v0.4.4 (*)
+│   │   ├── cipher feature "default" (*)
+│   │   └── poly1305 feature "default"
+│   │       └── poly1305 v0.8.0
+│   │           ├── universal-hash v0.5.1
+│   │           │   ├── subtle v2.6.1
+│   │           │   └── crypto-common feature "default" (*)
+│   │           └── opaque-debug feature "default"
+│   │               └── opaque-debug v0.3.1
+│   ├── chacha20poly1305 feature "alloc"
+│   │   ├── chacha20poly1305 v0.10.1 (*)
+│   │   └── aead feature "alloc"
+│   │       └── aead v0.5.2 (*)
+│   └── chacha20poly1305 feature "getrandom"
+│       ├── chacha20poly1305 v0.10.1 (*)
+│       ├── chacha20poly1305 feature "rand_core"
+│       │   ├── chacha20poly1305 v0.10.1 (*)
+│       │   └── aead feature "rand_core"
+│       │       ├── aead v0.5.2 (*)
+│       │       └── crypto-common feature "rand_core"
+│       │           └── crypto-common v0.1.7 (*)
+│       └── aead feature "getrandom"
+│           ├── aead v0.5.2 (*)
+│           ├── crypto-common feature "getrandom"
+│           │   ├── crypto-common v0.1.7 (*)
+│           │   ├── crypto-common feature "rand_core" (*)
+│           │   └── rand_core feature "getrandom"
+│           │       └── rand_core v0.6.4 (*)
+│           └── aead feature "rand_core" (*)
+├── poly1305 feature "default" (*)
+├── subtle feature "default"
+│   ├── subtle v2.6.1
+│   ├── subtle feature "i128"
+│   │   └── subtle v2.6.1
+│   └── subtle feature "std"
+│       └── subtle v2.6.1
+├── close_fds feature "default"
+│   └── close_fds v0.3.2
+│       ├── cfg-if feature "default" (*)
+│       └── libc feature "default" (*)
+├── dns-lookup feature "default"
+│   └── dns-lookup v3.0.1
+│       ├── cfg-if feature "default" (*)
+│       ├── libc feature "default" (*)
+│       └── socket2 feature "default"
+│           └── socket2 v0.6.5
+│               └── libc feature "default" (*)
+├── ed25519-dalek feature "default"
+│   ├── ed25519-dalek v2.2.0
+│   │   ├── ed25519 v2.2.3
+│   │   │   └── signature v2.2.0
+│   │   ├── rand_core v0.6.4 (*)
+│   │   ├── sha2 v0.10.9 (*)
+│   │   ├── subtle v2.6.1
+│   │   ├── zeroize v1.9.0 (*)
+│   │   └── curve25519-dalek feature "digest"
+│   │       └── curve25519-dalek v4.1.3
+│   │           ├── digest v0.10.7 (*)
+│   │           ├── subtle v2.6.1
+│   │           ├── zeroize v1.9.0 (*)
+│   │           └── cfg-if feature "default" (*)
+│   │           [build-dependencies]
+│   │           └── rustc_version feature "default"
+│   │               └── rustc_version v0.4.1
+│   │                   └── semver feature "default"
+│   │                       ├── semver v1.0.28
+│   │                       └── semver feature "std"
+│   │                           └── semver v1.0.28
+│   ├── ed25519-dalek feature "fast"
+│   │   ├── ed25519-dalek v2.2.0 (*)
+│   │   └── curve25519-dalek feature "precomputed-tables"
+│   │       └── curve25519-dalek v4.1.3 (*)
+│   ├── ed25519-dalek feature "std"
+│   │   ├── ed25519-dalek v2.2.0 (*)
+│   │   ├── ed25519-dalek feature "alloc"
+│   │   │   ├── ed25519-dalek v2.2.0 (*)
+│   │   │   ├── zeroize feature "alloc" (*)
+│   │   │   ├── ed25519-dalek feature "zeroize"
+│   │   │   │   ├── ed25519-dalek v2.2.0 (*)
+│   │   │   │   └── curve25519-dalek feature "zeroize"
+│   │   │   │       └── curve25519-dalek v4.1.3 (*)
+│   │   │   ├── curve25519-dalek feature "alloc"
+│   │   │   │   ├── curve25519-dalek v4.1.3 (*)
+│   │   │   │   └── zeroize feature "alloc" (*)
+│   │   │   └── ed25519 feature "alloc"
+│   │   │       └── ed25519 v2.2.3 (*)
+│   │   ├── ed25519 feature "std"
+│   │   │   ├── ed25519 v2.2.3 (*)
+│   │   │   └── signature feature "std"
+│   │   │       ├── signature v2.2.0
+│   │   │       └── signature feature "alloc"
+│   │   │           └── signature v2.2.0
+│   │   └── sha2 feature "std"
+│   │       ├── sha2 v0.10.9 (*)
+│   │       └── digest feature "std"
+│   │           ├── digest v0.10.7 (*)
+│   │           ├── crypto-common feature "std"
+│   │           │   └── crypto-common v0.1.7 (*)
+│   │           └── digest feature "alloc"
+│   │               └── digest v0.10.7 (*)
+│   └── ed25519-dalek feature "zeroize" (*)
+├── ed25519-dalek feature "rand_core"
+│   └── ed25519-dalek v2.2.0 (*)
+├── ed25519-dalek feature "zeroize" (*)
+├── sha2 feature "default"
+│   ├── sha2 v0.10.9 (*)
+│   └── sha2 feature "std" (*)
+├── hex feature "default"
+│   ├── hex v0.4.3
+│   └── hex feature "std"
+│       ├── hex v0.4.3
+│       └── hex feature "alloc"
+│           └── hex v0.4.3
+├── hmac feature "default"
+│   └── hmac v0.12.1 (*)
+├── md-5 feature "default"
+│   ├── md-5 v0.10.6
+│   │   ├── cfg-if feature "default" (*)
+│   │   └── digest feature "default" (*)
+│   └── md-5 feature "std"
+│       ├── md-5 v0.10.6 (*)
+│       └── digest feature "std" (*)
+├── nix feature "default"
+│   └── nix v0.30.1
+│       ├── cfg-if feature "default" (*)
+│       ├── libc feature "default" (*)
+│       ├── libc feature "extra_traits"
+│       │   └── libc v0.2.189
+│       └── bitflags feature "default"
+│           └── bitflags v2.13.2
+│       [build-dependencies]
+│       └── cfg_aliases feature "default"
+│           └── cfg_aliases v0.2.2
+├── nix feature "process"
+│   └── nix v0.30.1 (*)
+├── nix feature "user"
+│   ├── nix v0.30.1 (*)
+│   └── nix feature "feature"
+│       └── nix v0.30.1 (*)
+├── num-bigint feature "default"
+│   ├── num-bigint v0.5.1
+│   │   ├── serde v1.0.229
+│   │   │   ├── serde_core feature "result"
+│   │   │   │   └── serde_core v1.0.229
+│   │   │   └── serde_derive feature "default"
+│   │   │       └── serde_derive v1.0.229 (proc-macro)
+│   │   │           ├── proc-macro2 feature "proc-macro" (*)
+│   │   │           ├── quote feature "proc-macro" (*)
+│   │   │           ├── syn feature "clone-impls"
+│   │   │           │   └── syn v3.0.5
+│   │   │           │       ├── proc-macro2 v1.0.107 (*)
+│   │   │           │       ├── quote v1.0.47 (*)
+│   │   │           │       └── unicode-ident feature "default" (*)
+│   │   │           ├── syn feature "derive"
+│   │   │           │   └── syn v3.0.5 (*)
+│   │   │           ├── syn feature "parsing"
+│   │   │           │   └── syn v3.0.5 (*)
+│   │   │           ├── syn feature "printing"
+│   │   │           │   └── syn v3.0.5 (*)
+│   │   │           └── syn feature "proc-macro"
+│   │   │               ├── syn v3.0.5 (*)
+│   │   │               ├── proc-macro2 feature "proc-macro" (*)
+│   │   │               └── quote feature "proc-macro" (*)
+│   │   ├── num-integer feature "i128"
+│   │   │   └── num-integer v0.1.47
+│   │   │       └── num-traits feature "i128"
+│   │   │           └── num-traits v0.2.19
+│   │   │               [build-dependencies]
+│   │   │               └── autocfg feature "default"
+│   │   │                   └── autocfg v1.5.1
+│   │   └── num-traits feature "i128" (*)
+│   └── num-bigint feature "std"
+│       ├── num-bigint v0.5.1 (*)
+│       ├── num-integer feature "std"
+│       │   ├── num-integer v0.1.47 (*)
+│       │   └── num-traits feature "std"
+│       │       └── num-traits v0.2.19 (*)
+│       └── num-traits feature "std" (*)
+├── num-bigint feature "serde"
+│   └── num-bigint v0.5.1 (*)
+├── serde feature "default"
+│   ├── serde v1.0.229 (*)
+│   └── serde feature "std"
+│       ├── serde v1.0.229 (*)
+│       └── serde_core feature "std"
+│           └── serde_core v1.0.229
+├── serde feature "derive"
+│   ├── serde v1.0.229 (*)
+│   └── serde feature "serde_derive"
+│       └── serde v1.0.229 (*)
+├── openssl feature "default"
+│   └── openssl v0.10.81
+│       ├── cfg-if feature "default" (*)
+│       ├── libc feature "default" (*)
+│       ├── bitflags feature "default" (*)
+│       ├── foreign-types feature "default"
+│       │   └── foreign-types v0.3.2
+│       │       └── foreign-types-shared feature "default"
+│       │           └── foreign-types-shared v0.1.1
+│       ├── openssl-macros feature "default"
+│       │   └── openssl-macros v0.1.1 (proc-macro)
+│       │       ├── proc-macro2 feature "default" (*)
+│       │       ├── quote feature "default" (*)
+│       │       ├── syn feature "default" (*)
+│       │       └── syn feature "full" (*)
+│       └── openssl-sys feature "default"
+│           └── openssl-sys v0.9.117
+│               └── libc feature "default" (*)
+│               [build-dependencies]
+│               ├── cc feature "default"
+│               │   └── cc v1.4.6
+│               │       ├── find-msvc-tools feature "default"
+│               │       │   └── find-msvc-tools v0.1.12
+│               │       └── shlex feature "default"
+│               │           ├── shlex v2.0.1
+│               │           └── shlex feature "std"
+│               │               └── shlex v2.0.1
+│               ├── pkg-config feature "default"
+│               │   └── pkg-config v0.3.34
+│               └── vcpkg feature "default"
+│                   └── vcpkg v0.2.15
+├── percent-encoding feature "default"
+│   ├── percent-encoding v2.3.2
+│   └── percent-encoding feature "std"
+│       ├── percent-encoding v2.3.2
+│       └── percent-encoding feature "alloc"
+│           └── percent-encoding v2.3.2
+├── punycode feature "default"
+│   └── punycode v0.4.1
+├── rand feature "default"
+│   ├── rand v0.8.8
+│   │   ├── libc v0.2.189
+│   │   ├── rand_chacha v0.3.1
+│   │   │   ├── rand_core feature "default" (*)
+│   │   │   └── ppv-lite86 feature "simd"
+│   │   │       └── ppv-lite86 v0.2.21
+│   │   │           ├── zerocopy feature "default"
+│   │   │           │   └── zerocopy v0.8.57
+│   │   │           └── zerocopy feature "simd"
+│   │   │               └── zerocopy v0.8.57
+│   │   └── rand_core feature "default" (*)
+│   ├── rand feature "std"
+│   │   ├── rand v0.8.8 (*)
+│   │   ├── rand_core feature "std"
+│   │   │   ├── rand_core v0.6.4 (*)
+│   │   │   ├── rand_core feature "alloc"
+│   │   │   │   └── rand_core v0.6.4 (*)
+│   │   │   ├── rand_core feature "getrandom" (*)
+│   │   │   └── getrandom feature "std"
+│   │   │       └── getrandom v0.2.17 (*)
+│   │   ├── rand feature "alloc"
+│   │   │   ├── rand v0.8.8 (*)
+│   │   │   └── rand_core feature "alloc" (*)
+│   │   ├── rand feature "getrandom"
+│   │   │   ├── rand v0.8.8 (*)
+│   │   │   └── rand_core feature "getrandom" (*)
+│   │   ├── rand feature "libc"
+│   │   │   └── rand v0.8.8 (*)
+│   │   ├── rand feature "rand_chacha"
+│   │   │   └── rand v0.8.8 (*)
+│   │   └── rand_chacha feature "std"
+│   │       ├── rand_chacha v0.3.1 (*)
+│   │       └── ppv-lite86 feature "std"
+│   │           └── ppv-lite86 v0.2.21 (*)
+│   └── rand feature "std_rng"
+│       ├── rand v0.8.8 (*)
+│       └── rand feature "rand_chacha" (*)
+├── rustls-pki-types feature "default"
+│   ├── rustls-pki-types v1.15.1
+│   │   └── zeroize feature "default" (*)
+│   └── rustls-pki-types feature "alloc"
+│       └── rustls-pki-types v1.15.1 (*)
+├── regex feature "default"
+│   ├── regex v1.13.1
+│   │   ├── aho-corasick v1.1.5
+│   │   │   └── memchr v2.8.3
+│   │   ├── memchr v2.8.3
+│   │   ├── regex-syntax v0.8.11
+│   │   ├── regex-automata feature "alloc"
+│   │   │   └── regex-automata v0.4.18
+│   │   │       ├── aho-corasick v1.1.5 (*)
+│   │   │       ├── memchr v2.8.3
+│   │   │       └── regex-syntax v0.8.11
+│   │   ├── regex-automata feature "meta"
+│   │   │   ├── regex-automata v0.4.18 (*)
+│   │   │   ├── regex-automata feature "nfa-pikevm"
+│   │   │   │   ├── regex-automata v0.4.18 (*)
+│   │   │   │   └── regex-automata feature "nfa-thompson"
+│   │   │   │       ├── regex-automata v0.4.18 (*)
+│   │   │   │       └── regex-automata feature "alloc" (*)
+│   │   │   └── regex-automata feature "syntax"
+│   │   │       ├── regex-automata v0.4.18 (*)
+│   │   │       └── regex-automata feature "alloc" (*)
+│   │   ├── regex-automata feature "nfa-pikevm" (*)
+│   │   └── regex-automata feature "syntax" (*)
+│   ├── regex feature "perf"
+│   │   ├── regex v1.13.1 (*)
+│   │   ├── regex feature "perf-backtrack"
+│   │   │   ├── regex v1.13.1 (*)
+│   │   │   └── regex-automata feature "nfa-backtrack"
+│   │   │       ├── regex-automata v0.4.18 (*)
+│   │   │       └── regex-automata feature "nfa-thompson" (*)
+│   │   ├── regex feature "perf-cache"
+│   │   │   └── regex v1.13.1 (*)
+│   │   ├── regex feature "perf-dfa"
+│   │   │   ├── regex v1.13.1 (*)
+│   │   │   └── regex-automata feature "hybrid"
+│   │   │       ├── regex-automata v0.4.18 (*)
+│   │   │       ├── regex-automata feature "alloc" (*)
+│   │   │       └── regex-automata feature "nfa-thompson" (*)
+│   │   ├── regex feature "perf-inline"
+│   │   │   ├── regex v1.13.1 (*)
+│   │   │   └── regex-automata feature "perf-inline"
+│   │   │       └── regex-automata v0.4.18 (*)
+│   │   ├── regex feature "perf-literal"
+│   │   │   ├── regex v1.13.1 (*)
+│   │   │   └── regex-automata feature "perf-literal"
+│   │   │       ├── regex-automata v0.4.18 (*)
+│   │   │       ├── regex-automata feature "perf-literal-multisubstring"
+│   │   │       │   └── regex-automata v0.4.18 (*)
+│   │   │       └── regex-automata feature "perf-literal-substring"
+│   │   │           ├── regex-automata v0.4.18 (*)
+│   │   │           └── aho-corasick feature "perf-literal"
+│   │   │               └── aho-corasick v1.1.5 (*)
+│   │   └── regex feature "perf-onepass"
+│   │       ├── regex v1.13.1 (*)
+│   │       └── regex-automata feature "dfa-onepass"
+│   │           ├── regex-automata v0.4.18 (*)
+│   │           └── regex-automata feature "nfa-thompson" (*)
+│   ├── regex feature "std"
+│   │   ├── regex v1.13.1 (*)
+│   │   ├── aho-corasick feature "std"
+│   │   │   ├── aho-corasick v1.1.5 (*)
+│   │   │   └── memchr feature "std"
+│   │   │       ├── memchr v2.8.3
+│   │   │       └── memchr feature "alloc"
+│   │   │           └── memchr v2.8.3
+│   │   ├── memchr feature "std" (*)
+│   │   ├── regex-automata feature "std"
+│   │   │   ├── regex-automata v0.4.18 (*)
+│   │   │   ├── aho-corasick feature "std" (*)
+│   │   │   ├── memchr feature "std" (*)
+│   │   │   ├── regex-automata feature "alloc" (*)
+│   │   │   └── regex-syntax feature "std"
+│   │   │       └── regex-syntax v0.8.11
+│   │   └── regex-syntax feature "std" (*)
+│   ├── regex feature "unicode"
+│   │   ├── regex v1.13.1 (*)
+│   │   ├── regex feature "unicode-age"
+│   │   │   ├── regex v1.13.1 (*)
+│   │   │   ├── regex-automata feature "unicode-age"
+│   │   │   │   ├── regex-automata v0.4.18 (*)
+│   │   │   │   └── regex-syntax feature "unicode-age"
+│   │   │   │       └── regex-syntax v0.8.11
+│   │   │   └── regex-syntax feature "unicode-age" (*)
+│   │   ├── regex feature "unicode-bool"
+│   │   │   ├── regex v1.13.1 (*)
+│   │   │   ├── regex-automata feature "unicode-bool"
+│   │   │   │   ├── regex-automata v0.4.18 (*)
+│   │   │   │   └── regex-syntax feature "unicode-bool"
+│   │   │   │       └── regex-syntax v0.8.11
+│   │   │   └── regex-syntax feature "unicode-bool" (*)
+│   │   ├── regex feature "unicode-case"
+│   │   │   ├── regex v1.13.1 (*)
+│   │   │   ├── regex-automata feature "unicode-case"
+│   │   │   │   ├── regex-automata v0.4.18 (*)
+│   │   │   │   └── regex-syntax feature "unicode-case"
+│   │   │   │       └── regex-syntax v0.8.11
+│   │   │   └── regex-syntax feature "unicode-case" (*)
+│   │   ├── regex feature "unicode-gencat"
+│   │   │   ├── regex v1.13.1 (*)
+│   │   │   ├── regex-automata feature "unicode-gencat"
+│   │   │   │   ├── regex-automata v0.4.18 (*)
+│   │   │   │   └── regex-syntax feature "unicode-gencat"
+│   │   │   │       └── regex-syntax v0.8.11
+│   │   │   └── regex-syntax feature "unicode-gencat" (*)
+│   │   ├── regex feature "unicode-perl"
+│   │   │   ├── regex v1.13.1 (*)
+│   │   │   ├── regex-automata feature "unicode-perl"
+│   │   │   │   ├── regex-automata v0.4.18 (*)
+│   │   │   │   └── regex-syntax feature "unicode-perl"
+│   │   │   │       └── regex-syntax v0.8.11
+│   │   │   ├── regex-automata feature "unicode-word-boundary"
+│   │   │   │   └── regex-automata v0.4.18 (*)
+│   │   │   └── regex-syntax feature "unicode-perl" (*)
+│   │   ├── regex feature "unicode-script"
+│   │   │   ├── regex v1.13.1 (*)
+│   │   │   ├── regex-automata feature "unicode-script"
+│   │   │   │   ├── regex-automata v0.4.18 (*)
+│   │   │   │   └── regex-syntax feature "unicode-script"
+│   │   │   │       └── regex-syntax v0.8.11
+│   │   │   └── regex-syntax feature "unicode-script" (*)
+│   │   ├── regex feature "unicode-segment"
+│   │   │   ├── regex v1.13.1 (*)
+│   │   │   ├── regex-automata feature "unicode-segment"
+│   │   │   │   ├── regex-automata v0.4.18 (*)
+│   │   │   │   └── regex-syntax feature "unicode-segment"
+│   │   │   │       └── regex-syntax v0.8.11
+│   │   │   └── regex-syntax feature "unicode-segment" (*)
+│   │   ├── regex-automata feature "unicode"
+│   │   │   ├── regex-automata v0.4.18 (*)
+│   │   │   ├── regex-automata feature "unicode-age" (*)
+│   │   │   ├── regex-automata feature "unicode-bool" (*)
+│   │   │   ├── regex-automata feature "unicode-case" (*)
+│   │   │   ├── regex-automata feature "unicode-gencat" (*)
+│   │   │   ├── regex-automata feature "unicode-perl" (*)
+│   │   │   ├── regex-automata feature "unicode-script" (*)
+│   │   │   ├── regex-automata feature "unicode-segment" (*)
+│   │   │   ├── regex-automata feature "unicode-word-boundary" (*)
+│   │   │   └── regex-syntax feature "unicode"
+│   │   │       ├── regex-syntax v0.8.11
+│   │   │       ├── regex-syntax feature "unicode-age" (*)
+│   │   │       ├── regex-syntax feature "unicode-bool" (*)
+│   │   │       ├── regex-syntax feature "unicode-case" (*)
+│   │   │       ├── regex-syntax feature "unicode-gencat" (*)
+│   │   │       ├── regex-syntax feature "unicode-perl" (*)
+│   │   │       ├── regex-syntax feature "unicode-script" (*)
+│   │   │       └── regex-syntax feature "unicode-segment" (*)
+│   │   └── regex-syntax feature "unicode" (*)
+│   └── regex-syntax feature "default"
+│       ├── regex-syntax v0.8.11
+│       ├── regex-syntax feature "std" (*)
+│       └── regex-syntax feature "unicode" (*)
+├── rpassword feature "default"
+│   └── rpassword v7.5.4
+│       ├── libc feature "default" (*)
+│       └── rtoolbox feature "default"
+│           └── rtoolbox v0.0.6
+│               └── libc feature "default" (*)
+├── rustix feature "default"
+│   ├── rustix v1.1.4
+│   │   ├── bitflags v2.13.2
+│   │   ├── linux-raw-sys feature "auxvec"
+│   │   │   └── linux-raw-sys v0.12.1
+│   │   ├── linux-raw-sys feature "elf"
+│   │   │   └── linux-raw-sys v0.12.1
+│   │   ├── linux-raw-sys feature "errno"
+│   │   │   └── linux-raw-sys v0.12.1
+│   │   ├── linux-raw-sys feature "general"
+│   │   │   └── linux-raw-sys v0.12.1
+│   │   ├── linux-raw-sys feature "ioctl"
+│   │   │   └── linux-raw-sys v0.12.1
+│   │   └── linux-raw-sys feature "no_std"
+│   │       └── linux-raw-sys v0.12.1
+│   └── rustix feature "std"
+│       ├── rustix v1.1.4 (*)
+│       ├── bitflags feature "std"
+│       │   └── bitflags v2.13.2
+│       └── rustix feature "alloc"
+│           └── rustix v1.1.4 (*)
+├── rustix feature "event"
+│   └── rustix v1.1.4 (*)
+├── rustix feature "fs"
+│   └── rustix v1.1.4 (*)
+├── rustix feature "net"
+│   ├── rustix v1.1.4 (*)
+│   ├── linux-raw-sys feature "if_ether"
+│   │   └── linux-raw-sys v0.12.1
+│   ├── linux-raw-sys feature "net"
+│   │   └── linux-raw-sys v0.12.1
+│   ├── linux-raw-sys feature "netlink"
+│   │   └── linux-raw-sys v0.12.1
+│   └── linux-raw-sys feature "xdp"
+│       └── linux-raw-sys v0.12.1
+├── rustix feature "process"
+│   ├── rustix v1.1.4 (*)
+│   └── linux-raw-sys feature "prctl"
+│       └── linux-raw-sys v0.12.1
+├── rustix feature "system"
+│   ├── rustix v1.1.4 (*)
+│   └── linux-raw-sys feature "system"
+│       └── linux-raw-sys v0.12.1
+├── rustix feature "termios"
+│   └── rustix v1.1.4 (*)
+├── rustls feature "logging"
+│   ├── rustls v0.23.45
+│   │   ├── subtle v2.6.1
+│   │   ├── zeroize feature "default" (*)
+│   │   ├── ring feature "default"
+│   │   │   ├── ring v0.17.14
+│   │   │   │   ├── cfg-if v1.0.4
+│   │   │   │   ├── libc v0.2.189
+│   │   │   │   ├── getrandom feature "default" (*)
+│   │   │   │   └── untrusted feature "default"
+│   │   │   │       └── untrusted v0.9.0
+│   │   │   │   [build-dependencies]
+│   │   │   │   └── cc v1.4.6 (*)
+│   │   │   ├── ring feature "alloc"
+│   │   │   │   └── ring v0.17.14 (*)
+│   │   │   └── ring feature "dev_urandom_fallback"
+│   │   │       └── ring v0.17.14 (*)
+│   │   ├── rustls-pki-types feature "alloc" (*)
+│   │   ├── rustls-pki-types feature "default" (*)
+│   │   ├── log feature "default"
+│   │   │   └── log v0.4.34
+│   │   ├── once_cell feature "alloc"
+│   │   │   ├── once_cell v1.21.4
+│   │   │   └── once_cell feature "race"
+│   │   │       └── once_cell v1.21.4
+│   │   ├── once_cell feature "race" (*)
+│   │   └── rustls-webpki feature "alloc"
+│   │       ├── rustls-webpki v0.103.15
+│   │       │   ├── ring v0.17.14 (*)
+│   │       │   ├── rustls-pki-types v1.15.1 (*)
+│   │       │   └── untrusted feature "default" (*)
+│   │       ├── ring feature "alloc" (*)
+│   │       └── rustls-pki-types feature "alloc" (*)
+│   └── rustls feature "log"
+│       └── rustls v0.23.45 (*)
+├── rustls feature "ring"
+│   ├── rustls v0.23.45 (*)
+│   └── rustls-webpki feature "ring"
+│       └── rustls-webpki v0.103.15 (*)
+├── rustls feature "std"
+│   ├── rustls v0.23.45 (*)
+│   ├── rustls-pki-types feature "std"
+│   │   ├── rustls-pki-types v1.15.1 (*)
+│   │   └── rustls-pki-types feature "alloc" (*)
+│   ├── once_cell feature "std"
+│   │   ├── once_cell v1.21.4
+│   │   └── once_cell feature "alloc" (*)
+│   └── rustls-webpki feature "std"
+│       ├── rustls-webpki v0.103.15 (*)
+│       ├── rustls-pki-types feature "std" (*)
+│       └── rustls-webpki feature "alloc" (*)
+├── rustls feature "tls12"
+│   └── rustls v0.23.45 (*)
+├── rustls-native-certs feature "default"
+│   └── rustls-native-certs v0.8.4
+│       ├── rustls-pki-types feature "default" (*)
+│       ├── rustls-pki-types feature "std" (*)
+│       └── openssl-probe feature "default"
+│           └── openssl-probe v0.2.1
+├── rustls-pemfile feature "default"
+│   ├── rustls-pemfile v2.2.0
+│   │   └── rustls-pki-types feature "default" (*)
+│   └── rustls-pemfile feature "std"
+│       ├── rustls-pemfile v2.2.0 (*)
+│       └── rustls-pki-types feature "std" (*)
+├── serde_json feature "arbitrary_precision"
+│   └── serde_json v1.0.151
+│       ├── memchr v2.8.3
+│       ├── serde_core v1.0.229
+│       ├── indexmap feature "default"
+│       │   ├── indexmap v2.14.2
+│       │   │   ├── equivalent v1.0.2
+│       │   │   └── hashbrown v0.17.1
+│       │   └── indexmap feature "std"
+│       │       └── indexmap v2.14.2 (*)
+│       ├── itoa feature "default"
+│       │   └── itoa v1.0.18
+│       └── zmij feature "default"
+│           └── zmij v1.0.23
+├── serde_json feature "default"
+│   ├── serde_json v1.0.151 (*)
+│   └── serde_json feature "std"
+│       ├── serde_json v1.0.151 (*)
+│       ├── serde_core feature "std" (*)
+│       └── memchr feature "std" (*)
+├── serde_json feature "preserve_order"
+│   ├── serde_json v1.0.151 (*)
+│   ├── serde_json feature "indexmap"
+│   │   └── serde_json v1.0.151 (*)
+│   └── serde_json feature "std" (*)
+├── serde_json feature "unbounded_depth"
+│   └── serde_json v1.0.151 (*)
+├── signal-hook feature "default"
+│   ├── signal-hook v0.3.18
+│   │   ├── libc feature "default" (*)
+│   │   └── signal-hook-registry feature "default"
+│   │       └── signal-hook-registry v1.4.8
+│   │           ├── libc feature "default" (*)
+│   │           └── errno feature "default"
+│   │               ├── errno v0.3.14
+│   │               │   └── libc v0.2.189
+│   │               └── errno feature "std"
+│   │                   ├── errno v0.3.14 (*)
+│   │                   └── libc feature "std" (*)
+│   ├── signal-hook feature "channel"
+│   │   └── signal-hook v0.3.18 (*)
+│   └── signal-hook feature "iterator"
+│       ├── signal-hook v0.3.18 (*)
+│       └── signal-hook feature "channel" (*)
+├── socket2 feature "default"
+│   └── socket2 v0.5.10
+│       └── libc feature "default" (*)
+├── stringprep feature "default"
+│   └── stringprep v0.1.5
+│       ├── unicode-bidi feature "default"
+│       │   ├── unicode-bidi v0.3.18
+│       │   ├── unicode-bidi feature "hardcoded-data"
+│       │   │   └── unicode-bidi v0.3.18
+│       │   └── unicode-bidi feature "std"
+│       │       └── unicode-bidi v0.3.18
+│       ├── unicode-normalization feature "default"
+│       │   ├── unicode-normalization v0.1.25
+│       │   │   ├── tinyvec feature "alloc"
+│       │   │   │   └── tinyvec v1.13.3
+│       │   │   └── tinyvec feature "default"
+│       │   │       └── tinyvec v1.13.3
+│       │   └── unicode-normalization feature "std"
+│       │       └── unicode-normalization v0.1.25 (*)
+│       └── unicode-properties feature "default"
+│           ├── unicode-properties v0.1.4
+│           ├── unicode-properties feature "emoji"
+│           │   └── unicode-properties v0.1.4
+│           └── unicode-properties feature "general-category"
+│               └── unicode-properties v0.1.4
+├── unicode-normalization feature "default" (*)
+├── tempfile feature "default"
+│   ├── tempfile v3.27.0
+│   │   ├── getrandom v0.4.3
+│   │   │   ├── libc v0.2.189
+│   │   │   └── cfg-if feature "default" (*)
+│   │   ├── rustix feature "default" (*)
+│   │   ├── rustix feature "fs" (*)
+│   │   ├── once_cell feature "std" (*)
+│   │   └── fastrand feature "default"
+│   │       ├── fastrand v2.5.0
+│   │       └── fastrand feature "std"
+│   │           ├── fastrand v2.5.0
+│   │           └── fastrand feature "alloc"
+│   │               └── fastrand v2.5.0
+│   └── tempfile feature "getrandom"
+│       └── tempfile v3.27.0 (*)
+├── uuid feature "default"
+│   ├── uuid v1.26.1
+│   │   └── getrandom feature "default"
+│   │       └── getrandom v0.4.3 (*)
+│   └── uuid feature "std"
+│       └── uuid v1.26.1 (*)
+├── uuid feature "v4"
+│   ├── uuid v1.26.1 (*)
+│   └── uuid feature "rng"
+│       └── uuid v1.26.1 (*)
+└── x25519-dalek feature "default"
+    ├── x25519-dalek v2.0.1
+    │   ├── curve25519-dalek v4.1.3 (*)
+    │   ├── rand_core v0.6.4 (*)
+    │   └── zeroize feature "zeroize_derive" (*)
+    ├── x25519-dalek feature "alloc"
+    │   ├── x25519-dalek v2.0.1 (*)
+    │   ├── zeroize feature "alloc" (*)
+    │   └── curve25519-dalek feature "alloc" (*)
+    ├── x25519-dalek feature "precomputed-tables"
+    │   ├── x25519-dalek v2.0.1 (*)
+    │   └── curve25519-dalek feature "precomputed-tables" (*)
+    └── x25519-dalek feature "zeroize"
+        ├── x25519-dalek v2.0.1 (*)
+        └── curve25519-dalek feature "zeroize" (*)
+[dev-dependencies]
+├── rcgen feature "pem"
+│   └── rcgen v0.13.2
+│       ├── time v0.3.55
+│       │   ├── powerfmt v0.2.0
+│       │   ├── deranged feature "default"
+│       │   │   └── deranged v0.5.8
+│       │   ├── num-conv feature "default"
+│       │   │   └── num-conv v0.2.2
+│       │   └── time-core feature "default"
+│       │       └── time-core v0.1.9
+│       ├── pem feature "default"
+│       │   ├── pem v3.0.6
+│       │   │   └── base64 feature "alloc" (*)
+│       │   └── pem feature "std"
+│       │       ├── pem v3.0.6 (*)
+│       │       └── base64 feature "std" (*)
+│       ├── ring feature "default" (*)
+│       ├── rustls-pki-types feature "default" (*)
+│       ├── yasna feature "default"
+│       │   └── yasna v0.5.2
+│       │       └── time feature "std"
+│       │           ├── time v0.3.55 (*)
+│       │           └── time feature "alloc"
+│       │               └── time v0.3.55 (*)
+│       ├── yasna feature "std"
+│       │   └── yasna v0.5.2 (*)
+│       └── yasna feature "time"
+│           └── yasna v0.5.2 (*)
+└── rcgen feature "ring"
+    ├── rcgen v0.13.2 (*)
+    └── rcgen feature "crypto"
+        └── rcgen v0.13.2 (*)

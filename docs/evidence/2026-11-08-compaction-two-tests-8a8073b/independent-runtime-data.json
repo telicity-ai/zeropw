@@ -1,0 +1,188 @@
+{
+  "actual_model": "gpt-6.1-sol / ultra",
+  "as_of_utc": "2026-11-08T10:17:10.084267+00:00",
+  "audit_incidents": [
+    "Initial inventory display truncated; subsequent full in-memory verification reread both complete archives.",
+    "One tool-wrapper SyntaxError before dispatch due to Markdown delimiter; no shell execution or write.",
+    "All independent checks passed, then pre-write report-size guard rejected9139JSON+3393Markdown=12532bytes above12288. Nothing written. Final record shortened only; no verification condition changed."
+  ],
+  "independently_verified_checks": [
+    "Both complete archive hashes match. Every member unique safe regular file; collection exact path set, sizes, SHA256 and tar modes match. No extraction.",
+    "Both1464-file archived inventories match their fixed Git trees by full bytes, independently calculated blob, SHA256, Git mode and exact POSIX mode. Trusted git cat-file --batch read1465 unique objects; no working tree assumptions.",
+    "Every completed receipt agrees with plan/start/argv/sourcehead/Rusttree/control hashes. Full source before and after dictionaries equal exact manifest.",
+    "Every completed receipt log size/hash and every raw summary agree. Recorded own child=session/group, waited, no timeout/cancel, empty assigned UID processes.",
+    "Recorded UID/GID2100, no groups, NNP1, all capabilities zero across completed phases.",
+    "Old full112 ordered begin/end markers include107 integration targets, only Clippy101; VERIFY_FAILED=clippy.115 summaries total1874pass0fail5ignored;4explicit signer probes and48docs.",
+    "Old raw stderr contains non_octal_unix_permissions at tests/team_compaction_heads.rs:1926:59, from_mode(0), help0o0.",
+    "Fixed Git563 vs8a changes only one zero-literal spelling in rust/tests/team_compaction_heads.rs; full file otherwise exact;1463 other paths/blobs/modes exact. Diff hash matches new plan.",
+    "SOURCE-FREEZE head/tree/Rusttree/manifest/driver/plan hashes match and explicitly disclose separate coordinator style-only followup outside original three-path two-test scope.",
+    "New snapshot exactly5completed phases:features,fmt,strictClippy,two exact1-test successes. No new fullPASS asserted."
+  ],
+  "inputs": {
+    "SOURCE-FREEZE.json": {
+      "bytes": 1284,
+      "sha256": "4ffbda3997427ece09103c382968ae183055da6e1fd4bf356e82784d0347ecc6"
+    },
+    "new_preflight_snapshot": {
+      "bytes": 4669440,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/compaction-clippy-octal-r2-20261108/linux-preflight-snapshot.tar",
+      "sha256": "5645de1fd84061d93b3d868efff25198944001dd40bf3c03b8e350a9436e4894"
+    },
+    "old_archive": {
+      "bytes": 8243200,
+      "path": "/Users/ys/Code/zeropw-mlp-evidence/compaction-two-tests-root-collection-20261108/linux-planned-evidence.tar",
+      "sha256": "47566765c93fa4ded968e3cb7f4e3541f677a5044508302fdc9496983c87a518"
+    }
+  },
+  "limits": [
+    "Saved runtime observations are DATA consistency, not independent execution or cryptographic attestation.",
+    "Old17 later receipts/logs absent; NOTRUN is Root stopped-campaign attribution, not independently proved nonexecution.",
+    "New22 missing phases absent only from this snapshot; no current-progress or NOTRUN conclusion.",
+    "No live run directory, VM, SSH, PID, cache, key or credential inspected; no product/helper/compiler/formatter/test executed or source/ref/index written.",
+    "No semantic/adversarial review, Opus/Astra verdict, installation, capacity, physical two-Mac, Oracle or release evidence.",
+    "All original findings/severities and old native/Go holds OPEN unchanged. No lease/custody/release authority inferred."
+  ],
+  "octal_followup": {
+    "completed_snapshot_phases": [
+      {
+        "driver_exit": 0,
+        "passed": 0,
+        "phase": "01-features-before",
+        "receipt_sha256": "d4a7e3a8c143aeaf01e1153043e2de37788d69da77c1a6567816033d3ba01109",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "passed": 0,
+        "phase": "02-format",
+        "receipt_sha256": "0115862e0a908479597e10004c3e4dc1e2e5d932f99857066b08f8905b54243f",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "passed": 0,
+        "phase": "02-clippy-preflight",
+        "receipt_sha256": "1312032f342779cd53ac67cd78c3adbdfee0a3c5b9c0a78cdfc605faa791f859",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "passed": 1,
+        "phase": "03-new-exact",
+        "receipt_sha256": "caf37355badee0cca244df502a6b52c319023d401a332fe2e98276e473ae7241",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "passed": 1,
+        "phase": "04-new-exact",
+        "receipt_sha256": "4eb2beb2e46eaa242c6de207b32330b33e1c6a0a369ec4e654946626c8164897",
+        "test_exit": 0
+      }
+    ],
+    "driver_sha256": "e8b101722278b3c15cefeea8c8f09f2b6353149e73f4cc178a790abb392fe6be",
+    "exact_delta": "fs::Permissions::from_mode(0) -> fs::Permissions::from_mode(0o0)",
+    "head": "563de18b61b87b00e33faed955c43f14db43f681",
+    "manifest_sha256": "496ba2d16c7ba33300af3329babce07e16503c4492c64c1790945a8710e65b66",
+    "missing_snapshot_receipts": 22,
+    "only_path": "rust/tests/team_compaction_heads.rs",
+    "outcome": "PREFLIGHT_ONLY; current overall validation not assessed",
+    "plan_sha256": "e106d85e541a218299b9f6f4f2b95fd811316d5e03ae92b770d973b862a40ade",
+    "rust_tree": "7cfa2b85d103b50bc5d941f3b6165fe38b51cbd5",
+    "tree": "43566b5dfeef1c2943ee9265b0931f8912c19a8f",
+    "value": "integer zero both; no assertion or expected permission change"
+  },
+  "old_source": {
+    "completed_phases": [
+      {
+        "driver_exit": 0,
+        "passed": 0,
+        "phase": "01-features-before",
+        "receipt_sha256": "8dd3ca235b12c74d6c5b40c7e57be6698e6678f531be91cbedee664b0d76d0c4",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "passed": 0,
+        "phase": "02-format",
+        "receipt_sha256": "8b691d0673d8bd7d82e194674e875d2d200eac34fbefe44d721f29243d8944d6",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "passed": 1,
+        "phase": "03-new-exact",
+        "receipt_sha256": "08f5c099d23f70e93bf887f6453126eef6181534c256c7db15e3a29c482bb459",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "passed": 1,
+        "phase": "04-new-exact",
+        "receipt_sha256": "a458fbfe7a04307ad9fd3adca00a838bbc776f870ee0020a2c92c4a2826850b6",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "passed": 31,
+        "phase": "05-lib-debug",
+        "receipt_sha256": "669a85d691269fdf5003b41898d9347d0a64675871a3b8cdd8eb4f70d1e5c7c5",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "passed": 27,
+        "phase": "06-integration-debug",
+        "receipt_sha256": "579fe18d9a0192f84e36cda2503db520668bf3e92e26e5cf1a10aef80d806905",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "passed": 31,
+        "phase": "07-lib-release",
+        "receipt_sha256": "4e30c213d0fb6c86db87167d41af94acf1d32806c45d7d33378077cc4229fdec",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 0,
+        "passed": 27,
+        "phase": "08-integration-release",
+        "receipt_sha256": "66ef9925116690f6880edf92f90ddb50208db78df7bac8547339129863e47430",
+        "test_exit": 0
+      },
+      {
+        "driver_exit": 125,
+        "passed": 1874,
+        "phase": "09-full-matrix",
+        "receipt_sha256": "d3b318460a068262911a45b442164fddb221c27eb63f2f40b2acf57d1f1e0493",
+        "test_exit": 1
+      }
+    ],
+    "driver_sha256": "6ea46ba72ee96c6926db96780bbbf41001f4a494be667b46f9ecad2d68c48a3b",
+    "full_matrix": {
+      "doc_tests": 48,
+      "driver_exit": 125,
+      "elapsed_seconds": 2956.200471558,
+      "failed": 0,
+      "ignored": 5,
+      "integration_targets": 107,
+      "only_nonzero_step": "clippy exit101",
+      "overall": "FAIL",
+      "passed": 1874,
+      "receipt_sha256": "d3b318460a068262911a45b442164fddb221c27eb63f2f40b2acf57d1f1e0493",
+      "signer_probes": 4,
+      "steps": 112,
+      "summary_count": 115,
+      "test_exit": 1,
+      "verify_failed": "clippy"
+    },
+    "head": "8a8073b3d876bb3f83a628a7fdbd2902e8b40851",
+    "manifest_sha256": "c453a1c337c0870a96c1ca51e21785b313a317d13c892225bb8e97feefcfd4cd",
+    "missing_later_receipts": 17,
+    "plan_sha256": "4f7924fc94f2249688a46bf2a3e518a726d80505fc4aba4fc057544cf8bca6d2",
+    "rust_tree": "d63be7c07896e271bb48610463f4a6e027581f59",
+    "tree": "a43f60ea5438355879c90f9bf4bb6c63cd0e6679"
+  },
+  "schema": "Sol-independent-frozen-Linux-and-octal-DATA-v1",
+  "scope": "Read-only frozen DATA and fixed trusted Git objects; no execution/review/acceptance verdict."
+}

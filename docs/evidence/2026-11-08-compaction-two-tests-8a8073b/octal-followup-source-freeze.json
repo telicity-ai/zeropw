@@ -1,0 +1,19 @@
+{
+  "schema": "Root-octal-only-source-fix-v1",
+  "time_utc": "2026-11-08T10:08:49.856730+00:00",
+  "actual_model": "gpt-6.1-sol/ultra Root",
+  "head": "563de18b61b87b00e33faed955c43f14db43f681",
+  "tree": "43566b5dfeef1c2943ee9265b0931f8912c19a8f",
+  "rust_tree": "7cfa2b85d103b50bc5d941f3b6165fe38b51cbd5",
+  "prior_head": "8a8073b3d876bb3f83a628a7fdbd2902e8b40851",
+  "source_files": 1464,
+  "only_path": "rust/tests/team_compaction_heads.rs",
+  "delta": "from_mode(0) to from_mode(0o0), exact same u32 zero; no assertion/permission/expectation or production source change",
+  "preserved_8a_result": "Linux full FAIL strictClippy only,112steps107targets1874tests0failed5ignored;remaining17phasesNOTRUN. Native8a full remains active and unmodified.",
+  "scope": "Separate coordinator style-only followup, not silently inside two-test Astra3path slice; actual original8a preservation assertions remain bound only to8a. No new product decision, CI waiver or test weakening.",
+  "manifest_sha256": "496ba2d16c7ba33300af3329babce07e16503c4492c64c1790945a8710e65b66",
+  "driver_sha256": "e8b101722278b3c15cefeea8c8f09f2b6353149e73f4cc178a790abb392fe6be",
+  "plan_sha256": "e106d85e541a218299b9f6f4f2b95fd811316d5e03ae92b770d973b862a40ade",
+  "phase_count": 27,
+  "all_findings": "OPEN"
+}

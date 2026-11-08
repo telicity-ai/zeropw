@@ -1,0 +1,110 @@
+{
+  "schema": "Root-mac-resource-allocation-statement-v1",
+  "as_of_utc": "2026-11-08T06:39:04.816263+00:00",
+  "issuer": {
+    "role": "actual Root ZeroPW MLP resource allocator/coordinator",
+    "thread": "0f4acac7-9cb4-45f0-9cfc-78e74771ee22",
+    "model": "gpt-6.1-sol",
+    "effort": "ultra",
+    "source": "continuous retained coordinator custody and allocation responsibility, not a worker or independent VM observer"
+  },
+  "authority_basis": "Original user task authorized necessary isolated macOS MLP development/verification. No new user approval/answer is claimed. This is allocator factual testimony at that resource boundary, not new permission granted by Astra.",
+  "resource": {
+    "TART_HOME": "/Volumes/susudi/zeropw-mlp-macos-tart",
+    "name": "zeropw-mlp-macos",
+    "extra_disk": "/Volumes/susudi/zeropw-mlp-macos-tart/build-target-20261107.raw",
+    "historical_expected_logical_bytes": 85899345920,
+    "historical_mount": "/Volumes/ZeroPWBuild",
+    "historical_endpoint": "admin@192.168.64.2 UID501",
+    "client_public_fingerprint_not_server": "SHA256:M96+umpoyd3kOyoiEeE2P0vPSyvvEPBPpo0czRBc/ao"
+  },
+  "continuity_statement": {
+    "Root_retains_original_test_allocation": true,
+    "Root_has_not_transferred_or_shared_allocator_responsibility": true,
+    "replacement_rename_import_overwrite_transfer_or_disk_reassignment_performed_or_authorized_by_Root": "NONE since original clone/run/builddisk linkage",
+    "basis": "Root vouches for retained ownership/continuity of this exact originally allocated named test object/disk from its coordinator custody; no conflicting owner/change has been reported. Not an inference from matching IP/PID or no-overwrite alone.",
+    "no_fresh_immutable_UUID_or_disk_measurement_claim": true,
+    "unreported_outside_changes": "not independently excluded by a sensor or cryptographic attestation; any contrary ownership/identity fact withdraws prospective readiness"
+  },
+  "exhaustive_current_authorized_allocation_statement": {
+    "Root_is_sole_allocator_for_exact_target_and_rawdisk": true,
+    "other_authorized_users_workers_services_reservations_or_shared_disk_consumers": [],
+    "Root_has_issued_no_new_native_runtime_grant_after_compaction_HOLD": true,
+    "current_VM_resource_execution_grants": [],
+    "outstanding_resource_record": "compaction-heads-r1 original HOLD_UNEXPLAINED_SURVIVOR_RELEASE_NOT_CLAIMED; remains unclosed historical task scope, not a new competing allocator",
+    "static_tasks": "Astra resource and Rust fix planning hold no VM/runtime lease",
+    "UI_redesign": "Separate named zeropw-ui-redesign from retained UI report; Root never allocated this VM/rawdisk to that session. Its runtime is neither queried nor controlled here.",
+    "unknown_ten_guest_processes": "Still unattributed; no claim they are Root direct children, idle, absent, harmless, joined or a known service. Whole-object allocation testimony does not adopt their PIDs.",
+    "assurance": "Exhaustive as responsible allocator of this dedicated test object. Not a global host/guest process census or assertion about unauthorized/unreported external intervention."
+  },
+  "reconciled_history": [
+    {
+      "job": "original baseline/v2",
+      "endpoint": "v2 later finished summary supersedes early IN_PROGRESS; no global-idle claim"
+    },
+    {
+      "job": "M1 d59 native",
+      "endpoint": "own release 2026-11-07T13:38:04.583151+00:00"
+    },
+    {
+      "job": "m2b2a-native-2936202",
+      "endpoint": "own release16:34:51.668537+00:00; original audit failure preserved"
+    },
+    {
+      "job": "m2b2a prestaged",
+      "endpoint": "own release16:52:14.679515+00:00; cache failure preserved"
+    },
+    {
+      "job": "frozen m2b2a driver",
+      "endpoint": "own release18:03:28.343444+00:00"
+    },
+    {
+      "job": "required-generations-r1",
+      "endpoint": "own release23:20:26.110392+00:00;69knownphase waits/122SSHjoins"
+    },
+    {
+      "job": "compaction-heads-r1",
+      "endpoint": "31knownphase and33SSHjoin observations; original10unexplainedidentityHOLD persists"
+    }
+  ],
+  "stale_master_pointer_reconciliation": {
+    "native_vm_assignment": "Historical EXCLUSIVE required-generation4a pointer is superseded by its sealed own release and later compaction grant; not a current allocation. Raw historical value preserved.",
+    "native_m2b2a_status_running": "Historical provider status keys are superseded by explicit final release/collection state. No polling or active worker adoption.",
+    "current_authoritative_record": "This dated Root allocation statement, no new guest allocation; compactionHOLD retained."
+  },
+  "preservation_statement": {
+    "required_Root_artifacts": "All assigned source/final native logs, failed attempts, before/after manifests, public dependency pins, minimal HOLD identity observations, review inputs and outputs are already sealed on host in compaction frozen package/c13e and independent collection. Required earlier handoffs/releases remain retained.",
+    "guest_disk_source_evidence_cache": "Must remain intact; no VM/base/rawdisk delete/overwrite/resize or guest HOME/runtimeDB/key/memory collection. Public caches/targets are not sole copies of required evidence.",
+    "known_real_user_production_data_or_other_owner_retention_requests": "NONE authorized, supplied or reported for this dedicated synthetic MLP VM; Root introduced only controlled test inputs.",
+    "unknown_volatile_process_state": "Not captured and not claimed preserved. A future verified whole-object stop may end its epoch, but cannot supply retrospective child waits or convert original HOLD to RELEASED.",
+    "Root_task_retention_requirements_for_future_stop": "Host sealed evidence adequate; leave both VM disks and guest evidence intact."
+  },
+  "optional_metadata": "Only installed trusted tart get --help was read. It exposes text/json whole-configuration output, no field projection; no named-object/config/UUID/guest/current power/host-key observation attempted, no config path guessed or full dump. Host-side disposition does not depend on an unproved SSH identity.",
+  "readiness": "ALLOCATOR_DATA_RECONCILED_FOR_SEPARATE_ROOT_LIFECYCLE_PLAN_ONLY; no stop/restart/reuse/test executed or assigned here. Suspend if any conflicting allocation/identity/preservation fact appears.",
+  "original_HOLD": "UNCHANGED, not cleared/joined/released",
+  "global_product_review_release_Go_holds": "UNCHANGED OPEN; no process custody, hardware powerloss/physical erasure, current idle or MLP acceptance claim",
+  "verified_inputs": {
+    "/Users/ys/Code/zeropw-mlp-evidence/mac-vm-history-disposition-astra-20261108/decision.md": {
+      "sha256": "40032138a9d5baa14c4a096a91ae896744ba03eb7de025f7301a43efe7913e7a",
+      "bytes": 16089
+    },
+    "/Users/ys/Code/zeropw-mlp-evidence/mac-vm-history-disposition-astra-20261108/implementation-task.md": {
+      "sha256": "ffc1a89d0ca319a384890c1f91f7ca8dffe3ecf3e437a32dda1e30868b7b277f",
+      "bytes": 7908
+    },
+    "/Users/ys/Code/zeropw-mlp-evidence/mac-vm-recovered-history-20261108/recorded-calls.json": {
+      "sha256": "e96b7cee449cbee868b1874a5eb3ba91d808dd831154384abb008a06db284ac8",
+      "bytes": 17050
+    },
+    "/Users/ys/Code/zeropw-mlp-evidence/compaction-heads-sol-20261108/t3-bb0cec73/OWN-RESOURCE-HOLD.json": {
+      "sha256": "6d74313d87dd7badb8417c43b70734305d2502c9f20aefd1bdf8ab0e6b659542",
+      "bytes": 15227
+    },
+    "docs/personal-vault-i18n-2026-11-07.md": {
+      "sha256": "2d712a610c4d6f5e560fe535c7de6761e1975714f52331dd0b04ba58a7b525c6",
+      "bytes": 14285,
+      "used_fields": "named zeropw-ui-redesign isolated VM; not allocation of this target/rawdisk"
+    }
+  },
+  "master_snapshot_sha256": "2290766b0bb1839ebbfb2d9d1123b8ba9059a4b4bc824137a9a365c17fdc3776"
+}

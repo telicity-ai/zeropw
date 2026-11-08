@@ -1,0 +1,33 @@
+{
+  "as_of_utc": "2026-11-08T07:14:51.849096+00:00",
+  "source_head": "10aac8748c472180d8dc59f9c362d525d610dedb",
+  "source_files": 1441,
+  "product_validation": "NOTRUN",
+  "findings": "ZPCHEAD-OPUS-01 MEDIUM OPEN; 02 MEDIUM OPEN; 03 LOW OPEN",
+  "artifacts": {
+    "REPORT.md": {
+      "bytes": 2220,
+      "sha256": "d5fee0797a1bcad1c2a208fbe30914eedf4e35a820486fc1e05811262feab77c"
+    },
+    "implementation.patch": {
+      "bytes": 27219,
+      "sha256": "1d0c332667528912e1f9c460e617d0f5916500750487b7df11b522914dc210d2"
+    },
+    "independent-preservation.json": {
+      "bytes": 33975,
+      "sha256": "1cda7ce3a28ed17d274c68b101bac0e7fc4eb66d6e98a026a4370d5a36362554"
+    },
+    "independent-preservation.md": {
+      "bytes": 2488,
+      "sha256": "b561db3438efd02300d62a3864a6ed8c9f5a8cf059d00af51704cde18ad29d9d"
+    },
+    "source-manifest.json": {
+      "bytes": 448214,
+      "sha256": "db8363fbcb26244c798dc1f0ec14480b4189a01fe5320c2f4d84cd912867a672"
+    },
+    "source.tar": {
+      "bytes": 24432640,
+      "sha256": "5109f51b511b59ae9c5b835e3d99fea754ca851164da4855bfa12a3b70db2ae0"
+    }
+  }
+}
