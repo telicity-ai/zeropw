@@ -638,3 +638,16 @@ results remain pending. Completed Linux verification/E2E, DNS/NSG setup and
 certificate issuance do not satisfy the remaining native or deployed-service gates. This proposal
 neither closes those findings nor changes `rust/PORTING.md`, the
 security design, harness or CI requirements.
+
+
+### Original signed compaction heads: implementation collected, 2026-11-08
+
+The separate [four-file implementation and evidence](evidence/2026-11-08-compaction-heads-0d3fdc5/README.md)
+is collected at product0d3fdc54, Rustafc41fcb. Native unchanged verification
+passed112steps/107targets/1843tests with0failures and5ignored; focused debug/release
+and14 exact selectors passed. Independent DATA collection matched source, patch,
+logs and protected inputs. This is no Opus/Astra acceptance. Linux remains NOTRUN
+in the original worker handoff and overall validation INCOMPLETE. Resource release
+is HOLD for ten unexplained identities without birth/custody evidence; no further
+Mac execution/cleanup is assigned. All M2/runtime/review/physical/Oracle/release
+and old Go custody holds remain unchanged.

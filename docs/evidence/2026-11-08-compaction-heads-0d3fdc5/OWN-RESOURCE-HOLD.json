@@ -1,0 +1,557 @@
+{
+  "all_test_descendants_or_unexplained_processes_proven_absent": false,
+  "final_collection_sha256": "59a69c97dd17cef14321ea8a48260d5e5b0bf88be9e481df1187092c727227fa",
+  "final_host_epoch": 1794111800.60908,
+  "guest_hold": {
+    "absolute_deadline_epoch": 1794128590.158964,
+    "first_assigned_ssh_epoch": 1794106990.158964,
+    "guest_epoch": 1794111739.0460212,
+    "job": "/Volumes/ZeroPWBuild/compaction-heads-r1",
+    "linux": "NOT_ASSIGNED / NOTRUN",
+    "minimal_identity_check_scope": "assigned UID minimal pid/ppid/pgid/session/comm identity; known Popen child groups, assigned-job executable paths and unexplained helper names; no argv/env/memory inspection",
+    "next": "host joins this exact final collection SSH; freeze HOLD locally, no later runtime call, no signal/adoption/VM action",
+    "owned_survivors": [
+      {
+        "comm": "sleep",
+        "pgid": 24558,
+        "pid": 22753,
+        "ppid": 24558,
+        "session": "0"
+      },
+      {
+        "comm": "sleep",
+        "pgid": 24425,
+        "pid": 22754,
+        "ppid": 24425,
+        "session": "0"
+      },
+      {
+        "comm": "sleep",
+        "pgid": 61899,
+        "pid": 22755,
+        "ppid": 61899,
+        "session": "0"
+      },
+      {
+        "comm": "sleep",
+        "pgid": 73499,
+        "pid": 22756,
+        "ppid": 73499,
+        "session": "0"
+      },
+      {
+        "comm": "sleep",
+        "pgid": 73612,
+        "pid": 22760,
+        "ppid": 73612,
+        "session": "0"
+      },
+      {
+        "comm": "/bin/sh",
+        "pgid": 24425,
+        "pid": 24425,
+        "ppid": 1,
+        "session": "0"
+      },
+      {
+        "comm": "/bin/sh",
+        "pgid": 24558,
+        "pid": 24558,
+        "ppid": 1,
+        "session": "0"
+      },
+      {
+        "comm": "/bin/sh",
+        "pgid": 61899,
+        "pid": 61899,
+        "ppid": 1,
+        "session": "0"
+      },
+      {
+        "comm": "/bin/sh",
+        "pgid": 73499,
+        "pid": 73499,
+        "ppid": 1,
+        "session": "0"
+      },
+      {
+        "comm": "/bin/sh",
+        "pgid": 73612,
+        "pid": 73612,
+        "ppid": 1,
+        "session": "0"
+      }
+    ],
+    "phase_receipts": [
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "10-features-before",
+        "pid": 93771,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "11-format-allowed",
+        "pid": 93781,
+        "stop_reason": null
+      },
+      {
+        "exit": 101,
+        "joined": true,
+        "label": "12-lib-debug-attempt1",
+        "pid": 93786,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "13-lib-debug-attempt2",
+        "pid": 95070,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "14-integration-debug-attempt1",
+        "pid": 95367,
+        "stop_reason": null
+      },
+      {
+        "exit": 101,
+        "joined": true,
+        "label": "15-clippy-attempt1",
+        "pid": 95692,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "18-format-allowed-final",
+        "pid": 96340,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "19-clippy-attempt2",
+        "pid": 96351,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "20-rust-version",
+        "pid": 97055,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "21-cargo-version",
+        "pid": 97060,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "22-python-version",
+        "pid": 97065,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "23-lib-debug-final",
+        "pid": 97074,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "24-integration-debug-final",
+        "pid": 97371,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "25-lib-release-final",
+        "pid": 97550,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "26-integration-release-final",
+        "pid": 98849,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "27-full-verify-final",
+        "pid": 99269,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "28-exact-debug-1",
+        "pid": 22032,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "29-exact-debug-2",
+        "pid": 22037,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "30-exact-debug-3",
+        "pid": 22044,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "31-exact-debug-4",
+        "pid": 22049,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "32-exact-debug-5",
+        "pid": 22059,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "33-exact-debug-6",
+        "pid": 22086,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "34-exact-debug-7",
+        "pid": 22101,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "35-exact-release-1",
+        "pid": 22130,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "36-exact-release-2",
+        "pid": 22155,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "37-exact-release-3",
+        "pid": 22191,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "38-exact-release-4",
+        "pid": 22232,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "39-exact-release-5",
+        "pid": 22237,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "40-exact-release-6",
+        "pid": 22318,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "41-exact-release-7",
+        "pid": 22326,
+        "stop_reason": null
+      },
+      {
+        "exit": 0,
+        "joined": true,
+        "label": "42-features-after-final",
+        "pid": 22337,
+        "stop_reason": null
+      }
+    ],
+    "prior_release_attempt": "30-own-release-collect exit1: unexplained_owned_survivor_HOLD_no_kill_or_adoption; no identity bytes printed or saved by that failed assertion",
+    "remaining_files": "assigned source/public cache/target/control/evidence retained for Root; no credential/database/HOME export",
+    "schema": "zeropw-compaction-heads-own-native-release-v1",
+    "state": "HOLD_UNEXPLAINED_SURVIVOR_RELEASE_NOT_CLAIMED",
+    "uid": 501,
+    "unassigned_resource_files_jobs_controls": "NOT QUERIED OR USED",
+    "vm_stopped_deleted_or_reconfigured": false,
+    "whole_vm_idle_or_erasure_claim": false
+  },
+  "host_transport_receipts": [
+    {
+      "exit": 1,
+      "path": "00-native-preflight.transport.json",
+      "sha256": "dd4cc61cac5ccad9de471097c6c84934f1725db11c61d539e9f14ac9fa45214c",
+      "ssh_joined": true,
+      "ssh_pid": 83238
+    },
+    {
+      "exit": 0,
+      "path": "01-native-preflight.transport.json",
+      "sha256": "83a09729c4bf98295658b26183ce666e01d35f3734683a03901cde675daeeb6f",
+      "ssh_joined": true,
+      "ssh_pid": 84008
+    },
+    {
+      "exit": 0,
+      "path": "02-native-install.transport.json",
+      "sha256": "b3772891b7548b5ea00e4d89441e7f7fa823dda246c7e8141ab9e4f94ba8ec23",
+      "ssh_joined": true,
+      "ssh_pid": 85169
+    },
+    {
+      "exit": 1,
+      "path": "03-native-stage1.transport.json",
+      "sha256": "59a4c71c14d4e34125a1fea037551b27ac4401cc18aaa0c6d25a88eb0266128d",
+      "ssh_joined": true,
+      "ssh_pid": 85275
+    },
+    {
+      "exit": 0,
+      "path": "04-native-collect-attempt1.transport.json",
+      "sha256": "a7170842b800cd1f28c490f56f4ebec21ebf174d81d7f3c3f341fff93bb58d06",
+      "ssh_joined": true,
+      "ssh_pid": 86110
+    },
+    {
+      "exit": 0,
+      "path": "05-native-update2.transport.json",
+      "sha256": "9ecf503e626958b6d5b5db4df57a76e941bb16575d35a8a4bd5ae007647068c8",
+      "ssh_joined": true,
+      "ssh_pid": 86684
+    },
+    {
+      "exit": 0,
+      "path": "06-native-stage2.transport.json",
+      "sha256": "901477adb6bed34bb7f12cfb377778333b508162a79b918e12bd09bccba1f76d",
+      "ssh_joined": true,
+      "ssh_pid": 86747
+    },
+    {
+      "exit": 0,
+      "path": "07-native-collect-debug.transport.json",
+      "sha256": "0ddaef4036bd406be9d5a26ba40bf0ec3524599c79dc0f2893acf807d90056d0",
+      "ssh_joined": true,
+      "ssh_pid": 87745
+    },
+    {
+      "exit": 1,
+      "path": "08-native-stage3.transport.json",
+      "sha256": "d2fe6282bf53f008333fcbb280b21bf2fff49abec93544d4bf45e79e7aad6f3f",
+      "ssh_joined": true,
+      "ssh_pid": 87752
+    },
+    {
+      "exit": 0,
+      "path": "09-native-collect-clippy.transport.json",
+      "sha256": "4634b26e6565b9cd52f515ed26e40ebce2932afa81a92668b49c4d0eb1dd78a8",
+      "ssh_joined": true,
+      "ssh_pid": 88374
+    },
+    {
+      "exit": 0,
+      "path": "10-native-update3.transport.json",
+      "sha256": "aba17adf3fcfed5f1f9c377f734655c27d0c15d1cc4518a08dcfbc71209a381a",
+      "ssh_joined": true,
+      "ssh_pid": 88637
+    },
+    {
+      "exit": 0,
+      "path": "11-native-stage4.transport.json",
+      "sha256": "4e811931bcb21a8125b7fa0d268ae09e52ab6d5aee08d45ba569ab558816150d",
+      "ssh_joined": true,
+      "ssh_pid": 88642
+    },
+    {
+      "exit": 0,
+      "path": "12-native-collect-final-source.transport.json",
+      "sha256": "15388d3cf8941ce99f6ca5d66314ee31bfdbe688584f7ddc3c1d06719dd19ed8",
+      "ssh_joined": true,
+      "ssh_pid": 89700
+    },
+    {
+      "exit": 0,
+      "path": "13-native-driver-update.transport.json",
+      "sha256": "43c045c33ec235716a29ad3fd378497374b77b838de920c5d0046c0485af9d0d",
+      "ssh_joined": true,
+      "ssh_pid": 89706
+    },
+    {
+      "exit": 0,
+      "path": "14-native-final-matrix.transport.json",
+      "sha256": "2e87c3dbef66e378a7cedea4fe1aedde88df5db764643446ff45cb3cd3c6cef4",
+      "ssh_joined": true,
+      "ssh_pid": 89710
+    },
+    {
+      "exit": 0,
+      "path": "15-native-full-progress.transport.json",
+      "sha256": "4f3065cdbf454056f282e57253d0894969fe8cfbc05b5ba2eab9e02924706cb9",
+      "ssh_joined": true,
+      "ssh_pid": 95219
+    },
+    {
+      "exit": 0,
+      "path": "16-native-full-progress.transport.json",
+      "sha256": "a06c4953c1802a7035ddab094f9bdcdbb923c9990f86c63548c1e8365d2a8df2",
+      "ssh_joined": true,
+      "ssh_pid": 96450
+    },
+    {
+      "exit": 0,
+      "path": "17-native-full-progress.transport.json",
+      "sha256": "0f1f115e1e95b4c603f1880e275ed61cb777f80e201ddcca2208501cffedc533",
+      "ssh_joined": true,
+      "ssh_pid": 98749
+    },
+    {
+      "exit": 0,
+      "path": "18-native-full-progress.transport.json",
+      "sha256": "b6b6923d65a8167089eff855d3a17bdbd1ef8c567893123443097196b076b862",
+      "ssh_joined": true,
+      "ssh_pid": 3223
+    },
+    {
+      "exit": 0,
+      "path": "19-native-full-progress.transport.json",
+      "sha256": "1a34adcd6d979058a3930dc5f98bb799cc16b497944362e2adce2d0b8c1fcdd8",
+      "ssh_joined": true,
+      "ssh_pid": 4965
+    },
+    {
+      "exit": 0,
+      "path": "20-native-full-progress.transport.json",
+      "sha256": "b4b4a85ec487e54e49ec2d6143db69baeb0ec172c9d1d7cee159c9a3636fe4ea",
+      "ssh_joined": true,
+      "ssh_pid": 6626
+    },
+    {
+      "exit": 0,
+      "path": "21-native-full-progress.transport.json",
+      "sha256": "79974cd7f46f66d6ebb01d364a9f54d3f5533c49c0f5c3cb8ecc16dda133e7cd",
+      "ssh_joined": true,
+      "ssh_pid": 7165
+    },
+    {
+      "exit": 0,
+      "path": "22-native-full-progress.transport.json",
+      "sha256": "5a1f5f5b6a7e7fd3ea3975fffb85f4edb761c4aedbe015316e2e772aa8974628",
+      "ssh_joined": true,
+      "ssh_pid": 8478
+    },
+    {
+      "exit": 0,
+      "path": "23-native-full-progress.transport.json",
+      "sha256": "7abe971ae575fafed747ee108e518bb8e122c18ffe76c84c77bc6cf0733def83",
+      "ssh_joined": true,
+      "ssh_pid": 10364
+    },
+    {
+      "exit": 0,
+      "path": "24-native-full-progress.transport.json",
+      "sha256": "10ec354fe706e16836d719027a7191bc1b591cc75ddf29a148cc55c1fcbb47d3",
+      "ssh_joined": true,
+      "ssh_pid": 11162
+    },
+    {
+      "exit": 0,
+      "path": "25-native-full-progress.transport.json",
+      "sha256": "caf628f5736706163530a37a2402af6a25582038c32f18bdf5fc5e22195d7ddd",
+      "ssh_joined": true,
+      "ssh_pid": 14806
+    },
+    {
+      "exit": 0,
+      "path": "26-native-full-progress.transport.json",
+      "sha256": "3fb7b8aa76c3ec4cc1744e48a009e5ecccaaaafcdf0e598e36ea26d06fb620d3",
+      "ssh_joined": true,
+      "ssh_pid": 17808
+    },
+    {
+      "exit": 0,
+      "path": "27-native-full-progress.transport.json",
+      "sha256": "2ca1da3146d0c9db3ffc0849cf4f378aab533930bc75cab194723ac936449a6b",
+      "ssh_joined": true,
+      "ssh_pid": 22850
+    },
+    {
+      "exit": 0,
+      "path": "28-native-full-progress.transport.json",
+      "sha256": "20765ed6516a55b9181795f4f60b32be5ce025794a9fdea7dbed76633d2110c7",
+      "ssh_joined": true,
+      "ssh_pid": 24527
+    },
+    {
+      "exit": 0,
+      "path": "29-final-audit.transport.json",
+      "sha256": "02a5e04c0c36908805d68ef157e02a0dc2d7b6fbe9101f78207eb879396f3419",
+      "ssh_joined": true,
+      "ssh_pid": 27234
+    },
+    {
+      "exit": 1,
+      "path": "30-own-release-collect.transport.json",
+      "sha256": "cb71bb4f8e18f664c5bbd23c6210a01e4e0848b160d25da517021e0a35e7d606",
+      "ssh_joined": true,
+      "ssh_pid": 27531
+    },
+    {
+      "exit": 0,
+      "path": "31-native-full-progress.transport.json",
+      "sha256": "ba19629d1a1488979e9db48b5329615fefc33597359b54341fd04d3a8192bda4",
+      "ssh_joined": true,
+      "ssh_pid": 26739
+    },
+    {
+      "exit": 0,
+      "path": "32-hold-final-collect.transport.json",
+      "sha256": "1248598cb1008961723319e66f7bb0437bb10a767d3b0b24fc428637e719810b",
+      "ssh_joined": true,
+      "ssh_pid": 27867
+    }
+  ],
+  "known_Popen_phase_receipts_all_joined": true,
+  "last_assigned_SSH": "32-hold-final-collect",
+  "linux": "NOT_ASSIGNED / NOTRUN",
+  "no_further_runtime_calls": true,
+  "no_unexplained_process_signalled_adopted_or_VM_action": true,
+  "overall_two_platform_validation": "INCOMPLETE",
+  "own_host_SSH_transports_all_joined": true,
+  "release": false,
+  "state": "HOLD_UNEXPLAINED_SURVIVOR_RELEASE_NOT_CLAIMED",
+  "unexplained_identity_attribution": "UNRESOLVED; guest legacy field name owned_survivors does not establish ownership",
+  "unexplained_identity_count": 10
+}

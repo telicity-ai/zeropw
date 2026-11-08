@@ -1,0 +1,201 @@
+{
+  "actual_collector": "gpt-6.1-sol / ultra, native same-provider child",
+  "archives": [
+    {
+      "entries": 21,
+      "path": "04-native-collect-attempt1.stdout",
+      "sha256": "93a5b5bf8bba1b5173481fdc5c4c87e35d504a054f89a22962ec31cb455abf56",
+      "uncompressed_bytes": 5183483
+    },
+    {
+      "entries": 31,
+      "path": "07-native-collect-debug.stdout",
+      "sha256": "2a41acec415056dee7c009c9262d589e4c5ca3b5661256af18eee6dab9bbdcac",
+      "uncompressed_bytes": 6660818
+    },
+    {
+      "entries": 36,
+      "path": "09-native-collect-clippy.stdout",
+      "sha256": "e1615e91b386a361348b9d965f830e04b8cf83cc5fb936ab49184b2e5c29e699",
+      "uncompressed_bytes": 7402950
+    },
+    {
+      "entries": 46,
+      "path": "12-native-collect-final-source.stdout",
+      "sha256": "d8dd1032178214b99d538be18e944259d38d06429ce8ff72b0cb9be1f0b71642",
+      "uncompressed_bytes": 8877390
+    },
+    {
+      "entries": 165,
+      "path": "32-hold-final-collect.stdout",
+      "sha256": "59a69c97dd17cef14321ea8a48260d5e5b0bf88be9e481df1187092c727227fa",
+      "uncompressed_bytes": 28975705
+    },
+    {
+      "entries": 1374,
+      "path": "full-source.tar.gz",
+      "sha256": "8e4cb2530cc274f5c6f9d4dfda150e58411d34260ea901e85ca82f97952b0915",
+      "uncompressed_bytes": 20660696
+    },
+    {
+      "entries": 7,
+      "path": "native-install.tar",
+      "sha256": "ece63fd4d00fa87024f235e07fc4f1de927292ceca8dd3bdd7a182e36efb5244",
+      "uncompressed_bytes": 819206
+    },
+    {
+      "entries": 4,
+      "path": "overlay-pre-native.tar",
+      "sha256": "d6dc361e9037f64b6c2193944e1aa07ba1704aadc8a949d810faf091dc6fe4c4",
+      "uncompressed_bytes": 445246
+    },
+    {
+      "entries": 5,
+      "path": "revision2.tar",
+      "sha256": "3ade54d916dab80f854b58e6ab2af36826b4bae5512cb89a0b693ecb748883b2",
+      "uncompressed_bytes": 819541
+    },
+    {
+      "entries": 5,
+      "path": "revision3.tar",
+      "sha256": "4b29f36fcbcc9fa7c61b4a3ac8af16d5f3240feea38f1242abca0657f0adcd25",
+      "uncompressed_bytes": 819513
+    }
+  ],
+  "changed_paths": [
+    "rust/src/team/compaction_heads.rs",
+    "rust/src/team/mod.rs",
+    "rust/src/team/sync.rs",
+    "rust/tests/team_compaction_heads.rs"
+  ],
+  "counts": {
+    "baseline_files": 1372,
+    "cache_metadata_entries": 11744,
+    "catalogue_records": 464,
+    "changed_paths": 4,
+    "checksum_records": 465,
+    "exact_selectors": 14,
+    "external_regular_files": 467,
+    "final_source_exact_inventories": 50,
+    "fixture_protected_files": 536,
+    "freeze_bindings": 9,
+    "full_summary_records": 115,
+    "full_verifier_steps": 112,
+    "integration_targets": 107,
+    "known_phase_children_joined": 31,
+    "own_transport_receipts": 33,
+    "patch_sections_exact": 4,
+    "pinned_archive_records": 172,
+    "protected_existing_exact": 1370,
+    "safe_regular_archives": 10,
+    "source_files": 1374,
+    "source_inventories": 62,
+    "source_inventory_protected_record_comparisons": 84940,
+    "upstream_bytes": 254587496,
+    "upstream_file_records": 8194
+  },
+  "failed_DATA_history": "Worker native preflight Desktop/Rust pin union; host tree130/receipt aggregation1 preserved. Collector exploratory schema display AttributeError before any output write preserved in tool transcript; successful independent DATA checks used actual list schema, no product retry. Initial large display output was truncated; no mutation.",
+  "failed_product_attempts_preserved": [
+    {
+      "exit": 101,
+      "label": "12-lib-debug-attempt1",
+      "stderr_sha256": "4bbc98568685722d18e8cfef4ef7549a791cdca8c40ff26692079a01b1b25c6d",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "exit": 101,
+      "label": "15-clippy-attempt1",
+      "stderr_sha256": "bfd577a93df78ccbdc56fba7673e76f72c8997ce3742b4666823162176263d31",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "feature_bytes": 43536,
+  "feature_sha256": "49272219bd41ec9055a00758629efcfa8fae32b6fb9e14f73f2b0a70eb620051",
+  "focused_commands": [
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--lib",
+        "compaction_heads"
+      ],
+      "label": "23-lib-debug-final",
+      "passed": 13
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--test",
+        "team_compaction_heads"
+      ],
+      "label": "24-integration-debug-final",
+      "passed": 11
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--lib",
+        "compaction_heads"
+      ],
+      "label": "25-lib-release-final",
+      "passed": 13
+    },
+    {
+      "argv": [
+        "/opt/homebrew/bin/cargo",
+        "test",
+        "--locked",
+        "--manifest-path",
+        "rust/Cargo.toml",
+        "--release",
+        "--test",
+        "team_compaction_heads"
+      ],
+      "label": "26-integration-release-final",
+      "passed": 11
+    }
+  ],
+  "frozen_handoff_sha256": "c13e5ff0953522cc25f1e7e1bc5866286dfdbef07db2ef715e1170cf49e7ea84",
+  "full_test_totals": {
+    "failed": 0,
+    "filtered": 717,
+    "ignored": 5,
+    "measured": 0,
+    "passed": 1843
+  },
+  "holds": "All canonical findings/DOS-1 HIGH/M2/runtime/review/acceptance/oldGo quarantine and Oracle/release holds unchanged OPEN",
+  "input_directory": "/Users/ys/Code/zeropw-mlp-evidence/compaction-heads-sol-20261108/t3-bb0cec73",
+  "lifecycle": "HOLD unchanged; ten unexplained shell/sleep process identities are not adopted or released",
+  "limitations": [
+    "Saved cache metadata compared; no live guest byte rehash or current process query",
+    "No independent raw tool transcript fetch or adversarial source review",
+    "Saved waits and identity receipts do not attest universal descendant absence or physical erasure",
+    "Protected fixture records matched; no fixture regenerated",
+    "No runtime, semantic acceptance, Linux verification, physical two-Mac, Oracle capacity/deployment or release verdict"
+  ],
+  "patch_sha256": "c3721a7e8cd51aeec8808e48ec5b41c3165132f7e13e0f3c89c5c092d278b23c",
+  "raw_value": "ABSENT",
+  "runtime_observation": "native source-bound PASS only; Linux NOT_ASSIGNED / NOTRUN; overall INCOMPLETE",
+  "schema": "independent-compaction-heads-DATA-collection-v1",
+  "scope": "Only collector-authored stdlib DATA reads/hash/parse; no submitted code/runtime/SSH/VM/PID query, no source/ref/index edits, reviews or acceptance",
+  "source_archive_sha256": "8e4cb2530cc274f5c6f9d4dfda150e58411d34260ea901e85ca82f97952b0915",
+  "trees_DATA": {
+    "baseline_full": "8c0f2004a5fb8515db392abb30e52606e20402ca",
+    "desktop": "2413844c89265a3e239be2372d34b1e6e1b2d4bb",
+    "full": "fbf13d73d270e441dd574cf592609d7d8b38dc6d",
+    "rust": "afc41fcb5d55aaec2bc2fead7c7d8a94f312cc9f"
+  },
+  "unresolved_integrity_gaps": []
+}

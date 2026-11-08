@@ -1,0 +1,207 @@
+{
+  "integration_test_count": 11,
+  "library_test_count": 13,
+  "limitations": [
+    "Deterministic effect-prefix reopen is not physical power-loss proof.",
+    "No new hooks inside protected StateDir writer; actual owned filesystem rename failures exercise that writer.",
+    "No gapped/interacting-removal/continuation/import/READY/receipt/ACK/activation acceptance.",
+    "No provider/SSH credential readiness claim.",
+    "Existing all_commits/fold/canonicalization work remains; DOS-1 is not fixed."
+  ],
+  "no_expected_data_from_new_selector": true,
+  "schema": "zeropw-compaction-heads-oracle-map-v1",
+  "tests": [
+    {
+      "execution": "see source-bound native phase results; Linux NOT_ASSIGNED/NOTRUN",
+      "expectations": "literal hand-authored slots/deletion sets/HLC/data/order and pre-compaction canonical bytes where applicable; ordinary fold/signature checks are correlated secondary checks",
+      "line": 180,
+      "obligation": "Exact final data head / signed bytes / literal version order",
+      "path": "rust/tests/team_compaction_heads.rs",
+      "test": "final_data_head_is_deleted_live_but_original_bytes_hlc_and_version_order_survive"
+    },
+    {
+      "execution": "see source-bound native phase results; Linux NOT_ASSIGNED/NOTRUN",
+      "expectations": "literal hand-authored slots/deletion sets/HLC/data/order and pre-compaction canonical bytes where applicable; ordinary fold/signature checks are correlated secondary checks",
+      "line": 226,
+      "obligation": "Newer live head cannot replace old cutoff slot",
+      "path": "rust/tests/team_compaction_heads.rs",
+      "test": "newer_live_head_cannot_replace_the_exact_old_cutoff_slot"
+    },
+    {
+      "execution": "see source-bound native phase results; Linux NOT_ASSIGNED/NOTRUN",
+      "expectations": "literal hand-authored slots/deletion sets/HLC/data/order and pre-compaction canonical bytes where applicable; ordinary fold/signature checks are correlated secondary checks",
+      "line": 250,
+      "obligation": "Idle removed author / Context reopen / next ordinary sequence",
+      "path": "rust/tests/team_compaction_heads.rs",
+      "test": "second_compaction_after_context_reopen_preserves_idle_removed_author_and_next_sequence"
+    },
+    {
+      "execution": "see source-bound native phase results; Linux NOT_ASSIGNED/NOTRUN",
+      "expectations": "literal hand-authored slots/deletion sets/HLC/data/order and pre-compaction canonical bytes where applicable; ordinary fold/signature checks are correlated secondary checks",
+      "line": 319,
+      "obligation": "Six authority kinds and mixed whole commits retained byte-identically",
+      "path": "rust/tests/team_compaction_heads.rs",
+      "test": "all_six_authority_kinds_and_mixed_commits_stay_byte_identical"
+    },
+    {
+      "execution": "see source-bound native phase results; Linux NOT_ASSIGNED/NOTRUN",
+      "expectations": "literal hand-authored slots/deletion sets/HLC/data/order and pre-compaction canonical bytes where applicable; ordinary fold/signature checks are correlated secondary checks",
+      "line": 397,
+      "obligation": "Missing legacy head / ordinary reads / no new publication",
+      "path": "rust/tests/team_compaction_heads.rs",
+      "test": "legacy_missing_idle_head_refuses_before_new_images_and_preserves_ordinary_reads"
+    },
+    {
+      "execution": "see source-bound native phase results; Linux NOT_ASSIGNED/NOTRUN",
+      "expectations": "literal hand-authored slots/deletion sets/HLC/data/order and pre-compaction canonical bytes where applicable; ordinary fold/signature checks are correlated secondary checks",
+      "line": 439,
+      "obligation": "One-axis corruption / exact full-record equality / duplicate/trailing/extra fields",
+      "path": "rust/tests/team_compaction_heads.rs",
+      "test": "one_axis_cache_corruption_and_full_record_substitution_never_publish_or_prune"
+    },
+    {
+      "execution": "see source-bound native phase results; Linux NOT_ASSIGNED/NOTRUN",
+      "expectations": "literal hand-authored slots/deletion sets/HLC/data/order and pre-compaction canonical bytes where applicable; ordinary fold/signature checks are correlated secondary checks",
+      "line": 504,
+      "obligation": "Live/cache same-slot equivocation",
+      "path": "rust/tests/team_compaction_heads.rs",
+      "test": "conflicting_live_original_at_the_cached_slot_refuses_without_fallback"
+    },
+    {
+      "execution": "see source-bound native phase results; Linux NOT_ASSIGNED/NOTRUN",
+      "expectations": "literal hand-authored slots/deletion sets/HLC/data/order and pre-compaction canonical bytes where applicable; ordinary fold/signature checks are correlated secondary checks",
+      "line": 535,
+      "obligation": "No-old result and fresh member gate before pruning",
+      "path": "rust/tests/team_compaction_heads.rs",
+      "test": "no_old_and_fresh_active_member_gate_keep_original_result_schema_and_no_cache"
+    },
+    {
+      "execution": "see source-bound native phase results; Linux NOT_ASSIGNED/NOTRUN",
+      "expectations": "literal hand-authored slots/deletion sets/HLC/data/order and pre-compaction canonical bytes where applicable; ordinary fold/signature checks are correlated secondary checks",
+      "line": 560,
+      "obligation": "Legacy finite floats / opaque fields / depth >64 preserve original signed bytes",
+      "path": "rust/tests/team_compaction_heads.rs",
+      "test": "legacy_float_opaque_and_deeper_than_checkpoint_values_preserve_original_bytes"
+    },
+    {
+      "execution": "see source-bound native phase results; Linux NOT_ASSIGNED/NOTRUN",
+      "expectations": "literal hand-authored slots/deletion sets/HLC/data/order and pre-compaction canonical bytes where applicable; ordinary fold/signature checks are correlated secondary checks",
+      "line": 575,
+      "obligation": "M1 deletion, version revoke, late put, restart, backup/cache separation",
+      "path": "rust/tests/team_compaction_heads.rs",
+      "test": "deletion_and_version_revocation_survive_real_compaction_restart_and_cache_loss"
+    },
+    {
+      "execution": "see source-bound native phase results; Linux NOT_ASSIGNED/NOTRUN",
+      "expectations": "literal hand-authored slots/deletion sets/HLC/data/order and pre-compaction canonical bytes where applicable; ordinary fold/signature checks are correlated secondary checks",
+      "line": 660,
+      "obligation": "Reserved-number normalization refuses actual compactor before publication",
+      "path": "rust/tests/team_compaction_heads.rs",
+      "test": "reserved_number_legacy_head_refuses_real_compaction_before_new_publication"
+    },
+    {
+      "execution": "see source-bound native phase results; Linux NOT_ASSIGNED/NOTRUN",
+      "expectations": "literal hand-authored slots/deletion sets/HLC/data/order and pre-compaction canonical bytes where applicable; ordinary fold/signature checks are correlated secondary checks",
+      "line": 632,
+      "obligation": "Actual lock and exact prepared snapshot binding",
+      "path": "rust/src/team/compaction_heads.rs",
+      "test": "compaction_heads_helpers_require_real_lock_and_bind_snapshot_plan"
+    },
+    {
+      "execution": "see source-bound native phase results; Linux NOT_ASSIGNED/NOTRUN",
+      "expectations": "literal hand-authored slots/deletion sets/HLC/data/order and pre-compaction canonical bytes where applicable; ordinary fold/signature checks are correlated secondary checks",
+      "line": 673,
+      "obligation": "PyInt beyond u64, exact padded HLC, vector/HLC regression, no sequence enumeration",
+      "path": "rust/src/team/compaction_heads.rs",
+      "test": "compaction_heads_exact_huge_pyint_slots_hlc_monotonicity_and_vector_regression"
+    },
+    {
+      "execution": "see source-bound native phase results; Linux NOT_ASSIGNED/NOTRUN",
+      "expectations": "literal hand-authored slots/deletion sets/HLC/data/order and pre-compaction canonical bytes where applicable; ordinary fold/signature checks are correlated secondary checks",
+      "line": 750,
+      "obligation": "256/257 heads and sorted exact authors",
+      "path": "rust/src/team/compaction_heads.rs",
+      "test": "compaction_heads_at_256_and_over_256_are_exact_without_sequence_enumeration"
+    },
+    {
+      "execution": "see source-bound native phase results; Linux NOT_ASSIGNED/NOTRUN",
+      "expectations": "literal hand-authored slots/deletion sets/HLC/data/order and pre-compaction canonical bytes where applicable; ordinary fold/signature checks are correlated secondary checks",
+      "line": 787,
+      "obligation": "16 MiB exact/one over, oversized bounded read, nonfile refusal",
+      "path": "rust/src/team/compaction_heads.rs",
+      "test": "compaction_heads_serialized_16_mib_boundary_and_bounded_disk_read"
+    },
+    {
+      "execution": "see source-bound native phase results; Linux NOT_ASSIGNED/NOTRUN",
+      "expectations": "literal hand-authored slots/deletion sets/HLC/data/order and pre-compaction canonical bytes where applicable; ordinary fold/signature checks are correlated secondary checks",
+      "line": 850,
+      "obligation": "Prospective image round-trip refusal of reserved-number normalization",
+      "path": "rust/src/team/compaction_heads.rs",
+      "test": "compaction_heads_reserved_number_normalization_refuses_before_publication"
+    },
+    {
+      "execution": "see source-bound native phase results; Linux NOT_ASSIGNED/NOTRUN",
+      "expectations": "literal hand-authored slots/deletion sets/HLC/data/order and pre-compaction canonical bytes where applicable; ordinary fold/signature checks are correlated secondary checks",
+      "line": 9459,
+      "obligation": "14 deterministic fault prefixes / interrupted-first-unlink reopen",
+      "path": "rust/src/team/sync.rs",
+      "test": "compaction_heads_real_compactor_fault_prefixes_reopen_without_losing_data"
+    },
+    {
+      "execution": "see source-bound native phase results; Linux NOT_ASSIGNED/NOTRUN",
+      "expectations": "literal hand-authored slots/deletion sets/HLC/data/order and pre-compaction canonical bytes where applicable; ordinary fold/signature checks are correlated secondary checks",
+      "line": 9517,
+      "obligation": "Ordered durable snapshot/record/cache/readback before every unlink",
+      "path": "rust/src/team/sync.rs",
+      "test": "compaction_heads_every_successful_unlink_follows_both_durable_images_and_readback"
+    },
+    {
+      "execution": "see source-bound native phase results; Linux NOT_ASSIGNED/NOTRUN",
+      "expectations": "literal hand-authored slots/deletion sets/HLC/data/order and pre-compaction canonical bytes where applicable; ordinary fold/signature checks are correlated secondary checks",
+      "line": 9535,
+      "obligation": "Actual StateDir snapshot/record/cache writer rename failures",
+      "path": "rust/src/team/sync.rs",
+      "test": "compaction_heads_real_snapshot_record_and_cache_rename_failures_precede_unlink"
+    },
+    {
+      "execution": "see source-bound native phase results; Linux NOT_ASSIGNED/NOTRUN",
+      "expectations": "literal hand-authored slots/deletion sets/HLC/data/order and pre-compaction canonical bytes where applicable; ordinary fold/signature checks are correlated secondary checks",
+      "line": 9572,
+      "obligation": "Actual corrupt cache readback refuses, ordinary load ignores cache",
+      "path": "rust/src/team/sync.rs",
+      "test": "compaction_heads_actual_corrupt_readback_refuses_and_ordinary_load_ignores_cache"
+    },
+    {
+      "execution": "see source-bound native phase results; Linux NOT_ASSIGNED/NOTRUN",
+      "expectations": "literal hand-authored slots/deletion sets/HLC/data/order and pre-compaction canonical bytes where applicable; ordinary fold/signature checks are correlated secondary checks",
+      "line": 9592,
+      "obligation": "Fresh admitted facts override stale TeamSync facts",
+      "path": "rust/src/team/sync.rs",
+      "test": "compaction_heads_fresh_admitted_facts_override_stale_env_cache"
+    },
+    {
+      "execution": "see source-bound native phase results; Linux NOT_ASSIGNED/NOTRUN",
+      "expectations": "literal hand-authored slots/deletion sets/HLC/data/order and pre-compaction canonical bytes where applicable; ordinary fold/signature checks are correlated secondary checks",
+      "line": 9636,
+      "obligation": "Rotation/self-removal signed witness originals and fact/schedule semantics",
+      "path": "rust/src/team/sync.rs",
+      "test": "compaction_heads_rotation_and_self_removal_witnesses_and_fact_records_stay_live"
+    },
+    {
+      "execution": "see source-bound native phase results; Linux NOT_ASSIGNED/NOTRUN",
+      "expectations": "literal hand-authored slots/deletion sets/HLC/data/order and pre-compaction canonical bytes where applicable; ordinary fold/signature checks are correlated secondary checks",
+      "line": 9764,
+      "obligation": "Lagging peer vector and exact coverage preserves original gate",
+      "path": "rust/src/team/sync.rs",
+      "test": "compaction_heads_lagging_peer_blocks_until_exact_original_vector_coverage"
+    },
+    {
+      "execution": "see source-bound native phase results; Linux NOT_ASSIGNED/NOTRUN",
+      "expectations": "literal hand-authored slots/deletion sets/HLC/data/order and pre-compaction canonical bytes where applicable; ordinary fold/signature checks are correlated secondary checks",
+      "line": 9815,
+      "obligation": "Two compactors and separate actual StateDir holder serialize with bounded channels/joins",
+      "path": "rust/src/team/sync.rs",
+      "test": "compaction_heads_real_state_holders_and_two_compactors_serialize_without_lost_heads"
+    }
+  ]
+}
