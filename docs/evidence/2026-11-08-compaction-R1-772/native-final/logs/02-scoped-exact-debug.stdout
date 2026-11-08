@@ -1,0 +1,6 @@
+
+running 1 test
+test team::sync::compaction_heads_tests::compaction_heads_deferred_prefilter_stale_forward_receipt_uses_locked_sequence ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 744 filtered out; finished in 14.49s
+

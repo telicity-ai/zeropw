@@ -1,0 +1,304 @@
+{
+  "actual_model": "gpt-6.1-sol / ultra; effective service tier unexposed",
+  "as_of_utc": "2026-11-08T13:32:54.139030+00:00",
+  "bindings": {
+    "archive_bytes": 20756480,
+    "archive_sha256": "cec9108487f2ee5884662a789eb0a5133ee2b47302388077f5ee08e6df4b0a12",
+    "driver_sha256": "001c03838061c192669661c68e5e15d7342b56085f5efc807fc08f098968bcfb",
+    "grant_sha256": "1f1cdc76bbbd36292ea0181f06d01784820bd0ef62519430224adc43ac2fe503",
+    "host_summary_sha256": "4cce947f53cd77dc8f162a4bf125f3d4a1b98fb12d8a1cc253530aced3f33f52",
+    "manifest_sha256": "5599ea9b9b3b7cfbd0d0ad0df7276fb687554e6494279f97d94d89ecc95007ef",
+    "plan_sha256": "5db29a078946ea111ec6a2217306d7eca4a726f7f9e9f9d173952ae5a519899a"
+  },
+  "checks": {
+    "14stack_exact1each_bothprofiles": true,
+    "1519_fixed_Git_bytes_blobs_modes": true,
+    "23_host_and_receipt_waits_sha_bindings": true,
+    "23_started_completed_bindings_zero_exits_waits_emptyUID": true,
+    "46_raw_log_hashes_lengths": true,
+    "46_source_maps_69874entries": true,
+    "4controls0644_92evidence0600": true,
+    "4explicit_signer_probes48docs": true,
+    "4oldscoped_exact1each_bothprofiles": true,
+    "96_unique_safe_regular_members_no_links_or_aliases": true,
+    "both_feature_fetches_match_receipt_rawlogs": true,
+    "features_byte_equal_no_rawvalue": true,
+    "full112orderedsteps107targets115summaries1881passes0fails5ignored": true,
+    "recorded_UIDGID2100_NNP1_caps0_groupsnone": true,
+    "releasebuild_and_nm_forbidden_symbols_absent_recorded": true,
+    "verify_script_byte_unchanged_from563baseline": true
+  },
+  "failures_corrections": "None in this audit; original R1/R2 failures and prior collector correction left unchanged.",
+  "features_sha256": "6d374b3d0b30497f84484f82e3b89479403c73d0daa7b92f52afadeb362f25b2",
+  "final_recorded_assigned_UID2100_processes": [],
+  "full": {
+    "doc_passes": 48,
+    "elapsed_seconds": 3357.2108106779997,
+    "failed": 0,
+    "ignored": 5,
+    "integration_targets": 107,
+    "passed": 1881,
+    "receipt_sha256": "274b9a9a9c739466ed76984c2328ab44fbe5a6e4847ccf7150ac2b67a2b8dea7",
+    "signer_probes": [
+      "signer::tests::idle_cpu_with_one_and_nine_live_bindings",
+      "signer::tests::per_client_fd_cost_matches_python_ratio_of_one",
+      "signer::tests::per_binding_fd_cost_matches_python_ratio_of_one",
+      "signer::tests::rlimit_probe_served_clients_and_accept_loop_survival"
+    ],
+    "steps": 112,
+    "summary_count": 115
+  },
+  "full_tree": "43ccc017c0336a9d1d90d494705ec40ab4865c6d",
+  "head": "772e84517a188ad8ee60f2f247bf6413ac8fe88f",
+  "limits": [
+    "No product/helper/compiler/formatter/test/nm/transport execution or runtime/VM/cache/process/network/credential query.",
+    "Archived source POSIX modes and identity/census/waits are recorded observations, not live-state or cryptographic execution attestation.",
+    "Artifact binary not fetched; nm absence and hash are verified log observations only.",
+    "Nativefinal23 remains separate/ACTIVE; no native final, physicalMac, Oracle/capacity, security or acceptance proof.",
+    "All four compaction findings/globalholds remain OPEN. Rootgt01wholeallocation retained, no release/cancel or oldHOLD action."
+  ],
+  "non_test_release_artifact": {
+    "artifact": "/opt/cgjob/target/release/libzeropw.rlib",
+    "forbidden_gate_symbols": [],
+    "nm_exit": 0,
+    "scope": "explicit non-test release library only; optimized unit tests intentionally retain cfg(test)",
+    "sha256": "82e370a9a8bf6e7f6bd83b32ebe045a1c2e27f004c49fa51cb2cfe5f44914886"
+  },
+  "phases": [
+    {
+      "driver_exit": 0,
+      "host_and_receipt_transports_waited": true,
+      "kind": "features",
+      "own_child_waited": true,
+      "phase": "01-features-before",
+      "receipt_sha256": "18158941afcbf35b11479fe922f324064ff4f2a1e235ea008db1bc31de0e7233",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "exact_test": "team::sync::compaction_heads_tests::compaction_heads_deferred_prefilter_stale_forward_receipt_uses_locked_sequence",
+      "host_and_receipt_transports_waited": true,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "02-scoped-exact-debug",
+      "receipt_sha256": "fa4e4337deca51a34e777da191a92fd0dcbd32e324ce8e00968114be7034eb92",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "exact_test": "team::sync::compaction_heads_tests::compaction_heads_authorized_fact_cache_read_pause_keeps_envs_available",
+      "host_and_receipt_transports_waited": true,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "03-scoped-exact-debug",
+      "receipt_sha256": "60a53b2c275bd473b87f26892e90a615a43de50ae552a83e00cbe9bb8ab4ac44",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "exact_test": "team::sync::compaction_heads_tests::compaction_heads_deferred_prefilter_stale_forward_receipt_uses_locked_sequence",
+      "host_and_receipt_transports_waited": true,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "04-scoped-exact-release",
+      "receipt_sha256": "3e20a0cc26db08ae31464f5a8bd18ed88caa319f11dbebd3a5f8dbaa54d1284f",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "exact_test": "team::sync::compaction_heads_tests::compaction_heads_authorized_fact_cache_read_pause_keeps_envs_available",
+      "host_and_receipt_transports_waited": true,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "05-scoped-exact-release",
+      "receipt_sha256": "72f2d4ab2b74bd4c709feaee9119cce6f9e9554f34e26766f37b86e83ecc39f6",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "host_and_receipt_transports_waited": true,
+      "kind": "full",
+      "own_child_waited": true,
+      "phase": "06-full-matrix",
+      "receipt_sha256": "274b9a9a9c739466ed76984c2328ab44fbe5a6e4847ccf7150ac2b67a2b8dea7",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "host_and_receipt_transports_waited": true,
+      "kind": "build",
+      "own_child_waited": true,
+      "phase": "07-non-test-release-build",
+      "receipt_sha256": "fd7bc500e6fd9e6312b8b2fbf386f0fef7ff1ca6b236fe137771bdeb1f5d4bd0",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "host_and_receipt_transports_waited": true,
+      "kind": "artifact-check",
+      "own_child_waited": true,
+      "phase": "08-non-test-gate-absence",
+      "receipt_sha256": "6fece983173fbfb71c9ac69204bfb7b079131747fa43b91b18c66ec48a60dda6",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "exact_test": "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+      "host_and_receipt_transports_waited": true,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "09-stack-exact-debug",
+      "receipt_sha256": "8df12091980dea063ec13cfcc0156b350b4f85909a1ad39e4fcfae99e27387e7",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "exact_test": "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+      "host_and_receipt_transports_waited": true,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "10-stack-exact-debug",
+      "receipt_sha256": "6ba1a702864b566be8cc5c0423628f22274e89e9427218547cd0b32c7f287662",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "exact_test": "complete_candidate_depth64_success_late_error_repeat_drop_and_65_refusal_on_256_kib",
+      "host_and_receipt_transports_waited": true,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "11-stack-exact-debug",
+      "receipt_sha256": "fa369d8e5cc0d783bfea832372b5914e08777cda1785ac8e8067382fd8527426",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "exact_test": "complete_fold_depth64_on_actual_256_kib_stack",
+      "host_and_receipt_transports_waited": true,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "12-stack-exact-debug",
+      "receipt_sha256": "628f2856456a88cc568afad4f518732d7e6300388bb19c6e426b36d38494e3e9",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "exact_test": "required_generation_depth64_success_late_error_repeat_drop_on_actual_256_kib",
+      "host_and_receipt_transports_waited": true,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "13-stack-exact-debug",
+      "receipt_sha256": "4fa7dd9c45602a061ad8015c957cba4b20d5733fe009de91c785fbaf4b8ddd85",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "exact_test": "required_generation_depth65_refuses_before_crypto_on_actual_256_kib",
+      "host_and_receipt_transports_waited": true,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "14-stack-exact-debug",
+      "receipt_sha256": "06744bd8a4794baf6a98741ff5c90c543782f6e386c3b0b956cbedd16b1c6186",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "exact_test": "required_wrap_depth64_success_error_repeat_drop_on_actual_256_kib",
+      "host_and_receipt_transports_waited": true,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "15-stack-exact-debug",
+      "receipt_sha256": "de402f59b22e486fd9989f937aac015431c9febba724fde7d048f05af97b5bf5",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "exact_test": "full_verifier_total_depth_64_65_and_post_parse_helpers_on_256_kib_stack",
+      "host_and_receipt_transports_waited": true,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "16-stack-exact-release",
+      "receipt_sha256": "45fcfcf443b72b595d10ea7ebd88a92c5fa2a244d290d7108ef5c0fd6a989328",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "exact_test": "semantic_depth_64_success_error_drop_on_256_kib_stack_and_65_refusal",
+      "host_and_receipt_transports_waited": true,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "17-stack-exact-release",
+      "receipt_sha256": "b5e4408b4a155e1060b45d6d3ce27366e2fcafe422d3105f5d5f507482998b89",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "exact_test": "complete_candidate_depth64_success_late_error_repeat_drop_and_65_refusal_on_256_kib",
+      "host_and_receipt_transports_waited": true,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "18-stack-exact-release",
+      "receipt_sha256": "10add643b8af8cfb027e95572eee731fe40933fd395e0b0f83e0baad69a31417",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "exact_test": "complete_fold_depth64_on_actual_256_kib_stack",
+      "host_and_receipt_transports_waited": true,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "19-stack-exact-release",
+      "receipt_sha256": "4b8187020c959239664877f1baa47ad343335f1e34c517e8309dab255c8d01f0",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "exact_test": "required_generation_depth64_success_late_error_repeat_drop_on_actual_256_kib",
+      "host_and_receipt_transports_waited": true,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "20-stack-exact-release",
+      "receipt_sha256": "5657795665ee8e67d1ef1c7570703ab94709c5cdbbd3756160056be09ca34564",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "exact_test": "required_generation_depth65_refuses_before_crypto_on_actual_256_kib",
+      "host_and_receipt_transports_waited": true,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "21-stack-exact-release",
+      "receipt_sha256": "4dec070f83e976a069263293246faa93aba89a0cff1a28f1ffd08be8c71fcd16",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "exact_test": "required_wrap_depth64_success_error_repeat_drop_on_actual_256_kib",
+      "host_and_receipt_transports_waited": true,
+      "kind": "exact",
+      "own_child_waited": true,
+      "phase": "22-stack-exact-release",
+      "receipt_sha256": "fb96bd8ce570297526d63a466490f7a8eb45626a77410c3b1e49dd80c1214801",
+      "test_exit": 0
+    },
+    {
+      "driver_exit": 0,
+      "host_and_receipt_transports_waited": true,
+      "kind": "features",
+      "own_child_waited": true,
+      "phase": "23-features-after",
+      "receipt_sha256": "8349f94b959ad1a6d9208fd2547fe6bdccfeb82dbb8a3fac71591ba809172277",
+      "test_exit": 0
+    }
+  ],
+  "prior_diagnostic13_combination": {
+    "head_rust_manifest_1519_identity_equal": true,
+    "json_sha256": "54a6b093bcf418acbef9cfcd34e0ee4748b8d87023014763dbbec588cb79f589",
+    "report_sha256": "9c3b21dbc919307bc3d6f3e29306ca3832a6ca8c032ec253fc81100510fb515b",
+    "scope": "Same exact772source observations only. Does not promote any different whole17cfHEAD to PASS; no unique test sum."
+  },
+  "rust_tree": "a6d89b2e6855e7647e4aa3044a07dcca73f6fc40",
+  "schema": "Sol-independent-completed-Linux-R1-final23-DATA-v1",
+  "scope": "DATA consistency only, no execution/security/Astraacceptance",
+  "source_files": 1519
+}
