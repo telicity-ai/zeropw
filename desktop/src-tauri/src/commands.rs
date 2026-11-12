@@ -625,9 +625,13 @@ pub async fn pairing_preview(
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn pairing_join(shell: State<'_, Shell>, request: Request<'_>) -> Out<PairingJoinOut> {
-    let input: RefIn = input(&request)?;
+    let input: PairingJoinInput = input(&request)?;
     let core = core(&shell);
-    blocking(move || core.pairing_join(input)).await
+    blocking(move || match input {
+        PairingJoinInput::Legacy(input) => core.pairing_join(input),
+        PairingJoinInput::Personal(input) => core.pairing_personal_action(input),
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
@@ -639,16 +643,24 @@ pub async fn join_requests(shell: State<'_, Shell>, request: Request<'_>) -> Out
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn approve_join(shell: State<'_, Shell>, request: Request<'_>) -> Out<JoinDecisionOut> {
-    let input: JoinDecisionIn = input(&request)?;
+    let input: JoinApprovalInput = input(&request)?;
     let core = core(&shell);
-    blocking(move || core.approve_join(input)).await
+    blocking(move || match input {
+        JoinApprovalInput::Legacy(input) => core.approve_join(input),
+        JoinApprovalInput::Personal(input) => core.decide_personal_join(input, true),
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
 pub async fn deny_join(shell: State<'_, Shell>, request: Request<'_>) -> Out<JoinDecisionOut> {
-    let input: JoinDecisionIn = input(&request)?;
+    let input: JoinApprovalInput = input(&request)?;
     let core = core(&shell);
-    blocking(move || core.deny_join(input)).await
+    blocking(move || match input {
+        JoinApprovalInput::Legacy(input) => core.deny_join(input),
+        JoinApprovalInput::Personal(input) => core.decide_personal_join(input, false),
+    })
+    .await
 }
 
 #[tauri::command(rename_all = "snake_case")]

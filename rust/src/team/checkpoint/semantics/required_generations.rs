@@ -387,6 +387,127 @@ fn unwrap(
     Ok(key)
 }
 
+impl crate::team::checkpoint::personal::Plan {
+    /// Uses the same original span decoder, effective authority-wrap selector
+    /// and envelope crypto as the complete-cut stage. Only local KMS wrappers
+    /// leave this function. The current edit generation is required even when
+    /// no active or staged ciphertext remains.
+    pub(in crate::team::checkpoint) fn check_keys(
+        document: &Value,
+        payload: &crate::team::checkpoint::IntegrityCheckedPayload<'_>,
+        trace: &crate::team::fold::CheckpointAuthorityTrace,
+        recipient: &DeviceKey,
+        kms: &(dyn crate::kms::Kms + Send + Sync),
+    ) -> Result<BTreeMap<String, Value>> {
+        let env = text(document, "env_id")?;
+        let fingerprint = recipient.fingerprint().map_err(|_| BINDING)?;
+        let mut versions = Vec::new();
+        let mut required = BTreeSet::from([text(field(document, "dek")?, "current")?]);
+        for (sid, secret) in object(field(document, "secrets")?)? {
+            if secret.get("deleted").and_then(Value::as_bool) == Some(true) {
+                continue;
+            }
+            for (vid, entry) in object(field(secret, "versions")?)? {
+                if matches!(text(entry, "status")?, "active" | "staged") {
+                    if versions.len() >= RECORD_CAP {
+                        return Err(LIMIT);
+                    }
+                    let generation = text(entry, "generation")?;
+                    required.insert(generation);
+                    versions.push(Version {
+                        secret: sid,
+                        version: vid,
+                        generation,
+                        entry: object(entry)?,
+                    });
+                }
+            }
+        }
+        for v in array(field(component(payload, 5)?, "unavailable_generations")?)? {
+            if required.contains(v.as_str().ok_or(E::SemanticMismatch)?) {
+                return Err(E::GenerationUnavailable);
+            }
+        }
+        let mut selected: BTreeMap<String, Vec<Selected<'_, '_>>> = BTreeMap::new();
+        for span in &payload.index.wraps {
+            let entry = strict_json::materialize(span)?;
+            let generation = text(&entry, "generation_id")?;
+            if !required.contains(generation) {
+                continue;
+            }
+            let source = text(&entry, "source_commit_hash")?;
+            let index = bounded(field(&entry, "source_op_index")?, PAYLOAD_CAP)?;
+            let selector = (generation.to_owned(), fingerprint.clone());
+            let effective = trace
+                .effective_wrap_sources
+                .get(&selector)
+                .ok_or(E::GenerationUnavailable)?;
+            let op = trace
+                .operations
+                .iter()
+                .find(|op| op.position.hash == source && op.position.op_index == index)
+                .ok_or(E::GenerationUnavailable)?;
+            if text(&entry, "recipient")? != fingerprint
+                || op.skipped.is_some()
+                || !op.applicable_wraps.contains(&selector)
+            {
+                return Err(E::GenerationUnavailable);
+            }
+            let is_effective = effective.hash == source && effective.op_index == index;
+            if is_effective
+                && canonical(field(&entry, "wrap")?)?
+                    != canonical(
+                        &document["dek"]["generations"][generation]["wraps"][&fingerprint],
+                    )?
+            {
+                return Err(E::GenerationUnavailable);
+            }
+            preflight_wrap(field(&entry, "wrap")?)?;
+            selected
+                .entry(generation.into())
+                .or_default()
+                .push(Selected {
+                    span,
+                    effective: is_effective,
+                });
+        }
+        let mut keys = BTreeMap::new();
+        for generation in required {
+            let entries = selected.get(generation).ok_or(E::GenerationUnavailable)?;
+            let effective = entries
+                .iter()
+                .find(|x| x.effective)
+                .ok_or(E::GenerationUnavailable)?;
+            let key = unwrap(effective.span, env, generation, recipient)?;
+            for other in entries.iter().filter(|x| !x.effective) {
+                let other = unwrap(other.span, env, generation, recipient)?;
+                if !key.ct_eq(other.expose()) {
+                    return Err(E::GenerationUnavailable);
+                }
+            }
+            keys.insert(generation, key);
+        }
+        for v in versions {
+            let key = keys.get(v.generation).ok_or(E::GenerationUnavailable)?;
+            let plaintext = SecretBytes::new(
+                envelope::decrypt_secret(key.expose(), env, v.secret, v.version, v.entry)
+                    .map_err(|_| E::GenerationUnavailable)?,
+            );
+            drop(plaintext);
+        }
+        keys.into_iter()
+            .map(|(generation, key)| {
+                Ok((
+                    generation.to_owned(),
+                    kms.wrap(key.expose())
+                        .map_err(|_| E::GenerationUnavailable)?
+                        .to_dict(),
+                ))
+            })
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

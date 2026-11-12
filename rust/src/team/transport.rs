@@ -68,6 +68,8 @@ pub enum InviteDecision {
     /// completes, one encrypted [`JOIN_PENDING_TYPE`] frame is sent and the
     /// session is closed, never handed to the sync layer.
     Pending,
+    /// Personal checkpoint approval is required on both human surfaces.
+    PendingPersonal,
 }
 pub type InviteCheck =
     Arc<dyn Fn(&str, &DeviceRecord, &[u8], &[u8]) -> InviteDecision + Send + Sync>;
@@ -116,6 +118,14 @@ pub trait Session: Send + Sync {
     fn env_id(&self) -> &str;
     fn send(&self, message: &Value) -> Result<()>;
     fn recv(&self, timeout: Duration) -> std::result::Result<Option<Value>, SessionClosed>;
+    /// Original authenticated JSON bytes for snapshot bootstrap. An older
+    /// session implementation must refuse; reserializing Value is not evidence.
+    fn recv_original(
+        &self,
+        _timeout: Duration,
+    ) -> std::result::Result<Option<Vec<u8>>, SessionClosed> {
+        Err(SessionClosed("team_bootstrap_original_bytes_required"))
+    }
     fn close(&self);
     fn is_closed(&self) -> bool;
     fn created_at(&self) -> Instant;
@@ -178,6 +188,13 @@ fn parse_record(value: Option<&Value>) -> std::result::Result<DeviceRecord, Hand
 pub(crate) trait ByteChannel: Send + Sync {
     fn send(&self, bytes: &[u8]) -> std::result::Result<(), SessionClosed>;
     fn recv(&self, timeout: Duration) -> std::result::Result<Option<Vec<u8>>, SessionClosed>;
+    fn recv_limited(
+        &self,
+        _timeout: Duration,
+        _limit: usize,
+    ) -> std::result::Result<Option<Vec<u8>>, SessionClosed> {
+        Err(SessionClosed("team_bootstrap_original_bytes_required"))
+    }
     fn close(&self);
     /// [`Session::transport_kind`] of the sessions this channel carries.
     fn kind(&self) -> Option<&'static str> {
@@ -226,6 +243,39 @@ impl EncryptedSession {
             link_address: OnceLock::new(),
         }
     }
+    fn receive_original(
+        &self,
+        timeout: Duration,
+        limit: Option<usize>,
+    ) -> std::result::Result<Option<Vec<u8>>, SessionClosed> {
+        if self.is_closed() {
+            return Err(SessionClosed("session_closed"));
+        }
+        let received = match limit {
+            Some(limit) => self.channel.recv_limited(timeout, limit),
+            None => self.channel.recv(timeout),
+        };
+        let raw = match received {
+            Ok(None) => return Ok(None),
+            Ok(Some(v)) => v,
+            Err(e) => {
+                self.close();
+                return Err(e);
+            }
+        };
+        let mut count = self.recv_count.lock().unwrap_or_else(|e| e.into_inner());
+        let mut nonce = [0u8; 12];
+        nonce[..4].copy_from_slice(&self.tag_in);
+        nonce[4..].copy_from_slice(&count.to_be_bytes());
+        let plaintext = aead::decrypt(self.recv_key.expose(), &nonce, &raw, b"").map_err(|_| {
+            self.close();
+            SessionClosed("frame_authentication_failed")
+        })?;
+        *count = count
+            .checked_add(1)
+            .ok_or(SessionClosed("session_closed"))?;
+        Ok(Some(plaintext))
+    }
     fn set_on_close(&self, callback: Box<dyn FnOnce() + Send>) {
         *self.on_close.lock().unwrap_or_else(|e| e.into_inner()) = Some(callback);
     }
@@ -236,6 +286,12 @@ impl EncryptedSession {
     }
 }
 impl Session for EncryptedSession {
+    fn recv_original(
+        &self,
+        timeout: Duration,
+    ) -> std::result::Result<Option<Vec<u8>>, SessionClosed> {
+        self.receive_original(timeout, Some(131_072 + aead::TAG_SIZE))
+    }
     fn peer(&self) -> DeviceRecord {
         self.peer.clone()
     }
@@ -270,28 +326,22 @@ impl Session for EncryptedSession {
         })
     }
     fn recv(&self, timeout: Duration) -> std::result::Result<Option<Value>, SessionClosed> {
-        if self.is_closed() {
-            return Err(SessionClosed("session_closed"));
-        }
-        let raw = match self.channel.recv(timeout) {
-            Ok(None) => return Ok(None),
-            Ok(Some(v)) => v,
-            Err(e) => {
-                self.close();
-                return Err(e);
-            }
+        let Some(plaintext) = self.receive_original(timeout, None)? else {
+            return Ok(None);
         };
-        let mut count = self.recv_count.lock().unwrap_or_else(|e| e.into_inner());
-        let mut nonce = [0u8; 12];
-        nonce[..4].copy_from_slice(&self.tag_in);
-        nonce[4..].copy_from_slice(&count.to_be_bytes());
-        let plaintext = aead::decrypt(self.recv_key.expose(), &nonce, &raw, b"").map_err(|_| {
-            self.close();
-            SessionClosed("frame_authentication_failed")
-        })?;
-        *count = count
-            .checked_add(1)
-            .ok_or(SessionClosed("session_closed"))?;
+        if super::bootstrap::protocol::kind(&plaintext)
+            .ok()
+            .flatten()
+            .as_deref()
+            .is_some_and(super::bootstrap::protocol::is_control)
+        {
+            return super::bootstrap::protocol::parse(&plaintext)
+                .map(Some)
+                .map_err(|_| {
+                    self.close();
+                    SessionClosed("team_bootstrap_control_malformed")
+                });
+        }
         let message: Value = std::str::from_utf8(&plaintext)
             .ok()
             .and_then(|text| crate::pyjson::loads(text).ok())
@@ -389,6 +439,18 @@ impl ByteChannel for QueueChannel {
             Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
         }
     }
+    fn recv_limited(
+        &self,
+        timeout: Duration,
+        limit: usize,
+    ) -> std::result::Result<Option<Vec<u8>>, SessionClosed> {
+        let raw = self.recv(timeout)?;
+        if raw.as_ref().is_some_and(|b| b.len() > limit) {
+            self.close();
+            return Err(SessionClosed("frame_too_large"));
+        }
+        Ok(raw)
+    }
     fn close(&self) {
         if !self.closed.swap(true, Ordering::SeqCst) {
             let _ = self.outbox.send(QueueItem::Closed);
@@ -473,6 +535,40 @@ impl<S: StreamSocket> SocketChannel<S> {
     }
 }
 
+impl<S: StreamSocket> SocketChannel<S> {
+    fn read_frame(
+        &self,
+        timeout: Duration,
+        limit: usize,
+    ) -> std::result::Result<Option<Vec<u8>>, SessionClosed> {
+        if self.closed.load(Ordering::SeqCst) {
+            return Err(SessionClosed("channel_closed"));
+        }
+        let mut stream = self.reader.lock().unwrap_or_else(|e| e.into_inner());
+        let deadline = Instant::now() + timeout;
+        let mut header = [0u8; 4];
+        match read_exact_until(&mut *stream, &mut header, deadline) {
+            Ok(()) => {}
+            Err(SocketReadError::Timeout) => return Ok(None),
+            Err(SocketReadError::PeerClosed) => return Err(SessionClosed("peer_closed")),
+            Err(SocketReadError::Failed) => return Err(SessionClosed("recv_failed")),
+        }
+        let length = u32::from_be_bytes(header) as usize;
+        if length > limit.min(WIRE_FRAME_LIMIT) {
+            return Err(SessionClosed("frame_too_large"));
+        }
+        let mut payload = vec![0; length];
+        let payload_deadline = deadline + Duration::from_secs(SOCKET_OP_TIMEOUT_SECONDS);
+        read_exact_until(&mut *stream, &mut payload, payload_deadline).map_err(|e| match e {
+            SocketReadError::Timeout => SessionClosed("frame_incomplete"),
+            SocketReadError::PeerClosed => SessionClosed("peer_closed"),
+            SocketReadError::Failed => SessionClosed("recv_failed"),
+        })?;
+        capture_wire("recv", &payload);
+        Ok(Some(payload))
+    }
+}
+
 /// The length-prefixed [`ByteChannel`] over a connected stream socket.
 pub(crate) fn socket_channel<S: StreamSocket>(stream: S) -> std::io::Result<Arc<dyn ByteChannel>> {
     Ok(Arc::new(SocketChannel::new(stream)?))
@@ -541,31 +637,14 @@ impl<S: StreamSocket> ByteChannel for SocketChannel<S> {
             })
     }
     fn recv(&self, timeout: Duration) -> std::result::Result<Option<Vec<u8>>, SessionClosed> {
-        if self.closed.load(Ordering::SeqCst) {
-            return Err(SessionClosed("channel_closed"));
-        }
-        let mut stream = self.reader.lock().unwrap_or_else(|e| e.into_inner());
-        let deadline = Instant::now() + timeout;
-        let mut header = [0u8; 4];
-        match read_exact_until(&mut *stream, &mut header, deadline) {
-            Ok(()) => {}
-            Err(SocketReadError::Timeout) => return Ok(None),
-            Err(SocketReadError::PeerClosed) => return Err(SessionClosed("peer_closed")),
-            Err(SocketReadError::Failed) => return Err(SessionClosed("recv_failed")),
-        }
-        let length = u32::from_be_bytes(header) as usize;
-        if length > WIRE_FRAME_LIMIT {
-            return Err(SessionClosed("frame_too_large"));
-        }
-        let mut payload = vec![0; length];
-        let payload_deadline = deadline + Duration::from_secs(SOCKET_OP_TIMEOUT_SECONDS);
-        read_exact_until(&mut *stream, &mut payload, payload_deadline).map_err(|e| match e {
-            SocketReadError::Timeout => SessionClosed("frame_incomplete"),
-            SocketReadError::PeerClosed => SessionClosed("peer_closed"),
-            SocketReadError::Failed => SessionClosed("recv_failed"),
-        })?;
-        capture_wire("recv", &payload);
-        Ok(Some(payload))
+        self.read_frame(timeout, WIRE_FRAME_LIMIT)
+    }
+    fn recv_limited(
+        &self,
+        timeout: Duration,
+        limit: usize,
+    ) -> std::result::Result<Option<Vec<u8>>, SessionClosed> {
+        self.read_frame(timeout, limit)
     }
     fn close(&self) {
         self.closed.store(true, Ordering::SeqCst);
@@ -679,6 +758,7 @@ fn respond(
     }
     let hash = Sha256::digest(&t);
     let mut pending = false;
+    let mut personal_pending = false;
     if member.is_none() {
         let proof = if msg3.get("invite_proof").is_some() {
             b64d(msg3.get("invite_proof"))?
@@ -691,6 +771,10 @@ fn respond(
             InviteDecision::Accept => {}
             InviteDecision::Reject => return Err(HandshakeFailed::with_fp("invite_invalid", fp)),
             InviteDecision::Pending => pending = true,
+            InviteDecision::PendingPersonal => {
+                pending = true;
+                personal_pending = true;
+            }
         }
     }
     let (i2r, r2i) = keys(&shared, &hash)?;
@@ -706,7 +790,12 @@ fn respond(
             *b"R2I\0",
             *b"I2R\0",
         );
-        if session.send(&json!({"type": JOIN_PENDING_TYPE})).is_ok() {
+        let pending_message = if personal_pending {
+            json!({"type":JOIN_PENDING_TYPE,"personal_bootstrap":true})
+        } else {
+            json!({"type":JOIN_PENDING_TYPE})
+        };
+        if session.send(&pending_message).is_ok() {
             linger(channel.as_ref(), Instant::now() + JOIN_PENDING_LINGER);
         }
         session.close();

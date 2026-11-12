@@ -5121,33 +5121,135 @@ pub fn fact_role_ok(doc: &Value, kind: &str, author: &str, target: &Value) -> bo
 /// Admission receipts authenticate the local authorization decision. They are
 /// local only: peers must perform their own signature and authority checks.
 pub(crate) fn receipt_fact(ctx: &Context, fact: &Fact) -> Result<()> {
-    let _lock = ctx.state.lock()?;
+    let history = commit::HistorySession::open_runtime(ctx.state, &fact.env_id)?;
+    receipt_fact_with_input(ctx, fact, &history)
+}
+pub(crate) fn receipt_fact_with_input(
+    ctx: &Context,
+    fact: &Fact,
+    history: &commit::HistorySession<'_>,
+) -> Result<()> {
+    let nested = history.nested(ctx.state, &fact.env_id)?;
+    let history = &nested;
+    history.invalidate()?;
+    history.effect_boundary(&fact.env_id, "fact-deny-before")?;
+    crate::import_barrier::admitted_fact(ctx.state, fact)?;
+    history.effect_boundary(&fact.env_id, "fact-deny-after")?;
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
     let hash = fact.hash()?;
     let message = canon(
         &json!({"domain":"zeropw-local-fact-admission-v1","env_id":fact.env_id,"hash":hash}),
     )?;
+    history.match_local_identity(&device.record()?)?;
+    history.check()?;
+    let signature = device.sign(&message)?;
+    history.check()?;
+    history.invalidate()?;
+    history.effect_boundary(&fact.env_id, "fact-receipt-before")?;
     ctx.state.append_line(
         &format!("team/{}/fact_admissions.jsonl", fact.env_id),
         &pyjson::dumps(
-            &json!({"hash":hash,"sig":pybase64::b64encode(&device.sign(&message)?)}),
+            &json!({"hash":hash,"sig":pybase64::b64encode(&signature)}),
             DumpOptions::compact_sorted(),
         )?,
     )?;
-    crate::tombstone::retain_fact(ctx.state, fact)
+    history.effect_boundary(&fact.env_id, "fact-receipt-after")?;
+    history.invalidate()?;
+    history.effect_boundary(&fact.env_id, "fact-retention-before")?;
+    crate::tombstone::retain_fact(ctx.state, fact)?;
+    history.effect_boundary(&fact.env_id, "fact-retention-after")
+}
+
+pub(crate) fn personal_tombstone_digest(facts: &Facts) -> Result<String> {
+    super::tombstone_gate::digest(&facts.tombstone_facts)
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum FactServices<'c> {
+    Runtime(&'c Context),
+    VerifySettled,
+}
+pub(crate) struct SettledFacts<'a> {
+    facts: Facts,
+    hashes: HashSet<String>,
+    authors: HashMap<String, HashSet<String>>,
+    seal: commit::FactSeal<'a>,
+}
+impl SettledFacts<'_> {
+    fn current_with_vector<'s>(
+        &'s self,
+        history: &commit::HistorySession<'_>,
+    ) -> Result<(&'s Facts, BTreeMap<String, PyInt>)> {
+        let vector = self.seal.current_vector(history)?;
+        Ok((&self.facts, vector))
+    }
+    fn into_parts(self) -> (Facts, HashSet<String>, HashMap<String, HashSet<String>>) {
+        (self.facts, self.hashes, self.authors)
+    }
+    pub(crate) fn checked<'s>(&'s self, history: &commit::HistorySession<'_>) -> Result<&'s Facts> {
+        self.seal.check(history)?;
+        Ok(&self.facts)
+    }
+    pub(crate) fn digest(&self, history: &commit::HistorySession<'_>) -> Result<String> {
+        self.seal.check(history)?;
+        let hashes = self
+            .hashes
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        super::bootstrap::digest(&json!(hashes))
+    }
+}
+fn unsettled_facts() -> Error {
+    Error::state("team_bootstrap_recovery_required")
 }
 
 pub fn load_facts(
     ctx: &Context,
     env_id: &str,
 ) -> Result<(Facts, HashSet<String>, HashMap<String, HashSet<String>>)> {
-    let _lock = ctx.state.lock()?;
-    let state = ctx.state;
+    let history = commit::HistorySession::open_runtime(ctx.state, env_id)?;
+    load_facts_with_input(ctx, env_id, &history)
+}
+pub(crate) fn load_facts_with_input(
+    ctx: &Context,
+    env_id: &str,
+    history: &commit::HistorySession<'_>,
+) -> Result<(Facts, HashSet<String>, HashMap<String, HashSet<String>>)> {
+    if !std::ptr::eq(ctx.state, history.state()) || env_id != history.env() {
+        return Err(Error::state("team_bootstrap_local_state_changed"));
+    }
+    Ok(load_facts_core(history, FactServices::Runtime(ctx))?.into_parts())
+}
+pub(crate) fn load_facts_core<'a>(
+    parent: &commit::HistorySession<'a>,
+    services: FactServices<'_>,
+) -> Result<SettledFacts<'a>> {
+    if let FactServices::Runtime(ctx) = services
+        && !std::ptr::eq(ctx.state, parent.state())
+    {
+        return Err(Error::state("team_bootstrap_local_state_changed"));
+    }
+    let nested = parent.nested(parent.state(), parent.env())?;
+    let history = &nested;
+    let input = history.acquire()?;
+    let state = history.state();
+    let env_id = history.env();
     let path = format!("team/{env_id}/facts.jsonl");
-    let stored_lines = state.read_lines(&path, None)?;
+    let (stored_lines, shared_originals) = input.fact_sources()?;
+    history.charge(
+        stored_lines.len() as u64,
+        stored_lines.iter().map(|line| line.len() as u64).sum(),
+    )?;
     let mut lines = stored_lines.clone();
-    for fact in crate::tombstone::shared_facts(state, env_id)? {
+    for fact in shared_originals {
         let line = pyjson::dumps(&fact, DumpOptions::compact_sorted())?;
+        history.charge(
+            (lines.len() as u64)
+                .checked_mul(line.len() as u64)
+                .ok_or_else(|| Error::state("team_bootstrap_limit_exceeded"))?,
+            line.len() as u64,
+        )?;
         if !lines.contains(&line) {
             lines.push(line);
         }
@@ -5156,13 +5258,47 @@ pub fn load_facts(
     let mut hashes = HashSet::new();
     let mut authors: HashMap<String, HashSet<String>> = HashMap::new();
     if lines.is_empty() {
-        return Ok((facts, hashes, authors));
+        return Ok(SettledFacts {
+            facts,
+            hashes,
+            authors,
+            seal: input.fact_seal()?,
+        });
     }
-    let local = DeviceKey::load_or_create(state, ctx.kms)?.record()?;
-    let mut receipts =
-        state.read_json(&format!("team/{env_id}/fact_admissions.json"), json!({}))?;
-    for line in state.read_lines(&format!("team/{env_id}/fact_admissions.jsonl"), None)? {
-        if let Ok(entry) = pyjson::loads(&line)
+    // Reserve the bounded hash/public-record/fact/receipt signature walks
+    // before legacy predicates that may discard individual malformed lines.
+    // Resource errors stay sticky and cannot turn into a processed-prefix
+    // rewrite. This changes neither fact predicates nor their effect order.
+    let line_bytes = lines.iter().try_fold(0u64, |sum, line| {
+        sum.checked_add(line.len() as u64)
+            .ok_or_else(|| Error::state("team_bootstrap_limit_exceeded"))
+    })?;
+    history.charge(
+        (lines.len() as u64)
+            .checked_mul(16_384)
+            .ok_or_else(|| Error::state("team_bootstrap_limit_exceeded"))?,
+        line_bytes
+            .checked_mul(8)
+            .ok_or_else(|| Error::state("team_bootstrap_limit_exceeded"))?,
+    )?;
+    let local = match services {
+        FactServices::Runtime(_) if history.is_scoped() => {
+            // The session already binds this exact Context StateDir to the
+            // FULL public record loaded through its KMS and anchored root.
+            // Receipt creation still loads/signs with the real Context key.
+            history.local_record()?.clone()
+        }
+        FactServices::Runtime(ctx) => {
+            let record = DeviceKey::load_or_create(state, ctx.kms)?.record()?;
+            history.match_local_identity(&record)?;
+            record
+        }
+        FactServices::VerifySettled => history.local_record()?.clone(),
+    };
+    let (mut receipts, receipt_lines) = input.fact_admissions()?;
+    for line in receipt_lines {
+        history.check()?;
+        if let Ok(entry) = history.parse_line(&line)
             && let (Some(hash), Some(sig)) = (entry["hash"].as_str(), entry["sig"].as_str())
         {
             if let Some(map) = receipts.as_object_mut() {
@@ -5170,7 +5306,8 @@ pub fn load_facts(
             }
         }
     }
-    let commits = CommitStore::new(state, env_id).all_commits()?;
+    let commits = input.commits()?;
+    input.reserve_fold(&commits, None, 0)?;
     let identity = fold::fold(env_id, commits.clone(), None, None, None, None)?.document;
     // Irreversible historical revocations survive later role changes. A
     // signed history prefix proves the author once had the required role.
@@ -5178,7 +5315,7 @@ pub fn load_facts(
     let mut historical_members = HashSet::new();
     let needs_history = lines
         .iter()
-        .filter_map(|line| pyjson::loads(line).ok())
+        .filter_map(|line| history.parse_line(line).ok())
         .filter_map(|value| Fact::from_dict(&value).ok())
         .any(|fact| {
             if fact.kind == "member_removed" {
@@ -5199,6 +5336,18 @@ pub fn load_facts(
         });
     if needs_history {
         let mut ordered = commits.clone();
+        let width = ordered
+            .iter()
+            .map(|c| c.author.len() + c.author_seq.to_string().len() + c.hlc.len())
+            .max()
+            .unwrap_or(1) as u64;
+        history.charge(
+            (ordered.len() as u64)
+                .checked_mul(ordered.len() as u64)
+                .and_then(|n| n.checked_mul(width))
+                .ok_or_else(|| Error::state("team_bootstrap_limit_exceeded"))?,
+            0,
+        )?;
         ordered.sort_by(|a, b| {
             Hlc::parse(&a.hlc)
                 .unwrap_or_else(|_| (0.into(), 0.into()))
@@ -5207,8 +5356,10 @@ pub fn load_facts(
                 .then(a.author_seq.cmp(&b.author_seq))
         });
         for count in 1..=ordered.len() {
+            input.reserve_fold(&ordered[..count], None, 0)?;
             let doc =
                 fold::fold(env_id, ordered[..count].to_vec(), None, None, None, None)?.document;
+            history.check()?;
             if let Some(members) = doc["members"].as_object() {
                 for (fp, member) in members {
                     if member["status"] == "active" {
@@ -5222,8 +5373,11 @@ pub fn load_facts(
         }
     }
     let mut retained = Vec::new();
+    let mut required_deny_receipts = HashSet::new();
     for line in &lines {
-        let candidate = pyjson::loads(line)
+        history.check()?;
+        let candidate = history
+            .parse_line(line)
             .ok()
             .and_then(|v| Fact::from_dict(&v).ok());
         let mut accepted = false;
@@ -5262,15 +5416,94 @@ pub fn load_facts(
                     {
                         prefix.removed_members.remove(&fact.author);
                     }
+                    history
+                        .acquire()?
+                        .reserve_fold(&commits, Some(&prefix), 0)?;
                     let doc = fold::fold(env_id, commits.clone(), Some(&prefix), None, None, None)?
                         .document;
                     fact_role_ok(&doc, &fact.kind, &fact.author, &fact.target)
                 };
                 if authorized {
+                    history.check()?;
                     if !admitted {
-                        receipt_fact(ctx, &fact)?;
+                        match services {
+                            FactServices::Runtime(ctx) => {
+                                receipt_fact_with_input(ctx, &fact, history)?
+                            }
+                            FactServices::VerifySettled => return Err(unsettled_facts()),
+                        }
                     }
-                    crate::tombstone::retain_fact(state, &fact)?;
+                    match services {
+                        FactServices::Runtime(_) => {
+                            history.invalidate()?;
+                            history.effect_boundary(env_id, "fact-retention-before")?;
+                            crate::tombstone::retain_fact(state, &fact)?;
+                            history.effect_boundary(env_id, "fact-retention-after")?;
+                            history.invalidate()?;
+                            history.effect_boundary(env_id, "fact-deny-before")?;
+                            crate::import_barrier::admitted_fact(state, &fact)?;
+                            history.effect_boundary(env_id, "fact-deny-after")?;
+                        }
+                        FactServices::VerifySettled => {
+                            if !admitted {
+                                return Err(unsettled_facts());
+                            }
+                            if fact.kind == "secret_deleted" {
+                                let input = history.acquire()?;
+                                let ledger = input.read_json(crate::tombstone::PATH, json!({}))?;
+                                if ledger["shared"][env_id][&hash] != fact.to_dict() {
+                                    return Err(unsettled_facts());
+                                }
+                                let vault = input.read_json(crate::vault::VAULT_DOC, json!({}))?;
+                                let id = fact.target["secret_id"]
+                                    .as_str()
+                                    .ok_or_else(unsettled_facts)?;
+                                let entry = &vault["secrets"][id];
+                                if entry["shared_env"] == env_id {
+                                    let mapping = input.read_json(ENVS_MAP_PATH, json!({}))?;
+                                    let mut bindings = vec![
+                                        json!({"project":entry["project"],"environment":entry["environment"]}),
+                                    ];
+                                    if let (Some(project), Some(environment)) = (
+                                        mapping[env_id]["project"].as_str(),
+                                        mapping[env_id]["environment"].as_str(),
+                                    ) {
+                                        bindings.push(
+                                            json!({"project":project,"environment":environment}),
+                                        );
+                                    }
+                                    for binding in bindings {
+                                        if !ledger["bindings"][env_id][id]
+                                            .as_array()
+                                            .is_some_and(|scopes| scopes.contains(&binding))
+                                        {
+                                            return Err(unsettled_facts());
+                                        }
+                                    }
+                                }
+                            }
+                            if fact.kind == "member_removed"
+                                && state.import_identity().is_some_and(|record| {
+                                    fact.target["fingerprint"] == record.fingerprint()
+                                })
+                                && crate::import_barrier::index(state)?.get(env_id).is_some()
+                            {
+                                let name = super::bootstrap::path(env_id, "member-removed.json")?;
+                                crate::import_barrier::private_relative(state, &name)?;
+                                let value = history.acquire()?.read_json(&name, Value::Null)?;
+                                let witness =
+                                    Fact::from_dict(&value).map_err(|_| unsettled_facts())?;
+                                if witness.to_dict() != value
+                                    || witness.env_id != env_id
+                                    || witness.kind != "member_removed"
+                                    || witness.target["fingerprint"] != local.fingerprint()
+                                {
+                                    return Err(unsettled_facts());
+                                }
+                                required_deny_receipts.insert(witness.hash()?);
+                            }
+                        }
+                    }
                     hashes.insert(hash);
                     apply_fact(&mut facts, &fact);
                     if fact.kind == "member_removed"
@@ -5285,6 +5518,11 @@ pub fn load_facts(
         if accepted {
             retained.push(line.as_str());
         } else {
+            history.check()?;
+            if matches!(services, FactServices::VerifySettled) {
+                return Err(unsettled_facts());
+            }
+            history.invalidate()?;
             state.append_line(
                 &format!("team/{env_id}/rejected_facts.jsonl"),
                 &pyjson::dumps(
@@ -5299,15 +5537,32 @@ pub fn load_facts(
         if !text.is_empty() {
             text.push('\n');
         }
+        history.check()?;
+        if matches!(services, FactServices::VerifySettled) {
+            return Err(unsettled_facts());
+        }
+        history.invalidate()?;
         state.write_bytes(&path, text.as_bytes())?;
+        history.check()?;
     }
-    for value in crate::tombstone::shared_facts(state, env_id)? {
+    let final_input = history.acquire()?;
+    let (shared_final, seal) = final_input.shared_fact_seal()?;
+    for value in shared_final {
         let fact = Fact::from_dict(&value)?;
         if !hashes.contains(&fact.hash()?) {
             return Err(Error::state("team_tombstone_history_unavailable"));
         }
     }
-    Ok((facts, hashes, authors))
+    history.check()?;
+    if !required_deny_receipts.is_subset(&hashes) {
+        return Err(unsettled_facts());
+    }
+    Ok(SettledFacts {
+        facts,
+        hashes,
+        authors,
+        seal,
+    })
 }
 pub fn read_env_mapping(state: &StateDir) -> Result<Value> {
     let doc = state.read_json(ENVS_MAP_PATH, json!({}))?;
@@ -5417,6 +5672,16 @@ fn member_device_record(doc: &Value, fp: &str) -> Option<DeviceRecord> {
 /// `AttributeError`/`TypeError`) is `state_corrupt` (PORTING.md §3.5).
 fn read_dict_or_empty(state: &StateDir, path: &str) -> Result<Map<String, Value>> {
     match state.read_json(path, json!({}))? {
+        Value::Object(map) => Ok(map),
+        other if super::json_falsy(&other) => Ok(Map::new()),
+        _ => Err(Error::state("state_corrupt").with_detail(path)),
+    }
+}
+
+// Same dictionary coercion at the sealed registration acquisition boundary;
+// the ordinary reader above keeps its original body and lazy error behavior.
+fn read_dict_value(value: Value, path: &str) -> Result<Map<String, Value>> {
+    match value {
         Value::Object(map) => Ok(map),
         other if super::json_falsy(&other) => Ok(Map::new()),
         _ => Err(Error::state("state_corrupt").with_detail(path)),
@@ -5703,6 +5968,7 @@ pub struct TeamSync {
     sync_state: AtomicBool,
     /// When each invitation's join request was last audited.
     join_request_audits: Mutex<HashMap<String, Instant>>,
+    bootstrap_runtime: super::bootstrap::Runtime,
     /// Test observability: how many relaxed-document folds actually ran.
     #[cfg(test)]
     relaxed_folds: std::sync::atomic::AtomicUsize,
@@ -5718,6 +5984,9 @@ pub fn attached(ctx: &Context) -> Option<Arc<TeamSync>> {
 }
 impl TeamSync {
     pub fn new(ctx: Arc<Context>, transport: Arc<dyn Transport>, device: DeviceKey) -> Arc<Self> {
+        if let Ok(record) = device.record() {
+            let _ = ctx.state.bind_import_identity(record);
+        }
         let this = Arc::new_cyclic(|this| Self {
             ctx,
             transport,
@@ -5733,6 +6002,7 @@ impl TeamSync {
             poll_failures: Mutex::new(HashMap::new()),
             sync_state: AtomicBool::new(false),
             join_request_audits: Mutex::new(HashMap::new()),
+            bootstrap_runtime: Default::default(),
             #[cfg(test)]
             relaxed_folds: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
@@ -5795,6 +6065,7 @@ impl TeamSync {
     /// and join the receive threads.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
+        self.bootstrap_runtime.stop();
         let poll_thread = self
             .poll_thread
             .lock()
@@ -5911,6 +6182,18 @@ impl TeamSync {
         );
     }
     pub fn register_env(&self, env_id: &str) -> Result<()> {
+        #[cfg(test)]
+        let _stage = commit::history_testing::span(self.ctx.state, "register_env");
+        let recovery = commit::HistorySession::open_recovery_entry(&self.ctx, env_id)?;
+        super::bootstrap::install::recover_with_input(&self.ctx, env_id, &recovery)?;
+        let history = recovery.continue_runtime()?;
+        drop(recovery);
+        if history.is_scoped() {
+            super::bootstrap::approval::recover_all_with_input(&self.ctx, env_id, &history)?;
+        } else {
+            super::bootstrap::approval::recover_all(&self.ctx, env_id)?;
+        }
+        crate::import_barrier::require_env(self.ctx.state, env_id)?;
         if self
             .envs
             .lock()
@@ -5919,11 +6202,15 @@ impl TeamSync {
         {
             return Ok(());
         }
-        let (facts, hashes, authors) = load_facts(&self.ctx, env_id)?;
+        let (facts, hashes, authors) = load_facts_with_input(&self.ctx, env_id, &history)?;
+        let input = history.acquire()?;
         let mut env = EnvState::new(facts, hashes, authors);
         // `self._read_peers(env_id).items()`: a truthy non-dict document
         // raises in Python before the environment is loaded (§3.5).
-        let peers = read_dict_or_empty(self.ctx.state, &format!("team/{env_id}/peers.json"))?;
+        let peers = read_dict_value(
+            input.read_json(&format!("team/{env_id}/peers.json"), json!({}))?,
+            &format!("team/{env_id}/peers.json"),
+        )?;
         for (fp, addrs) in &peers {
             if valid_fp(fp) {
                 if let Some(addrs) = addrs.as_array() {
@@ -5941,8 +6228,10 @@ impl TeamSync {
         // `(read_json(...) or {}).items()`: a truthy non-dict raises (§3.5);
         // each dict-valued entry keeps `{str(k): int(v) ... if isinstance(v,
         // int) and not isinstance(v, bool)}` -- any magnitude, any sign.
-        let peer_vectors =
-            read_dict_or_empty(self.ctx.state, &format!("team/{env_id}/peer_vectors.json"))?;
+        let peer_vectors = read_dict_value(
+            input.read_json(&format!("team/{env_id}/peer_vectors.json"), json!({}))?,
+            &format!("team/{env_id}/peer_vectors.json"),
+        )?;
         for (fp, vector) in &peer_vectors {
             if !valid_fp(fp) {
                 continue;
@@ -5959,10 +6248,7 @@ impl TeamSync {
                 );
             }
         }
-        let persisted_lines = self
-            .ctx
-            .state
-            .read_lines(&format!("team/{env_id}/facts.jsonl"), None)?;
+        let persisted_lines = input.read_lines(&format!("team/{env_id}/facts.jsonl"))?;
         env.known_fact_lines = persisted_lines.len();
         for line in persisted_lines {
             if let Ok(value) = pyjson::loads(&line)
@@ -5993,11 +6279,7 @@ impl TeamSync {
                 Some(_) => return Err(corrupt()),
             };
         }
-        for line in self
-            .ctx
-            .state
-            .read_lines(&format!("team/{env_id}/incident_outbox.jsonl"), None)?
-        {
+        for line in input.read_lines(&format!("team/{env_id}/incident_outbox.jsonl"))? {
             if let Ok(value) = pyjson::loads(&line) {
                 if let Ok(fact) = Fact::from_dict(&value) {
                     if fact.env_id == env_id && fact.kind == "incident" {
@@ -6012,7 +6294,7 @@ impl TeamSync {
         // iterable (a dict's keys, a string's characters); a truthy number or
         // `true` is not iterable (`TypeError`, §3.5).
         let alerted_path = format!("team/{env_id}/overridden_alerted.json");
-        let alerted = self.ctx.state.read_json(&alerted_path, json!([]))?;
+        let alerted = input.read_json(&alerted_path, json!([]))?;
         if !super::json_falsy(&alerted) {
             env.alerted_overrides = python_list(&alerted)
                 .ok_or_else(|| Error::state("state_corrupt").with_detail(&alerted_path))?
@@ -6025,16 +6307,21 @@ impl TeamSync {
         }
         // A restarted serve still tells `offline` from `never_connected`.
         env.sync.last_contact = super::sync_status::previous_contacts(&self.ctx, env_id);
+        history.check()?;
         self.envs
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(env_id.into(), env);
         self.write_sync_state(env_id, true);
-        self.refold(env_id)?;
+        if history.is_scoped() {
+            self.refold_with_input(env_id, &history)?;
+        } else {
+            self.refold(env_id)?;
+        }
         // `env.last_known_vector = dict(env.store.vector())` runs after
         // `_refold`, so a failing refold leaves the registered environment
         // with the empty baseline.
-        let vector = CommitStore::new(self.ctx.state, env_id).vector()?;
+        let vector = history.acquire()?.vector()?;
         if let Some(env) = self
             .envs
             .lock()
@@ -6049,11 +6336,24 @@ impl TeamSync {
     /// refold until one succeeds (section 6.4, issue #51). Noted under the
     /// state lock, so in the order concurrent refolds ran.
     fn refold(&self, env_id: &str) -> Result<FoldResult> {
-        let lock = self.ctx.state.lock();
-        let folded = match &lock {
-            Ok(_) => self.fold_env(env_id),
-            Err(error) => Err(error.clone()),
-        };
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id);
+        match history {
+            Ok(history) if history.is_scoped() => self.refold_with_input(env_id, &history),
+            Ok(_history) => self.note_refold_result(env_id, self.fold_env(env_id)),
+            Err(error) => self.note_refold_result(env_id, Err(error)),
+        }
+    }
+    fn refold_with_input(
+        &self,
+        env_id: &str,
+        history: &commit::HistorySession<'_>,
+    ) -> Result<FoldResult> {
+        #[cfg(test)]
+        let _stage = commit::history_testing::span(self.ctx.state, "refold_with_input");
+        let folded = self.fold_env_with_input(env_id, history);
+        self.note_refold_result(env_id, folded)
+    }
+    fn note_refold_result(&self, env_id: &str, folded: Result<FoldResult>) -> Result<FoldResult> {
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(env) = envs.get_mut(env_id) {
             if folded.is_err() {
@@ -6105,11 +6405,48 @@ impl TeamSync {
         Err(error)
     }
     fn fold_env(&self, env_id: &str) -> Result<FoldResult> {
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        self.fold_env_with_input(env_id, &history)
+    }
+    fn fold_env_with_input(
+        &self,
+        env_id: &str,
+        parent: &commit::HistorySession<'_>,
+    ) -> Result<FoldResult> {
+        self.fold_env_with_settled(env_id, parent, None)
+    }
+    fn refold_with_settled<'a>(
+        &self,
+        env_id: &str,
+        parent: &commit::HistorySession<'a>,
+        settled: &SettledFacts<'a>,
+    ) -> Result<FoldResult> {
+        let result = self.fold_env_with_settled(env_id, parent, Some(settled));
+        self.note_refold_result(env_id, result)
+    }
+    fn fold_env_with_settled<'a>(
+        &self,
+        env_id: &str,
+        parent: &commit::HistorySession<'a>,
+        settled: Option<&SettledFacts<'a>>,
+    ) -> Result<FoldResult> {
+        #[cfg(test)]
+        let _stage = commit::history_testing::span(self.ctx.state, "fold_env_with_settled");
         #[cfg(test)]
         self.refolds_run.fetch_add(1, Ordering::SeqCst);
-        let _lock = self.ctx.state.lock()?;
-        let (facts, _, _) = load_facts(&self.ctx, env_id)?;
-        let commits = CommitStore::new(self.ctx.state, env_id).all_commits()?;
+        let history = parent.nested(self.ctx.state, env_id)?;
+        let facts = if let Some(settled) = settled {
+            let facts = settled.checked(&history)?;
+            let input = history.acquire()?;
+            let commits = input.commits()?;
+            input.reserve_fold(&commits, Some(facts), 1)?;
+            facts.clone()
+        } else {
+            load_facts_with_input(&self.ctx, env_id, &history)?.0
+        };
+        let input = history.acquire()?;
+        let commits = input.commits()?;
+        input.reserve_fold(&commits, Some(&facts), 1)?;
         let fold::Refold {
             result,
             snapshot,
@@ -6118,12 +6455,14 @@ impl TeamSync {
             unrecorded_snapshot,
         } = fold::fold_for_refold(
             env_id,
-            commits,
+            commits.clone(),
             self.ctx.state,
             Some(&facts),
             Some(self.ctx.audit),
         )?;
+        input.verify_folded_authority(&commits, &facts, &result)?;
         let (project, environment) = env_project_environment(self.ctx.state, env_id)?;
+        history.invalidate()?;
         fold::derive_local(
             &result,
             self.ctx.state,
@@ -6134,6 +6473,7 @@ impl TeamSync {
             project.as_deref(),
             environment.as_deref(),
         )?;
+        history.check()?;
         // `total = sum(result.vector.values())`: exact Python ints.
         let total = result
             .vector
@@ -6163,23 +6503,39 @@ impl TeamSync {
             .sub(&env.last_snapshot_total)
             .ok_or_else(|| Error::state("state_corrupt").with_detail("team_snapshot"))?
             .ge_int(&SNAPSHOT_INTERVAL_COMMITS.into());
+        // The StateDir lock serializes refolds; the environment mutex only
+        // protects the in-memory update and never covers snapshot I/O.
+        drop(envs);
         // Stale snapshots are replaced at once, so the next refold does not
         // pass them over again (issue #35).
         if due || !stale_snapshots.is_empty() {
+            history.invalidate()?;
             fold::save_snapshot(self.ctx.state, env_id, &total, &snapshot)?;
+            history.invalidate()?;
             fold::save_snapshot_record(self.ctx.state, env_id, &total, &record)?;
             for number in stale_snapshots.iter().filter(|number| **number != total) {
+                history.invalidate()?;
                 fold::remove_snapshot(self.ctx.state, env_id, number);
+                history.check()?;
             }
-            env.last_snapshot_total = PyNumber::Int(total.0);
+            if let Some(env) = self
+                .envs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_mut(env_id)
+            {
+                env.last_snapshot_total = PyNumber::Int(total.0);
+            }
         }
         // Only spares the next fold a check: a record not written is checked
         // again.
         if let Some(number) = unrecorded_snapshot {
+            history.invalidate()?;
             let _ = fold::save_snapshot_record(self.ctx.state, env_id, &number, &record);
         }
-        drop(envs);
+        history.invalidate()?;
         self.record_overrides(env_id, &result.overridden)?;
+        history.check()?;
         Ok(result)
     }
     fn record_overrides(&self, env_id: &str, overridden: &[Value]) -> Result<()> {
@@ -6270,6 +6626,16 @@ impl TeamSync {
         proof: &[u8],
     ) -> InviteDecision {
         use super::membership::InviteOutcome;
+        match super::bootstrap::approval::check(&self.ctx, env_id, record, hash, proof) {
+            Ok(Some(decision)) => {
+                if decision == InviteDecision::Accept && self.refold(env_id).is_err() {
+                    return InviteDecision::Reject;
+                }
+                return decision;
+            }
+            Ok(None) => {}
+            Err(_) => return InviteDecision::Reject,
+        }
         let joiner = record.fingerprint();
         let outcome = super::membership::check_invite(&self.ctx, env_id, hash, proof, &joiner);
         match outcome {
@@ -6341,6 +6707,8 @@ impl TeamSync {
         );
     }
     pub fn document(&self, env_id: &str) -> Result<Value> {
+        let _import_view = self.ctx.state.lock()?;
+        crate::import_barrier::require_env(self.ctx.state, env_id)?;
         self.envs
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -6352,6 +6720,12 @@ impl TeamSync {
     /// refuse a device whose removal fact no refold has folded in yet
     /// ([`EnvState::active_member`]).
     pub fn is_active_member(&self, env_id: &str, fp: &str) -> bool {
+        let Ok(_import_view) = self.ctx.state.lock() else {
+            return false;
+        };
+        if crate::import_barrier::require_env(self.ctx.state, env_id).is_err() {
+            return false;
+        }
         let Ok(envs) = self.envs.lock() else {
             return false;
         };
@@ -6359,6 +6733,17 @@ impl TeamSync {
             env.document["members"][fp]["status"] == "active"
                 && member_device_record(&env.document, fp).is_some()
         })
+    }
+
+    pub(crate) fn personal_session_open(&self, env_id: &str) -> bool {
+        self.envs
+            .lock()
+            .ok()
+            .and_then(|envs| {
+                envs.get(env_id)
+                    .map(|env| env.sessions.values().any(|session| !session.is_closed()))
+            })
+            .unwrap_or(false)
     }
     pub fn set_peer_address(&self, env_id: &str, fp: &str, address: &str) -> Result<()> {
         // A `zpl:` address must be a well-formed link address
@@ -6414,6 +6799,20 @@ impl TeamSync {
             .add_if_new(&hash)
     }
     pub fn submit_commit(&self, env_id: &str, commit: &Commit) -> Result<&'static str> {
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        let result = self.submit_commit_with_input(env_id, commit, &history);
+        drop(history);
+        if result.is_ok() {
+            self.flush_deferred_sends();
+        }
+        result
+    }
+    pub(crate) fn submit_commit_with_input(
+        &self,
+        env_id: &str,
+        commit: &Commit,
+        history: &commit::HistorySession<'_>,
+    ) -> Result<&'static str> {
         if !self
             .envs
             .lock()
@@ -6423,12 +6822,14 @@ impl TeamSync {
             return Err(Error::invalid_input("team_env_unknown"));
         }
         let result = {
-            let _lock = self.ctx.state.lock()?;
-            commit::receive_commit(
+            commit::receive_runtime_with_input(
                 &CommitStore::new(self.ctx.state, env_id),
                 commit,
                 commit::now_ms(),
                 Some(self.ctx.audit),
+                true,
+                history,
+                &self.ctx,
             )?
         };
         if result == "accepted" {
@@ -6436,7 +6837,7 @@ impl TeamSync {
             // `pick_up_local_commits`, as in Python: resetting it here would
             // swallow a commit another process wrote meanwhile. The seen-set
             // keeps that pickup from broadcasting this commit a second time.
-            self.refold(env_id)?;
+            self.refold_with_input(env_id, history)?;
             if self.commit_first_seen(commit) {
                 self.broadcast(
                     env_id,
@@ -6448,10 +6849,15 @@ impl TeamSync {
         Ok(result)
     }
     pub fn publish_fact(&self, env_id: &str, kind: &str, target: Value) -> Result<Value> {
-        let _lock = self.ctx.state.lock()?;
-        let fact = self.sign_authorized_fact(env_id, kind, target)?;
-        let stored = self.store_and_apply_fact(env_id, &fact)?;
-        drop(_lock);
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        let fact = self.sign_authorized_fact_with_input(env_id, kind, target, &history)?;
+        let stored = if history.is_scoped() {
+            self.store_and_apply_fact_with_input(env_id, &fact, &history)?
+        } else {
+            self.store_and_apply_fact(env_id, &fact)?
+        };
+        history.check()?;
+        drop(history);
         if let Some(folded) = stored {
             self.announce_fact(env_id, &fact);
             folded?;
@@ -6466,23 +6872,36 @@ impl TeamSync {
         kind: &str,
         target: Value,
     ) -> Result<Fact> {
-        let _lock = self.ctx.state.lock()?;
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        self.sign_authorized_fact_with_input(env_id, kind, target, &history)
+    }
+    pub(crate) fn sign_authorized_fact_with_input(
+        &self,
+        env_id: &str,
+        kind: &str,
+        target: Value,
+        parent: &commit::HistorySession<'_>,
+    ) -> Result<Fact> {
+        let history = parent.nested(self.ctx.state, env_id)?;
+        history.match_local_identity(&self.device.record()?)?;
         validate_fact_target(kind, &target)?;
         let fp = self.device.fingerprint()?;
         let doc = if kind == "member_removed" {
-            self.role_document_for_removal(
+            self.role_document_for_removal_with_input(
                 env_id,
                 &fp,
                 target["fingerprint"].as_str().unwrap_or(""),
+                &history,
             )?
         } else {
-            crate::team::membership::load_environment(&self.ctx, env_id)?.document
+            crate::team::membership::load_environment_with_input(&self.ctx, env_id, &history)?
+                .document
         };
         if !fact_role_ok(&doc, kind, &fp, &target) {
             return Err(Error::policy_denied("team_fact_not_authorized"));
         }
         let store = CommitStore::new(self.ctx.state, env_id);
-        let observed = store.all_commits()?;
+        let observed = history.acquire()?.commits()?;
         let mut observed_clock = Hlc::default();
         for commit in &observed {
             observed_clock.observe(&commit.hlc)?;
@@ -6500,15 +6919,27 @@ impl TeamSync {
             let wall = compaction_heads::testing::author_wall();
             env.hlc.tick(wall)
         };
+        history.check()?;
         sign_fact(&self.device, env_id, kind, target, &hlc)
     }
     /// Store, apply and broadcast a fact [`Self::sign_authorized_fact`]
     /// signed.
     pub(crate) fn publish_signed_fact(&self, env_id: &str, fact: Fact) -> Result<Value> {
-        let _lock = self.ctx.state.lock()?;
-        let stored = self.store_and_apply_fact(env_id, &fact)?;
-        drop(_lock);
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        let result = self.publish_signed_fact_with_input(env_id, fact, &history);
+        drop(history);
+        self.flush_deferred_sends();
+        result
+    }
+    pub(crate) fn publish_signed_fact_with_input(
+        &self,
+        env_id: &str,
+        fact: Fact,
+        history: &commit::HistorySession<'_>,
+    ) -> Result<Value> {
+        let stored = self.store_and_apply_fact_with_input(env_id, &fact, history)?;
         if let Some(folded) = stored {
+            history.check()?;
             self.announce_fact(env_id, &fact);
             folded?;
         }
@@ -6518,7 +6949,16 @@ impl TeamSync {
     /// refold's outcome. A fact is announced even when that refold failed:
     /// it is stored, and the poll's retry folds it in (issue #51).
     fn store_and_apply_fact(&self, env_id: &str, fact: &Fact) -> Result<Option<Result<()>>> {
-        if !self.store_fact(env_id, fact)? {
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        self.store_and_apply_fact_with_input(env_id, fact, &history)
+    }
+    fn store_and_apply_fact_with_input(
+        &self,
+        env_id: &str,
+        fact: &Fact,
+        history: &commit::HistorySession<'_>,
+    ) -> Result<Option<Result<()>>> {
+        if !self.store_fact_with_input(env_id, fact, history)? {
             return Ok(None);
         }
         if fact.kind == "member_removed"
@@ -6526,7 +6966,7 @@ impl TeamSync {
         {
             self.drain_removed(env_id, fp);
         }
-        Ok(Some(self.refold(env_id).map(|_| ())))
+        Ok(Some(self.refold_with_input(env_id, history).map(|_| ())))
     }
     fn announce_fact(&self, env_id: &str, fact: &Fact) {
         self.audit_fact_apply(env_id, fact);
@@ -6536,6 +6976,17 @@ impl TeamSync {
         }
     }
     fn store_fact(&self, env_id: &str, fact: &Fact) -> Result<bool> {
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        self.store_fact_with_input(env_id, fact, &history)
+    }
+    fn store_fact_with_input(
+        &self,
+        env_id: &str,
+        fact: &Fact,
+        history: &commit::HistorySession<'_>,
+    ) -> Result<bool> {
+        let nested = history.nested(self.ctx.state, env_id)?;
+        let history = &nested;
         let hash = fact.hash()?;
         let _lock = self.ctx.state.lock()?;
         {
@@ -6547,7 +6998,7 @@ impl TeamSync {
                 return Ok(false);
             }
         }
-        receipt_fact(&self.ctx, fact)?;
+        receipt_fact_with_input(&self.ctx, fact, history)?;
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
         let env = envs
             .get_mut(env_id)
@@ -6556,9 +7007,11 @@ impl TeamSync {
             return Ok(false);
         }
         let line = pyjson::dumps(&fact.to_dict(), DumpOptions::compact_sorted())?;
+        history.check()?;
         self.ctx
             .state
             .append_line(&format!("team/{env_id}/facts.jsonl"), &line)?;
+        history.check()?;
         env.fact_hashes.insert(hash.clone());
         apply_fact(&mut env.facts, fact);
         if fact.kind == "secret_deleted" {
@@ -6704,6 +7157,20 @@ impl TeamSync {
             .map(|ts| iso(Some(ts)))
     }
 
+    pub(crate) fn synced_at_with_input(
+        &self,
+        env_id: &str,
+        parent: &commit::HistorySession<'_>,
+    ) -> Result<Option<String>> {
+        self.update_readiness_with_input(env_id, parent)?;
+        Ok(self
+            .envs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(env_id)
+            .and_then(|env| env.synced_at)
+            .map(|ts| iso(Some(ts))))
+    }
     fn accept_session(&self, env_id: &str, session: Arc<dyn Session>, inbound: bool) -> bool {
         self.accept_session_with_transport(env_id, session, inbound, None)
     }
@@ -6775,7 +7242,7 @@ impl TeamSync {
         // exchange; CLI readers must not reuse its predecessor's cached ACK.
         self.write_sync_state(env_id, true);
         if session
-            .send(&json!({"type":"SYNC_CAPS","v":1,"features":[super::tombstone_gate::FEATURE]}))
+            .send(&json!({"type":"SYNC_CAPS","v":1,"features":[super::tombstone_gate::FEATURE,super::bootstrap::FEATURE]}))
             .is_err()
         {
             self.drop_session(env_id, &fp, Some(&session));
@@ -6797,6 +7264,17 @@ impl TeamSync {
         true
     }
     fn on_inbound_session(self: &Arc<Self>, session: Arc<dyn Session>) {
+        match super::bootstrap::needs_serve(&self.ctx, session.as_ref()) {
+            Ok(true) => {
+                let _ = self.bootstrap_runtime.inbound(self.clone(), session);
+                return;
+            }
+            Ok(false) => {}
+            Err(_) => {
+                session.close();
+                return;
+            }
+        }
         let env_id = session.env_id().to_owned();
         let fp = session.peer().fingerprint();
         if !self.accept_session(&env_id, session.clone(), true) {
@@ -6840,6 +7318,9 @@ impl TeamSync {
         }
         self.retry_pending_incidents_to(&env_id, &session);
     }
+    pub(crate) fn personal_adopt_inbound(self: &Arc<Self>, session: Arc<dyn Session>) {
+        self.on_inbound_session(session);
+    }
     fn admit_member(
         &self,
         env_id: &str,
@@ -6848,8 +7329,10 @@ impl TeamSync {
         name: &str,
     ) -> Result<()> {
         use crate::kms::WrappedKey;
-        let _lock = self.ctx.state.lock()?;
-        let doc = crate::team::membership::load_environment(&self.ctx, env_id)?.document;
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        let doc =
+            crate::team::membership::load_environment_with_input(&self.ctx, env_id, &history)?
+                .document;
         let mut wraps = Map::new();
         if let Some(gens) = doc["dek"]["generations"].as_object() {
             for gen_id in gens.keys() {
@@ -6876,7 +7359,13 @@ impl TeamSync {
         if !wraps.is_empty() {
             op["wraps"] = Value::Object(wraps);
         }
-        crate::team::membership::author_commit(&self.ctx, Some(self), env_id, vec![op])?;
+        crate::team::membership::author_commit_with_input(
+            &self.ctx,
+            Some(self),
+            env_id,
+            vec![op],
+            &history,
+        )?;
         // Python: extra={"env_id", "fingerprint", "role"} (the role is not a
         // fact/op `kind`).
         let _ = self.ctx.audit.record(
@@ -6891,7 +7380,7 @@ impl TeamSync {
                 ..Default::default()
             },
         );
-        drop(_lock);
+        drop(history);
         self.flush_deferred_sends();
         Ok(())
     }
@@ -6913,6 +7402,10 @@ impl TeamSync {
                         // An approval inviter's only frame to an unapproved
                         // joiner (docs/remote-sync.md §3.2): `join` reports it.
                         if !heard && message["type"] == JOIN_PENDING_TYPE {
+                            if message["personal_bootstrap"] == true {
+                                let _ =
+                                    super::bootstrap::offer(&this.ctx, &env_id, &session.peer());
+                            }
                             this.note_join_pending(&env_id, &session.peer().fingerprint());
                             break;
                         }
@@ -7001,14 +7494,27 @@ impl TeamSync {
         }
         Ok(())
     }
+    #[cfg(test)]
     fn handle_tombstone_control(
         &self,
         env_id: &str,
         session: &Arc<dyn Session>,
         message: &Value,
     ) -> Result<()> {
+        if let Some(operation) = self.prepare_tombstone_control(env_id, session, message)? {
+            self.service_tombstones_with_operation(env_id, session, &operation)?;
+        }
+        Ok(())
+    }
+    fn prepare_tombstone_control(
+        &self,
+        env_id: &str,
+        session: &Arc<dyn Session>,
+        message: &Value,
+    ) -> Result<Option<commit::HistoryResume<'_>>> {
         super::tombstone_gate::validate(message)?;
-        let state_lock = self.ctx.state.lock()?;
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        history.preflight_inventory()?;
         let fp = session.peer().fingerprint();
         {
             let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
@@ -7019,12 +7525,13 @@ impl TeamSync {
                         .get(&fp)
                         .is_none_or(|current| !Arc::ptr_eq(current, session))
             }) {
-                return Ok(());
+                return Ok(None);
             }
         }
         if message["type"] == "TOMBSTONE_STATE"
             && message["digest"] != super::tombstone_gate::empty_digest()
         {
+            history.invalidate()?;
             crate::tombstone::require_support(self.ctx.state, env_id)?;
         }
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
@@ -7039,7 +7546,7 @@ impl TeamSync {
                 .get(&fp)
                 .is_none_or(|current| !Arc::ptr_eq(current, session))
         {
-            return Ok(());
+            return Ok(None);
         }
         let digest = super::tombstone_gate::digest(&env.facts.tombstone_facts)?;
         let gate = env
@@ -7064,13 +7571,32 @@ impl TeamSync {
             _ => return Err(Error::invalid_input("team_sync_control_malformed")),
         }
         drop(envs);
-        drop(state_lock);
+        history.check()?;
+        let operation = history.into_resume()?;
         self.write_sync_state(env_id, true);
-        self.service_tombstones(env_id, session)
+        operation.check_unlocked()?;
+        Ok(Some(operation))
     }
     /// Announce our computed set before ordinary data; ACK only a matching
     /// complete admitted set after a successful durable fold/derivation.
     fn service_tombstones(&self, env_id: &str, session: &Arc<dyn Session>) -> Result<()> {
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        let operation = history.into_resume()?;
+        self.service_tombstones_with_operation(env_id, session, &operation)
+            .map(|_| ())
+    }
+    fn service_tombstones_with_operation<'a>(
+        &self,
+        env_id: &str,
+        session: &Arc<dyn Session>,
+        parent: &commit::HistoryResume<'a>,
+    ) -> Result<Option<SettledFacts<'a>>> {
+        #[cfg(test)]
+        let _stage =
+            commit::history_testing::span(self.ctx.state, "service_tombstones_with_operation");
+        let history = parent.resume()?;
+        history.preflight_inventory()?;
+        let mut settled = None;
         let fp = session.peer().fingerprint();
         let known = self
             .envs
@@ -7079,8 +7605,17 @@ impl TeamSync {
             .get(env_id)
             .is_some_and(|env| !env.facts.tombstone_facts.is_empty());
         if known || crate::tombstone::support_required(self.ctx.state, env_id)? {
-            let lock = self.ctx.state.lock()?;
-            let (facts, _, _) = load_facts(&self.ctx, env_id)?;
+            let ordinary;
+            let facts = if history.is_scoped() {
+                settled = Some(load_facts_core(&history, FactServices::Runtime(&self.ctx))?);
+                settled
+                    .as_ref()
+                    .ok_or_else(|| Error::state("team_bootstrap_recovery_required"))?
+                    .checked(&history)?
+            } else {
+                ordinary = load_facts_with_input(&self.ctx, env_id, &history)?.0;
+                &ordinary
+            };
             let changed = self
                 .envs
                 .lock()
@@ -7088,15 +7623,20 @@ impl TeamSync {
                 .get(env_id)
                 .is_some_and(|env| env.facts.tombstone_facts != facts.tombstone_facts);
             if changed {
-                self.refold(env_id)?;
+                if let Some(current) = &settled {
+                    self.refold_with_settled(env_id, &history, current)?;
+                    settled = None;
+                } else {
+                    self.refold(env_id)?;
+                }
             }
-            drop(lock);
         }
         let required = crate::tombstone::support_required(self.ctx.state, env_id)?;
+        let operation = history.into_resume()?;
         let (state, ack, unsupported) = {
             let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             let Some(env) = envs.get_mut(env_id) else {
-                return Ok(());
+                return Ok(None);
             };
             if env
                 .sessions
@@ -7104,14 +7644,14 @@ impl TeamSync {
                 .is_none_or(|current| !Arc::ptr_eq(current, session))
                 || env.draining.contains_key(&fp)
             {
-                return Ok(());
+                return Ok(None);
             }
             let digest = super::tombstone_gate::digest(&env.facts.tombstone_facts)?;
             let Some(gate) = env.gates.get_mut(&fp) else {
-                return Ok(());
+                return Ok(None);
             };
             if !gate.caps_sent {
-                return Ok(());
+                return Ok(None);
             }
             let unsupported = required
                 && gate.caps != Some(true)
@@ -7144,9 +7684,10 @@ impl TeamSync {
         };
         if unsupported {
             self.drop_session(env_id, &fp, Some(session));
-            return Ok(());
+            return Ok(None);
         }
         if let Some(state) = state {
+            operation.check_unlocked()?;
             session.send(&state)?;
             if let Some(gate) = self
                 .envs
@@ -7166,10 +7707,32 @@ impl TeamSync {
             }
         }
         if let Some((digest, request)) = ack {
-            let lock = self.ctx.state.lock()?;
-            // Includes all newly stored facts from other processes; never ACK
-            // our cached document or a digest merely advertised by the peer.
-            self.refold(env_id)?;
+            let history = operation.resume()?;
+            // Reuse only this operation's sealed settled result after a full
+            // raw revision check. Unlocking never refreshes the budget. Any
+            // intervening change requires the same Runtime engine again.
+            if history.is_scoped() {
+                let reusable = match settled.as_ref().map(|value| value.checked(&history)) {
+                    Some(Ok(_)) => true,
+                    Some(Err(error)) if error.reason == "team_bootstrap_local_state_changed" => {
+                        false
+                    }
+                    Some(Err(error)) => return Err(error),
+                    None => false,
+                };
+                if !reusable {
+                    settled = Some(load_facts_core(&history, FactServices::Runtime(&self.ctx))?);
+                }
+                self.refold_with_settled(
+                    env_id,
+                    &history,
+                    settled
+                        .as_ref()
+                        .ok_or_else(|| Error::state("team_bootstrap_recovery_required"))?,
+                )?;
+            } else {
+                self.refold(env_id)?;
+            }
             let matching = {
                 let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
                 envs.get(env_id).is_some_and(|env| {
@@ -7181,8 +7744,10 @@ impl TeamSync {
                         })
                 })
             };
-            drop(lock);
+            history.check()?;
+            drop(history);
             if matching && self.current_fact_session(env_id, &fp, session) {
+                operation.check_unlocked()?;
                 session
                     .send(&json!({"type":"TOMBSTONE_ACK","digest":digest,"request_id":request}))?;
                 if let Some(gate) = self
@@ -7196,13 +7761,155 @@ impl TeamSync {
                 }
             }
         }
-        Ok(())
+        Ok(settled)
+    }
+    fn service_and_readiness(&self, env_id: &str, session: &Arc<dyn Session>) -> Result<()> {
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        if !history.is_scoped() {
+            drop(history);
+            self.service_tombstones(env_id, session)?;
+            return self.update_readiness(env_id);
+        }
+        let operation = history.into_resume()?;
+        let settled = self.service_tombstones_with_operation(env_id, session, &operation)?;
+        self.readiness_after_service(env_id, &operation, settled.as_ref())
+    }
+    fn readiness_after_service<'a>(
+        &self,
+        env_id: &str,
+        operation: &commit::HistoryResume<'a>,
+        settled: Option<&SettledFacts<'a>>,
+    ) -> Result<()> {
+        let history = operation.resume()?;
+        let provided = match settled.map(|value| value.checked(&history)) {
+            Some(Ok(_)) => settled,
+            Some(Err(error)) if error.reason == "team_bootstrap_local_state_changed" => None,
+            Some(Err(error)) => return Err(error),
+            None => None,
+        };
+        let result = self.update_readiness_with_settled(env_id, &history, provided);
+        if result.is_err()
+            && let Some(env) = self
+                .envs
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .get_mut(env_id)
+        {
+            env.synced_at = None;
+        }
+        result
     }
     fn update_readiness(&self, env_id: &str) -> Result<()> {
-        let _lock = self.ctx.state.lock()?;
-        let local = CommitStore::new(self.ctx.state, env_id).vector()?;
-        let (durable, _, _) = load_facts(&self.ctx, env_id)?;
+        #[cfg(test)]
+        let _stage = commit::history_testing::span(self.ctx.state, "update_readiness");
+        let history = match commit::HistorySession::open_runtime(self.ctx.state, env_id) {
+            Ok(history) => history,
+            Err(error) => {
+                if let Some(env) = self
+                    .envs
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get_mut(env_id)
+                {
+                    env.synced_at = None;
+                }
+                return Err(error);
+            }
+        };
+        let result = self.update_readiness_with_input(env_id, &history);
+        if result.is_err() {
+            if let Some(env) = self
+                .envs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_mut(env_id)
+            {
+                env.synced_at = None;
+            }
+        }
+        result
+    }
+    fn update_readiness_with_input(
+        &self,
+        env_id: &str,
+        parent: &commit::HistorySession<'_>,
+    ) -> Result<()> {
+        let result = self.update_readiness_with_settled(env_id, parent, None);
+        if result.is_err()
+            && let Some(env) = self
+                .envs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_mut(env_id)
+        {
+            env.synced_at = None;
+        }
+        result
+    }
+    fn update_readiness_with_settled<'a>(
+        &self,
+        env_id: &str,
+        parent: &commit::HistorySession<'a>,
+        provided: Option<&SettledFacts<'a>>,
+    ) -> Result<()> {
+        let history = parent.nested(self.ctx.state, env_id)?;
+        if let Err(error) = crate::import_barrier::require_env(self.ctx.state, env_id) {
+            if let Ok(mut envs) = self.envs.lock()
+                && let Some(env) = envs.get_mut(env_id)
+            {
+                env.synced_at = None;
+            }
+            return Err(error);
+        }
+        if crate::import_barrier::credential_projection_denied(self.ctx.state, env_id)? {
+            if let Some(env) = self
+                .envs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_mut(env_id)
+            {
+                env.synced_at = None;
+            }
+            return Ok(());
+        }
+        let settled;
+        let ordinary;
+        let (local, durable) = if history.is_scoped() {
+            // The complete engine settles first. Its sealed raw epoch owns
+            // the actual validated vector; current_with_vector checks the
+            // full raw/path/type revision and shared mutation generation.
+            let current = match provided {
+                Some(value) => value,
+                None => {
+                    settled = load_facts_core(&history, FactServices::Runtime(&self.ctx))?;
+                    &settled
+                }
+            };
+            let (facts, vector) = current.current_with_vector(&history)?;
+            (vector, facts)
+        } else {
+            let local = history.acquire()?.vector()?;
+            ordinary = load_facts_with_input(&self.ctx, env_id, &history)?.0;
+            if history.acquire()?.vector()? != local {
+                return Err(Error::state("team_bootstrap_local_state_changed"));
+            }
+            (local, &ordinary)
+        };
+        if history.is_scoped()
+            && crate::import_barrier::credential_projection_denied(self.ctx.state, env_id)?
+        {
+            if let Some(env) = self
+                .envs
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .get_mut(env_id)
+            {
+                env.synced_at = None;
+            }
+            return Ok(());
+        }
         let required = crate::tombstone::support_required(self.ctx.state, env_id)?;
+        history.check()?;
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
         let Some(env) = envs.get_mut(env_id) else {
             return Ok(());
@@ -7227,14 +7934,28 @@ impl TeamSync {
                                 .is_some_and(|g| g.ready(&digest, required)))
                 })
             });
+        history.check_deadline()?;
         env.synced_at = ready.then(|| (self.ctx.clock)());
+        drop(envs);
+        history.check()?;
         Ok(())
     }
     fn send_vector(&self, env_id: &str, session: &Arc<dyn Session>) {
-        if self.service_tombstones(env_id, session).is_err()
-            || !self.replication_allowed(env_id, session)
-        {
+        #[cfg(test)]
+        let _stage = commit::history_testing::span(self.ctx.state, "send_vector");
+        if self.service_tombstones(env_id, session).is_err() {
             return;
+        }
+        let _ = self.send_vector_after_service(env_id, session, None);
+    }
+    fn send_vector_after_service(
+        &self,
+        env_id: &str,
+        session: &Arc<dyn Session>,
+        operation: Option<&commit::HistoryResume<'_>>,
+    ) -> Result<()> {
+        if !self.replication_allowed(env_id, session) {
+            return Ok(());
         }
         let fp = session.peer().fingerprint();
         {
@@ -7243,18 +7964,42 @@ impl TeamSync {
                 .get(env_id)
                 .is_none_or(|e| e.draining.contains_key(&fp))
             {
-                return;
+                return Ok(());
             }
         }
-        let Ok(vector) = CommitStore::new(self.ctx.state, env_id).vector() else {
-            return;
+        let vector = if let Some(operation) = operation {
+            let history = operation.resume()?;
+            if !std::ptr::eq(history.state(), self.ctx.state) || history.env() != env_id {
+                return Err(Error::state("team_bootstrap_local_state_changed"));
+            }
+            let input = history.acquire()?;
+            let vector = input.vector()?;
+            history.check()?;
+            vector
+        } else {
+            let Ok(vector) = CommitStore::new(self.ctx.state, env_id).vector() else {
+                return Ok(());
+            };
+            vector
         };
-        if self
-            .send_replication(env_id, session, &json!({"type":"VECTOR","vector":vector}))
-            .is_err()
-        {
+        let message = json!({"type":"VECTOR","vector":vector});
+        let sent = if let Some(operation) = operation {
+            // This branch already settled the control frame under this lease.
+            // Reopening send_replication would give the same operation a new
+            // budget. Keep the original final session/gate check after unlock.
+            operation.check_unlocked()?;
+            if self.replication_allowed(env_id, session) {
+                operation.check_unlocked()?;
+                session.send(&message)
+            } else {
+                Ok(())
+            }
+        } else {
+            self.send_replication(env_id, session, &message)
+        };
+        if sent.is_err() {
             self.drop_session(env_id, &fp, Some(session));
-            return;
+            return Ok(());
         }
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(env) = envs.get_mut(env_id) {
@@ -7262,6 +8007,7 @@ impl TeamSync {
             env.last_vector_sent.insert(fp, Instant::now());
             env.synced_at = None;
         }
+        Ok(())
     }
     /// The VECTORs early commits asked for (issue #28), once the peer was not
     /// asked within [`EARLY_VECTOR_INTERVAL`] and no commit was accepted
@@ -7338,6 +8084,8 @@ impl TeamSync {
         session: &Arc<dyn Session>,
         message: &Value,
     ) -> Result<()> {
+        #[cfg(test)]
+        let _stage = commit::history_testing::span(self.ctx.state, "handle_message");
         let mtype = message["type"].as_str().unwrap_or("");
         let fp = session.peer().fingerprint();
         let draining = {
@@ -7381,9 +8129,21 @@ impl TeamSync {
             return Ok(());
         }
         if super::tombstone_gate::is_control(mtype) {
-            self.handle_tombstone_control(env_id, session, message)?;
-            self.send_vector(env_id, session);
-            self.update_readiness(env_id)?;
+            let Some(operation) = self.prepare_tombstone_control(env_id, session, message)? else {
+                return Ok(());
+            };
+            let scoped = {
+                let history = operation.resume()?;
+                history.is_scoped()
+            };
+            let settled = self.service_tombstones_with_operation(env_id, session, &operation)?;
+            if scoped {
+                self.send_vector_after_service(env_id, session, Some(&operation))?;
+                self.readiness_after_service(env_id, &operation, settled.as_ref())?;
+            } else {
+                self.send_vector(env_id, session);
+                self.update_readiness(env_id)?;
+            }
             return Ok(());
         }
         if !self.replication_allowed(env_id, session) {
@@ -7409,8 +8169,7 @@ impl TeamSync {
             "INCIDENT_ACK" => self.handle_incident_ack(env_id, message)?,
             _ => {}
         }
-        self.service_tombstones(env_id, session)?;
-        self.update_readiness(env_id)?;
+        self.service_and_readiness(env_id, session)?;
         Ok(())
     }
     fn handle_vector(
@@ -7419,9 +8178,12 @@ impl TeamSync {
         session: &Arc<dyn Session>,
         message: &Value,
     ) -> Result<()> {
+        #[cfg(test)]
+        let _stage = commit::history_testing::span(self.ctx.state, "handle_vector");
         let Some(vector) = message["vector"].as_object() else {
             return Ok(());
         };
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
         let fp = session.peer().fingerprint();
         // `isinstance(v, int) and not isinstance(v, bool) and v >= 0`, exact.
         let clean: BTreeMap<String, PyInt> = vector
@@ -7435,35 +8197,43 @@ impl TeamSync {
         {
             let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(env) = envs.get_mut(env_id) {
-                env.peer_vectors.insert(fp.clone(), clean);
+                env.peer_vectors.insert(fp.clone(), clean.clone());
                 env.sync
                     .vector_received_at
                     .insert(fp.clone(), (self.ctx.clock)());
             }
         }
         self.persist_peer_vectors(env_id)?;
-        let store = CommitStore::new(self.ctx.state, env_id);
-        let local = store.vector()?;
-        let mut missing = Vec::new();
-        for (author, last) in local {
-            // `their_seq = peer_vector.get(fp, 0)`, reset to 0 unless a
-            // non-negative non-bool int; `range(their_seq + 1, last_seq + 1)`
-            // is empty for any claim at or past `last_seq`, however large.
-            let their = vector
-                .get(&author)
-                .and_then(PyInt::from_json_integer)
-                .filter(|n| n.0.sign() != num_bigint::Sign::Minus);
-            let mut seq = match their {
-                None => PyInt::from(1),
-                Some(n) => &n + 1,
-            };
-            while seq <= last {
-                if let Some(commit) = store.get(&author, &seq)? {
-                    missing.push(commit);
+        let mut missing = if history.is_scoped() {
+            history.acquire()?.replication_after(&clean)?
+        } else {
+            Vec::new()
+        };
+        if !history.is_scoped() {
+            let store = CommitStore::new(self.ctx.state, env_id);
+            let local = store.vector()?;
+            for (author, last) in local {
+                // `their_seq = peer_vector.get(fp, 0)`, reset to 0 unless a
+                // non-negative non-bool int; `range(their_seq + 1, last_seq + 1)`
+                // is empty for any claim at or past `last_seq`, however large.
+                let their = vector
+                    .get(&author)
+                    .and_then(PyInt::from_json_integer)
+                    .filter(|n| n.0.sign() != num_bigint::Sign::Minus);
+                let mut seq = match their {
+                    None => PyInt::from(1),
+                    Some(n) => &n + 1,
+                };
+                while seq <= last {
+                    if let Some(commit) = store.get(&author, &seq)? {
+                        missing.push(commit);
+                    }
+                    seq = &seq + 1;
                 }
-                seq = &seq + 1;
             }
         }
+        history.check()?;
+        drop(history);
         // In total order across authors, so the peer learns each member's
         // admission before that member's own commits (issue #28).
         let mut sent = 0;
@@ -7651,14 +8421,16 @@ impl TeamSync {
         Ok(())
     }
     fn persist_peer_vectors(&self, env_id: &str) -> Result<()> {
-        let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(env) = envs.get(env_id) else {
-            return Ok(());
+        let vectors = {
+            let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(env) = envs.get(env_id) else {
+                return Ok(());
+            };
+            json!(env.peer_vectors)
         };
-        self.ctx.state.write_json(
-            &format!("team/{env_id}/peer_vectors.json"),
-            &json!(env.peer_vectors),
-        )
+        self.ctx
+            .state
+            .write_json(&format!("team/{env_id}/peer_vectors.json"), &vectors)
     }
     fn handle_commit(
         &self,
@@ -7688,14 +8460,18 @@ impl TeamSync {
         if commit.env_id != env_id {
             return Ok(());
         }
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
         let receive = |live: bool| -> Result<&'static str> {
-            let _lock = self.ctx.state.lock()?;
             let store = CommitStore::new(self.ctx.state, env_id);
-            if live {
-                commit::receive_live_commit(&store, &commit, commit::now_ms(), Some(self.ctx.audit))
-            } else {
-                commit::receive_commit(&store, &commit, commit::now_ms(), Some(self.ctx.audit))
-            }
+            commit::receive_runtime_with_input(
+                &store,
+                &commit,
+                commit::now_ms(),
+                Some(self.ctx.audit),
+                !live,
+                &history,
+                &self.ctx,
+            )
         };
         let mut outcome = receive(true)?;
         if outcome == "early" {
@@ -7708,7 +8484,13 @@ impl TeamSync {
         if outcome == "accepted" {
             // As in `submit_commit`: the pickup baseline is left alone and the
             // seen-set gates the (single) rebroadcast.
-            self.refold(env_id)?;
+            if history.is_scoped() {
+                self.refold_with_input(env_id, &history)?;
+            } else {
+                self.refold(env_id)?;
+            }
+            history.check()?;
+            drop(history);
             if self.commit_first_seen(&commit) {
                 self.broadcast(
                     env_id,
@@ -7790,33 +8572,43 @@ impl TeamSync {
     /// previous fold is reused instead of re-folding the whole commit log
     /// (one lookup per replayed/received fact and per incident).
     fn relaxed_document(&self, env_id: &str) -> Result<Arc<Value>> {
-        let vector_key = CommitStore::new(self.ctx.state, env_id).vector()?;
+        #[cfg(test)]
+        let _stage = commit::history_testing::span(self.ctx.state, "relaxed_document");
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        self.relaxed_document_with_input(env_id, &history)
+    }
+    fn relaxed_document_with_input(
+        &self,
+        env_id: &str,
+        parent: &commit::HistorySession<'_>,
+    ) -> Result<Arc<Value>> {
+        let history = parent.nested(self.ctx.state, env_id)?;
+        let input = history.acquire()?;
+        let vector_key = input.vector()?;
         let (mut facts, generation) = {
             let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             let env = envs
                 .get(env_id)
                 .ok_or_else(|| Error::invalid_input("team_env_unknown"))?;
-            if let Some((cached_key, cached)) = &env.relaxed_cache
+            if !history.is_scoped()
+                && let Some((cached_key, cached)) = &env.relaxed_cache
                 && *cached_key == vector_key
             {
                 return Ok(cached.clone());
             }
             (env.facts.clone(), env.relaxed_generation)
         };
+        if history.is_scoped() {
+            facts = load_facts_with_input(&self.ctx, env_id, &history)?.0;
+        }
+        let input = history.acquire()?;
         facts.removed_members.clear();
         #[cfg(test)]
         self.relaxed_folds.fetch_add(1, Ordering::SeqCst);
-        let document = Arc::new(
-            fold::fold(
-                env_id,
-                CommitStore::new(self.ctx.state, env_id).all_commits()?,
-                Some(&facts),
-                None,
-                None,
-                None,
-            )?
-            .document,
-        );
+        let live = input.commits()?;
+        input.reserve_fold(&live, Some(&facts), 0)?;
+        let document = Arc::new(fold::fold(env_id, live, Some(&facts), None, None, None)?.document);
+        history.check()?;
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(env) = envs.get_mut(env_id)
             && env.relaxed_generation == generation
@@ -7830,7 +8622,18 @@ impl TeamSync {
         member_device_record(self.relaxed_document(env_id).ok()?.as_ref(), fp)
     }
     fn role_document_for_removal(&self, env_id: &str, author: &str, target: &str) -> Result<Value> {
-        let (mut facts, _, authors) = load_facts(&self.ctx, env_id)?;
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        self.role_document_for_removal_with_input(env_id, author, target, &history)
+    }
+    fn role_document_for_removal_with_input(
+        &self,
+        env_id: &str,
+        author: &str,
+        target: &str,
+        parent: &commit::HistorySession<'_>,
+    ) -> Result<Value> {
+        let history = parent.nested(self.ctx.state, env_id)?;
+        let (mut facts, _, authors) = load_facts_with_input(&self.ctx, env_id, &history)?;
         if facts.removed_members.contains(author)
             && authors
                 .get(author)
@@ -7838,17 +8641,25 @@ impl TeamSync {
         {
             facts.removed_members.remove(author);
         }
-        Ok(fold::fold(
-            env_id,
-            CommitStore::new(self.ctx.state, env_id).all_commits()?,
-            Some(&facts),
-            None,
-            None,
-            None,
-        )?
-        .document)
+        let input = history.acquire()?;
+        let commits = input.commits()?;
+        input.reserve_fold(&commits, Some(&facts), 0)?;
+        let document = fold::fold(env_id, commits, Some(&facts), None, None, None)?.document;
+        history.check()?;
+        Ok(document)
     }
     fn validate_incoming_fact(&self, env_id: &str, fact: &Fact) -> Result<bool> {
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        self.validate_incoming_fact_with_input(env_id, fact, &history)
+    }
+    fn validate_incoming_fact_with_input(
+        &self,
+        env_id: &str,
+        fact: &Fact,
+        parent: &commit::HistorySession<'_>,
+    ) -> Result<bool> {
+        let history = parent.nested(self.ctx.state, env_id)?;
+        history.charge(4096, 65_536)?;
         let hash = fact.hash()?;
         {
             let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
@@ -7863,7 +8674,15 @@ impl TeamSync {
             self.audit_fact_rejected(env_id, fact, "team_fact_target_invalid");
             return Ok(false);
         }
-        let Some(record) = self.known_record(env_id, &fact.author) else {
+        let record = if history.is_scoped() {
+            member_device_record(
+                self.relaxed_document_with_input(env_id, &history)?.as_ref(),
+                &fact.author,
+            )
+        } else {
+            self.known_record(env_id, &fact.author)
+        };
+        let Some(record) = record else {
             self.audit_fact_rejected(env_id, fact, "team_fact_signature_invalid");
             return Ok(false);
         };
@@ -7872,18 +8691,29 @@ impl TeamSync {
             return Ok(false);
         }
         let doc = if fact.kind == "member_removed" {
-            self.role_document_for_removal(
-                env_id,
-                &fact.author,
-                fact.target["fingerprint"].as_str().unwrap_or(""),
-            )?
+            if history.is_scoped() {
+                self.role_document_for_removal_with_input(
+                    env_id,
+                    &fact.author,
+                    fact.target["fingerprint"].as_str().unwrap_or(""),
+                    &history,
+                )?
+            } else {
+                self.role_document_for_removal(
+                    env_id,
+                    &fact.author,
+                    fact.target["fingerprint"].as_str().unwrap_or(""),
+                )?
+            }
         } else {
-            crate::team::membership::load_environment(&self.ctx, env_id)?.document
+            crate::team::membership::load_environment_with_input(&self.ctx, env_id, &history)?
+                .document
         };
         if !fact_role_ok(&doc, &fact.kind, &fact.author, &fact.target) {
             self.audit_fact_rejected(env_id, fact, "team_fact_not_authorized");
             return Ok(false);
         }
+        history.check()?;
         Ok(true)
     }
     fn repair_member_removals(&self, env_id: &str) -> Result<()> {
@@ -7940,7 +8770,9 @@ impl TeamSync {
         Ok(())
     }
     fn handle_fact(&self, env_id: &str, session: &Arc<dyn Session>, message: &Value) -> Result<()> {
-        let _lock = self.ctx.state.lock()?;
+        #[cfg(test)]
+        let _stage = commit::history_testing::span(self.ctx.state, "handle_fact");
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
         let Ok(fact) = Fact::from_dict(&message["fact"]) else {
             return Ok(());
         };
@@ -7950,14 +8782,29 @@ impl TeamSync {
         {
             return Ok(());
         }
-        if self.validate_incoming_fact(env_id, &fact)? && self.store_fact(env_id, &fact)? {
+        let valid = if history.is_scoped() {
+            self.validate_incoming_fact_with_input(env_id, &fact, &history)?
+        } else {
+            self.validate_incoming_fact(env_id, &fact)?
+        };
+        if valid
+            && if history.is_scoped() {
+                self.store_fact_with_input(env_id, &fact, &history)?
+            } else {
+                self.store_fact(env_id, &fact)?
+            }
+        {
             if fact.kind == "member_removed"
                 && let Some(fp) = fact.target["fingerprint"].as_str()
             {
                 self.drain_removed(env_id, fp);
             }
-            let folded = self.refold(env_id);
-            drop(_lock);
+            let folded = if history.is_scoped() {
+                self.refold_with_input(env_id, &history)
+            } else {
+                self.refold(env_id)
+            };
+            drop(history);
             // Even when that refold failed: the fact is stored, and the
             // poll's retry folds it in (issue #51).
             self.audit_fact_apply(env_id, &fact);
@@ -8397,6 +9244,11 @@ impl TeamSync {
     /// One poll tick. An environment that fails holds up no other (section
     /// 6.4): each is polled, and the first error is returned.
     pub fn poll(&self) -> Result<()> {
+        #[cfg(test)]
+        let _stage = commit::history_testing::span(self.ctx.state, "poll");
+        if let Some(this) = self.this.upgrade() {
+            self.bootstrap_runtime.poll(this)?;
+        }
         self.flush_deferred_sends();
         let now = Instant::now();
         let mut failed = None;
@@ -8480,10 +9332,14 @@ impl TeamSync {
             .get(env_id)
             .map(|e| e.sessions.values().cloned().collect::<Vec<_>>())
             .unwrap_or_default();
-        for session in sessions {
-            self.service_tombstones(env_id, &session)?;
+        if sessions.len() == 1 {
+            self.service_and_readiness(env_id, &sessions[0])?;
+        } else {
+            for session in sessions {
+                self.service_tombstones(env_id, &session)?;
+            }
+            self.update_readiness(env_id)?;
         }
-        self.update_readiness(env_id)?;
         // Before the periodic VECTORs are picked, so a peer due both ways
         // gets one.
         self.send_due_vectors(env_id, now);
@@ -8552,16 +9408,31 @@ impl TeamSync {
     /// refold produced, and a refold still owed after them is returned
     /// (section 6.4, issue #51).
     fn advance_env(&self, env_id: &str, now: Instant) -> Result<Option<Error>> {
+        #[cfg(test)]
+        let _stage = commit::history_testing::span(self.ctx.state, "advance_env");
         let owed = self.retry_failed_refold(env_id, now).is_err();
         self.pick_up_local_commits(env_id, owed)?;
         self.pick_up_local_facts(env_id, owed)?;
         self.repair_member_removals(env_id)?;
         self.poll_incident_outbox(env_id, now);
         let store = CommitStore::new(self.ctx.state, env_id);
-        let released = store.release_deferred(commit::now_ms(), Some(self.ctx.audit))?;
+        // Deferred servicing is a distinct poll operation. Its one lease
+        // spans preflight, the unlocked prefilter and every fresh-lock append.
+        let (released, deferred_operation) =
+            store.release_deferred_runtime(&self.ctx, commit::now_ms(), Some(self.ctx.audit))?;
         // While a refold is owed, or when this one fails, these are left to
         // the pickup, which broadcasts them once a refold succeeds.
-        if !released.is_empty() && !owed && self.refold(env_id).is_ok() {
+        let refolded = if !released.is_empty() && !owed {
+            if let Some(operation) = deferred_operation {
+                let history = operation.resume()?;
+                self.refold_with_input(env_id, &history).is_ok()
+            } else {
+                self.refold(env_id).is_ok()
+            }
+        } else {
+            false
+        };
+        if !released.is_empty() && !owed && refolded {
             for commit in released {
                 // The next pickup tick sees these as new store commits too;
                 // the seen-set keeps that from broadcasting them again.
@@ -8585,8 +9456,10 @@ impl TeamSync {
     /// `owed`: a failed refold is still owed, so new commits are left for
     /// the pickup after a refold succeeds.
     fn pick_up_local_commits(&self, env_id: &str, owed: bool) -> Result<()> {
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        let input = history.acquire()?;
         let store = CommitStore::new(self.ctx.state, env_id);
-        let current = store.vector()?;
+        let current = input.vector()?;
         let baseline = {
             self.envs
                 .lock()
@@ -8596,24 +9469,64 @@ impl TeamSync {
                 .unwrap_or_default()
         };
         let mut added = Vec::new();
-        for (fp, hi) in &current {
-            // `seq_lo = baseline.get(fp, 0)`; `range(seq_lo + 1, seq_hi + 1)`.
-            let mut seq = match baseline.get(fp) {
-                Some(lo) => lo + 1,
-                None => PyInt::from(1),
-            };
-            while seq <= *hi {
-                if let Some(commit) = store.get(fp, &seq)? {
-                    added.push(commit);
+        if history.is_scoped() {
+            added = input
+                .commits()?
+                .into_iter()
+                .filter(|c| {
+                    c.author_seq > baseline.get(&c.author).cloned().unwrap_or_else(PyInt::zero)
+                        && c.author_seq
+                            <= current.get(&c.author).cloned().unwrap_or_else(PyInt::zero)
+                })
+                .collect();
+            history.charge(
+                (added.len() as u64)
+                    .checked_mul(added.len() as u64)
+                    .ok_or_else(|| Error::state("team_bootstrap_limit_exceeded"))?,
+                0,
+            )?;
+            added.sort_by(|a, b| {
+                a.author
+                    .cmp(&b.author)
+                    .then(a.author_seq.cmp(&b.author_seq))
+            });
+        } else {
+            for (fp, hi) in &current {
+                // `seq_lo = baseline.get(fp, 0)`; `range(seq_lo + 1, seq_hi + 1)`.
+                let mut seq = match baseline.get(fp) {
+                    Some(lo) => lo + 1,
+                    None => PyInt::from(1),
+                };
+                while seq <= *hi {
+                    if let Some(commit) = store.get(fp, &seq)? {
+                        added.push(commit);
+                    }
+                    seq = &seq + 1;
                 }
-                seq = &seq + 1;
             }
         }
         // The baseline moves only once a refold succeeds: while one is owed,
         // or when this one fails (noted and retried by the poll), the pickup
         // after a refold succeeds folds and broadcasts these (issue #51).
-        if !added.is_empty() && (owed || self.refold(env_id).is_err()) {
+        if !added.is_empty() && (owed || self.refold_with_input(env_id, &history).is_err()) {
             return Ok(());
+        }
+        if history.is_scoped() {
+            let fresh = history.acquire()?;
+            let observed = fresh.vector()?;
+            if current
+                .iter()
+                .any(|(author, seq)| observed.get(author).is_none_or(|now| now < seq))
+            {
+                return Err(Error::state("team_bootstrap_local_state_changed"));
+            }
+            let originals = fresh.commits()?;
+            if added
+                .iter()
+                .any(|entry| !originals.iter().any(|now| now == entry))
+            {
+                return Err(Error::state("team_bootstrap_local_state_changed"));
+            }
         }
         if let Some(env) = self
             .envs
@@ -8623,6 +9536,9 @@ impl TeamSync {
         {
             env.last_known_vector = current;
         }
+        history.check()?;
+        drop(input);
+        drop(history);
         if !added.is_empty() {
             for commit in added {
                 if self.commit_first_seen(&commit) {
@@ -8693,7 +9609,7 @@ impl TeamSync {
     /// `owed`: a failed refold is still owed, so the poll's retry rather than
     /// a refold here folds the facts picked up.
     fn pick_up_local_facts(&self, env_id: &str, owed: bool) -> Result<()> {
-        let _lock = self.ctx.state.lock()?;
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
         let stamp = self.fact_file_stamp(env_id)?;
         if self
             .envs
@@ -8707,16 +9623,17 @@ impl TeamSync {
         #[cfg(test)]
         self.fact_pickup_loads.fetch_add(1, Ordering::SeqCst);
 
-        let (_, admitted, _) = load_facts(&self.ctx, env_id)?;
-        let lines = self
-            .ctx
-            .state
-            .read_lines(&format!("team/{env_id}/facts.jsonl"), None)?;
+        let (_, admitted, _) = load_facts_with_input(&self.ctx, env_id, &history)?;
+        let lines = history
+            .acquire()?
+            .read_lines(&format!("team/{env_id}/facts.jsonl"))?;
         let mut refolding = !owed;
         // Scan by accepted fact hash, not a prefix count: another process may
         // append an unvalidated line before an already accepted remote fact.
         for line in &lines {
-            let Ok(value) = pyjson::loads(line) else {
+            history.check()?;
+            let Ok(value) = history.parse_line(line) else {
+                history.check()?;
                 self.quarantine_local_fact(env_id, line, "team_fact_malformed")?;
                 continue;
             };
@@ -8744,7 +9661,11 @@ impl TeamSync {
                 self.quarantine_local_fact(env_id, line, "team_fact_rejected")?;
                 continue;
             }
-            receipt_fact(&self.ctx, &fact)?;
+            if history.is_scoped() {
+                receipt_fact_with_input(&self.ctx, &fact, &history)?;
+            } else {
+                receipt_fact(&self.ctx, &fact)?;
+            }
             let inserted = {
                 let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(env) = envs.get_mut(env_id) {
@@ -8786,9 +9707,17 @@ impl TeamSync {
             }
             // A refold that fails is noted, and the poll's retry folds in this
             // fact and the rest; they are announced all the same (issue #51).
-            if refolding && self.refold(env_id).is_err() {
+            if refolding
+                && (if history.is_scoped() {
+                    self.refold_with_input(env_id, &history)
+                } else {
+                    self.refold(env_id)
+                })
+                .is_err()
+            {
                 refolding = false;
             }
+            history.check()?;
             self.audit_fact_apply(env_id, &fact);
             self.broadcast(env_id, &json!({"type":"FACT","fact":fact.to_dict()}), None);
             if fact.kind == "member_removed" {
@@ -8797,6 +9726,7 @@ impl TeamSync {
                 }
             }
         }
+        history.check()?;
         let stamp = self.fact_file_stamp(env_id)?;
         if let Some(env) = self
             .envs
@@ -9014,6 +9944,57 @@ impl TeamSync {
         self.wire_dialed_session(env_id, &fp, address, session)
             .map(|_| ())
     }
+    /// A committed Personal receiver can reconnect to an inviter whose ACK
+    /// was already durable. Replay only the bounded CAPS/first M1 control
+    /// consumed while selecting protocols into a newly reset ordinary gate.
+    /// No receipt, previous vector or cached agreement marks this gate ready.
+    pub(crate) fn personal_adopt_ordinary(
+        &self,
+        env_id: &str,
+        session: Arc<dyn Session>,
+        address: &str,
+        capabilities: &Value,
+        first: &Value,
+    ) -> Result<()> {
+        if capabilities["type"] != "SYNC_CAPS"
+            || !(super::tombstone_gate::is_control(first["type"].as_str().unwrap_or(""))
+                || first["type"] == "VECTOR")
+        {
+            return Err(Error::invalid_input("team_sync_control_malformed"));
+        }
+        super::tombstone_gate::validate(capabilities)?;
+        if first["type"] == "VECTOR" {
+            if first.as_object().is_none_or(|v| v.len() != 2)
+                || first["vector"].as_object().is_none_or(|v| {
+                    v.len() > 256
+                        || v.iter().any(|(fp, seq)| {
+                            !valid_fp(fp) || PyInt::from_json_integer(seq).is_none_or(|n| n < 0)
+                        })
+                })
+            {
+                return Err(Error::invalid_input("team_sync_control_malformed"));
+            }
+        } else {
+            super::tombstone_gate::validate(first)?;
+        }
+        self.register_env(env_id)?;
+        let fp = session.peer().fingerprint();
+        self.set_peer_address(env_id, &fp, address)?;
+        if !self.accept_session(env_id, session.clone(), false) {
+            return Err(Error::state("team_session_closed"));
+        }
+        self.audit_event("team_session_open", env_id, Some(&fp), None, None);
+        self.handle_message(env_id, &session, capabilities)?;
+        self.handle_message(env_id, &session, first)?;
+        self.start_receiver(env_id.into(), session.clone());
+        self.send_vector(env_id, &session);
+        self.send_peers(env_id, &session)?;
+        self.retry_pending_incidents_to(env_id, &session);
+        if session.is_closed() {
+            return Err(Error::state("team_session_closed"));
+        }
+        Ok(())
+    }
     /// Write `team/ENV_ID/sync_state.json` from now on (`serve`; docs/remote-sync.md §3.3).
     pub fn enable_sync_state(&self) {
         self.sync_state.store(true, Ordering::SeqCst);
@@ -9089,6 +10070,8 @@ impl TeamSync {
     /// and what it says changed, at most every
     /// [`super::sync_status::WRITE_INTERVAL`] unless `force`d (on stop).
     fn write_sync_state(&self, env_id: &str, force: bool) {
+        #[cfg(test)]
+        let _stage = commit::history_testing::span(self.ctx.state, "write_sync_state");
         if !self.sync_state.load(Ordering::SeqCst) {
             return;
         }
@@ -9138,17 +10121,29 @@ impl TeamSync {
         }
     }
     pub fn status(&self, env_id: &str) -> Result<Value> {
-        self.update_readiness(env_id)?;
-        let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
-        let env = envs
-            .get(env_id)
-            .ok_or_else(|| Error::not_found("team_env_unknown"))?;
-        let mut sessions: Vec<_> = env.sessions.keys().cloned().collect();
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        self.update_readiness_with_input(env_id, &history)?;
+        let (mut sessions, synced_at, removed_members) = {
+            let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+            let env = envs
+                .get(env_id)
+                .ok_or_else(|| Error::not_found("team_env_unknown"))?;
+            history.charge(
+                env.sessions.len() as u64 + env.facts.removed_members.len() as u64,
+                ((env.sessions.len() + env.facts.removed_members.len()) as u64)
+                    .checked_mul(128)
+                    .ok_or_else(|| Error::state("team_bootstrap_limit_exceeded"))?,
+            )?;
+            (
+                env.sessions.keys().cloned().collect::<Vec<_>>(),
+                env.synced_at,
+                env.facts.removed_members.clone(),
+            )
+        };
         sessions.sort();
-        let conflicts = self
-            .ctx
-            .state
-            .read_json(&format!("team/{env_id}/removal_conflicts.json"), json!({}))?;
+        let input = history.acquire()?;
+        let conflicts =
+            input.read_json(&format!("team/{env_id}/removal_conflicts.json"), json!({}))?;
         if conflicts.as_object().is_none_or(|values| {
             values.values().any(|value| {
                 !value["target"].as_str().is_some_and(valid_fp)
@@ -9165,24 +10160,29 @@ impl TeamSync {
             .ok_or_else(|| Error::state("state_corrupt"))?
             .values()
             .filter(|value| {
-                value["target"].as_str().is_some_and(|target| {
-                    valid_fp(target) && !env.facts.removed_members.contains(target)
-                })
+                value["target"]
+                    .as_str()
+                    .is_some_and(|target| valid_fp(target) && !removed_members.contains(target))
             })
             .map(|value| {
                 json!({"target":value["target"],"author":value["author"],"hash":value["hash"],
                 "reason":"team_fact_not_authorized"})
             })
             .collect();
+        let vector = input.vector()?;
+        let pending_deferred = input.pending_deferred_count()?;
+        history.check()?;
         Ok(
-            json!({"env_id":env_id,"vector":CommitStore::new(self.ctx.state,env_id).vector()?,"sessions":sessions,"synced_at":env.synced_at.map(|ts|iso(Some(ts))),"pending_deferred":CommitStore::new(self.ctx.state,env_id).deferred_commits()?.len(),"rejected_removals":rejected_removals}),
+            json!({"env_id":env_id,"vector":vector,"sessions":sessions,"synced_at":synced_at.map(|ts|iso(Some(ts))),"pending_deferred":pending_deferred,"rejected_removals":rejected_removals}),
         )
     }
 
     pub fn compact(&self, env_id: &str) -> Result<Value> {
         // As in refold: StateDir first, then only short in-memory envs access.
         // Keep writers serialized from fresh input collection through pruning.
-        let state_lock = self.ctx.state.lock()?;
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        #[cfg(test)]
+        crate::import_barrier::testing::hit(self.ctx.state, env_id, "compact-opened")?;
         let peer_vectors = {
             let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             let env = envs
@@ -9190,17 +10190,31 @@ impl TeamSync {
                 .ok_or_else(|| Error::not_found("team_env_unknown"))?;
             env.peer_vectors.clone()
         };
-        let (facts, _, _) = load_facts(&self.ctx, env_id)?;
-        let store = CommitStore::new(self.ctx.state, env_id);
-        let commits = store.all_commits()?;
+        let (facts, _, _) = load_facts_with_input(&self.ctx, env_id, &history)?;
+        #[cfg(test)]
+        crate::import_barrier::testing::hit(self.ctx.state, env_id, "compact-facts-settled")?;
+        let input = history.acquire()?;
+        #[cfg(test)]
+        crate::import_barrier::testing::hit(self.ctx.state, env_id, "compact-input-acquired")?;
+        let commits = input.commits()?;
+        input.reserve_fold(&commits, Some(&facts), 1)?;
         if commits.is_empty() {
             return Ok(json!({"env_id":env_id,"removed":0,"blocked_by":[]}));
         }
-        let members =
-            fold::fold_with_snapshot(env_id, commits.clone(), self.ctx.state, Some(&facts), None)?
-                .document["members"]
-                .clone();
+        let members = input
+            .fold_with_snapshot(commits.clone(), &facts, None)?
+            .document["members"]
+            .clone();
+        #[cfg(test)]
+        crate::import_barrier::testing::hit(self.ctx.state, env_id, "compact-members-folded")?;
+        #[cfg(not(test))]
         let now = PyInt::from(commit::now_ms());
+        #[cfg(test)]
+        let now = PyInt::from(personal_bootstrap_compaction_age::observe(
+            self.ctx.state,
+            env_id,
+            commit::now_ms(),
+        )?);
         let mut cutoff = None;
         for (i, entry) in commits.iter().enumerate() {
             let (wall, _) = Hlc::parse(&entry.hlc)?;
@@ -9246,6 +10260,9 @@ impl TeamSync {
         if !blocked.is_empty() {
             return Ok(json!({"env_id":env_id,"removed":0,"blocked_by":blocked}));
         }
+        history
+            .acquire()?
+            .reserve_fold(&commits[..=cutoff], Some(&facts), 1)?;
         let snapshot = fold::snapshot_of_prefix(
             env_id,
             commits[..=cutoff].to_vec(),
@@ -9254,6 +10271,8 @@ impl TeamSync {
             &commits,
             Some(self.ctx.audit),
         )?;
+        #[cfg(test)]
+        crate::import_barrier::testing::hit(self.ctx.state, env_id, "compact-prefix-folded")?;
         // Numbered by what it covers, an earlier compaction's commits
         // included (issue #50).
         let total = snapshot
@@ -9269,14 +10288,23 @@ impl TeamSync {
         let prepared =
             compaction_heads::prepare(self.ctx.state, env_id, &snapshot, &commits, &records)?;
         #[cfg(test)]
+        crate::import_barrier::testing::hit(self.ctx.state, env_id, "compact-heads-prepared")?;
+        #[cfg(test)]
         compaction_heads::testing::hit(compaction_heads::testing::Boundary::BeforeSnapshot)?;
+        history.check()?;
+        history.invalidate()?;
         fold::save_snapshot(self.ctx.state, env_id, &total, &snapshot)?;
         #[cfg(test)]
         compaction_heads::testing::hit(compaction_heads::testing::Boundary::AfterSnapshot)?;
+        #[cfg(test)]
+        crate::import_barrier::testing::hit(self.ctx.state, env_id, "compact-snapshot-written")?;
         let record = fold::snapshot_record(Some(&facts), &commits);
         #[cfg(test)]
         compaction_heads::testing::hit(compaction_heads::testing::Boundary::BeforeRecord)?;
+        history.check()?;
+        history.invalidate()?;
         fold::save_snapshot_record(self.ctx.state, env_id, &total, &record)?;
+        history.check()?;
         #[cfg(test)]
         compaction_heads::testing::hit(compaction_heads::testing::Boundary::AfterRecord)?;
         let persisted_record = self
@@ -9293,7 +10321,11 @@ impl TeamSync {
         {
             return Err(Error::state("team_compaction_head_persist_failed"));
         }
+        history.check()?;
+        history.invalidate()?;
         compaction_heads::persist_before_prune(self.ctx.state, env_id, &total, prepared)?;
+        #[cfg(test)]
+        crate::import_barrier::testing::hit(self.ctx.state, env_id, "compact-heads-persisted")?;
         let mut removed = 0;
         {
             for entry in &commits[..=cutoff] {
@@ -9316,6 +10348,8 @@ impl TeamSync {
                 ));
                 #[cfg(test)]
                 compaction_heads::testing::hit(compaction_heads::testing::Boundary::BeforeUnlink)?;
+                history.check()?;
+                history.invalidate()?;
                 if std::fs::remove_file(path).is_ok() {
                     removed += 1;
                     #[cfg(test)]
@@ -9335,8 +10369,19 @@ impl TeamSync {
         {
             env.last_snapshot_total = PyNumber::Int(total.0);
         }
-        drop(state_lock);
-        self.refold(env_id)?;
+        #[cfg(test)]
+        crate::import_barrier::testing::hit(self.ctx.state, env_id, "compact-prune-complete")?;
+        drop(input);
+        if history.is_scoped() {
+            self.refold_with_input(env_id, &history)?;
+            history.check()?;
+            drop(history);
+        } else {
+            drop(history);
+            self.refold(env_id)?;
+        }
+        #[cfg(test)]
+        crate::import_barrier::testing::hit(self.ctx.state, env_id, "compact-refold-complete")?;
         let _ = self.ctx.audit.record(
             "team_compact",
             RecordArgs {
@@ -12394,5 +13439,684 @@ mod compaction_heads_tests {
                 assert!(f.store().get(&f.fp, f.n + 1).unwrap().is_none());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod personal_bootstrap_restart_age_tests {
+    use crate as zeropw;
+    use crate::{
+        clock,
+        context::{Config, Context},
+        pyjson,
+        team::{
+            commit::{self, CommitStore},
+            envelope,
+            identity::DeviceKey,
+            membership,
+        },
+    };
+    use serde_json::{Value, json};
+    mod runtime {
+        use crate as zeropw;
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/team_personal_bootstrap_runtime.rs"
+        ));
+    }
+    #[test]
+    fn personal_history_current_reader_work_timing_metadata() {
+        fn timed<T>(name: &str, f: impl FnOnce() -> crate::errors::Result<T>) -> T {
+            let began = std::time::Instant::now();
+            let result = f();
+            println!(
+                "PVBOOT_BOUNDED_LOCAL_STAGE {}",
+                json!({"stage":name,"elapsed_us":began.elapsed().as_micros(),"ok":result.is_ok()})
+            );
+            result.unwrap()
+        }
+        let f = runtime::installed(false);
+        for team in f.teams.iter().rev() {
+            team.stop();
+        }
+        for (role, ctx) in [("a", &f.a), ("b", &f.b)] {
+            let scope = commit::history_testing::Scope::owned(ctx.state);
+            println!("PVBOOT_BOUNDED_LOCAL_ROLE {role}");
+            timed("index", || crate::import_barrier::index(ctx.state));
+            let history = timed("open", || {
+                commit::HistorySession::open_runtime(ctx.state, &f.env)
+            });
+            let input = timed("acquire", || history.acquire());
+            timed("commits", || input.commits());
+            let (facts, _, _) = timed("facts", || {
+                super::load_facts_with_input(ctx, &f.env, &history)
+            });
+            let input = timed("post_fact_acquire", || history.acquire());
+            let commits = input.commits().unwrap();
+            timed("snapshot_fold", || {
+                input.fold_with_snapshot(commits, &facts, None)
+            });
+            timed("refold_and_derive", || {
+                membership::refold_and_derive_with_input(ctx, &f.env, &history)
+            });
+            drop(history);
+            println!("PVBOOT_BOUNDED_LOCAL_COUNTS {}", scope.snapshot());
+        }
+    }
+    #[test]
+    fn personal_bootstrap_crash_fresh_normal_agreement_compaction_and_reopen_keep_provenance() {
+        use std::{
+            sync::Arc,
+            time::{Duration, Instant},
+        };
+        use zeropw::team::{sync::TeamSync, transport::TcpTransport};
+        struct Stop(Vec<Arc<TeamSync>>);
+        impl Drop for Stop {
+            fn drop(&mut self) {
+                for team in self.0.iter().rev() {
+                    team.stop();
+                }
+            }
+        }
+        let f = runtime::installed(false);
+        for team in f.teams.iter().rev() {
+            team.stop();
+        }
+        let cipher = envelope::encrypt_secret(
+            &[7; 32],
+            &f.env,
+            "alpha",
+            "7777777777777777",
+            b"synthetic-post-cut-compaction",
+        )
+        .unwrap();
+        let c=membership::author_commit(&f.b,None,&f.env,vec![json!({"op":"secret.put_version","secret_id":"alpha","version_id":"7777777777777777","generation_id":runtime::GENERATION,"kind":"api_key","ciphertext":cipher,"public":{}}),json!({"op":"secret.activate","secret_id":"alpha","version_id":"7777777777777777"})]).unwrap();
+        let a_work = commit::history_testing::Scope::owned(f.a.state);
+        let b_work = commit::history_testing::Scope::owned(f.b.state);
+        let trace = Arc::new(RestartTrace::default());
+        let ak = DeviceKey::load_or_create(f.a.state, f.a.kms).unwrap();
+        let bk = DeviceKey::load_or_create(f.b.state, f.b.kms).unwrap();
+        let at = TcpTransport::new(ak.clone(), Arc::new(|_, _| None), 64);
+        let bt = TcpTransport::new(bk.clone(), Arc::new(|_, _| None), 64);
+        let ta = TeamSync::new(
+            f.a.clone(),
+            Arc::new(RestartTransport {
+                inner: at.clone(),
+                side: "a",
+                trace: trace.clone(),
+                dial: RestartDial::All,
+            }),
+            ak.clone(),
+        );
+        let tb = TeamSync::new(
+            f.b.clone(),
+            Arc::new(RestartTransport {
+                inner: bt.clone(),
+                side: "b",
+                trace: trace.clone(),
+                dial: RestartDial::All,
+            }),
+            bk.clone(),
+        );
+        let _stop = Stop(vec![ta.clone(), tb.clone()]);
+        ta.enable_sync_state();
+        tb.enable_sync_state();
+        ta.start(Some("127.0.0.1:0")).unwrap();
+        tb.start(Some("127.0.0.1:0")).unwrap();
+        ta.set_peer_address(
+            &f.env,
+            &bk.fingerprint().unwrap(),
+            &bt.bound_address().unwrap(),
+        )
+        .unwrap();
+        tb.set_peer_address(
+            &f.env,
+            &ak.fingerprint().unwrap(),
+            &at.bound_address().unwrap(),
+        )
+        .unwrap();
+        let start = Instant::now();
+        let deadline = start + Duration::from_secs(35);
+        let mut next_metadata = start;
+        loop {
+            let a_ready = ta.synced_at(&f.env).is_some();
+            let b_ready = tb.synced_at(&f.env).is_some();
+            let a_has_b2 = CommitStore::new(f.a.state, &f.env)
+                .get(&c.author, c.author_seq.clone())
+                .unwrap()
+                .is_some();
+            if Instant::now() >= next_metadata
+                || Instant::now() >= deadline
+                || a_ready && b_ready && a_has_b2
+            {
+                println!(
+                    "PVBOOT_RESTART_METADATA {}",
+                    json!({"elapsed_ms":start.elapsed().as_millis(),"predicates":{"a_ready":a_ready,"b_ready":b_ready,"a_has_b2":a_has_b2},"a":restart_metadata(&f.a,&f.env,&bk.fingerprint().unwrap()),"b":restart_metadata(&f.b,&f.env,&ak.fingerprint().unwrap()),"wire":trace.snapshot(),"work_a":a_work.snapshot(),"work_b":b_work.snapshot()})
+                );
+                next_metadata = Instant::now() + Duration::from_secs(3);
+            }
+            if a_ready && b_ready && a_has_b2 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "fresh ordinary vector/fact agreement did not complete: a_ready={a_ready} b_ready={b_ready} a_has_b2={a_has_b2}"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert_eq!(
+            crate::team::bootstrap::status(&f.b, &f.env).unwrap()["state"],
+            "ready"
+        );
+        let before = membership::load_environment(&f.b, &f.env).unwrap();
+        let receipt_path =
+            f.b.state
+                .path
+                .join(format!("team/{}/bootstrap/receipt.json", f.env));
+        let receipt = std::fs::read(&receipt_path).unwrap();
+        let compact_inputs=CommitStore::new(f.b.state,&f.env).all_commits().unwrap().iter().take(8).map(|c|{let wall=commit::Hlc::parse(&c.hlc).unwrap().0;json!({"author":c.author,"seq":c.author_seq,"old_enough":wall<=commit::now_ms()-zeropw::team::sync::COMPACT_MIN_AGE_MS,"authority":c.ops.iter().any(|o|matches!(o["op"].as_str(),Some("env.init"|"member.add"|"member.set_role"|"member.remove"|"owner.transfer"|"dek.rotate")))})}).collect::<Vec<_>>();
+        let floor =
+            f.b.state
+                .read_json(
+                    &format!("team/{}/bootstrap/provenance/manifest.json", f.env),
+                    Value::Null,
+                )
+                .unwrap()["vector"]
+                .clone();
+        let compact_trace = crate::import_barrier::testing::Scope::track(f.b.state, None);
+        let _age =
+            super::personal_bootstrap_compaction_age::Guard::once(f.b.state, &f.env).unwrap();
+        let compacted = tb.compact(&f.env);
+        if let Err(error) = &compacted {
+            println!(
+                "PVBOOT_RESTART_COMPACTION_REFUSAL {}",
+                json!({"reason":error.reason,"minimum_age_ms":zeropw::team::sync::COMPACT_MIN_AGE_MS,"retained_slots":compact_inputs,"installed_floor":floor,"stages":compact_trace.hits().iter().rev().take(8).map(|(_,point)|point).collect::<Vec<_>>()})
+            );
+        }
+        let compacted = compacted.unwrap();
+        drop(compact_trace);
+        drop(_age);
+        assert!(
+            compacted["removed"].as_i64().unwrap() > 0,
+            "real post-cut data must compact"
+        );
+        assert!(
+            CommitStore::new(f.b.state, &f.env)
+                .get(&c.author, &c.author_seq)
+                .unwrap()
+                .is_none(),
+            "post-cut B2 original must actually prune"
+        );
+        assert_eq!(
+            CommitStore::new(f.a.state, &f.env)
+                .all_commits()
+                .unwrap()
+                .iter()
+                .flat_map(|c| &c.ops)
+                .filter(|o| o["op"] == "member.add")
+                .count(),
+            1
+        );
+        ta.stop();
+        tb.stop();
+        let reopened = Context::open(&f.b.state.path, Config::default(), clock::system()).unwrap();
+        let after = membership::load_environment(&reopened, &f.env).unwrap();
+        assert_eq!(before.document, after.document);
+        assert_eq!(before.version_order, after.version_order);
+        assert_eq!(std::fs::read(receipt_path).unwrap(), receipt);
+        assert!(
+            reopened
+                .vault
+                .secret_for_trusted_use("alpha", None)
+                .unwrap()
+                .ct_eq(b"synthetic-post-cut-compaction")
+        );
+        let next = membership::author_commit(
+            &reopened,
+            None,
+            &f.env,
+            vec![json!({"op":"settings.update","sync_interval_seconds":23})],
+        )
+        .unwrap();
+        assert_eq!(next.author_seq, 3);
+        assert!(commit::Hlc::parse(&next.hlc).unwrap() > commit::Hlc::parse(&c.hlc).unwrap());
+    }
+
+    #[derive(Default)]
+    struct RestartTrace {
+        events: std::sync::Mutex<std::collections::BTreeMap<String, Value>>,
+    }
+    impl RestartTrace {
+        fn frame(&self, side: &str, session: usize, direction: &str, message: &Value) {
+            let kind = message["type"].as_str().unwrap_or("");
+            if !matches!(
+                kind,
+                "VECTOR" | "FACT" | "COMMIT" | "SYNC_CAPS" | "TOMBSTONE_STATE" | "TOMBSTONE_ACK"
+            ) && !kind.starts_with("BOOTSTRAP_")
+            {
+                return;
+            }
+            let key = format!("{side}:{session}:{direction}:{kind}");
+            let mut events = self.events.lock().unwrap();
+            if events.len() >= 64 && !events.contains_key(&key) {
+                return;
+            }
+            let value = events.entry(key).or_insert_with(|| json!({"count":0}));
+            value["count"] = json!(value["count"].as_u64().unwrap() + 1);
+            if kind == "VECTOR" {
+                assert!(message["vector"].as_object().unwrap().len() <= 2);
+                value["vector"] = message["vector"].clone();
+            }
+        }
+        fn snapshot(&self) -> Value {
+            json!(*self.events.lock().unwrap())
+        }
+        fn processed(&self, side: &str, session: usize, kind: &str, elapsed: std::time::Duration) {
+            let key = format!("{side}:{session}:processing:{kind}");
+            let mut events = self.events.lock().unwrap();
+            if events.len() >= 64 && !events.contains_key(&key) {
+                return;
+            }
+            let value = events
+                .entry(key)
+                .or_insert_with(|| json!({"count":0,"total_us":0,"max_us":0}));
+            let micros = u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX);
+            value["count"] = json!(value["count"].as_u64().unwrap() + 1);
+            value["total_us"] = json!(value["total_us"].as_u64().unwrap().saturating_add(micros));
+            value["max_us"] = json!(value["max_us"].as_u64().unwrap().max(micros));
+        }
+    }
+    #[allow(dead_code)]
+    enum RestartDial {
+        All,
+        InboundOnly,
+        PersonalOnly,
+    }
+    struct RestartTransport {
+        inner: std::sync::Arc<zeropw::team::transport::TcpTransport>,
+        side: &'static str,
+        trace: std::sync::Arc<RestartTrace>,
+        dial: RestartDial,
+    }
+    struct RestartSession {
+        inner: std::sync::Arc<dyn zeropw::team::transport::Session>,
+        side: &'static str,
+        id: usize,
+        trace: std::sync::Arc<RestartTrace>,
+        processing: std::sync::Mutex<Option<(std::time::Instant, String)>>,
+    }
+    impl RestartSession {
+        fn wrap(
+            inner: std::sync::Arc<dyn zeropw::team::transport::Session>,
+            side: &'static str,
+            trace: std::sync::Arc<RestartTrace>,
+        ) -> std::sync::Arc<dyn zeropw::team::transport::Session> {
+            static IDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            std::sync::Arc::new(Self {
+                inner,
+                side,
+                trace,
+                id: IDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+                processing: std::sync::Mutex::new(None),
+            })
+        }
+    }
+    impl zeropw::team::transport::Session for RestartSession {
+        fn peer(&self) -> zeropw::team::identity::DeviceRecord {
+            self.inner.peer()
+        }
+        fn env_id(&self) -> &str {
+            self.inner.env_id()
+        }
+        fn send(&self, v: &Value) -> zeropw::errors::Result<()> {
+            self.trace.frame(self.side, self.id, "send", v);
+            self.inner.send(v)
+        }
+        fn recv(
+            &self,
+            t: std::time::Duration,
+        ) -> Result<Option<Value>, zeropw::team::transport::SessionClosed> {
+            if let Some((start, kind)) = self.processing.lock().unwrap().take() {
+                self.trace
+                    .processed(self.side, self.id, &kind, start.elapsed());
+            }
+            let v = self.inner.recv(t)?;
+            if let Some(v) = &v {
+                self.trace.frame(self.side, self.id, "recv", v);
+                let kind = v["type"].as_str().unwrap_or("");
+                if matches!(
+                    kind,
+                    "VECTOR"
+                        | "FACT"
+                        | "COMMIT"
+                        | "SYNC_CAPS"
+                        | "TOMBSTONE_STATE"
+                        | "TOMBSTONE_ACK"
+                ) {
+                    *self.processing.lock().unwrap() =
+                        Some((std::time::Instant::now(), kind.into()));
+                }
+            }
+            Ok(v)
+        }
+        fn recv_original(
+            &self,
+            t: std::time::Duration,
+        ) -> Result<Option<Vec<u8>>, zeropw::team::transport::SessionClosed> {
+            let raw = self.inner.recv_original(t)?;
+            if let Some(raw) = &raw
+                && let Ok(v) = pyjson::loads(std::str::from_utf8(raw).unwrap_or(""))
+            {
+                self.trace.frame(self.side, self.id, "raw_recv", &v);
+            }
+            Ok(raw)
+        }
+        fn close(&self) {
+            self.inner.close()
+        }
+        fn is_closed(&self) -> bool {
+            self.inner.is_closed()
+        }
+        fn created_at(&self) -> std::time::Instant {
+            self.inner.created_at()
+        }
+        fn transport_kind(&self) -> Option<&'static str> {
+            self.inner.transport_kind()
+        }
+    }
+    impl zeropw::team::transport::Transport for RestartTransport {
+        fn set_membership(&self, cb: zeropw::team::transport::MembershipCheck) {
+            self.inner.set_membership(cb)
+        }
+        fn set_invite_check(&self, cb: Option<zeropw::team::transport::InviteCheck>) {
+            self.inner.set_invite_check(cb)
+        }
+        fn set_handshake_failed(&self, cb: Option<zeropw::team::transport::HandshakeFailedHook>) {
+            self.inner.set_handshake_failed(cb)
+        }
+        fn listen(
+            &self,
+            address: &str,
+            cb: zeropw::team::transport::OnSession,
+        ) -> zeropw::errors::Result<()> {
+            let side = self.side;
+            let trace = self.trace.clone();
+            self.inner.listen_arc(
+                address,
+                std::sync::Arc::new(move |s| cb(RestartSession::wrap(s, side, trace.clone()))),
+            )
+        }
+        fn dial(
+            &self,
+            address: &str,
+            env: &str,
+            proof: Option<zeropw::team::transport::InviteProof>,
+        ) -> Result<
+            std::sync::Arc<dyn zeropw::team::transport::Session>,
+            zeropw::team::transport::SessionClosed,
+        > {
+            if matches!(self.dial, RestartDial::InboundOnly)
+                || matches!(self.dial, RestartDial::PersonalOnly) && proof.is_none()
+            {
+                return Err(zeropw::team::transport::SessionClosed(
+                    "synthetic_dial_disabled",
+                ));
+            }
+            self.inner
+                .dial_session(address, env, proof)
+                .map(|s| RestartSession::wrap(s, self.side, self.trace.clone()))
+        }
+        fn close(&self) {
+            self.inner.shutdown()
+        }
+    }
+    fn restart_metadata(ctx: &Context, env: &str, peer: &str) -> Value {
+        let state = ctx
+            .state
+            .read_json(&format!("team/{env}/sync_state.json"), Value::Null)
+            .unwrap();
+        let attempt = ctx
+            .state
+            .read_json(&format!("team/{env}/bootstrap/attempt.json"), Value::Null)
+            .unwrap();
+        let auth = ctx
+            .state
+            .read_json(
+                &format!("team/{env}/bootstrap/authorizations/{peer}.json"),
+                Value::Null,
+            )
+            .unwrap();
+        let closed = |value: &Value| {
+            value
+                .as_str()
+                .filter(|s| {
+                    s.len() <= 64
+                        && s.bytes()
+                            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+                })
+                .map(|s| json!(s))
+                .unwrap_or(Value::Null)
+        };
+        let reasons = ctx
+            .state
+            .read_lines("audit/audit.jsonl", Some(24))
+            .unwrap()
+            .iter()
+            .filter_map(|line| pyjson::loads(line).ok())
+            .filter(|row| {
+                matches!(
+                    row["event"].as_str(),
+                    Some("team_sync_poll" | "team_handshake_failed")
+                )
+            })
+            .map(|row| json!({"event":closed(&row["event"]),"reason":closed(&row["reason"])}))
+            .take(8)
+            .collect::<Vec<_>>();
+        let p = &state["peers"][peer];
+        json!({"vector":CommitStore::new(ctx.state,env).vector().unwrap(),"peer":{"session":p["session"],"peer_vector":p["peer_vector"],"vector_received_at":p["vector_received_at"],"transport":p["transport"],"dial_failures":p["dial_failures"],"last_error":closed(&p["last_error"]),"tombstone_agreement":p["tombstone_agreement"]},"closed_reasons":reasons,"authorization_activated":auth["activated"],"attempt_state":closed(&attempt["state"]),"attempt_reason":closed(&attempt["reason"])})
+    }
+
+    fn sparse_measured(literal: &str) {
+        use crate::team::commit::history_testing::Scope;
+        let command = crate::admin_cli::personal_history_test_cli::command;
+        let (f, (a_counts, b_counts)) = runtime::sparse_installed_with_command(
+            literal,
+            |a, b| (Scope::owned(a.state), Scope::owned(b.state)),
+            command,
+        );
+        runtime::sparse_continue_with_command(&f, literal, command);
+        let afp = DeviceKey::load_or_create(f.a.state, f.a.kms)
+            .unwrap()
+            .fingerprint()
+            .unwrap();
+        let bfp = DeviceKey::load_or_create(f.b.state, f.b.kms)
+            .unwrap()
+            .fingerprint()
+            .unwrap();
+        for (ctx, team) in [(&f.a, &f.teams[0]), (&f.b, &f.teams[1])] {
+            assert_eq!(
+                crate::admin_cli::personal_history_test_cli::shared(ctx, &f.env).unwrap()["owner"],
+                afp
+            );
+            membership::author_fact(
+                ctx,
+                None,
+                &f.env,
+                "connection_disabled",
+                json!({"connection_id":"sparse-disabled"}),
+            )
+            .unwrap();
+            team.publish_fact(
+                &f.env,
+                "connection_disabled",
+                json!({"connection_id":"sparse-disabled"}),
+            )
+            .unwrap();
+            let role = team.role_document_for_removal(&f.env, &afp, &bfp).unwrap();
+            assert_eq!(role["members"][&bfp]["status"], "active");
+            let signed = team
+                .sign_authorized_fact(&f.env, "member_removed", json!({"fingerprint":bfp}))
+                .unwrap();
+            assert_eq!(signed.kind, "member_removed");
+            membership::ensure_removal_rotations(ctx, Some(team.as_ref()), &f.env).unwrap();
+            team.register_env(&f.env).unwrap();
+            assert_eq!(team.status(&f.env).unwrap()["env_id"], f.env);
+            assert_eq!(
+                crate::team::sync_status::status(ctx, &f.env).unwrap()["env_id"],
+                f.env
+            );
+            team.poll().unwrap();
+            // These synthetic originals were authored now. The normal age
+            // clock must leave both large-vector environments unpruned.
+            assert_eq!(team.compact(&f.env).unwrap()["removed"], 0);
+        }
+        for (role, scope) in [("owner", a_counts), ("recipient", b_counts)] {
+            let counts = scope.snapshot();
+            assert!(counts["acquisitions"].as_u64().unwrap() > 10);
+            assert!(counts["canonical_slots_visited"].as_u64().unwrap() > 20);
+            assert!(counts["physical_entries_visited"].as_u64().unwrap() < 1_000_000);
+            assert!(counts["max_operation_work"].as_u64().unwrap() <= 67_108_864);
+            assert!(counts["max_operation_bytes"].as_u64().unwrap() <= 1_073_741_824);
+            println!(
+                "PVBOOT_SPARSE_MEASURED {}",
+                json!({"role":role,"literal_digits":literal.len(),"counts":counts})
+            );
+        }
+    }
+    #[test]
+    fn personal_history_literal_10_40_real_paths_measured() {
+        sparse_measured("10000000000000000000000000000000000000000");
+    }
+    #[test]
+    fn personal_history_literal_10_80_real_paths_measured() {
+        sparse_measured(
+            "100000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        );
+    }
+}
+
+// PVBOOT-TEST-COMPACT-CLOCK-01: every name and call in this module is elided
+// from the non-test library. This changes only one compact age observation.
+#[cfg(test)]
+mod personal_bootstrap_compaction_age {
+    use crate::{
+        errors::{Error, Result},
+        store::StateDir,
+    };
+    use std::{
+        marker::PhantomData,
+        rc::Rc,
+        sync::{
+            Mutex,
+            atomic::{AtomicU64, Ordering},
+        },
+        thread::ThreadId,
+    };
+    const ADVANCE: i64 = 31 * 24 * 3600 * 1000;
+    struct Entry {
+        state: usize,
+        env: String,
+        token: u64,
+        owner: ThreadId,
+        used: bool,
+    }
+    static ENTRIES: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
+    static TOKENS: AtomicU64 = AtomicU64::new(1);
+    pub(super) struct Guard<'a> {
+        _state: &'a StateDir,
+        state: usize,
+        token: u64,
+        _thread: PhantomData<Rc<()>>,
+    }
+    impl<'a> Guard<'a> {
+        pub(super) fn once(state: &'a StateDir, env: &str) -> Result<Self> {
+            let _registration_lock = state.lock()?;
+            if !super::commit::valid_env_id(env) {
+                return Err(Error::state("personal_compaction_age_test_target"));
+            }
+            let state_id = state as *const StateDir as usize;
+            let mut entries = ENTRIES.lock().unwrap_or_else(|e| e.into_inner());
+            if entries.iter().any(|e| e.state == state_id && e.env == env) {
+                return Err(Error::state("personal_compaction_age_test_target"));
+            }
+            let token = TOKENS
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |v| v.checked_add(1))
+                .map_err(|_| Error::state("personal_compaction_age_test_overflow"))?;
+            entries.push(Entry {
+                state: state_id,
+                env: env.into(),
+                token,
+                owner: std::thread::current().id(),
+                used: false,
+            });
+            Ok(Self {
+                _state: state,
+                state: state_id,
+                token,
+                _thread: PhantomData,
+            })
+        }
+    }
+    impl Drop for Guard<'_> {
+        fn drop(&mut self) {
+            ENTRIES
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .retain(|e| !(e.state == self.state && e.token == self.token));
+        }
+    }
+    pub(super) fn observe(state: &StateDir, env: &str, real: i64) -> Result<i64> {
+        let mut entries = ENTRIES.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = entries.iter_mut().find(|e| {
+            e.state == state as *const StateDir as usize
+                && e.env == env
+                && e.owner == std::thread::current().id()
+                && !e.used
+        }) {
+            entry.used = true;
+            return real
+                .checked_add(ADVANCE)
+                .ok_or_else(|| Error::state("personal_compaction_age_test_overflow"));
+        }
+        Ok(real)
+    }
+    #[test]
+    fn normal_clock_negative_target_isolation_single_use_and_raii_cleanup() {
+        let root = tempfile::TempDir::new().unwrap();
+        let a = StateDir::new(root.path().join("a"));
+        a.create().unwrap();
+        let b = StateDir::new(root.path().join("b"));
+        b.create().unwrap();
+        let env = "aaaaaaaaaaaaaaaaaaaaaaaaaa-0123456789abcdef0123456789abcdef";
+        let other = "bbbbbbbbbbbbbbbbbbbbbbbbbb-0123456789abcdef0123456789abcdef";
+        let now = super::commit::now_ms();
+        assert_eq!(observe(&a, env, now).unwrap(), now);
+        assert!(observe(&a, env, now).unwrap() - now < super::COMPACT_MIN_AGE_MS);
+        {
+            let _guard = Guard::once(&a, env).unwrap();
+            assert!(
+                !a.locked_by_current_thread(),
+                "the age fixture must not create an ambient runtime lock"
+            );
+            assert_eq!(observe(&a, other, now).unwrap(), now);
+            assert_eq!(observe(&b, env, now).unwrap(), now);
+            assert_eq!(
+                observe(&a, env, now).unwrap(),
+                now.checked_add(ADVANCE).unwrap()
+            );
+            assert_eq!(observe(&a, env, now).unwrap(), now);
+        }
+        assert_eq!(observe(&a, env, now).unwrap(), now);
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = Guard::once(&a, env).unwrap();
+            panic!("synthetic scoped guard unwind");
+        }));
+        assert!(panic.is_err());
+        assert_eq!(observe(&a, env, now).unwrap(), now);
+        {
+            let _guard = Guard::once(&a, env).unwrap();
+            assert!(observe(&a, env, i64::MAX).is_err());
+        }
+        assert_eq!(observe(&a, env, now).unwrap(), now);
     }
 }

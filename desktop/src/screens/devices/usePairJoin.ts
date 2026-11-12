@@ -8,9 +8,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { t, type CopyKey } from '../../copy';
 import { call, toIpcError } from '../../ipc/client';
 import type { PairingJoinResult, PairingPreview } from '../../ipc/contract';
-import { finalJoinReason, isFinalPairingReason, isPairingCode, pairingPreviewErrorKey, pairingStopKey, pairingWaitHintKey } from '../../lib/pairing';
+import { finalJoinReason, personalApprovalNeeded, isFinalPairingReason, isPairingCode, pairingPreviewErrorKey, pairingStopKey, pairingWaitHintKey } from '../../lib/pairing';
 import { poll, type PollHandle } from '../../lib/poll';
 import { useApp } from '../../ui/app';
+import { passErrorKey } from '../../ui/Dialog';
 
 /** How often a pending join is tried again, and for how long at most (the code lasts 10 minutes
  *  on the other Mac; a new code is the way after that). */
@@ -32,33 +33,49 @@ export function usePairJoin(onDone: (result: PairingJoinResult) => void) {
   const [text, setTextState] = useState('');
   const [error, setError] = useState<CopyKey | null>(null);
   const [phase, setPhaseState] = useState<PairPhase>({ kind: 'idle' });
+  const [approvalPass, setApprovalPass] = useState('');
+  const [approvalError, setApprovalError] = useState<CopyKey | null>(null);
+  const [approving, setApproving] = useState(false);
   const phaseRef = useRef(phase);
   const setPhase = (p: PairPhase) => { phaseRef.current = p; setPhaseState(p); };
   const seq = useRef(0);
   const polling = useRef<PollHandle<PairingJoinResult> | null>(null);
   const alive = useRef(true);
+  const inFlight=useRef<Promise<PairingJoinResult>|null>(null);
   const done = useRef(onDone);
   done.current = onDone;
+
+  const abandon = useCallback((p:PairPhase) => {
+    const ref=heldRef(p);if(!ref)return;
+    const finish=(result:PairingJoinResult|null)=>{
+      const bindings=result?.environments.filter((e)=>e.bootstrap_state&&e.state!=='joined').map((e)=>({env:e.env,record_binding:e.inviter_record_binding??'',self_record_binding:e.self_record_binding??''}))??[];
+      if(bindings.length)void call('pairing_join',{ref,action:'cancel',bindings,admin_passphrase:''}).catch(()=>undefined).finally(()=>discard(ref));
+      else discard(ref);
+    };
+    if(p.kind==='waiting'&&inFlight.current)void inFlight.current.then(finish,()=>finish(p.result));
+    else finish(p.kind==='waiting'?p.result:null);
+  },[]);
 
   const reset = useCallback(() => {
     seq.current++;
     polling.current?.cancel(); polling.current = null;
-    const ref = heldRef(phaseRef.current);
-    if (ref) discard(ref);
-    setTextState(''); setError(null);
+    abandon(phaseRef.current);
+    setTextState(''); setError(null);setApprovalPass('');setApprovalError(null);
     phaseRef.current = { kind: 'idle' }; setPhaseState({ kind: 'idle' });
-  }, []);
+  }, [abandon]);
 
   useEffect(() => {
     alive.current = true;
     return () => {
       alive.current = false;
       polling.current?.cancel(); polling.current = null;
-      const ref = heldRef(phaseRef.current);
+      abandon(phaseRef.current);
       phaseRef.current = { kind: 'idle' };
-      if (ref) discard(ref);
     };
-  }, []);
+  }, [abandon]);
+
+  const visibleBindings=phase.kind==='waiting'?phase.result?.environments.filter(personalApprovalNeeded).map((e)=>`${e.env}/${e.self_record_binding}/${e.inviter_record_binding}`).sort().join('|')??'':'';
+  useEffect(()=>{setApprovalPass('');setApprovalError(null);},[visibleBindings]);
 
   const setText = (v: string) => {
     if (phaseRef.current.kind === 'waiting') return;
@@ -89,7 +106,11 @@ export function usePairJoin(onDone: (result: PairingJoinResult) => void) {
     announce(t('mac.wait.title'));
     let last: PairingJoinResult | null = null;
     const handle = poll<PairingJoinResult>({
-      step: () => call('pairing_join', { ref }),
+      step: () => {
+        const request=call('pairing_join',{ref});inFlight.current=request;
+        void request.finally(()=>{if(inFlight.current===request)inFlight.current=null;}).catch(()=>undefined);
+        return request;
+      },
       done: (r) => r.done,
       // stop once nothing can change any more: every place not joined failed for good
       final: (r) => finalJoinReason(r.environments),
@@ -120,7 +141,7 @@ export function usePairJoin(onDone: (result: PairingJoinResult) => void) {
       } else if (out.kind === 'cancelled') {
         // whoever cancelled (stop, reset, leaving) already discarded the code
       } else {
-        discard(ref);
+        abandon(phaseRef.current);
         setPhase({ kind: 'stopped', key: out.kind === 'expired' ? 'pair.expired' : pairingStopKey(out.reason) });
       }
     });
@@ -130,12 +151,25 @@ export function usePairJoin(onDone: (result: PairingJoinResult) => void) {
     const p = phaseRef.current;
     polling.current?.cancel(); polling.current = null;
     if (p.kind === 'waiting') {
-      discard(p.ref);
+      abandon(p);
       setPhase({ kind: 'stopped', key: 'mac.cancelled' });
     }
   };
 
-  return { text, setText, error, phase, start, cancel, reset };
+  const approve = async () => {
+    const p=phase;if(p.kind!=='waiting'||approving)return;
+    if(!approvalPass){setApprovalError('pass.err.empty');return;}
+    const bindings=p.result?.environments.filter((e)=>personalApprovalNeeded(e)&&e.inviter_record_binding&&e.self_record_binding).map((e)=>({env:e.env,record_binding:e.inviter_record_binding!,self_record_binding:e.self_record_binding!}))??[];
+    if(!bindings.length)return;setApproving(true);setApprovalError(null);
+    const pass=approvalPass;setApprovalPass('');
+    try{
+      const result=await call('pairing_join',{ref:p.ref,action:'approve',bindings,admin_passphrase:pass});
+      const current=phaseRef.current;
+      if(current.kind==='waiting'&&current.ref===p.ref)setPhase({...current,result});
+    }catch(error){setApprovalError(passErrorKey(error));}finally{setApproving(false);}
+  };
+
+  return { text, setText, error, phase, start, cancel, reset,approvalPass,setApprovalPass,approvalError,approving,approve };
 }
 
 export type PairJoin = ReturnType<typeof usePairJoin>;

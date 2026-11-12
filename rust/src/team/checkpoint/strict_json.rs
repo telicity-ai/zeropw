@@ -1622,3 +1622,12 @@ mod metadata_shape_tests {
         }
     }
 }
+
+// PVBOOT-STRICT-JSON-BRIDGE-01. Syntax only; the sealed caller reserves
+// structural/work/byte budgets and retains the raw original separately.
+pub(super) fn retained_original(bytes: &[u8]) -> Result<Value> {
+    run(root(bytes), Role::Any, true)?
+        .output
+        .take()
+        .ok_or(Error::Json)
+}

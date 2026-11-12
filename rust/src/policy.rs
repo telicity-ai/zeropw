@@ -4528,6 +4528,10 @@ impl<'a> Policy<'a> {
     /// `get_connection(connection_id)` for an id of any JSON shape (a
     /// stored grant's unvalidated `connection`): see [`dict_get_value`].
     fn get_connection_value(&self, connection_id: &Value) -> Result<Connection, Error> {
+        let _import_view = self.state.lock()?;
+        if let Some(id) = connection_id.as_str() {
+            crate::import_barrier::require_connection(self.state, id)?;
+        }
         let doc = self.connections()?;
         let entry = dict_get_value(&doc, connection_id, CONNECTIONS)?
             .ok_or_else(|| Error::not_found("connection_not_found"))?;
@@ -4535,6 +4539,7 @@ impl<'a> Policy<'a> {
     }
 
     pub fn list_connections(&self) -> Result<Vec<Connection>, Error> {
+        let _import_view = self.state.lock()?;
         let doc = self.connections()?;
         let mut ids: Vec<&String> = doc.keys().collect();
         ids.sort();
@@ -6254,6 +6259,12 @@ impl<'a> Policy<'a> {
         action: Option<&Action>,
         grant_id: Option<&str>,
     ) -> Result<Decision, Error> {
+        let _import_view = self.state.lock()?;
+        if let Some(id) = connection_id.as_str()
+            && crate::import_barrier::require_connection(self.state, id).is_err()
+        {
+            return Ok(Decision::denied("team_bootstrap_recovery_required"));
+        }
         let control = self.control()?;
         if json_truthy(control.get("restore_pending")) {
             return Ok(Decision::denied("restore_pending"));
@@ -6452,6 +6463,7 @@ impl<'a> Policy<'a> {
     /// Connections the caller may use right now, with the grant that allows
     /// each.
     pub fn usable_connections(&self, caller: &str) -> Result<Vec<(Connection, Grant)>, Error> {
+        let _import_view = self.state.lock()?;
         let control = self.control()?;
         if json_truthy(control.get("restore_pending")) || json_truthy(control.get("stopped")) {
             return Ok(Vec::new());

@@ -2046,6 +2046,10 @@ impl<'a> CommitStore<'a> {
     /// Store a commit, enforcing contiguous per-author sequence (no gaps,
     /// no duplicates). Port of `CommitStore.append`.
     pub fn append(&self, commit: &Commit) -> Result<()> {
+        if let Some(history) = retained_history::selected_store(self)? {
+            return retained_history::append_with_input(self, commit, now_ms(), &history, None)
+                .map_err(retained_history::AppendFailure::into_error);
+        }
         if commit.env_id != self.env_id {
             return Err(Error::invalid_input("team_env_id_mismatch"));
         }
@@ -2242,14 +2246,92 @@ impl<'a> CommitStore<'a> {
         now_ms_value: i64,
         audit: Option<&Audit>,
     ) -> Result<Vec<Commit>> {
+        if let Some(history) = retained_history::selected_store(self)? {
+            let operation = history.lease()?;
+            drop(history);
+            return self.release_deferred_common(now_ms_value, audit, Some(&operation), None);
+        }
+        self.release_deferred_common(now_ms_value, audit, None, None)
+    }
+    pub(crate) fn release_deferred_runtime(
+        &self,
+        ctx: &crate::context::Context,
+        now_ms_value: i64,
+        audit: Option<&Audit>,
+    ) -> Result<(Vec<Commit>, Option<HistoryResume<'a>>)> {
+        if !std::ptr::eq(ctx.state, self.state) {
+            return Err(Error::state("team_bootstrap_local_state_changed"));
+        }
+        if let Some(history) = retained_history::selected_store(self)? {
+            let operation = history.lease()?;
+            drop(history);
+            let released =
+                self.release_deferred_common(now_ms_value, audit, Some(&operation), Some(ctx))?;
+            return Ok((released, Some(operation)));
+        }
+        Ok((
+            self.release_deferred_common(now_ms_value, audit, None, None)?,
+            None,
+        ))
+    }
+    fn append_deferred_with_input(
+        &self,
+        commit: &Commit,
+        now: i64,
+        history: Option<&HistorySession<'_>>,
+        runtime: Option<&crate::context::Context>,
+    ) -> Result<()> {
+        if let Some(history) = history {
+            let settled = runtime
+                .map(|ctx| {
+                    super::sync::load_facts_core(history, super::sync::FactServices::Runtime(ctx))
+                })
+                .transpose()?;
+            return retained_history::append_with_input(
+                self,
+                commit,
+                now,
+                history,
+                settled.as_ref(),
+            )
+            .map_err(retained_history::AppendFailure::into_error);
+        }
+        self.append(commit)
+    }
+    fn release_deferred_common(
+        &self,
+        now_ms_value: i64,
+        audit: Option<&Audit>,
+        operation: Option<&HistoryResume<'_>>,
+        runtime: Option<&crate::context::Context>,
+    ) -> Result<Vec<Commit>> {
+        let preflight = operation.map(HistoryResume::resume).transpose()?;
+        if let Some(history) = &preflight {
+            history.preflight_inventory()?;
+            let input = history.acquire()?;
+            let commits = input.commits()?;
+            input.reserve_fold(&commits, None, 0)?;
+            input.reserve_deferred_walk()?;
+        }
+        let deferred = self.deferred_commits()?;
+        if let Some(history) = &preflight {
+            history.check()?;
+        }
+        drop(preflight);
         let mut due = Vec::new();
-        for commit in self.deferred_commits()? {
+        for commit in deferred {
+            if let Some(operation) = operation {
+                operation.check_unlocked()?;
+            }
             let (wall_ms, _) = Hlc::parse(&commit.hlc)?;
             if wall_ms <= &PyInt::from(now_ms_value) + MAX_CLOCK_SKEW_MS {
                 due.push(commit);
             }
         }
         if due.is_empty() {
+            if let Some(operation) = operation {
+                operation.check_unlocked()?;
+            }
             return Ok(Vec::new());
         }
         // Read without the lock, only to pass over what waits; whatever it
@@ -2257,6 +2339,9 @@ impl<'a> CommitStore<'a> {
         let mut vector = self.vector()?;
         let mut released = Vec::new();
         for commit in due {
+            if let Some(operation) = operation {
+                operation.check_unlocked()?;
+            }
             let last = vector
                 .get(&commit.author)
                 .cloned()
@@ -2270,7 +2355,17 @@ impl<'a> CommitStore<'a> {
                 self.state,
                 &self.env_id,
             )?;
-            let _lock = self.state.lock()?;
+            let history = operation.map(HistoryResume::resume).transpose()?;
+            let _lock = if history.is_none() {
+                Some(self.state.lock()?)
+            } else {
+                None
+            };
+            if let Some(history) = &history {
+                let input = history.acquire()?;
+                let commits = input.commits()?;
+                input.reserve_fold(&commits, None, 0)?;
+            }
             let fresh_last = self.last_seq(&commit.author)?;
             if commit.author_seq > &fresh_last + 1 {
                 continue;
@@ -2284,13 +2379,22 @@ impl<'a> CommitStore<'a> {
                 }
             } else if self.hlc_not_above_previous(&commit, None)? {
                 reject_commit(self, &commit, "team_hlc_not_monotone", audit)?;
-            } else if self.append(&commit).is_err() {
+            } else if self
+                .append_deferred_with_input(&commit, now_ms_value, history.as_ref(), runtime)
+                .is_err()
+            {
                 continue; // still out of sequence; leave it deferred
             } else {
                 vector.insert(commit.author.clone(), commit.author_seq.clone());
                 released.push(commit);
             }
+            if let Some(history) = &history {
+                history.invalidate()?;
+            }
             let _ = std::fs::remove_file(&target);
+        }
+        if let Some(operation) = operation {
+            operation.check_unlocked()?;
         }
         Ok(released)
     }
@@ -2489,7 +2593,71 @@ fn receive(
     audit: Option<&Audit>,
     quarantine_early: bool,
 ) -> Result<&'static str> {
-    let _lock = store.state.lock()?;
+    let history = HistorySession::open_runtime(store.state, &store.env_id)?;
+    receive_with_input(
+        store,
+        commit,
+        now_ms_value,
+        audit,
+        quarantine_early,
+        &history,
+    )
+}
+pub(crate) fn receive_with_input(
+    store: &CommitStore,
+    commit: &Commit,
+    now_ms_value: i64,
+    audit: Option<&Audit>,
+    quarantine_early: bool,
+    history: &HistorySession<'_>,
+) -> Result<&'static str> {
+    receive_with_services(
+        store,
+        commit,
+        now_ms_value,
+        audit,
+        quarantine_early,
+        history,
+        None,
+    )
+}
+pub(crate) fn receive_runtime_with_input<'a>(
+    store: &CommitStore<'a>,
+    commit: &Commit,
+    now_ms_value: i64,
+    audit: Option<&Audit>,
+    quarantine_early: bool,
+    history: &HistorySession<'a>,
+    ctx: &crate::context::Context,
+) -> Result<&'static str> {
+    receive_with_services(
+        store,
+        commit,
+        now_ms_value,
+        audit,
+        quarantine_early,
+        history,
+        Some(ctx),
+    )
+}
+fn receive_with_services<'a>(
+    store: &CommitStore<'a>,
+    commit: &Commit,
+    now_ms_value: i64,
+    audit: Option<&Audit>,
+    quarantine_early: bool,
+    history: &HistorySession<'a>,
+    runtime: Option<&crate::context::Context>,
+) -> Result<&'static str> {
+    if !std::ptr::eq(store.state, history.state())
+        || store.env_id != history.env()
+        || (history.is_scoped() && store.root != env_root(&store.env_id))
+    {
+        return Err(Error::state("team_bootstrap_local_state_changed"));
+    }
+    if history.is_scoped() {
+        history.preflight_candidate(commit)?;
+    }
     let reject = |reason: &str| -> Result<&'static str> {
         reject_commit(store, commit, reason, audit)?;
         Ok("rejected")
@@ -2527,7 +2695,12 @@ fn receive(
         }
     }
 
-    let existing = store.all_commits()?;
+    let input = history.acquire()?;
+    let existing = if history.is_scoped() {
+        input.commits()?
+    } else {
+        store.all_commits()?
+    };
     let mut registry = device_registry(&existing);
     if is_bootstrap && !registry.contains_key(&commit.author) {
         let owner_device = commit.ops[0]
@@ -2552,6 +2725,36 @@ fn receive(
         return reject("team_signature_invalid");
     }
 
+    if let Some(manifest) = crate::import_barrier::personal_manifest(store.state, &commit.env_id)? {
+        let floor = PyInt::from_json_integer(&manifest["vector"][&commit.author])
+            .unwrap_or_else(PyInt::zero);
+        let retained = store.get(&commit.author, &commit.author_seq)?;
+        let cut = manifest["heads"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|h| {
+                Some((
+                    PyInt::from_json_integer(&h["hlc"]["wall_ms"])?,
+                    PyInt::from_json_integer(&h["hlc"]["counter"])?,
+                ))
+            })
+            .max();
+        if (commit.author_seq <= floor
+            && retained
+                .as_ref()
+                .is_none_or(|c| c.hash().ok() != commit.hash().ok()))
+            || (commit.author_seq > floor
+                && cut.is_some_and(|cut| Hlc::parse(&commit.hlc).is_ok_and(|h| h <= cut)))
+        {
+            return Err(crate::import_barrier::history_required(
+                store.state,
+                &commit.env_id,
+                &commit.to_dict(),
+            )?);
+        }
+    }
+
     let last_seq = store.last_seq(&commit.author)?;
     if commit.author_seq <= last_seq {
         let previously_stored = store.get(&commit.author, &commit.author_seq)?;
@@ -2573,11 +2776,33 @@ fn receive(
         return Ok("deferred");
     }
 
-    if let Err(exc) = store.append(commit) {
-        if !quarantine_early && exc.reason == "team_seq_gap" {
-            return Ok("early");
+    history.check()?;
+    let settled = if history.is_scoped() {
+        runtime
+            .map(|ctx| {
+                super::sync::load_facts_core(history, super::sync::FactServices::Runtime(ctx))
+            })
+            .transpose()?
+    } else {
+        None
+    };
+    let append = if history.is_scoped() {
+        retained_history::append_with_input(store, commit, now_ms_value, history, settled.as_ref())
+    } else {
+        store
+            .append(commit)
+            .map_err(retained_history::AppendFailure::Invalid)
+    };
+    if let Err(failure) = append {
+        match failure {
+            retained_history::AppendFailure::Local(error) => return Err(error),
+            retained_history::AppendFailure::Invalid(exc) => {
+                if !quarantine_early && exc.reason == "team_seq_gap" {
+                    return Ok("early");
+                }
+                return reject(&exc.reason);
+            }
         }
-        return reject(&exc.reason);
     }
     Ok("accepted")
 }
@@ -4150,4 +4375,5038 @@ mod tests {
         assert_eq!(crate::pystr::unicode_decimal_digit('\u{11F50}'), Some(0)); // Kawi ZERO
         assert_eq!(crate::pystr::unicode_decimal_digit('\u{11F59}'), Some(9)); // Kawi NINE
     }
+}
+
+// Personal retained-input facility. This module's fields are deliberately
+// inaccessible to callers: raw DATA and a held reentrant lock alone confer no
+// history or authorization assurance.
+mod retained_history {
+    use super::*;
+    use crate::{
+        store::StateLock,
+        team::{checkpoint, fold},
+    };
+    use sha2::{Digest, Sha256};
+    use std::{
+        cell::{Cell, RefCell},
+        collections::BTreeSet,
+        fs::{self},
+        io::Read,
+        marker::PhantomData,
+        os::unix::fs::MetadataExt,
+        rc::Rc,
+        time::{Duration, Instant},
+    };
+    const ENTRIES: usize = 65_536;
+    const INVENTORY: u64 = 67_108_864;
+    const BULK: u64 = 16_777_216;
+    const NODES: u64 = 1_048_576;
+    const WORK: u64 = 67_108_864;
+    const BYTES: u64 = 1_073_741_824;
+    fn invalid() -> Error {
+        Error::state("team_bootstrap_state_invalid")
+    }
+    fn limit() -> Error {
+        Error::state("team_bootstrap_limit_exceeded")
+    }
+    fn stale() -> Error {
+        Error::state("team_bootstrap_local_state_changed")
+    }
+    #[derive(Clone, Copy)]
+    pub(crate) enum ProbePurpose {
+        Invite,
+        Recipient,
+    }
+    #[derive(Clone, Copy)]
+    enum Selection {
+        Ordinary,
+        Probe(ProbePurpose),
+        Owner,
+        Recipient,
+    }
+    struct Counters {
+        work: u64,
+        bytes: u64,
+    }
+    #[derive(Clone, Copy)]
+    enum BudgetFailure {
+        Limit,
+        Timeout,
+    }
+    struct HistoryBudget {
+        began: Instant,
+        counters: RefCell<Counters>,
+        failure: Cell<Option<BudgetFailure>>,
+    }
+    impl HistoryBudget {
+        fn new() -> Self {
+            Self {
+                began: Instant::now(),
+                counters: RefCell::new(Counters { work: 0, bytes: 0 }),
+                failure: Cell::new(None),
+            }
+        }
+        fn check(&self) -> Result<()> {
+            if self.failure.get().is_none() && self.began.elapsed() >= Duration::from_secs(5) {
+                self.failure.set(Some(BudgetFailure::Timeout));
+            }
+            match self.failure.get() {
+                Some(BudgetFailure::Limit) => Err(limit()),
+                Some(BudgetFailure::Timeout) => Err(Error::state("team_bootstrap_timeout")),
+                None => Ok(()),
+            }
+        }
+        fn charge(&self, work: u64, bytes: u64) -> Result<()> {
+            self.check()?;
+            let mut c = self.counters.borrow_mut();
+            let w = c.work.checked_add(work).filter(|n| *n <= WORK);
+            let b = c.bytes.checked_add(bytes).filter(|n| *n <= BYTES);
+            let (Some(w), Some(b)) = (w, b) else {
+                self.failure.set(Some(BudgetFailure::Limit));
+                return Err(limit());
+            };
+            c.work = w;
+            c.bytes = b;
+            Ok(())
+        }
+    }
+    struct FileImage {
+        raw: Vec<u8>,
+    }
+    struct Inventory {
+        files: BTreeMap<String, FileImage>,
+        layout: BTreeSet<(String, bool)>,
+        revision: [u8; 32],
+        entries: usize,
+        bytes: u64,
+    }
+    struct RetainedOriginal {
+        path: String,
+        raw: Vec<u8>,
+        parsed: Commit,
+    }
+    pub(crate) struct HistoryOperation<'a> {
+        state: &'a StateDir,
+        env: String,
+        selection: Selection,
+        identity: Option<DeviceRecord>,
+        root: Option<crate::store::ImportRootIdentity>,
+        budget: Rc<HistoryBudget>,
+        generation: Rc<Cell<u64>>,
+        _thread: PhantomData<Rc<()>>,
+    }
+    pub(crate) struct HistorySession<'a> {
+        state: &'a StateDir,
+        env: String,
+        selection: Selection,
+        identity: Option<DeviceRecord>,
+        _lock: StateLock<'a>,
+        budget: Rc<HistoryBudget>,
+        generation: Rc<Cell<u64>>,
+        operation: Rc<HistoryOperation<'a>>,
+        _thread: PhantomData<Rc<()>>,
+    }
+    pub(crate) struct HistoryResume<'a> {
+        operation: Rc<HistoryOperation<'a>>,
+        selection: Selection,
+        _thread: PhantomData<Rc<()>>,
+    }
+    pub(crate) struct FactSeal<'a> {
+        operation: Rc<HistoryOperation<'a>>,
+        generation: u64,
+        revision: String,
+        vector: BTreeMap<String, PyInt>,
+    }
+    impl<'a> HistoryOperation<'a> {
+        fn lock_session(self: &Rc<Self>) -> Result<HistorySession<'a>> {
+            let lock = self.state.lock()?;
+            let session = HistorySession::from_operation(self.clone(), lock);
+            session.check()?;
+            Ok(session)
+        }
+        fn resume(self: &Rc<Self>, selection: Selection) -> Result<HistorySession<'a>> {
+            let mut session = self.lock_session()?;
+            session.selection = selection;
+            if session.is_scoped() {
+                session.acquire()?;
+            } else if raw_witness_with_budget(self.state, &self.env, Some(&session))?.0 {
+                // An ordinary lease cannot cross publication of a selected
+                // route and retain the legacy history contract.
+                return Err(stale());
+            }
+            Ok(session)
+        }
+    }
+    impl<'a> HistoryResume<'a> {
+        pub(crate) fn resume(&self) -> Result<HistorySession<'a>> {
+            self.operation.resume(self.selection)
+        }
+        pub(crate) fn check_unlocked(&self) -> Result<()> {
+            if !matches!(self.selection, Selection::Ordinary) {
+                self.operation.budget.check()?;
+            }
+            Ok(())
+        }
+    }
+    impl FactSeal<'_> {
+        pub(crate) fn current_vector(
+            &self,
+            history: &HistorySession<'_>,
+        ) -> Result<BTreeMap<String, PyInt>> {
+            self.check(history)?;
+            let size = self
+                .vector
+                .iter()
+                .try_fold(0u64, |sum, (author, sequence)| {
+                    sum.checked_add(author.len() as u64)
+                        .and_then(|value| value.checked_add(sequence.0.bits()))
+                        .ok_or_else(limit)
+                })?;
+            history.charge(size, size.checked_mul(8).ok_or_else(limit)?)?;
+            Ok(self.vector.clone())
+        }
+        pub(crate) fn check(&self, history: &HistorySession<'_>) -> Result<()> {
+            history.check()?;
+            if !Rc::ptr_eq(&self.operation, &history.operation)
+                || self.generation != history.generation.get()
+                || hex::encode(history.collect()?.revision) != self.revision
+            {
+                return Err(stale());
+            }
+            Ok(())
+        }
+    }
+    pub(crate) struct RetainedInput<'s, 'a> {
+        session: &'s HistorySession<'a>,
+        generation: u64,
+        inventory: Option<Inventory>,
+        originals: Vec<RetainedOriginal>,
+        vector: BTreeMap<String, PyInt>,
+        floor: BTreeMap<String, PyInt>,
+        _thread: PhantomData<Rc<()>>,
+    }
+    impl<'a> HistorySession<'a> {
+        fn from_operation(operation: Rc<HistoryOperation<'a>>, lock: StateLock<'a>) -> Self {
+            Self {
+                state: operation.state,
+                env: operation.env.clone(),
+                selection: operation.selection,
+                identity: operation.identity.clone(),
+                budget: operation.budget.clone(),
+                generation: operation.generation.clone(),
+                operation,
+                _lock: lock,
+                _thread: PhantomData,
+            }
+        }
+        fn new_locked(
+            state: &'a StateDir,
+            env: &str,
+            selection: Selection,
+            lock: StateLock<'a>,
+            budget: Rc<HistoryBudget>,
+        ) -> Result<Self> {
+            let root = if matches!(selection, Selection::Ordinary) {
+                None
+            } else {
+                Some(state.checked_import_root()?)
+            };
+            let operation = Rc::new(HistoryOperation {
+                state,
+                env: env.into(),
+                selection,
+                identity: state.import_identity().cloned(),
+                root,
+                budget,
+                generation: Rc::new(Cell::new(0)),
+                _thread: PhantomData,
+            });
+            let session = Self::from_operation(operation, lock);
+            session.check()?;
+            Ok(session)
+        }
+        pub(crate) fn open_runtime(state: &'a StateDir, env: &str) -> Result<Self> {
+            Self::open_runtime_routed(state, env, 0, 0)
+        }
+        fn open_runtime_routed(
+            state: &'a StateDir,
+            env: &str,
+            route_work: u64,
+            route_bytes: u64,
+        ) -> Result<Self> {
+            #[cfg(test)]
+            let _stage = testing::span(state, "history_open");
+            let already_locked = state.locked_by_current_thread();
+            let lock = state.lock()?;
+            let budget = Rc::new(HistoryBudget::new());
+            budget.charge(route_work, route_bytes)?;
+            let mut result =
+                Self::new_locked(state, env, Selection::Ordinary, lock, budget.clone())?;
+            if !valid_env_id(env) {
+                return Ok(result);
+            }
+            let mut witnessed =
+                match fs::symlink_metadata(state.path.join(format!("team/{env}/bootstrap"))) {
+                    Ok(_) => true,
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+                    Err(_) => return Err(invalid()),
+                };
+            // The signed visibility index is also a routing witness when the
+            // entire environment bootstrap directory has been lost. Probe it
+            // as bounded untrusted DATA; never turn damaged provenance into an
+            // ordinary numeric fallback. Ordinary layout semantics stay lazy.
+            match fs::symlink_metadata(state.path.join(crate::import_barrier::INDEX)) {
+                Ok(metadata) => {
+                    if metadata.len() > 1_048_576 {
+                        return Err(limit());
+                    }
+                    crate::import_barrier::private_relative(state, crate::import_barrier::INDEX)?;
+                    result.budget.charge(
+                        metadata.len(),
+                        metadata.len().checked_mul(4).ok_or_else(limit)?,
+                    )?;
+                    let file = anchored_file(state, crate::import_barrier::INDEX)?;
+                    if stamp(&file.metadata().map_err(|_| invalid())?) != stamp(&metadata) {
+                        return Err(stale());
+                    }
+                    let mut raw = Vec::new();
+                    (&file)
+                        .take(metadata.len().checked_add(1).ok_or_else(limit)?)
+                        .read_to_end(&mut raw)
+                        .map_err(|_| invalid())?;
+                    if raw.len() as u64 != metadata.len()
+                        || stamp(&file.metadata().map_err(|_| invalid())?) != stamp(&metadata)
+                        || stamp(
+                            &fs::symlink_metadata(state.path.join(crate::import_barrier::INDEX))
+                                .map_err(|_| invalid())?,
+                        ) != stamp(&metadata)
+                    {
+                        return Err(stale());
+                    }
+                    // This read selects a route only. All selected content is
+                    // subsequently parsed strictly and authenticated afresh.
+                    result.budget.charge(
+                        raw.len() as u64,
+                        (raw.len() as u64).checked_mul(64).ok_or_else(limit)?,
+                    )?;
+                    result.screen(&raw, 1_048_576)?;
+                    let value = pyjson::loads(std::str::from_utf8(&raw).map_err(|_| invalid())?)
+                        .map_err(|_| Error::state("team_bootstrap_storage_failed"))?;
+                    if !value.is_object() {
+                        return Err(invalid());
+                    }
+                    witnessed |= value.get(env).is_some();
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => return Err(invalid()),
+            }
+            if witnessed {
+                if already_locked {
+                    return Err(stale());
+                }
+                let selection = if env_owner_fingerprint(env)?
+                    == result.identity.as_ref().ok_or_else(invalid)?.fingerprint()
+                {
+                    Selection::Owner
+                } else {
+                    Selection::Recipient
+                };
+                result = Self::new_locked(state, env, selection, result._lock, budget)?;
+                result.acquire()?;
+            }
+            Ok(result)
+        }
+        pub(crate) fn open_recovery_entry(
+            ctx: &crate::context::Context,
+            env: &str,
+        ) -> Result<Self> {
+            let (witnessed, work, bytes) = raw_witness(ctx.state, env)?;
+            if !witnessed {
+                return Self::open_runtime(ctx.state, env);
+            }
+            if ctx.state.locked_by_current_thread() {
+                return Err(stale());
+            }
+            let history = Self::open_probe(ctx, env, ProbePurpose::Recipient)?;
+            history.charge(work, bytes)?;
+            Ok(history)
+        }
+        pub(crate) fn continue_runtime(&self) -> Result<Self> {
+            let result = (|| {
+                self.check()?;
+                let (witnessed, _, _) = raw_witness_with_budget(self.state, &self.env, Some(self))?;
+                let selection = if witnessed {
+                    if env_owner_fingerprint(&self.env)? == self.local_record()?.fingerprint() {
+                        Selection::Owner
+                    } else {
+                        Selection::Recipient
+                    }
+                } else {
+                    Selection::Ordinary
+                };
+                self.invalidate()?;
+                let mut session = self.operation.lock_session()?;
+                session.selection = selection;
+                if session.is_scoped() {
+                    session.acquire()?;
+                }
+                Ok(session)
+            })();
+            self.resource_result(result)
+        }
+        pub(crate) fn open_probe(
+            ctx: &crate::context::Context,
+            env: &str,
+            purpose: ProbePurpose,
+        ) -> Result<Self> {
+            let state = ctx.state;
+            if state.locked_by_current_thread() {
+                return Err(stale());
+            }
+            let lock = state.lock()?;
+            let budget = Rc::new(HistoryBudget::new());
+            if !valid_env_id(env) {
+                return Err(invalid());
+            }
+            // A Context just initialized in this process has not reopened its
+            // device file. Bind the actual KMS-loaded full local record here;
+            // cached labels or caller-created StateDir objects are not proof.
+            let device = DeviceKey::load_or_create(state, ctx.kms)?;
+            let identity = device.record()?;
+            state.bind_import_identity(identity.clone())?;
+            budget.check()?;
+            Self::new_locked(state, env, Selection::Probe(purpose), lock, budget)
+        }
+        pub(crate) fn nested(&self, state: &'a StateDir, env: &str) -> Result<Self> {
+            self.check()?;
+            if !std::ptr::eq(state, self.state) || env != self.env {
+                return Err(stale());
+            }
+            let mut session = self.operation.lock_session()?;
+            session.selection = self.selection;
+            session.check()?;
+            Ok(session)
+        }
+        pub(crate) fn into_resume(self) -> Result<HistoryResume<'a>> {
+            self.check()?;
+            Ok(HistoryResume {
+                operation: self.operation.clone(),
+                selection: self.selection,
+                _thread: PhantomData,
+            })
+        }
+        pub(crate) fn lease(&self) -> Result<HistoryResume<'a>> {
+            self.check()?;
+            Ok(HistoryResume {
+                operation: self.operation.clone(),
+                selection: self.selection,
+                _thread: PhantomData,
+            })
+        }
+        pub(crate) fn effect_boundary(&self, name: &str, point: &str) -> Result<()> {
+            self.check()?;
+            #[cfg(test)]
+            crate::import_barrier::testing::hit(self.state, name, point)?;
+            #[cfg(not(test))]
+            let _ = (name, point);
+            self.check()
+        }
+        pub(crate) fn invalidate(&self) -> Result<()> {
+            let result = (|| {
+                let generation = self.generation.get().checked_add(1).ok_or_else(limit)?;
+                self.generation.set(generation);
+                self.check()
+            })();
+            self.resource_result(result)
+        }
+        pub(crate) fn local_record(&self) -> Result<&DeviceRecord> {
+            self.check()?;
+            self.identity.as_ref().ok_or_else(invalid)
+        }
+        fn preflight_value(&self, value: &Value) -> Result<(u64, u64)> {
+            let result = (|| {
+                let mut pending = vec![(value, 1usize)];
+                let mut nodes = 0u64;
+                let mut bytes = 0u64;
+                while let Some((value, depth)) = pending.pop() {
+                    nodes = nodes
+                        .checked_add(1)
+                        .filter(|n| *n <= NODES)
+                        .ok_or_else(limit)?;
+                    if depth > 64 {
+                        return Err(limit());
+                    }
+                    let length = match value {
+                        Value::String(text) => text.len() as u64,
+                        Value::Number(number) => number.as_str().len() as u64,
+                        _ => 1,
+                    };
+                    bytes = bytes
+                        .checked_add(length.checked_mul(6).ok_or_else(limit)?)
+                        .filter(|n| *n <= BULK)
+                        .ok_or_else(limit)?;
+                    match value {
+                        Value::Array(values) => {
+                            if pending
+                                .len()
+                                .checked_add(values.len())
+                                .is_none_or(|n| n > NODES as usize)
+                            {
+                                return Err(limit());
+                            }
+                            self.charge(
+                                values.len() as u64,
+                                (values.len() as u64).checked_mul(32).ok_or_else(limit)?,
+                            )?;
+                            pending.extend(values.iter().map(|value| (value, depth + 1)));
+                        }
+                        Value::Object(values) => {
+                            nodes = nodes
+                                .checked_add(values.len() as u64)
+                                .filter(|n| *n <= NODES)
+                                .ok_or_else(limit)?;
+                            if pending
+                                .len()
+                                .checked_add(values.len())
+                                .is_none_or(|n| n > NODES as usize)
+                            {
+                                return Err(limit());
+                            }
+                            for (key, value) in values {
+                                bytes = bytes
+                                    .checked_add(
+                                        (key.len() as u64).checked_mul(6).ok_or_else(limit)?,
+                                    )
+                                    .filter(|n| *n <= BULK)
+                                    .ok_or_else(limit)?;
+                                self.charge(1, 32)?;
+                                pending.push((value, depth + 1));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                self.charge(
+                    nodes.checked_add(bytes).ok_or_else(limit)?,
+                    nodes
+                        .checked_mul(64)
+                        .and_then(|n| n.checked_add(bytes))
+                        .ok_or_else(limit)?,
+                )?;
+                self.check()?;
+                Ok((nodes, bytes))
+            })();
+            self.resource_result(result)
+        }
+        fn encode_image(&self, value: &Value) -> Result<Vec<u8>> {
+            let result = (|| {
+                self.preflight_value(value)?;
+                let mut pending = vec![value];
+                let mut nonempty = 0u64;
+                while let Some(value) = pending.pop() {
+                    match value {
+                        Value::Object(values) if !values.is_empty() => {
+                            nonempty += 1;
+                            pending.extend(values.values());
+                        }
+                        Value::Array(values) if !values.is_empty() => {
+                            nonempty += 1;
+                            pending.extend(values);
+                        }
+                        _ => {}
+                    }
+                }
+                // encoded_len is a conservative existing counter: each nonempty
+                // container reserves one trailing separator byte that dumps omits.
+                let size = (crate::import_barrier::encoded_len(value)? as u64)
+                    .checked_sub(nonempty)
+                    .ok_or_else(limit)?;
+                if size > BULK {
+                    return Err(limit());
+                }
+                self.charge(
+                    size.checked_mul(8).ok_or_else(limit)?,
+                    size.checked_mul(8).ok_or_else(limit)?,
+                )?;
+                let bytes = pyjson::dumps(value, DumpOptions::pretty_sorted())?.into_bytes();
+                if bytes.len() as u64 != size {
+                    return Err(invalid());
+                }
+                self.screen(&bytes, BULK)?;
+                self.check()?;
+                Ok(bytes)
+            })();
+            self.resource_result(result)
+        }
+        pub(crate) fn preflight_operations(&self, ops: &[Value]) -> Result<()> {
+            let result = (|| {
+                if !self.is_scoped() {
+                    return Ok(());
+                }
+                let mut nodes = 0u64;
+                let mut bytes = 0u64;
+                for op in ops {
+                    let (n, b) = self.preflight_value(op)?;
+                    nodes = nodes
+                        .checked_add(n)
+                        .filter(|n| *n <= NODES)
+                        .ok_or_else(limit)?;
+                    bytes = bytes
+                        .checked_add(b)
+                        .filter(|n| *n <= BULK)
+                        .ok_or_else(limit)?;
+                }
+                self.check()
+            })();
+            self.resource_result(result)
+        }
+        pub(super) fn preflight_candidate(&self, candidate: &Commit) -> Result<()> {
+            let result = (|| {
+                if candidate.seen.len() > 256 || candidate.ops.len() > NODES as usize {
+                    return Err(limit());
+                }
+                let header = candidate.format.len()
+                    + candidate.env_id.len()
+                    + candidate.author.len()
+                    + candidate.hlc.len()
+                    + candidate.sig.len();
+                self.charge(
+                    header as u64,
+                    (header as u64).checked_mul(8).ok_or_else(limit)?,
+                )?;
+                let mut nodes = 16u64;
+                let mut bytes = header as u64;
+                for op in &candidate.ops {
+                    let (n, b) = self.preflight_value(op)?;
+                    nodes = nodes
+                        .checked_add(n)
+                        .filter(|n| *n <= NODES)
+                        .ok_or_else(limit)?;
+                    bytes = bytes
+                        .checked_add(b)
+                        .filter(|n| *n <= BULK)
+                        .ok_or_else(limit)?;
+                }
+                self.charge(
+                    nodes,
+                    nodes
+                        .checked_mul(128)
+                        .and_then(|n| n.checked_add(bytes.checked_mul(8)?))
+                        .ok_or_else(limit)?,
+                )?;
+                for (author, seq) in &candidate.seen {
+                    let size = seq
+                        .0
+                        .bits()
+                        .checked_add(author.len() as u64)
+                        .ok_or_else(limit)?;
+                    self.charge(size, size.checked_mul(8).ok_or_else(limit)?)?;
+                }
+                let size = candidate.author_seq.0.bits();
+                self.charge(size, size.checked_mul(8).ok_or_else(limit)?)?;
+                self.check()
+            })();
+            self.resource_result(result)
+        }
+        pub(crate) fn reserve_writer(&self, name: &str, length: u64) -> Result<()> {
+            let result = (|| {
+                if length > BULK {
+                    return Err(limit());
+                }
+                let mut path_bytes = self.state.path.as_os_str().len() as u64;
+                let mut path = self.state.path.clone();
+                for component in std::path::Path::new(name).components() {
+                    path.push(component);
+                    path_bytes = path_bytes
+                        .checked_add(path.as_os_str().len() as u64)
+                        .ok_or_else(limit)?;
+                }
+                let cost = length
+                    .checked_add(path_bytes)
+                    .and_then(|n| n.checked_add(1))
+                    .and_then(|n| n.checked_mul(16))
+                    .ok_or_else(limit)?;
+                self.charge(cost, cost)
+            })();
+            self.resource_result(result)
+        }
+        pub(crate) fn screen_original(&self, raw: &[u8]) -> Result<()> {
+            self.screen(raw, BULK)
+        }
+        pub(crate) fn preflight_inventory(&self) -> Result<()> {
+            if self.is_scoped() {
+                self.collect()?;
+            }
+            self.check()
+        }
+        pub(crate) fn journal_record(&self) -> Result<Value> {
+            let inventory = self.collect()?;
+            let name = format!("team/{}/bootstrap/journal.json", self.env);
+            let image = inventory.files.get(&name).ok_or_else(invalid)?;
+            let bytes = image.raw.len() as u64;
+            self.charge(
+                bytes.checked_mul(8).ok_or_else(limit)?,
+                bytes.checked_mul(8).ok_or_else(limit)?,
+            )?;
+            self.screen(&image.raw, INVENTORY)?;
+            // Journal parsing remains the existing authenticated local format.
+            // Its opaque walk was reserved, its raw bytes/depth/nodes bounded.
+            let value = pyjson::loads(std::str::from_utf8(&image.raw).map_err(|_| invalid())?)
+                .map_err(|_| invalid())?;
+            self.check()?;
+            Ok(value)
+        }
+
+        pub(crate) fn reserve_counts(&self, [c, o, t, f, d, s, b]: [u64; 7]) -> Result<()> {
+            let result = (|| {
+                let q = 1u64
+                    .checked_add(c)
+                    .and_then(|n| n.checked_add(o))
+                    .and_then(|n| n.checked_add(t))
+                    .and_then(|n| n.checked_add(d))
+                    .ok_or_else(limit)?;
+                let ff = f.checked_mul(f).ok_or_else(limit)?;
+                let scale = 8u64
+                    .checked_mul(s.checked_add(2).ok_or_else(limit)?)
+                    .ok_or_else(limit)?;
+                let work = q
+                    .checked_mul(q)
+                    .and_then(|n| {
+                        ff.checked_mul(c.checked_add(o)?.checked_add(1)?)
+                            .and_then(|v| n.checked_add(v))
+                    })
+                    .and_then(|n| n.checked_mul(scale))
+                    .ok_or_else(limit)?;
+                let bytes = c
+                    .checked_add(o)
+                    .and_then(|n| n.checked_add(t))
+                    .and_then(|n| n.checked_add(ff))
+                    .and_then(|n| n.checked_add(1))
+                    .and_then(|n| n.checked_mul(b.checked_add(1)?))
+                    .and_then(|n| n.checked_mul(scale))
+                    .ok_or_else(limit)?;
+                self.charge(work, bytes)
+            })();
+            self.resource_result(result)
+        }
+        pub(crate) fn match_local_identity(&self, record: &DeviceRecord) -> Result<()> {
+            self.check()?;
+            if self.is_scoped() && self.identity.as_ref() != Some(record) {
+                return Err(stale());
+            }
+            Ok(())
+        }
+        fn resource_result<T>(&self, result: Result<T>) -> Result<T> {
+            if self.is_scoped()
+                && self.budget.failure.get().is_none()
+                && let Err(error) = &result
+            {
+                match error.reason.as_ref() {
+                    "team_bootstrap_limit_exceeded" => {
+                        self.budget.failure.set(Some(BudgetFailure::Limit))
+                    }
+                    "team_bootstrap_timeout" => {
+                        self.budget.failure.set(Some(BudgetFailure::Timeout))
+                    }
+                    _ => {}
+                }
+            }
+            result
+        }
+        pub(crate) fn state(&self) -> &'a StateDir {
+            self.state
+        }
+        pub(crate) fn env(&self) -> &str {
+            &self.env
+        }
+        // Routing only. This flag cannot construct a sealed input or proof.
+        pub(crate) fn is_scoped(&self) -> bool {
+            !matches!(self.selection, Selection::Ordinary)
+        }
+        pub(crate) fn check_deadline(&self) -> Result<()> {
+            if self.is_scoped() {
+                self.budget.check()?;
+            }
+            Ok(())
+        }
+        pub(crate) fn check(&self) -> Result<()> {
+            if !self.state.locked_by_current_thread() {
+                return Err(stale());
+            }
+            if self.is_scoped() {
+                self.budget.check()?;
+                if self.state.import_identity() != self.identity.as_ref()
+                    || self.operation.root.as_ref() != Some(&self.state.checked_import_root()?)
+                {
+                    return Err(stale());
+                }
+            }
+            Ok(())
+        }
+        pub(crate) fn charge(&self, work: u64, bytes: u64) -> Result<()> {
+            if self.is_scoped() {
+                self.budget.charge(work, bytes)?;
+                #[cfg(test)]
+                {
+                    let counters = self.budget.counters.borrow();
+                    testing::charge(self.state, work, bytes, counters.work, counters.bytes);
+                }
+            }
+            Ok(())
+        }
+        pub(crate) fn acquire(&self) -> Result<RetainedInput<'_, 'a>> {
+            let result = (|| {
+                self.check()?;
+                let generation = self.generation.get();
+                if !self.is_scoped() {
+                    return Ok(RetainedInput {
+                        session: self,
+                        generation,
+                        inventory: None,
+                        originals: Vec::new(),
+                        vector: BTreeMap::new(),
+                        floor: BTreeMap::new(),
+                        _thread: PhantomData,
+                    });
+                }
+                let inventory = self.collect()?;
+                #[cfg(test)]
+                testing::acquired(self.state, inventory.entries as u64);
+                let mut originals = Vec::new();
+                let mut slots = BTreeSet::new();
+                for (path, file) in &inventory.files {
+                    let suffix = path.strip_prefix(&format!("team/{}/commits/", self.env));
+                    let Some(suffix) = suffix else { continue };
+                    let pieces = suffix.split('/').collect::<Vec<_>>();
+                    if pieces.len() != 2 || !is_fingerprint(pieces[0]) {
+                        return Err(invalid());
+                    }
+                    let seq = canonical_number(self, pieces[1], true)?;
+                    #[cfg(test)]
+                    testing::slot(self.state);
+                    if !slots.insert((pieces[0].to_owned(), seq.clone())) {
+                        return Err(invalid());
+                    }
+                    // Reserve the conversion/equality/raw and parsed copies before
+                    // any of them materializes: at most sixteen byte/node walks
+                    // and sixty-four charged heap bytes per original source byte.
+                    self.charge(
+                        (file.raw.len() as u64).checked_mul(16).ok_or_else(limit)?,
+                        (file.raw.len() as u64).checked_mul(64).ok_or_else(limit)?,
+                    )?;
+                    let value = self.parse(&file.raw)?;
+                    if value["seen"].as_object().is_some_and(|m| m.len() > 256) {
+                        return Err(limit());
+                    }
+                    let seen = value["seen"].as_object().ok_or_else(invalid)?;
+                    let mut conversion_work = 0u64;
+                    for integer in std::iter::once(&value["author_seq"]).chain(seen.values()) {
+                        let Value::Number(number) = integer else {
+                            return Err(invalid());
+                        };
+                        let length = number.as_str().len() as u64;
+                        conversion_work = conversion_work
+                            .checked_add(length.checked_mul(length).ok_or_else(limit)?)
+                            .ok_or_else(limit)?;
+                    }
+                    for part in value["hlc"].as_str().ok_or_else(invalid)?.split('-') {
+                        let length = part.len() as u64;
+                        conversion_work = conversion_work
+                            .checked_add(length.checked_mul(length).ok_or_else(limit)?)
+                            .ok_or_else(limit)?;
+                    }
+                    self.charge(conversion_work, 0)?;
+                    let op_count = match &value["ops"] {
+                        Value::Array(v) => v.len(),
+                        Value::Object(v) => v.len(),
+                        Value::String(v) => v.len(),
+                        _ => 1,
+                    };
+                    self.charge(
+                        op_count as u64,
+                        (op_count as u64).checked_mul(64).ok_or_else(limit)?,
+                    )?;
+                    let commit = Commit::from_dict(&value)?;
+                    if commit.to_dict() != value
+                        || commit.format != COMMIT_FORMAT
+                        || commit.env_id != self.env
+                        || commit.author != pieces[0]
+                        || commit.author_seq != seq
+                    {
+                        return Err(invalid());
+                    }
+                    validate_ops(&commit.ops)?;
+                    Hlc::parse(&commit.hlc)?;
+                    self.charge(1, file.raw.len() as u64)?;
+                    originals.push(RetainedOriginal {
+                        path: path.clone(),
+                        raw: file.raw.clone(),
+                        parsed: commit,
+                    });
+                    if originals.len() > ENTRIES {
+                        return Err(limit());
+                    }
+                }
+                // Both stable sorts compare encoded arbitrary-precision integers.
+                // Reserve their worst-case comparisons before either sort; numeric
+                // magnitude never controls a walk or is cast to an index.
+                let width = originals
+                    .iter()
+                    .map(|o| {
+                        o.parsed.author.len()
+                            + o.parsed.author_seq.to_string().len()
+                            + o.parsed.hlc.len()
+                    })
+                    .max()
+                    .unwrap_or(1) as u64;
+                let count = originals.len() as u64;
+                self.charge(
+                    count
+                        .checked_mul(count)
+                        .and_then(|n| n.checked_mul(width))
+                        .and_then(|n| n.checked_mul(2))
+                        .ok_or_else(limit)?,
+                    0,
+                )?;
+                originals.sort_by(|a, b| {
+                    a.parsed
+                        .author
+                        .cmp(&b.parsed.author)
+                        .then(a.parsed.author_seq.cmp(&b.parsed.author_seq))
+                });
+                let mut keyed = Vec::with_capacity(originals.len());
+                for original in originals {
+                    self.charge(1, 0)?;
+                    keyed.push((order_key(&original.parsed)?, original));
+                }
+                keyed.sort_by(|a, b| a.0.cmp(&b.0));
+                let originals = keyed.into_iter().map(|(_, o)| o).collect::<Vec<_>>();
+                let commits = originals
+                    .iter()
+                    .map(|o| o.parsed.clone())
+                    .collect::<Vec<_>>();
+                let mut public_records = BTreeMap::new();
+                for commit in &commits {
+                    for op in &commit.ops {
+                        let value = match op["op"].as_str() {
+                            Some("env.init") => Some(&op["owner_device"]),
+                            Some("member.add") => Some(&op["device"]),
+                            _ => None,
+                        };
+                        if let Some(value) = value {
+                            let record = DeviceRecord::from_dict(value)?;
+                            let fp = record.fingerprint();
+                            if !public_records.contains_key(&fp) && public_records.len() >= 256 {
+                                return Err(limit());
+                            }
+                            self.charge(4096, 256)?;
+                            self.check()?;
+                            if !record.verify() {
+                                return Err(invalid());
+                            }
+                            self.check()?;
+                            if public_records
+                                .get(&fp)
+                                .is_some_and(|previous| previous != &record)
+                            {
+                                return Err(invalid());
+                            }
+                            public_records.insert(fp, record);
+                        }
+                    }
+                }
+                // The existing first-verified registry and signature checks remain
+                // the consumers. Preflight above bounds their physical record walk.
+                let registry = device_registry(&commits);
+                for original in &originals {
+                    self.charge(4096, original.raw.len() as u64)?;
+                    self.check()?;
+                    if !registry
+                        .get(&original.parsed.author)
+                        .is_some_and(|r| verify_commit(&original.parsed, r))
+                    {
+                        return Err(invalid());
+                    }
+                    self.check()?;
+                }
+                let mut snapshots = Vec::new();
+                for path in inventory.files.keys() {
+                    if let Some(name) = path.strip_prefix(&format!("team/{}/snapshots/", self.env))
+                    {
+                        snapshots.push((canonical_number(self, name, false)?, path));
+                    }
+                }
+                let count = snapshots.len() as u64;
+                let width = snapshots
+                    .iter()
+                    .map(|(_, path)| path.len())
+                    .max()
+                    .unwrap_or(1) as u64;
+                self.charge(
+                    count
+                        .checked_mul(count)
+                        .and_then(|n| n.checked_mul(width))
+                        .ok_or_else(limit)?,
+                    0,
+                )?;
+                snapshots.sort_by(|a, b| a.0.cmp(&b.0));
+                let mut vector = BTreeMap::new();
+                if let Some((_, path)) = snapshots.last() {
+                    let snapshot = self.parse(&inventory.files[*path].raw)?;
+                    let values = snapshot["vector"].as_object().ok_or_else(invalid)?;
+                    if values.len() > 256 {
+                        return Err(limit());
+                    }
+                    for (author, value) in values {
+                        let n = PyInt::from_json_integer(value)
+                            .filter(|n| *n >= 0)
+                            .ok_or_else(invalid)?;
+                        if !is_fingerprint(author) {
+                            return Err(invalid());
+                        }
+                        vector.insert(author.clone(), n);
+                    }
+                }
+                let floor = vector.clone();
+                for (author, seq) in slots {
+                    let previous = vector.entry(author.clone()).or_insert_with(PyInt::zero);
+                    if seq > *previous {
+                        if seq != &*previous + 1 {
+                            return Err(Error::state("team_checkpoint_history_required"));
+                        }
+                        *previous = seq;
+                    }
+                    if !floor.contains_key(&author) && *previous < 0 {
+                        return Err(invalid());
+                    }
+                }
+                self.check()?;
+                let input = RetainedInput {
+                    session: self,
+                    generation,
+                    inventory: Some(inventory),
+                    originals,
+                    vector,
+                    floor,
+                    _thread: PhantomData,
+                };
+                if matches!(self.selection, Selection::Owner | Selection::Recipient) {
+                    input.authenticate_selection()?;
+                }
+                Ok(input)
+            })();
+            self.resource_result(result)
+        }
+        fn screen(&self, raw: &[u8], cap: u64) -> Result<()> {
+            let result = (|| {
+                // Reserve before any tree is built. The syntax engine does not
+                // supply resource, signed-record, or authority assurance.
+                if raw.len() as u64 > cap {
+                    return Err(limit());
+                }
+                let mut nodes = 0u64;
+                let mut depth = 0u64;
+                let mut quoted = false;
+                let mut escaped = false;
+                let mut scalar = false;
+                self.charge(
+                    raw.len() as u64,
+                    (raw.len() as u64).checked_mul(4).ok_or_else(limit)?,
+                )?;
+                for byte in raw {
+                    if quoted {
+                        if escaped {
+                            escaped = false;
+                        } else if *byte == b'\\' {
+                            escaped = true;
+                        } else if *byte == b'"' {
+                            quoted = false;
+                        }
+                        continue;
+                    }
+                    match *byte {
+                        b'"' => {
+                            quoted = true;
+                            scalar = false;
+                            nodes = nodes.checked_add(1).ok_or_else(limit)?;
+                        }
+                        b'{' | b'[' => {
+                            depth = depth.checked_add(1).ok_or_else(limit)?;
+                            if depth > 64 {
+                                return Err(limit());
+                            }
+                            nodes = nodes.checked_add(1).ok_or_else(limit)?;
+                            scalar = false;
+                        }
+                        b'}' | b']' => {
+                            depth = depth.checked_sub(1).ok_or_else(invalid)?;
+                            scalar = false;
+                        }
+                        b' ' | b'\n' | b'\r' | b'\t' | b',' | b':' => scalar = false,
+                        _ => {
+                            if !scalar {
+                                nodes = nodes.checked_add(1).ok_or_else(limit)?;
+                            }
+                            scalar = true;
+                        }
+                    }
+                    if nodes > NODES {
+                        return Err(limit());
+                    }
+                }
+                self.charge(nodes, nodes.checked_mul(64).ok_or_else(limit)?)?;
+                self.check()
+            })();
+            self.resource_result(result)
+        }
+        fn parse(&self, raw: &[u8]) -> Result<Value> {
+            self.screen(raw, BULK)?;
+            let value = checkpoint::retained_original(raw).map_err(|e| Error::state(e.reason()))?;
+            self.check()?;
+            Ok(value)
+        }
+        pub(crate) fn parse_line(&self, line: &str) -> Result<Value> {
+            self.check()?;
+            if self.is_scoped() {
+                let parsed = self.parse(line.as_bytes()).and_then(|value| {
+                    if let Some(hlc) = value["hlc"].as_str() {
+                        let work = hlc.split('-').try_fold(hlc.len() as u64, |sum, part| {
+                            let length = part.len() as u64;
+                            sum.checked_add(length.checked_mul(length).ok_or_else(limit)?)
+                                .ok_or_else(limit)
+                        })?;
+                        self.charge(work, 0)?;
+                    }
+                    self.check()?;
+                    Ok(value)
+                });
+                // Legacy fact predicates intentionally discard syntax-invalid
+                // lines. Resource refusal is sticky across those predicates:
+                // it can never become a quarantine/rewrite or partial allow.
+                if let Err(error) = &parsed {
+                    match error.reason.as_ref() {
+                        "team_bootstrap_limit_exceeded" => {
+                            self.budget.failure.set(Some(BudgetFailure::Limit))
+                        }
+                        "team_bootstrap_timeout" => {
+                            self.budget.failure.set(Some(BudgetFailure::Timeout))
+                        }
+                        _ => {}
+                    }
+                }
+                parsed
+            } else {
+                pyjson::loads(line).map_err(|_| Error::state("state_corrupt"))
+            }
+        }
+        fn collect(&self) -> Result<Inventory> {
+            let result = (|| {
+                #[cfg(test)]
+                let _stage = testing::span(self.state, "history_collect");
+                let mut files = BTreeMap::new();
+                let mut layout = BTreeSet::new();
+                let mut hash = Sha256::new();
+                let mut entries = 0usize;
+                let mut bytes = 0u64;
+                let envroot = format!("team/{}", self.env);
+                let mut pending = vec![(envroot, 0usize)];
+                while let Some((name, depth)) = pending.pop() {
+                    self.check()?;
+                    if depth > 64 {
+                        return Err(limit());
+                    }
+                    let path = self.state.path.join(&name);
+                    let metadata = match fs::symlink_metadata(&path) {
+                        Ok(v) => v,
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                        Err(_) => return Err(invalid()),
+                    };
+                    layout.insert((name.clone(), metadata.is_dir()));
+                    if metadata.is_dir() {
+                        crate::import_barrier::private_relative(
+                            self.state,
+                            &format!("{name}/.history-layout-check"),
+                        )?;
+                    } else {
+                        crate::import_barrier::private_relative(self.state, &name)?;
+                    }
+                    self.charge(name.len() as u64, name.len() as u64)?;
+                    hash.update((name.len() as u64).to_be_bytes());
+                    hash.update(name.as_bytes());
+                    let stamp = stamp(&metadata);
+                    for item in &stamp {
+                        hash.update(item.to_be_bytes());
+                    }
+                    if metadata.is_dir() {
+                        if name == format!("team/{}/commits", self.env)
+                            || name.starts_with(&format!("team/{}/commits/", self.env))
+                        {
+                            let suffix = name
+                                .strip_prefix(&format!("team/{}/commits", self.env))
+                                .unwrap();
+                            if !suffix.is_empty()
+                                && (suffix.len() != 27
+                                    || !suffix.starts_with('/')
+                                    || !is_fingerprint(&suffix[1..]))
+                            {
+                                return Err(invalid());
+                            }
+                        }
+                        let directory = fs::read_dir(path).map_err(|_| invalid())?;
+                        for entry in directory {
+                            let entry = entry.map_err(|_| invalid())?;
+                            entries = entries
+                                .checked_add(1)
+                                .filter(|n| *n <= ENTRIES)
+                                .ok_or_else(limit)?;
+                            self.charge(1, 256)?;
+                            let leaf = entry.file_name().into_string().map_err(|_| invalid())?;
+                            if leaf.is_empty() || leaf == "." || leaf == ".." {
+                                return Err(invalid());
+                            }
+                            pending.push((format!("{name}/{leaf}"), depth + 1));
+                        }
+                        self.charge(
+                            (pending.len() as u64)
+                                .checked_mul(pending.len() as u64)
+                                .ok_or_else(limit)?,
+                            0,
+                        )?;
+                        pending.sort_by(|a, b| b.0.cmp(&a.0));
+                    } else {
+                        if !metadata.is_file() {
+                            return Err(invalid());
+                        }
+                        if name.starts_with(&format!("team/{}/commits/", self.env)) {
+                            let suffix = name
+                                .strip_prefix(&format!("team/{}/commits/", self.env))
+                                .unwrap();
+                            let parts = suffix.split('/').collect::<Vec<_>>();
+                            if parts.len() != 2 || !is_fingerprint(parts[0]) {
+                                return Err(invalid());
+                            }
+                            canonical_number(self, parts[1], true)?;
+                        }
+                        for directory in ["snapshots", "snapshot_records"] {
+                            if let Some(leaf) =
+                                name.strip_prefix(&format!("team/{}/{directory}/", self.env))
+                            {
+                                canonical_number(self, leaf, false)?;
+                            }
+                        }
+                        let cap = if name.ends_with("/journal.json") || name.ends_with(".jsonl") {
+                            INVENTORY
+                        } else if name.contains("/bootstrap/")
+                            && !name.ends_with("/payload.json")
+                            && name
+                                != format!("team/{}/bootstrap/local-removal-denial.json", self.env)
+                            && !name.contains("/staging/")
+                        {
+                            65_536
+                        } else {
+                            BULK
+                        };
+                        bytes = bytes
+                            .checked_add(metadata.len())
+                            .filter(|n| *n <= INVENTORY)
+                            .ok_or_else(limit)?;
+                        let raw = self.read_file(&name, cap, &metadata)?;
+                        if name.ends_with(".json") {
+                            self.screen(&raw, cap)?;
+                        }
+                        for aux in ["deferred", "rejected"] {
+                            if let Some(leaf) =
+                                name.strip_prefix(&format!("team/{}/{aux}/", self.env))
+                            {
+                                if leaf.contains('/') {
+                                    return Err(invalid());
+                                }
+                                let value = self.parse(&raw)?;
+                                let commit = Commit::from_dict(&value)?;
+                                if !is_fingerprint(&commit.author) || commit.env_id != self.env {
+                                    return Err(invalid());
+                                }
+                                let expected = if aux == "deferred" {
+                                    format!("{}-{:010}.json", commit.author, commit.author_seq)
+                                } else {
+                                    let digest = commit.hash()?;
+                                    format!(
+                                        "{}-{:010}-{}.json",
+                                        commit.author,
+                                        commit.author_seq,
+                                        &digest[..12]
+                                    )
+                                };
+                                if leaf != expected {
+                                    return Err(invalid());
+                                }
+                            }
+                        }
+                        hash.update(Sha256::digest(&raw));
+                        files.insert(name, FileImage { raw });
+                    }
+                }
+                // Bound global import discovery before the existing authenticated
+                // index walker can read any journal from another environment.
+                let mut discovered = BTreeSet::new();
+                let mut listed = 0usize;
+                let mut journal_bytes = 0u64;
+                let team = self.state.path.join("team");
+                let mut global_names = Vec::new();
+                for entry in fs::read_dir(&team).map_err(|_| invalid())? {
+                    listed = listed
+                        .checked_add(1)
+                        .filter(|n| *n <= ENTRIES)
+                        .ok_or_else(limit)?;
+                    self.charge(1, 256)?;
+                    let leaf = entry
+                        .map_err(|_| invalid())?
+                        .file_name()
+                        .into_string()
+                        .map_err(|_| invalid())?;
+                    global_names.push(leaf);
+                }
+                let count = global_names.len() as u64;
+                let width = global_names.iter().map(String::len).max().unwrap_or(1) as u64;
+                self.charge(
+                    count
+                        .checked_mul(count)
+                        .and_then(|n| n.checked_mul(width))
+                        .ok_or_else(limit)?,
+                    0,
+                )?;
+                global_names.sort();
+                for leaf in global_names {
+                    let directory =
+                        fs::symlink_metadata(team.join(&leaf)).map_err(|_| invalid())?;
+                    hash.update(leaf.as_bytes());
+                    for item in stamp(&directory) {
+                        hash.update(item.to_be_bytes());
+                    }
+                    if !valid_env_id(&leaf) {
+                        continue;
+                    }
+                    if !directory.is_dir() {
+                        return Err(invalid());
+                    }
+                    crate::import_barrier::private_relative(
+                        self.state,
+                        &format!("team/{leaf}/.history-layout-check"),
+                    )?;
+                    discovered.insert(leaf.clone());
+                    if discovered.len() > 256 {
+                        return Err(limit());
+                    }
+                    let name = format!("team/{leaf}/bootstrap/journal.json");
+                    let metadata = match fs::symlink_metadata(self.state.path.join(&name)) {
+                        Ok(v) => v,
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                        Err(_) => return Err(invalid()),
+                    };
+                    journal_bytes = journal_bytes
+                        .checked_add(metadata.len())
+                        .filter(|n| *n <= INVENTORY)
+                        .ok_or_else(limit)?;
+                    if let std::collections::btree_map::Entry::Vacant(slot) =
+                        files.entry(name.clone())
+                    {
+                        crate::import_barrier::private_relative(self.state, &name)?;
+                        let raw = self.read_file(&name, INVENTORY, &metadata)?;
+                        self.screen(&raw, INVENTORY)?;
+                        // Existing journals are signed local records. Reserve the
+                        // bounded opaque index/parser walk before calling it.
+                        self.charge(
+                            (raw.len() as u64).checked_mul(8).ok_or_else(limit)?,
+                            (raw.len() as u64).checked_mul(8).ok_or_else(limit)?,
+                        )?;
+                        layout.insert((name.clone(), false));
+                        hash.update(name.as_bytes());
+                        for item in stamp(&metadata) {
+                            hash.update(item.to_be_bytes());
+                        }
+                        hash.update(Sha256::digest(&raw));
+                        slot.insert(FileImage { raw });
+                    }
+                }
+                // These mutable shared inventories participate in every revision.
+                let mut shared = 0u64;
+                for name in [
+                    crate::vault::VAULT_DOC,
+                    crate::policy::CONNECTIONS,
+                    crate::projects::DOC,
+                    crate::policy::CONTROL,
+                    crate::tombstone::PATH,
+                    super::super::sync::ENVS_MAP_PATH,
+                    crate::import_barrier::INDEX,
+                ] {
+                    let metadata = match fs::symlink_metadata(self.state.path.join(name)) {
+                        Ok(v) => v,
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                            hash.update(name.as_bytes());
+                            hash.update([0]);
+                            continue;
+                        }
+                        Err(_) => return Err(invalid()),
+                    };
+                    shared = shared
+                        .checked_add(metadata.len())
+                        .filter(|n| *n <= INVENTORY)
+                        .ok_or_else(limit)?;
+                    crate::import_barrier::private_relative(self.state, name)?;
+                    let raw = self.read_file(name, INVENTORY, &metadata)?;
+                    self.screen(&raw, INVENTORY)?;
+                    if [
+                        crate::import_barrier::INDEX,
+                        super::super::sync::ENVS_MAP_PATH,
+                    ]
+                    .contains(&name)
+                    {
+                        journal_bytes = journal_bytes
+                            .checked_add(raw.len() as u64)
+                            .filter(|n| *n <= INVENTORY)
+                            .ok_or_else(limit)?;
+                        let value = self.parse(&raw)?;
+                        let environments = value.as_object().ok_or_else(invalid)?;
+                        for env in environments.keys() {
+                            self.charge(env.len() as u64, env.len() as u64)?;
+                            if !valid_env_id(env) {
+                                return Err(invalid());
+                            }
+                            discovered.insert(env.clone());
+                            if discovered.len() > 256 {
+                                return Err(limit());
+                            }
+                        }
+                    }
+                    layout.insert((name.into(), false));
+                    hash.update(name.as_bytes());
+                    let stamp = stamp(&metadata);
+                    for item in &stamp {
+                        hash.update(item.to_be_bytes());
+                    }
+                    hash.update(Sha256::digest(&raw));
+                    files.insert(name.into(), FileImage { raw });
+                }
+                // Bind local identity without reading or retaining wrapped private
+                // device-key material. Any same-thread key-file rewrite changes its
+                // inode/ctime revision; signing also compares the loaded full record.
+                let identity_path = crate::team::identity::DEVICE_KEY_FILE;
+                crate::import_barrier::private_relative(self.state, identity_path)?;
+                let metadata = fs::symlink_metadata(self.state.path.join(identity_path))
+                    .map_err(|_| invalid())?;
+                layout.insert((identity_path.into(), false));
+                self.charge(1, 256)?;
+                hash.update(identity_path.as_bytes());
+                for item in stamp(&metadata) {
+                    hash.update(item.to_be_bytes());
+                }
+                if let Some(record) = &self.identity {
+                    let public = pyjson::dumps(&record.to_dict(), DumpOptions::compact_sorted())?;
+                    self.charge(public.len() as u64, public.len() as u64)?;
+                    hash.update(public.as_bytes());
+                }
+                // Fold reservations include every captured raw fact/document/
+                // snapshot input, including shared deny-ledger and import records.
+                let bytes = files.values().try_fold(0u64, |sum, image| {
+                    sum.checked_add(image.raw.len() as u64).ok_or_else(limit)
+                })?;
+                self.check()?;
+                Ok(Inventory {
+                    files,
+                    layout,
+                    revision: hash.finalize().into(),
+                    entries,
+                    bytes,
+                })
+            })();
+            self.resource_result(result)
+        }
+        fn read_file(&self, name: &str, cap: u64, before: &fs::Metadata) -> Result<Vec<u8>> {
+            if before.len() > cap {
+                return Err(limit());
+            }
+            let read_bound = before.len().checked_add(1).ok_or_else(limit)?;
+            self.charge(read_bound, read_bound.checked_mul(4).ok_or_else(limit)?)?;
+            let file = anchored_file(self.state, name)?;
+            if stamp(&file.metadata().map_err(|_| invalid())?) != stamp(before) {
+                return Err(stale());
+            }
+            let mut raw = Vec::new();
+            (&file)
+                .take(read_bound)
+                .read_to_end(&mut raw)
+                .map_err(|_| invalid())?;
+            if raw.len() as u64 != before.len()
+                || stamp(&file.metadata().map_err(|_| invalid())?) != stamp(before)
+                || raw.len() as u64 > cap
+                || stamp(&fs::symlink_metadata(self.state.path.join(name)).map_err(|_| invalid())?)
+                    != stamp(before)
+            {
+                return Err(stale());
+            }
+            self.check()?;
+            Ok(raw)
+        }
+    }
+    fn anchored_file(state: &StateDir, name: &str) -> Result<std::fs::File> {
+        use rustix::fs::{Mode, OFlags, open, openat};
+        let mut directory = open(
+            &state.path,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|_| invalid())?;
+        let parts = std::path::Path::new(name).components().collect::<Vec<_>>();
+        for (i, part) in parts.iter().enumerate() {
+            let std::path::Component::Normal(part) = part else {
+                return Err(invalid());
+            };
+            let mut flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+            if i + 1 < parts.len() {
+                flags |= OFlags::DIRECTORY;
+            }
+            let next = openat(&directory, *part, flags, Mode::empty()).map_err(|_| invalid())?;
+            if i + 1 == parts.len() {
+                return Ok(std::fs::File::from(next));
+            }
+            directory = next;
+        }
+        Err(invalid())
+    }
+    fn stamp(m: &fs::Metadata) -> Vec<u64> {
+        vec![
+            m.dev(),
+            m.ino(),
+            m.mode() as u64,
+            m.uid() as u64,
+            m.gid() as u64,
+            m.nlink(),
+            m.len(),
+            m.mtime() as u64,
+            m.mtime_nsec() as u64,
+            m.ctime() as u64,
+            m.ctime_nsec() as u64,
+        ]
+    }
+    fn canonical_number(session: &HistorySession<'_>, name: &str, positive: bool) -> Result<PyInt> {
+        let length = name.len() as u64;
+        session.charge(length.checked_mul(length).ok_or_else(limit)?, length)?;
+        let stem = name.strip_suffix(".json").ok_or_else(invalid)?;
+        if stem.is_empty()
+            || stem.len() > 4300
+            || !stem.bytes().all(|b| b.is_ascii_digit())
+            || (stem.len() > 1 && stem.starts_with('0'))
+            || (positive && stem == "0")
+        {
+            return Err(invalid());
+        }
+        let seq = crate::pystr::int_from_str_decimal_limited(stem).ok_or_else(invalid)?;
+        Ok(PyInt(seq.parse().map_err(|_| invalid())?))
+    }
+    impl<'a> RetainedInput<'_, 'a> {
+        fn current(&self) -> Result<()> {
+            self.session.check()?;
+            if self.generation != self.session.generation.get() {
+                return Err(stale());
+            }
+            Ok(())
+        }
+        pub(crate) fn recheck(&self) -> Result<()> {
+            self.current()?;
+            if let Some(before) = &self.inventory
+                && self.session.collect()?.revision != before.revision
+            {
+                return Err(stale());
+            }
+            Ok(())
+        }
+        pub(crate) fn commits(&self) -> Result<Vec<Commit>> {
+            self.recheck()?;
+            self.observed_commits()
+        }
+        fn observed_commits(&self) -> Result<Vec<Commit>> {
+            self.current()?;
+            if self.inventory.is_none() {
+                return CommitStore::new(self.session.state, &self.session.env).all_commits();
+            }
+            let size = self.originals.iter().try_fold(0u64, |sum, o| {
+                sum.checked_add(o.raw.len() as u64).ok_or_else(limit)
+            })?;
+            self.session.charge(
+                size.checked_mul(16).ok_or_else(limit)?,
+                size.checked_mul(64).ok_or_else(limit)?,
+            )?;
+            Ok(self.originals.iter().map(|o| o.parsed.clone()).collect())
+        }
+        pub(crate) fn vector(&self) -> Result<BTreeMap<String, PyInt>> {
+            self.recheck()?;
+            if self.inventory.is_none() {
+                CommitStore::new(self.session.state, &self.session.env).vector()
+            } else {
+                let size = self.vector.iter().try_fold(0u64, |sum, (author, seq)| {
+                    sum.checked_add(author.len() as u64)
+                        .and_then(|n| n.checked_add(seq.0.bits()))
+                        .and_then(|n| n.checked_add(32))
+                        .ok_or_else(limit)
+                })?;
+                self.session
+                    .charge(size, size.checked_mul(8).ok_or_else(limit)?)?;
+                Ok(self.vector.clone())
+            }
+        }
+        pub(crate) fn replication_after(
+            &self,
+            peer: &BTreeMap<String, PyInt>,
+        ) -> Result<Vec<Commit>> {
+            self.recheck()?;
+            if self.inventory.is_none() {
+                return Err(invalid());
+            }
+            for (author, floor) in &self.floor {
+                if peer.get(author).cloned().unwrap_or_else(PyInt::zero) < *floor {
+                    return Err(Error::state("team_checkpoint_history_required"));
+                }
+            }
+            let size = self.originals.iter().try_fold(0u64, |sum, original| {
+                sum.checked_add(original.raw.len() as u64).ok_or_else(limit)
+            })?;
+            self.session.charge(
+                size.checked_mul(16).ok_or_else(limit)?,
+                size.checked_mul(64).ok_or_else(limit)?,
+            )?;
+            Ok(self
+                .originals
+                .iter()
+                .filter(|o| {
+                    peer.get(&o.parsed.author)
+                        .is_none_or(|known| o.parsed.author_seq > *known)
+                        && self
+                            .vector
+                            .get(&o.parsed.author)
+                            .is_some_and(|captured| o.parsed.author_seq <= *captured)
+                })
+                .map(|o| o.parsed.clone())
+                .collect())
+        }
+        pub(crate) fn read_json(&self, name: &str, default: Value) -> Result<Value> {
+            self.recheck()?;
+            self.observed_json(name, default)
+        }
+        fn observed_json(&self, name: &str, default: Value) -> Result<Value> {
+            self.current()?;
+            if let Some(inventory) = &self.inventory {
+                match inventory.files.get(name) {
+                    None => Ok(default),
+                    Some(file) => self.session.parse(&file.raw),
+                }
+            } else {
+                self.session.state.read_json(name, default)
+            }
+        }
+        pub(crate) fn read_lines(&self, name: &str) -> Result<Vec<String>> {
+            self.recheck()?;
+            self.observed_lines(name)
+        }
+        fn observed_lines(&self, name: &str) -> Result<Vec<String>> {
+            self.current()?;
+            if let Some(inventory) = &self.inventory {
+                let Some(file) = inventory.files.get(name) else {
+                    return Ok(Vec::new());
+                };
+                if file.raw.len() as u64 > INVENTORY {
+                    return Err(limit());
+                }
+                self.session.charge(
+                    file.raw.len() as u64,
+                    (file.raw.len() as u64).checked_mul(4).ok_or_else(limit)?,
+                )?;
+                let text = std::str::from_utf8(&file.raw).map_err(|_| invalid())?;
+                let mut lines = Vec::new();
+                for line in text
+                    .replace("\r\n", "\n")
+                    .replace('\r', "\n")
+                    .split_terminator('\n')
+                {
+                    if lines.len() >= ENTRIES || line.len() as u64 > BULK {
+                        return Err(limit());
+                    }
+                    lines.push(line.to_owned());
+                }
+                Ok(lines)
+            } else {
+                self.session.state.read_lines(name, None)
+            }
+        }
+        pub(crate) fn shared_facts(&self) -> Result<Vec<Value>> {
+            self.recheck()?;
+            self.observed_shared_facts()
+        }
+        fn observed_shared_facts(&self) -> Result<Vec<Value>> {
+            self.current()?;
+            if let Some(inventory) = &self.inventory
+                && let Some(file) = inventory.files.get(crate::tombstone::PATH)
+            {
+                self.session.parse(&file.raw)?;
+                self.session.charge(
+                    file.raw.len() as u64,
+                    (file.raw.len() as u64).checked_mul(4).ok_or_else(limit)?,
+                )?;
+            }
+            let values = crate::tombstone::shared_facts(self.session.state, &self.session.env)?;
+            self.session.check()?;
+            Ok(values)
+        }
+        // These batches are untrusted DATA for the one fact engine. There is
+        // no callback/effect between captured reads. The engine closes the
+        // transaction with full revision checks before authority is returned.
+        // Ordinary acquisition order stays lazy.
+        pub(crate) fn fact_sources(&self) -> Result<(Vec<String>, Vec<Value>)> {
+            self.recheck()?;
+            let lines = self.observed_lines(&format!("team/{}/facts.jsonl", self.session.env))?;
+            let shared = self.observed_shared_facts()?;
+            self.current()?;
+            Ok((lines, shared))
+        }
+        pub(crate) fn fact_admissions(&self) -> Result<(Value, Vec<String>)> {
+            self.recheck()?;
+            let receipts = self.observed_json(
+                &format!("team/{}/fact_admissions.json", self.session.env),
+                json!({}),
+            )?;
+            let lines =
+                self.observed_lines(&format!("team/{}/fact_admissions.jsonl", self.session.env))?;
+            self.current()?;
+            Ok((receipts, lines))
+        }
+        pub(crate) fn shared_fact_seal(&self) -> Result<(Vec<Value>, FactSeal<'a>)> {
+            let values = self.observed_shared_facts()?;
+            let seal = self.fact_seal()?;
+            Ok((values, seal))
+        }
+        pub(crate) fn fact_seal(&self) -> Result<FactSeal<'a>> {
+            self.recheck()?;
+            let revision = self
+                .inventory
+                .as_ref()
+                .map(|value| hex::encode(value.revision))
+                .unwrap_or_default();
+            let size = self
+                .vector
+                .iter()
+                .try_fold(0u64, |sum, (author, sequence)| {
+                    sum.checked_add(author.len() as u64)
+                        .and_then(|value| value.checked_add(sequence.0.bits()))
+                        .ok_or_else(limit)
+                })?;
+            self.session
+                .charge(size, size.checked_mul(8).ok_or_else(limit)?)?;
+            Ok(FactSeal {
+                operation: self.session.operation.clone(),
+                generation: self.generation,
+                revision,
+                vector: self.vector.clone(),
+            })
+        }
+        pub(crate) fn target_revision(&self) -> Result<String> {
+            self.recheck()?;
+            let Some(inventory) = &self.inventory else {
+                return Ok(String::new());
+            };
+            let prefix = format!("team/{}/bootstrap", self.session.env);
+            let pins = ["receiver.json", "observed.json", "known-facts.json"]
+                .map(|leaf| format!("{prefix}/{leaf}"));
+            let volatile = ["sync_state.json", "peers.json", "peer_vectors.json"]
+                .map(|leaf| format!("team/{}/{leaf}", self.session.env));
+            let mut hash = Sha256::new();
+            for (name, directory) in &inventory.layout {
+                if (name == &prefix || name.starts_with(&format!("{prefix}/")))
+                    && !pins.contains(name)
+                {
+                    continue;
+                }
+                if volatile.contains(name) {
+                    continue;
+                }
+                self.session.charge(name.len() as u64, name.len() as u64)?;
+                hash.update((name.len() as u64).to_be_bytes());
+                hash.update(name.as_bytes());
+                hash.update([u8::from(*directory)]);
+                if let Some(image) = inventory.files.get(name) {
+                    self.session.charge(image.raw.len() as u64, 0)?;
+                    hash.update(Sha256::digest(&image.raw));
+                }
+            }
+            self.session.check()?;
+            Ok(hex::encode(hash.finalize()))
+        }
+        pub(crate) fn cut_revision(&self) -> Result<String> {
+            self.recheck()?;
+            let Some(inventory) = &self.inventory else {
+                return Ok(String::new());
+            };
+            // Transport hints/status do not enter the exported cut. Every
+            // original, snapshot, fact/receipt/ledger, approval, import witness
+            // and shared target/mapping is bound by raw path/type/content.
+            let volatile = ["sync_state.json", "peers.json", "peer_vectors.json"]
+                .map(|leaf| format!("team/{}/{leaf}", self.session.env));
+            let mut hash = Sha256::new();
+            for (name, directory) in &inventory.layout {
+                if volatile.contains(name) {
+                    continue;
+                }
+                self.session.charge(name.len() as u64, name.len() as u64)?;
+                hash.update((name.len() as u64).to_be_bytes());
+                hash.update(name.as_bytes());
+                hash.update([u8::from(*directory)]);
+                if let Some(image) = inventory.files.get(name) {
+                    self.session.charge(image.raw.len() as u64, 0)?;
+                    hash.update(Sha256::digest(&image.raw));
+                }
+            }
+            if let Some(identity) = &self.session.identity {
+                let record = pyjson::dumps(&identity.to_dict(), DumpOptions::compact_sorted())?;
+                self.session
+                    .charge(record.len() as u64, record.len() as u64)?;
+                hash.update(record.as_bytes());
+            }
+            self.session.check()?;
+            Ok(hex::encode(hash.finalize()))
+        }
+        pub(crate) fn revision(&self) -> Result<String> {
+            self.recheck()?;
+            if let Some(inventory) = &self.inventory {
+                let paths = self.originals.iter().try_fold(0u64, |n, o| {
+                    n.checked_add(o.path.len() as u64).ok_or_else(limit)
+                })?;
+                self.session.charge(inventory.entries as u64, paths)?;
+                for original in &self.originals {
+                    if inventory
+                        .files
+                        .get(&original.path)
+                        .is_none_or(|f| f.raw != original.raw)
+                    {
+                        return Err(stale());
+                    }
+                }
+                Ok(hex::encode(inventory.revision))
+            } else {
+                Ok(String::new())
+            }
+        }
+        pub(crate) fn fold_with_snapshot(
+            &self,
+            commits: Vec<Commit>,
+            facts: &fold::Facts,
+            audit: Option<&Audit>,
+        ) -> Result<fold::FoldResult> {
+            self.reserve_fold(&commits, Some(facts), 1)?;
+            if !self.session.is_scoped() {
+                return fold::fold_with_snapshot(
+                    &self.session.env,
+                    commits,
+                    self.session.state,
+                    Some(facts),
+                    audit,
+                );
+            }
+            let result = fold::fold_with_snapshot(
+                &self.session.env,
+                commits.clone(),
+                self.session.state,
+                Some(facts),
+                audit,
+            )?;
+            self.verify_folded_authority(&commits, facts, &result)?;
+            Ok(result)
+        }
+        pub(crate) fn verify_folded_authority(
+            &self,
+            commits: &[Commit],
+            facts: &fold::Facts,
+            result: &fold::FoldResult,
+        ) -> Result<()> {
+            if !self.session.is_scoped() {
+                return Ok(());
+            }
+            verify_authority_projection(self.session, self, commits, facts, result)
+        }
+        pub(crate) fn pending_deferred_count(&self) -> Result<usize> {
+            self.recheck()?;
+            self.reserve_deferred_walk()?;
+            let count = CommitStore::new(self.session.state, &self.session.env)
+                .deferred_commits()?
+                .len();
+            self.session.check()?;
+            Ok(count)
+        }
+        pub(super) fn reserve_deferred_walk(&self) -> Result<()> {
+            self.current()?;
+            let Some(inventory) = &self.inventory else {
+                return Ok(());
+            };
+            let entries = inventory.entries as u64;
+            let width = inventory
+                .files
+                .keys()
+                .map(|path| path.len() as u64)
+                .max()
+                .unwrap_or(1);
+            let work = entries
+                .checked_mul(entries)
+                .and_then(|n| n.checked_mul(width))
+                .and_then(|n| n.checked_add(inventory.bytes.checked_mul(16)?))
+                .ok_or_else(limit)?;
+            self.session
+                .charge(work, inventory.bytes.checked_mul(16).ok_or_else(limit)?)
+        }
+        pub(crate) fn reserve_fold(
+            &self,
+            commits: &[Commit],
+            facts: Option<&fold::Facts>,
+            snapshots: u64,
+        ) -> Result<()> {
+            self.current()?;
+            if self.inventory.is_none() {
+                return Ok(());
+            }
+            let c = commits.len() as u64;
+            let o = commits.iter().try_fold(0u64, |a, c| {
+                a.checked_add(c.ops.len() as u64).ok_or_else(limit)
+            })?;
+            let t = facts.map_or(0, |f| {
+                f.tombstone_facts.len()
+                    + f.removal_facts.len()
+                    + f.revoked_versions.len()
+                    + f.disabled_connections.len()
+                    + f.deleted_secrets.len()
+                    + f.removed_members.len()
+            }) as u64;
+            let f = facts.map_or(0, |f| f.removal_facts.len()) as u64;
+            let inventory = self.inventory.as_ref().unwrap();
+            let snapshots = if snapshots == 0 {
+                0
+            } else {
+                inventory
+                    .files
+                    .keys()
+                    .filter(|path| {
+                        path.starts_with(&format!("team/{}/snapshots/", self.session.env))
+                    })
+                    .count() as u64
+            };
+            let mut d = 0u64;
+            if snapshots > 0 {
+                for (path, file) in &inventory.files {
+                    if path.starts_with(&format!("team/{}/snapshots/", self.session.env)) {
+                        let value = self.session.parse(&file.raw)?;
+                        for root in [&value["document"], &value["version_order"]] {
+                            let mut pending = vec![root];
+                            while let Some(value) = pending.pop() {
+                                d = d.checked_add(1).filter(|n| *n <= NODES).ok_or_else(limit)?;
+                                match value {
+                                    Value::Object(m) => pending.extend(m.values()),
+                                    Value::Array(a) => pending.extend(a),
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            // D counts input document/version-order nodes; a pure fold has no
+            // document seed. Every conservative prefix reservation is charged.
+            self.session
+                .reserve_counts([c, o, t, f, d, snapshots, inventory.bytes])
+        }
+        fn authenticate_selection(&self) -> Result<()> {
+            self.current()?;
+            let local = self.session.identity.as_ref().ok_or_else(invalid)?;
+            let genesis = self
+                .originals
+                .iter()
+                .find(|o| {
+                    o.parsed.author_seq == 1
+                        && o.parsed
+                            .ops
+                            .first()
+                            .is_some_and(|op| op["op"] == "env.init")
+                })
+                .ok_or_else(invalid)?;
+            let owner = DeviceRecord::from_dict(&genesis.parsed.ops[0]["owner_device"])?;
+            if owner.fingerprint() != env_owner_fingerprint(&self.session.env)?
+                || genesis.parsed.author != owner.fingerprint()
+                || !verify_commit(&genesis.parsed, &owner)
+            {
+                return Err(invalid());
+            }
+            match &self.session.selection {
+                Selection::Owner => {
+                    if &owner != local {
+                        return Err(invalid());
+                    }
+                    let inventory = self.inventory.as_ref().ok_or_else(invalid)?;
+                    let prefix = format!("team/{}/bootstrap/invites/", self.session.env);
+                    let mut found = false;
+                    for (path, file) in &inventory.files {
+                        if path.starts_with(&prefix) {
+                            let witness = self.session.parse(&file.raw)?;
+                            if witness["owner_record"] != owner.to_dict()
+                                || witness["genesis_hash"] != genesis.parsed.hash()?
+                                || !witness["initial_revision"].is_string()
+                            {
+                                return Err(invalid());
+                            }
+                            found = true;
+                        }
+                    }
+                    if !found {
+                        return Err(invalid());
+                    }
+                    let prefix = format!("team/{}/bootstrap/authorizations/", self.session.env);
+                    let mut admissions = 0;
+                    for (path, file) in &inventory.files {
+                        if path.starts_with(&prefix) {
+                            admissions += 1;
+                            if admissions > 1 {
+                                return Err(invalid());
+                            }
+                            let auth = self.session.parse(&file.raw)?;
+                            let admission = Commit::from_dict(&auth["admission"])?;
+                            let peer = DeviceRecord::from_dict(&auth["device_record"])?;
+                            let stored = self.originals.iter().any(|o| o.parsed == admission);
+                            let prepared = auth["state"] == "admission_intent"
+                                && admission.author_seq
+                                    == self
+                                        .vector
+                                        .get(&owner.fingerprint())
+                                        .cloned()
+                                        .unwrap_or_else(PyInt::zero)
+                                        + 1;
+                            if !verify_commit(&admission, &owner)
+                                || admission.author != owner.fingerprint()
+                                || admission.ops.len() != 1
+                                || admission.ops[0]["op"] != "member.add"
+                                || admission.ops[0]["role"] != "admin"
+                                || admission.ops[0]["device"] != peer.to_dict()
+                                || (!stored && !prepared)
+                            {
+                                return Err(invalid());
+                            }
+                            let request_path =
+                                format!("team/{}/bootstrap/requests.json", self.session.env);
+                            let requests =
+                                inventory.files.get(&request_path).ok_or_else(invalid)?;
+                            let requests = self.session.parse(&requests.raw)?;
+                            let request_id = auth["request_id"].as_str().ok_or_else(invalid)?;
+                            let request = &requests[request_id];
+                            for field in [
+                                "env_id",
+                                "invite_id",
+                                "device_record",
+                                "record_binding",
+                                "authorization_id",
+                                "expires_at_ms",
+                            ] {
+                                if auth[field] != request[field] {
+                                    return Err(invalid());
+                                }
+                            }
+                            if request["env_id"] != self.session.env
+                                || request["device_record"] != peer.to_dict()
+                                || auth["record_binding"]
+                                    != super::super::bootstrap::digest(&peer.to_dict())?
+                            {
+                                return Err(invalid());
+                            }
+                            if !auth["last_manifest"].is_null()
+                                || !auth["last_manifest_hash"].is_null()
+                            {
+                                let manifest = &auth["last_manifest"];
+                                let mut unsigned = manifest.clone();
+                                let signature = unsigned
+                                    .as_object_mut()
+                                    .ok_or_else(invalid)?
+                                    .remove("sig")
+                                    .ok_or_else(invalid)?;
+                                let signature = pybase64::b64decode_strict(
+                                    signature.as_str().ok_or_else(invalid)?,
+                                )
+                                .map_err(|_| invalid())?;
+                                self.session.charge(4096, file.raw.len() as u64)?;
+                                self.session.check()?;
+                                if manifest["domain"] != "zeropw-team-bootstrap-v1"
+                                    || manifest["env_id"] != self.session.env
+                                    || manifest["signer"] != owner.fingerprint()
+                                    || manifest["recipient"] != peer.fingerprint()
+                                    || manifest["recipient_role"] != "admin"
+                                    || manifest["invite_id"] != auth["invite_id"]
+                                    || manifest["recipient_authorization_id"]
+                                        != auth["authorization_id"]
+                                    || manifest["recipient_admission_commit_hash"]
+                                        != admission.hash()?
+                                    || super::super::bootstrap::digest(manifest)?
+                                        != auth["last_manifest_hash"]
+                                    || !ed25519::verify(
+                                        &owner.sign_pub,
+                                        &super::super::bootstrap::bytes(&unsigned)?,
+                                        &signature,
+                                    )
+                                {
+                                    return Err(invalid());
+                                }
+                                self.session.check()?;
+                            }
+                        }
+                    }
+                }
+                Selection::Recipient => {
+                    // B's authentic committed index+journal and immutable
+                    // receipt/manifest/payload are independent of attempt flags.
+                    let index = crate::import_barrier::index(self.session.state)?;
+                    if index[&self.session.env]["state"] != "committed" {
+                        return Err(Error::state(
+                            if index[&self.session.env]["reason"]
+                                == "team_checkpoint_history_required"
+                            {
+                                "team_checkpoint_history_required"
+                            } else {
+                                "team_bootstrap_recovery_required"
+                            },
+                        ));
+                    }
+                    let journal = self.observed_json(
+                        &super::super::bootstrap::path(&self.session.env, "journal.json")?,
+                        Value::Null,
+                    )?;
+                    let receipt = self.observed_json(
+                        &super::super::bootstrap::path(&self.session.env, "receipt.json")?,
+                        Value::Null,
+                    )?;
+                    for (value, domain, signer) in [
+                        (&journal, "zeropw-personal-import-journal-v1", local),
+                        (&receipt, "zeropw-team-bootstrap-receipt-v1", local),
+                        (&journal["ready"], "zeropw-team-bootstrap-ready-v1", &owner),
+                    ] {
+                        let mut unsigned = value.clone();
+                        let signature = unsigned
+                            .as_object_mut()
+                            .ok_or_else(invalid)?
+                            .remove("sig")
+                            .ok_or_else(invalid)?;
+                        let signature =
+                            pybase64::b64decode_strict(signature.as_str().ok_or_else(invalid)?)
+                                .map_err(|_| invalid())?;
+                        self.session.charge(4096, 0)?;
+                        if value["domain"] != domain
+                            || value["env_id"] != self.session.env
+                            || !ed25519::verify(
+                                &signer.sign_pub,
+                                &super::super::bootstrap::bytes(&unsigned)?,
+                                &signature,
+                            )
+                        {
+                            return Err(invalid());
+                        }
+                    }
+                    if journal["state"] != "COMMITTED"
+                        || journal["epoch"] != index[&self.session.env]["epoch"]
+                        || journal["receipt"] != receipt
+                        || journal["manifest_hash"] != index[&self.session.env]["manifest_hash"]
+                        || journal["visibility"]["epoch"] != journal["epoch"]
+                        || receipt["epoch"] != journal["epoch"]
+                        || super::super::bootstrap::digest(&receipt)?
+                            != index[&self.session.env]["receipt_sha256"]
+                        || receipt["ready_sha256"]
+                            != super::super::bootstrap::digest(&journal["ready"])?
+                        || journal["ready"]["manifest_hash"] != journal["manifest_hash"]
+                        || journal["ready"]["recipient"] != local.fingerprint()
+                    {
+                        return Err(invalid());
+                    }
+                    let manifest = self.observed_json(
+                        &format!(
+                            "team/{}/bootstrap/provenance/manifest.json",
+                            self.session.env
+                        ),
+                        Value::Null,
+                    )?;
+                    let mut unsigned = manifest.clone();
+                    let sig = unsigned
+                        .as_object_mut()
+                        .ok_or_else(invalid)?
+                        .remove("sig")
+                        .ok_or_else(invalid)?;
+                    let sig = pybase64::b64decode_strict(sig.as_str().ok_or_else(invalid)?)
+                        .map_err(|_| invalid())?;
+                    if manifest["env_id"] != self.session.env
+                        || manifest["recipient"] != local.fingerprint()
+                        || manifest["signer"] != owner.fingerprint()
+                        || !ed25519::verify(
+                            &owner.sign_pub,
+                            &super::super::bootstrap::bytes(&unsigned)?,
+                            &sig,
+                        )
+                    {
+                        return Err(invalid());
+                    }
+                    let hash = manifest["recipient_admission_commit_hash"]
+                        .as_str()
+                        .ok_or_else(invalid)?;
+                    if !self.originals.iter().any(|o| {
+                        o.parsed.hash().ok().as_deref() == Some(hash)
+                            && o.parsed.ops.iter().any(|op| {
+                                op["op"] == "member.add"
+                                    && op["device"] == local.to_dict()
+                                    && op["role"] == "admin"
+                            })
+                    }) {
+                        return Err(invalid());
+                    }
+                }
+                Selection::Ordinary | Selection::Probe(_) => {}
+            }
+            self.recheck()?;
+            self.session.check()
+        }
+    }
+
+    fn raw_witness(state: &StateDir, env: &str) -> Result<(bool, u64, u64)> {
+        raw_witness_with_budget(state, env, None)
+    }
+    fn raw_witness_with_budget(
+        state: &StateDir,
+        env: &str,
+        parent: Option<&HistorySession<'_>>,
+    ) -> Result<(bool, u64, u64)> {
+        if let Some(parent) = parent {
+            if !std::ptr::eq(parent.state(), state) || parent.env() != env {
+                return Err(stale());
+            }
+            parent.check()?;
+            parent.charge(4, 0)?;
+        }
+        if !valid_env_id(env) {
+            return Ok((false, 0, 0));
+        }
+        let path = state.path.join(format!("team/{env}/bootstrap"));
+        match fs::symlink_metadata(path) {
+            Ok(_) => return Ok((true, 1, 0)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(stale()),
+        }
+        let name = crate::import_barrier::INDEX;
+        let metadata = match fs::symlink_metadata(state.path.join(name)) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok((false, 1, 0)),
+            Err(_) => return Err(stale()),
+        };
+        if metadata.len() > 1_048_576 {
+            return Err(limit());
+        }
+        if let Some(parent) = parent {
+            // Read/copy and syntax work are charged before allocation, then
+            // the exact node/materialization reservation precedes the bridge.
+            parent.charge(
+                metadata.len().checked_mul(4).ok_or_else(limit)?,
+                metadata.len().checked_mul(4).ok_or_else(limit)?,
+            )?;
+            parent.check()?;
+        }
+        crate::import_barrier::private_relative(state, name)?;
+        let file = anchored_file(state, name)?;
+        if stamp(&file.metadata().map_err(|_| invalid())?) != stamp(&metadata) {
+            return Err(stale());
+        }
+        let mut raw = Vec::new();
+        (&file)
+            .take(metadata.len().checked_add(1).ok_or_else(limit)?)
+            .read_to_end(&mut raw)
+            .map_err(|_| invalid())?;
+        if raw.len() as u64 != metadata.len()
+            || stamp(&file.metadata().map_err(|_| invalid())?) != stamp(&metadata)
+            || stamp(&fs::symlink_metadata(state.path.join(name)).map_err(|_| invalid())?)
+                != stamp(&metadata)
+        {
+            return Err(stale());
+        }
+        // Unlocked, bounded DATA routing only. It establishes no authority.
+        // Its conservative resources are carried into the selected operation
+        // before any locked acquisition; ordinary append takes no new lock.
+        let mut depth = 0u64;
+        let mut quoted = false;
+        let mut escaped = false;
+        let mut nodes = 0u64;
+        for byte in &raw {
+            if quoted {
+                if escaped {
+                    escaped = false;
+                } else if *byte == b'\\' {
+                    escaped = true;
+                } else if *byte == b'"' {
+                    quoted = false;
+                }
+                continue;
+            }
+            match *byte {
+                b'"' => {
+                    quoted = true;
+                    nodes += 1;
+                }
+                b'{' | b'[' => {
+                    depth = depth
+                        .checked_add(1)
+                        .filter(|n| *n <= 64)
+                        .ok_or_else(limit)?;
+                    nodes += 1;
+                }
+                b'}' | b']' => depth = depth.checked_sub(1).ok_or_else(invalid)?,
+                b',' | b':' => nodes = nodes.checked_add(1).ok_or_else(limit)?,
+                _ => {}
+            }
+            if nodes > NODES {
+                return Err(limit());
+            }
+        }
+        let cost = (raw.len() as u64)
+            .checked_mul(128)
+            .and_then(|n| n.checked_add(nodes.checked_mul(64)?))
+            .ok_or_else(limit)?;
+        if cost > BYTES {
+            return Err(limit());
+        }
+        if let Some(parent) = parent {
+            parent.charge(raw.len() as u64 + nodes, cost)?;
+            parent.check()?;
+        }
+        let value = checkpoint::retained_original(&raw).map_err(|_| invalid())?;
+        if let Some(parent) = parent {
+            parent.check()?;
+        }
+        if !value.is_object() {
+            return Err(invalid());
+        }
+        Ok((value.get(env).is_some(), raw.len() as u64 + nodes, cost))
+    }
+    fn normalized_absolute(path: &std::path::Path) -> Result<std::path::PathBuf> {
+        let absolute = std::path::absolute(path).map_err(|_| invalid())?;
+        let mut normalized = std::path::PathBuf::new();
+        for part in absolute.components() {
+            match part {
+                std::path::Component::ParentDir => {
+                    normalized.pop();
+                }
+                std::path::Component::CurDir => {}
+                other => normalized.push(other),
+            }
+        }
+        Ok(normalized)
+    }
+    pub(super) fn selected_store<'a>(
+        store: &CommitStore<'a>,
+    ) -> Result<Option<HistorySession<'a>>> {
+        let (logical, mut work, mut bytes) = raw_witness(store.state, &store.env_id)?;
+        let target = store.state.path.join(&store.root);
+        let target = fs::canonicalize(&target).unwrap_or(normalized_absolute(&target)?);
+        let base =
+            fs::canonicalize(&store.state.path).unwrap_or(normalized_absolute(&store.state.path)?);
+        let mut physical = false;
+        if let Ok(relative) = target.strip_prefix(&base) {
+            let parts = relative.components().collect::<Vec<_>>();
+            if parts.first().is_some_and(|part| part.as_os_str() == "team")
+                && let Some(env) = parts.get(1).and_then(|part| part.as_os_str().to_str())
+            {
+                let (witness, w, b) = raw_witness(store.state, env)?;
+                work = work.checked_add(w).ok_or_else(limit)?;
+                bytes = bytes.checked_add(b).ok_or_else(limit)?;
+                physical = witness;
+                if witness
+                    && (env != store.env_id || store.root != env_root(env) || parts.len() != 2)
+                {
+                    return Err(stale());
+                }
+            }
+        } else if !matches!(fs::symlink_metadata(target.join("bootstrap")),Err(error) if error.kind()==std::io::ErrorKind::NotFound)
+        {
+            return Err(stale());
+        }
+        if !logical && !physical {
+            return Ok(None);
+        }
+        if store.root != env_root(&store.env_id) {
+            return Err(stale());
+        }
+        let history = HistorySession::open_runtime_routed(store.state, &store.env_id, work, bytes)?;
+        if !history.is_scoped() {
+            return Err(stale());
+        }
+        Ok(Some(history))
+    }
+
+    pub(super) enum AppendFailure {
+        Invalid(Error),
+        Local(Error),
+    }
+    impl AppendFailure {
+        pub(super) fn into_error(self) -> Error {
+            match self {
+                Self::Invalid(error) | Self::Local(error) => error,
+            }
+        }
+    }
+    pub(super) struct PreparedAppend<'s, 'a> {
+        history: &'s HistorySession<'a>,
+        store: &'s CommitStore<'a>,
+        _lock: StateLock<'a>,
+        candidate: Commit,
+        encoded: Vec<u8>,
+        hash: String,
+        before: Inventory,
+        metadata: BTreeMap<String, Vec<u64>>,
+        global_names: BTreeSet<String>,
+        denial: Option<(String, Vec<u8>)>,
+        existing_denial: Option<String>,
+    }
+    fn input_error(reason: &'static str) -> AppendFailure {
+        AppendFailure::Invalid(Error::invalid_input(reason))
+    }
+    impl<'s, 'a> PreparedAppend<'s, 'a> {
+        pub(super) fn prepare(
+            store: &'s CommitStore<'a>,
+            candidate: &Commit,
+            observed_now: i64,
+            history: &'s HistorySession<'a>,
+            settled: Option<&super::super::sync::SettledFacts<'a>>,
+        ) -> std::result::Result<Self, AppendFailure> {
+            let local = AppendFailure::Local;
+            history.check().map_err(local)?;
+            if !std::ptr::eq(store.state, history.state)
+                || store.env_id != history.env
+                || store.root != env_root(&history.env)
+            {
+                return Err(local(stale()));
+            }
+            match history.selection {
+                Selection::Owner | Selection::Recipient => {}
+                Selection::Probe(ProbePurpose::Invite) => {
+                    return Err(local(Error::state(
+                        "team_bootstrap_semantic_scope_unsupported",
+                    )));
+                }
+                Selection::Probe(ProbePurpose::Recipient) => {
+                    return Err(local(Error::state("team_bootstrap_recovery_required")));
+                }
+                Selection::Ordinary => return Err(local(invalid())),
+            }
+            let lock = history.state.lock().map_err(local)?;
+            history.preflight_candidate(candidate).map_err(local)?;
+            if candidate.format != COMMIT_FORMAT {
+                return Err(input_error("team_format_unknown"));
+            }
+            if candidate.env_id != store.env_id {
+                return Err(input_error("team_env_id_mismatch"));
+            }
+            validate_ops(&candidate.ops).map_err(AppendFailure::Invalid)?;
+            Hlc::parse(&candidate.hlc).map_err(AppendFailure::Invalid)?;
+            let original_input = history.acquire().map_err(local)?;
+            let original_commits = original_input.commits().map_err(local)?;
+            let registry = device_registry(&original_commits);
+            for op in &candidate.ops {
+                let announced = match op["op"].as_str() {
+                    Some("env.init") => Some(&op["owner_device"]),
+                    Some("member.add") => Some(&op["device"]),
+                    _ => None,
+                };
+                if let Some(value) = announced {
+                    let record = DeviceRecord::from_dict(value).map_err(AppendFailure::Invalid)?;
+                    history.charge(4096, 256).map_err(local)?;
+                    if !record.verify_uncached()
+                        || registry
+                            .get(&record.fingerprint())
+                            .is_some_and(|existing| existing != &record)
+                    {
+                        return Err(local(Error::state(
+                            "team_bootstrap_semantic_scope_unsupported",
+                        )));
+                    }
+                }
+            }
+            history.charge(4096, 0).map_err(local)?;
+            if !registry
+                .get(&candidate.author)
+                .is_some_and(|record| verify_commit(candidate, record))
+            {
+                return Err(input_error("team_signature_invalid"));
+            }
+            let last = store.last_seq(&candidate.author).map_err(local)?;
+            if candidate.author_seq <= last {
+                return Err(input_error("team_seq_duplicate"));
+            }
+            if candidate.author_seq > &last + 1 {
+                return Err(input_error("team_seq_gap"));
+            }
+            if store
+                .hlc_not_above_previous(candidate, Some(&original_commits))
+                .map_err(local)?
+            {
+                return Err(input_error("team_hlc_not_monotone"));
+            }
+            let (wall, _) = Hlc::parse(&candidate.hlc).map_err(AppendFailure::Invalid)?;
+            if wall > PyInt::from(observed_now.min(now_ms())) + MAX_CLOCK_SKEW_MS {
+                return Err(local(Error::state("team_bootstrap_state_invalid")));
+            }
+            let verified;
+            let settled = match settled {
+                Some(settled) => settled,
+                None => {
+                    verified = super::super::sync::load_facts_core(
+                        history,
+                        super::super::sync::FactServices::VerifySettled,
+                    )
+                    .map_err(local)?;
+                    &verified
+                }
+            };
+            let facts = settled.checked(history).map_err(local)?;
+            let facts_digest = settled.digest(history).map_err(local)?;
+            let mut input = history.acquire().map_err(local)?;
+            let commits = input.commits().map_err(local)?;
+            input
+                .reserve_fold(&commits, Some(facts), 1)
+                .map_err(local)?;
+            let before_fold = fold::fold_with_snapshot(
+                &history.env,
+                commits.clone(),
+                history.state,
+                Some(facts),
+                None,
+            )
+            .map_err(local)?;
+            verify_authority_projection(history, &input, &commits, facts, &before_fold)
+                .map_err(local)?;
+            history.check().map_err(local)?;
+            history
+                .charge(
+                    commits.len() as u64,
+                    input
+                        .inventory
+                        .as_ref()
+                        .ok_or_else(|| local(invalid()))?
+                        .bytes,
+                )
+                .map_err(local)?;
+            let mut after_commits = commits;
+            after_commits.push(candidate.clone());
+            input
+                .reserve_fold(&after_commits, Some(facts), 1)
+                .map_err(local)?;
+            let after_fold = fold::fold_with_snapshot(
+                &history.env,
+                after_commits.clone(),
+                history.state,
+                Some(facts),
+                None,
+            )
+            .map_err(local)?;
+            verify_authority_projection(history, &input, &after_commits, facts, &after_fold)
+                .map_err(local)?;
+            history.check().map_err(local)?;
+            let value = candidate.to_dict();
+            let encoded = history.encode_image(&value).map_err(local)?;
+            history.screen(&encoded, BULK).map_err(local)?;
+            if history.parse(&encoded).map_err(local)? != value {
+                return Err(local(invalid()));
+            }
+            let hash = candidate.hash().map_err(local)?;
+            let revision = input.revision().map_err(local)?;
+            let mut denial = None;
+            let mut existing_denial = None;
+            if matches!(history.selection, Selection::Recipient) {
+                let recipient = history.local_record().map_err(local)?;
+                let fingerprint = recipient.fingerprint();
+                for result in [&before_fold, &after_fold] {
+                    if result.document["members"][&fingerprint]["device"] != recipient.to_dict() {
+                        return Err(local(invalid()));
+                    }
+                }
+                let before_removed = before_fold.document["members"][&fingerprint]["status"]
+                    == "removed"
+                    && before_fold.document["owner"] != fingerprint;
+                let after_removed = after_fold.document["members"][&fingerprint]["status"]
+                    == "removed"
+                    && after_fold.document["owner"] != fingerprint;
+                let name = super::super::bootstrap::path(
+                    &history.env,
+                    crate::import_barrier::LOCAL_REMOVAL_DENIAL,
+                )
+                .map_err(local)?;
+                let imports = crate::import_barrier::index(history.state).map_err(local)?;
+                let epoch = &imports[&history.env];
+                let receipt = input
+                    .read_json(
+                        &super::super::bootstrap::path(&history.env, "receipt.json")
+                            .map_err(local)?,
+                        Value::Null,
+                    )
+                    .map_err(local)?;
+                if let Some(image) = input
+                    .inventory
+                    .as_ref()
+                    .and_then(|inventory| inventory.files.get(&name))
+                {
+                    let record = history.parse(&image.raw).map_err(local)?;
+                    validate_denial(history, &record, epoch, &receipt, &registry).map_err(local)?;
+                    existing_denial = Some(name);
+                } else if before_removed || after_removed {
+                    let mut record = json!({"v":1,"kind":"local-removal-denial","env_id":history.env,"epoch":epoch["epoch"],"recipient_record":recipient.to_dict(),"manifest_hash":epoch["manifest_hash"],"receipt_sha256":epoch["receipt_sha256"],"payload_sha256":receipt["payload_sha256"],"cause":if before_removed{"committed_history"}else{"candidate"},"basis_revision":revision,"facts_digest":facts_digest,"result_digest":super::super::bootstrap::digest(if before_removed{&before_fold.document}else{&after_fold.document}).map_err(local)?});
+                    if !before_removed {
+                        record["commit"] = value.clone();
+                        record["commit_hash"] = json!(hash);
+                    }
+                    history.preflight_value(&record).map_err(local)?;
+                    let bytes = history.encode_image(&record).map_err(local)?;
+                    validate_denial(
+                        history,
+                        &history.parse(&bytes).map_err(local)?,
+                        epoch,
+                        &receipt,
+                        &registry,
+                    )
+                    .map_err(local)?;
+                    history
+                        .reserve_writer(&name, bytes.len() as u64)
+                        .map_err(local)?;
+                    denial = Some((name, bytes));
+                }
+            }
+            let path = format!(
+                "{}/commits/{}/{}.json",
+                store.root, candidate.author, candidate.author_seq
+            );
+            history
+                .reserve_writer(&path, encoded.len() as u64)
+                .map_err(local)?;
+            let before = input.inventory.take().ok_or_else(|| local(invalid()))?;
+            let mut metadata = BTreeMap::new();
+            for (name, _) in &before.layout {
+                history.charge(1, 128).map_err(local)?;
+                let value = fs::symlink_metadata(history.state.path.join(name))
+                    .map_err(|_| local(stale()))?;
+                metadata.insert(name.clone(), stamp(&value));
+            }
+            let global_names = global_names(history).map_err(local)?;
+            for name in &global_names {
+                let path = format!("team/{name}");
+                history.charge(1, 128).map_err(local)?;
+                metadata.insert(
+                    path.clone(),
+                    stamp(
+                        &fs::symlink_metadata(history.state.path.join(&path))
+                            .map_err(|_| local(stale()))?,
+                    ),
+                );
+            }
+            history.check().map_err(local)?;
+            if history.collect().map_err(local)?.revision != before.revision {
+                return Err(local(stale()));
+            }
+            Ok(Self {
+                history,
+                store,
+                _lock: lock,
+                candidate: candidate.clone(),
+                encoded,
+                hash,
+                before,
+                metadata,
+                global_names,
+                denial,
+                existing_denial,
+            })
+        }
+        pub(super) fn publish(self) -> std::result::Result<(), AppendFailure> {
+            let local = AppendFailure::Local;
+            let history = self.history;
+            history.check().map_err(local)?;
+            if history.collect().map_err(local)?.revision != self.before.revision {
+                return Err(local(stale()));
+            }
+            if let Some(name) = &self.existing_denial {
+                crate::import_barrier::confirm_denial_durable(history, name).map_err(local)?;
+                if history.collect().map_err(local)?.revision != self.before.revision {
+                    return Err(local(stale()));
+                }
+            }
+            if let Some((name, bytes)) = &self.denial {
+                crate::import_barrier::write_with_history(history, name, bytes).map_err(local)?;
+                let after = history.collect().map_err(local)?;
+                if !self
+                    .only_expected_denial(&after, name, bytes)
+                    .map_err(local)?
+                {
+                    return Err(local(stale()));
+                }
+            }
+            history.check().map_err(local)?;
+            let fresh = history.acquire().map_err(local)?;
+            let commits = fresh.commits().map_err(local)?;
+            if self.candidate.hash().map_err(local)? != self.hash
+                || self.store.last_seq(&self.candidate.author).map_err(local)? + 1
+                    != self.candidate.author_seq
+                || self
+                    .store
+                    .hlc_not_above_previous(&self.candidate, Some(&commits))
+                    .map_err(local)?
+            {
+                return Err(local(stale()));
+            }
+            let registry = device_registry(&commits);
+            history.charge(4096, 0).map_err(local)?;
+            if !registry
+                .get(&self.candidate.author)
+                .is_some_and(|record| verify_commit(&self.candidate, record))
+            {
+                return Err(local(stale()));
+            }
+            fresh.recheck().map_err(local)?;
+            history.check().map_err(local)?;
+            let name = format!(
+                "{}/commits/{}/{}.json",
+                self.store.root, self.candidate.author, self.candidate.author_seq
+            );
+            crate::import_barrier::write_with_history(history, &name, &self.encoded)
+                .map_err(|_| local(Error::state("team_local_removal_outcome_uncertain")))?;
+            history
+                .invalidate()
+                .map_err(|_| local(Error::state("team_local_removal_outcome_uncertain")))?;
+            let stored = self
+                .store
+                .get(&self.candidate.author, self.candidate.author_seq.clone())
+                .map_err(|_| local(Error::state("team_local_removal_outcome_uncertain")))?;
+            if stored.as_ref() != Some(&self.candidate) {
+                return Err(local(Error::state("team_local_removal_outcome_uncertain")));
+            }
+            history
+                .check()
+                .map_err(|_| local(Error::state("team_local_removal_outcome_uncertain")))?;
+            Ok(())
+        }
+        fn only_expected_denial(
+            &self,
+            after: &Inventory,
+            name: &str,
+            bytes: &[u8],
+        ) -> Result<bool> {
+            let history = self.history;
+            history.check()?;
+            if after.files.len() != self.before.files.len() + 1
+                || after.files.get(name).is_none_or(|image| image.raw != bytes)
+                || global_names(history)? != self.global_names
+            {
+                return Ok(false);
+            }
+            for (path, image) in &self.before.files {
+                if after
+                    .files
+                    .get(path)
+                    .is_none_or(|current| current.raw != image.raw)
+                {
+                    return Ok(false);
+                }
+            }
+            let mut expected = self.before.layout.clone();
+            expected.insert((name.into(), false));
+            if expected != after.layout {
+                return Ok(false);
+            }
+            let parent = std::path::Path::new(name).parent().ok_or_else(invalid)?;
+            for (path, before) in &self.metadata {
+                let now = stamp(
+                    &fs::symlink_metadata(history.state.path.join(path)).map_err(|_| stale())?,
+                );
+                if std::path::Path::new(path) == parent {
+                    if before[..6] != now[..6] {
+                        return Ok(false);
+                    }
+                } else if before != &now {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
+    }
+    pub(super) fn append_with_input<'a>(
+        store: &CommitStore<'a>,
+        candidate: &Commit,
+        observed_now: i64,
+        history: &HistorySession<'a>,
+        settled: Option<&super::super::sync::SettledFacts<'a>>,
+    ) -> std::result::Result<(), AppendFailure> {
+        PreparedAppend::prepare(store, candidate, observed_now, history, settled)?.publish()
+    }
+    fn global_names(history: &HistorySession<'_>) -> Result<BTreeSet<String>> {
+        let mut names = BTreeSet::new();
+        for entry in fs::read_dir(history.state.path.join("team")).map_err(|_| invalid())? {
+            history.charge(1, 256)?;
+            if names.len() >= ENTRIES {
+                return Err(limit());
+            }
+            names.insert(
+                entry
+                    .map_err(|_| invalid())?
+                    .file_name()
+                    .into_string()
+                    .map_err(|_| invalid())?,
+            );
+        }
+        Ok(names)
+    }
+    fn verify_authority_projection(
+        history: &HistorySession<'_>,
+        input: &RetainedInput<'_, '_>,
+        commits: &[Commit],
+        facts: &fold::Facts,
+        folded: &fold::FoldResult,
+    ) -> Result<()> {
+        // Snapshot DATA is not membership authority. Every authority original
+        // is retained; compare only the authority fields, with the unchanged
+        // full fact/removal semantics. Missing DATA is still attested, not
+        // promoted into a complete-history proof.
+        input.reserve_fold(commits, Some(facts), 0)?;
+        let retained = fold::fold(
+            &history.env,
+            commits.to_vec(),
+            Some(facts),
+            None,
+            None,
+            None,
+        )?;
+        for field in ["owner", "members", "dek"] {
+            if retained.document[field] != folded.document[field] {
+                return Err(Error::state("team_bootstrap_authority_unproven"));
+            }
+        }
+        history.check()
+    }
+    fn validate_denial(
+        history: &HistorySession<'_>,
+        record: &Value,
+        epoch: &Value,
+        receipt: &Value,
+        registry: &std::collections::HashMap<String, DeviceRecord>,
+    ) -> Result<()> {
+        let object = record.as_object().ok_or_else(invalid)?;
+        let base = [
+            "v",
+            "kind",
+            "env_id",
+            "epoch",
+            "recipient_record",
+            "manifest_hash",
+            "receipt_sha256",
+            "payload_sha256",
+            "cause",
+            "basis_revision",
+            "facts_digest",
+            "result_digest",
+        ];
+        let candidate = record["cause"] == "candidate";
+        if object.len() != base.len() + if candidate { 2 } else { 0 }
+            || base.iter().any(|key| !object.contains_key(*key))
+            || (!candidate && record["cause"] != "committed_history")
+        {
+            return Err(invalid());
+        }
+        if record["v"] != 1
+            || record["kind"] != "local-removal-denial"
+            || record["env_id"] != history.env
+            || record["epoch"] != epoch["epoch"]
+            || record["recipient_record"] != history.local_record()?.to_dict()
+            || record["manifest_hash"] != epoch["manifest_hash"]
+            || record["receipt_sha256"] != epoch["receipt_sha256"]
+            || record["payload_sha256"] != receipt["payload_sha256"]
+        {
+            return Err(invalid());
+        }
+        for key in [
+            "basis_revision",
+            "facts_digest",
+            "result_digest",
+            "manifest_hash",
+            "receipt_sha256",
+            "payload_sha256",
+        ] {
+            if !record[key].as_str().is_some_and(|text| {
+                text.len() == 64
+                    && text
+                        .bytes()
+                        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            }) {
+                return Err(invalid());
+            }
+        }
+        if candidate {
+            if !object.contains_key("commit") || !object.contains_key("commit_hash") {
+                return Err(invalid());
+            }
+            let commit = Commit::from_dict(&record["commit"])?;
+            history.charge(4096, 0)?;
+            if commit.to_dict() != record["commit"]
+                || commit.env_id != history.env
+                || commit.hash()? != record["commit_hash"]
+                || !registry
+                    .get(&commit.author)
+                    .is_some_and(|author| verify_commit(&commit, author))
+            {
+                return Err(invalid());
+            }
+        }
+        history.check()
+    }
+
+    // Keep private-access tests in their original expansion scope; their
+    // definitions live in a top-level test-only module, like other suites.
+    #[cfg(test)]
+    super::retained_history_test_bodies::define!();
+
+    /// Metadata counters only: no control over selection, predicates, budgets,
+    /// originals, clocks or outcomes. Entire module is syntactically test-only.
+    #[cfg(test)]
+    pub(crate) mod testing {
+        use super::*;
+        use std::sync::{LazyLock, Mutex};
+        #[derive(Clone, Default)]
+        struct Stats {
+            acquired: u64,
+            entries: u64,
+            slots: u64,
+            work: u64,
+            bytes: u64,
+            max_work: u64,
+            max_bytes: u64,
+            stages: BTreeMap<&'static str, (u64, u64, u64)>,
+        }
+        static SCOPES: LazyLock<Mutex<BTreeMap<std::path::PathBuf, Stats>>> =
+            LazyLock::new(|| Mutex::new(BTreeMap::new()));
+        pub(crate) struct Scope {
+            root: std::path::PathBuf,
+            _thread: PhantomData<Rc<()>>,
+        }
+        impl Scope {
+            pub(crate) fn owned(state: &StateDir) -> Self {
+                assert!(state.path.is_dir());
+                let mut scopes = SCOPES.lock().unwrap_or_else(|e| e.into_inner());
+                assert!(scopes.len() < 8);
+                assert!(
+                    scopes
+                        .insert(state.path.clone(), Stats::default())
+                        .is_none()
+                );
+                Self {
+                    root: state.path.clone(),
+                    _thread: PhantomData,
+                }
+            }
+            pub(crate) fn snapshot(&self) -> Value {
+                let scopes = SCOPES.lock().unwrap_or_else(|e| e.into_inner());
+                let s = &scopes[&self.root];
+                json!({"acquisitions":s.acquired,"physical_entries_visited":s.entries,"canonical_slots_visited":s.slots,"charged_work_total":s.work,"charged_bytes_total":s.bytes,"max_operation_work":s.max_work,"max_operation_bytes":s.max_bytes,"stages":s.stages.iter().map(|(name,(count,total,max))|(*name,json!({"count":count,"total_us":total,"max_us":max}))).collect::<BTreeMap<_,_>>()})
+            }
+        }
+        impl Drop for Scope {
+            fn drop(&mut self) {
+                SCOPES
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&self.root);
+            }
+        }
+        fn update(state: &StateDir, f: impl FnOnce(&mut Stats)) {
+            if let Some(s) = SCOPES
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_mut(&state.path)
+            {
+                f(s)
+            }
+        }
+        pub(crate) struct Span<'a> {
+            state: &'a StateDir,
+            name: &'static str,
+            began: Instant,
+        }
+        impl Drop for Span<'_> {
+            fn drop(&mut self) {
+                let elapsed = u64::try_from(self.began.elapsed().as_micros()).unwrap();
+                update(self.state, |stats| {
+                    let value = stats.stages.entry(self.name).or_default();
+                    value.0 = value.0.checked_add(1).unwrap();
+                    value.1 = value.1.checked_add(elapsed).unwrap();
+                    value.2 = value.2.max(elapsed);
+                });
+            }
+        }
+        pub(crate) fn span<'a>(state: &'a StateDir, name: &'static str) -> Option<Span<'a>> {
+            SCOPES
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .contains_key(&state.path)
+                .then(|| Span {
+                    state,
+                    name,
+                    began: Instant::now(),
+                })
+        }
+        pub(super) fn charge(
+            state: &StateDir,
+            work: u64,
+            bytes: u64,
+            total_work: u64,
+            total_bytes: u64,
+        ) {
+            update(state, |s| {
+                s.work = s.work.checked_add(work).unwrap();
+                s.bytes = s.bytes.checked_add(bytes).unwrap();
+                s.max_work = s.max_work.max(total_work);
+                s.max_bytes = s.max_bytes.max(total_bytes);
+            });
+        }
+        pub(super) fn acquired(state: &StateDir, entries: u64) {
+            update(state, |s| {
+                s.acquired = s.acquired.checked_add(1).unwrap();
+                s.entries = s.entries.checked_add(entries).unwrap();
+            });
+        }
+        pub(super) fn slot(state: &StateDir) {
+            update(state, |s| s.slots = s.slots.checked_add(1).unwrap());
+        }
+    }
+}
+#[cfg(test)]
+pub(crate) use retained_history::testing as history_testing;
+pub(crate) use retained_history::{FactSeal, HistoryResume, HistorySession, ProbePurpose};
+
+// Both suites expand inside retained_history, retaining private field access
+// and exact test selectors. No production item is defined by this macro.
+#[cfg(test)]
+mod retained_history_test_bodies {
+    macro_rules! define {
+        () => {
+    #[cfg(test)]
+    mod personal_removal_tests {
+        use super::*;
+        use crate::{
+            clock,
+            context::{Config, Context},
+            team::{bootstrap::install, identity::DeviceKey, membership},
+        };
+        use std::{
+            os::unix::fs::{DirBuilderExt, PermissionsExt},
+            path::Path,
+            process::{Command, Stdio},
+            sync::Arc,
+        };
+        fn copy(source: &Path, target: &Path) {
+            let metadata = fs::symlink_metadata(source).unwrap();
+            assert!(metadata.is_dir());
+            fs::DirBuilder::new()
+                .mode(metadata.permissions().mode() & 0o777)
+                .create(target)
+                .unwrap();
+            for entry in fs::read_dir(source).unwrap() {
+                let entry = entry.unwrap();
+                let metadata = fs::symlink_metadata(entry.path()).unwrap();
+                let target = target.join(entry.file_name());
+                if metadata.is_dir() {
+                    copy(&entry.path(), &target);
+                } else {
+                    assert!(metadata.is_file());
+                    fs::copy(entry.path(), &target).unwrap();
+                    fs::set_permissions(target, metadata.permissions()).unwrap();
+                }
+            }
+        }
+        fn cloned(source: &StateDir) -> (tempfile::TempDir, Arc<Context>) {
+            let root = tempfile::tempdir().unwrap();
+            let path = root.path().join("b");
+            copy(&source.path, &path);
+            let ctx = Arc::new(Context::open(path, Config::default(), clock::system()).unwrap());
+            (root, ctx)
+        }
+        fn signed(ctx: &Context, env: &str, key: &DeviceKey, ops: Vec<Value>) -> Commit {
+            let store = CommitStore::new(ctx.state, env);
+            let mut hlc = Hlc::new(0, 0);
+            for c in store.all_commits().unwrap() {
+                hlc.observe(&c.hlc).unwrap();
+            }
+            sign_commit(
+                key,
+                env,
+                store.last_seq(&key.fingerprint().unwrap()).unwrap() + 1,
+                &hlc.tick(None),
+                &store.vector().unwrap(),
+                ops,
+            )
+            .unwrap()
+        }
+        fn denial(env: &str) -> String {
+            super::super::super::bootstrap::path(env, crate::import_barrier::LOCAL_REMOVAL_DENIAL)
+                .unwrap()
+        }
+        fn denied(ctx: &Context) {
+            assert!(ctx.vault.secret_for_trusted_use("alpha", None).is_err());
+            assert!(
+                ctx.vault
+                    .list_secrets(None, None)
+                    .unwrap()
+                    .iter()
+                    .all(|entry| entry.id != "alpha")
+            );
+            assert!(ctx.vault.secret_for_trusted_use("unrelated", None).is_ok());
+        }
+        fn accept(ctx: &Context, env: &str, c: &Commit) {
+            assert_eq!(
+                receive_commit(
+                    &CommitStore::new(ctx.state, env),
+                    c,
+                    now_ms(),
+                    Some(ctx.audit)
+                )
+                .unwrap(),
+                "accepted"
+            );
+        }
+        #[test]
+        fn personal_removal_whole_effect_ignored_mixed_owner_transfer_and_self_user() {
+            let fixture = install::tests::installed();
+            let ak = DeviceKey::load_or_create(fixture.a.state, fixture.a.kms).unwrap();
+            let bk = DeviceKey::load_or_create(fixture.b.state, fixture.b.kms).unwrap();
+            let a = ak.fingerprint().unwrap();
+            let b = bk.fingerprint().unwrap();
+            let cases: Vec<(Vec<Value>, bool)> = vec![
+                (vec![json!({"op":"member.remove","fingerprint":a})], false),
+                (
+                    vec![json!({"op":"member.remove","fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaa"})],
+                    false,
+                ),
+                (
+                    vec![
+                        json!({"op":"member.remove","fingerprint":a}),
+                        json!({"op":"member.remove","fingerprint":b}),
+                    ],
+                    true,
+                ),
+                (
+                    vec![
+                        json!({"op":"member.remove","fingerprint":b}),
+                        json!({"op":"member.remove","fingerprint":a}),
+                    ],
+                    true,
+                ),
+            ];
+            for (ops, effective) in cases {
+                let (_root, ctx) = cloned(fixture.b.state);
+                let c = signed(&ctx, &fixture.env, &bk, ops);
+                accept(&ctx, &fixture.env, &c);
+                assert_eq!(ctx.state.exists(&denial(&fixture.env)), effective);
+                assert_eq!(
+                    CommitStore::new(ctx.state, &fixture.env)
+                        .get(&b, &c.author_seq)
+                        .unwrap(),
+                    Some(c.clone())
+                );
+                if effective {
+                    denied(&ctx);
+                } else {
+                    assert!(ctx.vault.secret_for_trusted_use("alpha", None).is_ok());
+                }
+                assert_eq!(
+                    receive_commit(
+                        &CommitStore::new(ctx.state, &fixture.env),
+                        &c,
+                        now_ms(),
+                        None
+                    )
+                    .unwrap(),
+                    "duplicate"
+                );
+            }
+            // The old author helper still refuses the whole mixed commit.
+            let (_root, ctx) = cloned(fixture.b.state);
+            assert!(
+                membership::author_commit(
+                    &ctx,
+                    None,
+                    &fixture.env,
+                    vec![
+                        json!({"op":"member.remove","fingerprint":a}),
+                        json!({"op":"member.remove","fingerprint":b})
+                    ]
+                )
+                .is_err()
+            );
+            assert!(!ctx.state.exists(&denial(&fixture.env)));
+            // A current owner cannot be removed, including after a real transfer.
+            let (_root, ctx) = cloned(fixture.b.state);
+            let transfer = signed(
+                &ctx,
+                &fixture.env,
+                &ak,
+                vec![json!({"op":"owner.transfer","fingerprint":b})],
+            );
+            accept(&ctx, &fixture.env, &transfer);
+            let ignored = signed(
+                &ctx,
+                &fixture.env,
+                &bk,
+                vec![json!({"op":"member.remove","fingerprint":b})],
+            );
+            accept(&ctx, &fixture.env, &ignored);
+            assert!(!ctx.state.exists(&denial(&fixture.env)));
+            assert!(ctx.vault.secret_for_trusted_use("alpha", None).is_ok());
+            // Self-removal remains effective for an actual demoted user.
+            let (_root, ctx) = cloned(fixture.b.state);
+            let demote = signed(
+                &ctx,
+                &fixture.env,
+                &ak,
+                vec![json!({"op":"member.set_role","fingerprint":b,"role":"user"})],
+            );
+            accept(&ctx, &fixture.env, &demote);
+            let removal = signed(
+                &ctx,
+                &fixture.env,
+                &bk,
+                vec![json!({"op":"member.remove","fingerprint":b})],
+            );
+            accept(&ctx, &fixture.env, &removal);
+            denied(&ctx);
+            println!(
+                "PVBOOT_WHOLE_EFFECT_CASES {}",
+                json!({"receive_cases":6,"author_refusal":1,"self_user":true,"owner_protected":true,"one_admission":true})
+            );
+        }
+        #[test]
+        fn personal_removal_delayed_role_change_enables_retained_removal() {
+            let fixture = install::tests::installed();
+            let (_a_root, sender) = cloned(fixture.a.state);
+            let (_b_root, receiver) = cloned(fixture.b.state);
+            let a = DeviceKey::load_or_create(sender.state, sender.kms).unwrap();
+            let b = DeviceKey::load_or_create(receiver.state, receiver.kms).unwrap();
+            let third = DeviceKey::generate();
+            let third_fp = third.fingerprint().unwrap();
+            let bfp = b.fingerprint().unwrap();
+            // A real post-cut signed admission gives this author a user role.
+            let admission = membership::author_commit(&sender, None, &fixture.env,
+                vec![json!({"op":"member.add","device":third.record().unwrap().to_dict(),"name":"post-cut user","role":"user"})]).unwrap();
+            accept(&receiver, &fixture.env, &admission);
+            // A authors the promotion offline, before seeing the user's next
+            // original. Its actual HLC is earlier; delivery is delayed.
+            let promotion = membership::author_commit(
+                &sender,
+                None,
+                &fixture.env,
+                vec![json!({"op":"member.set_role","fingerprint":third_fp,"role":"admin"})],
+            )
+            .unwrap();
+            let (wall, counter) = Hlc::parse(&promotion.hlc).unwrap();
+            let attempted = sign_commit(
+                &third,
+                &fixture.env,
+                1,
+                &Hlc::new(wall, counter + 1).render(),
+                &CommitStore::new(receiver.state, &fixture.env)
+                    .vector()
+                    .unwrap(),
+                vec![json!({"op":"member.remove","fingerprint":bfp})],
+            )
+            .unwrap();
+            accept(&receiver, &fixture.env, &attempted);
+            let before = membership::load_environment(&receiver, &fixture.env).unwrap();
+            assert_eq!(before.document["members"][&third_fp]["role"], "user");
+            assert_eq!(before.document["members"][&bfp]["status"], "active");
+            assert!(!receiver.state.exists(&denial(&fixture.env)));
+            assert!(receiver.vault.secret_for_trusted_use("alpha", None).is_ok());
+            assert!(!promotion.ops.iter().any(|op| op["op"] == "member.remove"));
+            // The whole fold now places the promotion before the retained
+            // removal. The candidate has no removal op of its own.
+            accept(&receiver, &fixture.env, &promotion);
+            let after = membership::load_environment(&receiver, &fixture.env).unwrap();
+            assert_eq!(after.document["members"][&third_fp]["role"], "admin");
+            assert_eq!(after.document["members"][&bfp]["status"], "removed");
+            let witness = receiver
+                .state
+                .read_json(&denial(&fixture.env), Value::Null)
+                .unwrap();
+            assert_eq!(witness["cause"], "candidate");
+            assert_eq!(witness["commit_hash"], promotion.hash().unwrap());
+            assert_eq!(witness["commit"], promotion.to_dict());
+            assert_eq!(
+                CommitStore::new(receiver.state, &fixture.env)
+                    .get(&third_fp, 1)
+                    .unwrap(),
+                Some(attempted)
+            );
+            assert!(!receiver.state.exists(
+                &crate::team::bootstrap::path(&fixture.env, "member-removed.json").unwrap()
+            ));
+            denied(&receiver);
+            assert_eq!(
+                a.fingerprint().unwrap(),
+                before.document["owner"].as_str().unwrap()
+            );
+            println!(
+                "PVBOOT_INDIRECT_REMOVAL_WHOLE_FOLD {{\"real_admission\":true,\"ignored_user_original_retained\":true,\"delayed_promotion_has_no_removal_op\":true,\"denial_before_FACT\":true}}"
+            );
+        }
+        #[test]
+        fn personal_removal_retained_removed_author_and_inactive_target_are_ignored() {
+            let fixture = install::tests::installed();
+            let (_root, ctx) = cloned(fixture.b.state);
+            let a = DeviceKey::load_or_create(fixture.a.state, fixture.a.kms).unwrap();
+            let b = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+            let third = DeviceKey::generate();
+            let third_fp = third.fingerprint().unwrap();
+            let bfp = b.fingerprint().unwrap();
+            let add = signed(
+                &ctx,
+                &fixture.env,
+                &a,
+                vec![
+                    json!({"op":"member.add","device":third.record().unwrap().to_dict(),"name":"post-cut user","role":"user"}),
+                ],
+            );
+            accept(&ctx, &fixture.env, &add);
+            let remove = signed(
+                &ctx,
+                &fixture.env,
+                &a,
+                vec![json!({"op":"member.remove","fingerprint":third_fp})],
+            );
+            accept(&ctx, &fixture.env, &remove);
+            assert_eq!(
+                membership::load_environment(&ctx, &fixture.env)
+                    .unwrap()
+                    .document["members"][&third_fp]["status"],
+                "removed"
+            );
+            let removed_author = signed(
+                &ctx,
+                &fixture.env,
+                &third,
+                vec![json!({"op":"member.remove","fingerprint":bfp})],
+            );
+            accept(&ctx, &fixture.env, &removed_author);
+            let inactive_target = signed(
+                &ctx,
+                &fixture.env,
+                &b,
+                vec![json!({"op":"member.remove","fingerprint":third_fp})],
+            );
+            accept(&ctx, &fixture.env, &inactive_target);
+            let store = CommitStore::new(ctx.state, &fixture.env);
+            assert_eq!(store.get(&third_fp, 1).unwrap(), Some(removed_author));
+            assert_eq!(
+                store.get(&bfp, &inactive_target.author_seq).unwrap(),
+                Some(inactive_target)
+            );
+            let result = membership::load_environment(&ctx, &fixture.env).unwrap();
+            assert_eq!(result.document["members"][&bfp]["status"], "active");
+            assert_eq!(result.document["members"][&third_fp]["status"], "removed");
+            assert!(!ctx.state.exists(&denial(&fixture.env)));
+            assert!(ctx.vault.secret_for_trusted_use("alpha", None).is_ok());
+            assert_eq!(
+                store
+                    .all_commits()
+                    .unwrap()
+                    .iter()
+                    .flat_map(|c| &c.ops)
+                    .filter(|op| op["op"] == "member.add"
+                        && op["device"] == b.record().unwrap().to_dict())
+                    .count(),
+                1
+            );
+            println!(
+                "PVBOOT_IGNORED_REMOVAL_AUTHORITY {{\"removed_author_stored\":true,\"inactive_target_stored\":true,\"no_new_denial\":true,\"local_recipient_active\":true}}"
+            );
+        }
+        #[test]
+        fn personal_removal_committed_history_repair_revalidates_candidate_and_never_autoappends() {
+            let fixture = install::tests::installed();
+            let (_root, ctx) = cloned(fixture.b.state);
+            let a = DeviceKey::load_or_create(fixture.a.state, fixture.a.kms).unwrap();
+            let bfp = DeviceKey::load_or_create(ctx.state, ctx.kms)
+                .unwrap()
+                .fingerprint()
+                .unwrap();
+            let removal = signed(
+                &ctx,
+                &fixture.env,
+                &a,
+                vec![json!({"op":"member.remove","fingerprint":bfp})],
+            );
+            accept(&ctx, &fixture.env, &removal);
+            let store = CommitStore::new(ctx.state, &fixture.env);
+            // Test-only loss of this DATA leaf leaves the independently signed
+            // committed original. No migration/all-evidence rollback promise.
+            fs::remove_file(ctx.state.path.join(denial(&fixture.env))).unwrap();
+            let metadata = signed(
+                &ctx,
+                &fixture.env,
+                &a,
+                vec![json!({"op":"settings.update","sync_interval_seconds":17})],
+            );
+            let mut invalid = metadata.clone();
+            invalid.sig = "invalid".into();
+            assert!(store.append(&invalid).is_err());
+            assert!(!ctx.state.exists(&denial(&fixture.env)));
+            assert!(
+                store
+                    .get(&a.fingerprint().unwrap(), &metadata.author_seq)
+                    .unwrap()
+                    .is_none()
+            );
+            accept(&ctx, &fixture.env, &metadata);
+            let witness = ctx
+                .state
+                .read_json(&denial(&fixture.env), Value::Null)
+                .unwrap();
+            assert_eq!(witness["cause"], "committed_history");
+            assert!(witness.get("commit").is_none());
+            assert!(witness.get("commit_hash").is_none());
+            assert_eq!(
+                store.get(&removal.author, &removal.author_seq).unwrap(),
+                Some(removal)
+            );
+            assert_eq!(
+                store.get(&metadata.author, &metadata.author_seq).unwrap(),
+                Some(metadata.clone())
+            );
+            denied(&ctx);
+            let witness_bytes = ctx.state.read_bytes(&denial(&fixture.env)).unwrap();
+            assert_eq!(
+                receive_commit(&store, &metadata, now_ms(), None).unwrap(),
+                "duplicate"
+            );
+            assert_eq!(
+                ctx.state.read_bytes(&denial(&fixture.env)).unwrap(),
+                witness_bytes
+            );
+            let reopened =
+                Context::open(&ctx.state.path, Config::default(), clock::system()).unwrap();
+            assert_eq!(
+                CommitStore::new(reopened.state, &fixture.env)
+                    .last_seq(&metadata.author)
+                    .unwrap(),
+                metadata.author_seq
+            );
+            denied(&reopened);
+            println!(
+                "PVBOOT_COMMITTED_HISTORY_REPAIR {{\"independent_signed_original\":true,\"invalid_candidate_no_marker\":true,\"same_original_retry\":true,\"no_candidate_JSON_authority\":true,\"no_autoappend_on_reopen\":true}}"
+            );
+        }
+        #[test]
+        fn personal_removal_raw_invalid_routing_retry_and_true_deferred() {
+            let fixture = install::tests::installed();
+            let predecessor = membership::author_commit(
+                &fixture.b,
+                None,
+                &fixture.env,
+                vec![json!({"op":"settings.update","sync_interval_seconds":21})],
+            )
+            .unwrap();
+            assert_eq!(predecessor.author_seq, 1);
+            let bk = DeviceKey::load_or_create(fixture.b.state, fixture.b.kms).unwrap();
+            let b = bk.fingerprint().unwrap();
+            let original = signed(
+                &fixture.b,
+                &fixture.env,
+                &bk,
+                vec![json!({"op":"member.remove","fingerprint":b})],
+            );
+            for kind in [
+                "signature",
+                "format",
+                "env",
+                "gap",
+                "clock",
+                "floor",
+                "equal_clock",
+                "lower_clock",
+                "unknown_author",
+                "custom",
+                "alias",
+                "absolute",
+                "state",
+                "nested",
+            ] {
+                let (_root, ctx) = cloned(fixture.b.state);
+                let store = CommitStore::new(ctx.state, &fixture.env);
+                let mut c = original.clone();
+                let result = match kind {
+                    "signature" => {
+                        c.sig = "invalid".into();
+                        store.append(&c)
+                    }
+                    "format" => {
+                        c.format = "unknown".into();
+                        store.append(&c)
+                    }
+                    "env" => {
+                        c.env_id = "other".into();
+                        store.append(&c)
+                    }
+                    "gap" => {
+                        c = sign_commit(
+                            &bk,
+                            &fixture.env,
+                            &c.author_seq + 1,
+                            &c.hlc,
+                            &c.seen,
+                            c.ops.clone(),
+                        )
+                        .unwrap();
+                        store.append(&c)
+                    }
+                    "clock" => {
+                        c = sign_commit(
+                            &bk,
+                            &fixture.env,
+                            c.author_seq.clone(),
+                            &format!("{}-0000", now_ms() + MAX_CLOCK_SKEW_MS + 10_000),
+                            &c.seen,
+                            c.ops.clone(),
+                        )
+                        .unwrap();
+                        store.append(&c)
+                    }
+                    "floor" => {
+                        c = sign_commit(
+                            &bk,
+                            &fixture.env,
+                            c.author_seq.clone(),
+                            "1-0000",
+                            &c.seen,
+                            c.ops.clone(),
+                        )
+                        .unwrap();
+                        store.append(&c)
+                    }
+                    "equal_clock" | "lower_clock" => {
+                        let previous = store.get(&b, &original.author_seq - 1).unwrap().unwrap();
+                        let hlc = if kind == "equal_clock" {
+                            previous.hlc
+                        } else {
+                            let (wall, _) = Hlc::parse(&previous.hlc).unwrap();
+                            Hlc::new(wall - 1, 0).render()
+                        };
+                        c = sign_commit(
+                            &bk,
+                            &fixture.env,
+                            c.author_seq.clone(),
+                            &hlc,
+                            &c.seen,
+                            c.ops.clone(),
+                        )
+                        .unwrap();
+                        store.append(&c)
+                    }
+                    "unknown_author" => {
+                        c = sign_commit(
+                            &DeviceKey::generate(),
+                            &fixture.env,
+                            1,
+                            &c.hlc,
+                            &c.seen,
+                            c.ops.clone(),
+                        )
+                        .unwrap();
+                        store.append(&c)
+                    }
+                    "custom" => CommitStore {
+                        state: ctx.state,
+                        env_id: fixture.env.clone(),
+                        root: format!("team/{}/commits/..", fixture.env),
+                    }
+                    .append(&c),
+                    "alias" => CommitStore {
+                        state: ctx.state,
+                        env_id: "wrong".into(),
+                        root: format!("team/{}", fixture.env),
+                    }
+                    .append(&c),
+                    "absolute" => CommitStore {
+                        state: ctx.state,
+                        env_id: fixture.env.clone(),
+                        root: ctx
+                            .state
+                            .path
+                            .join(format!("team/{}", fixture.env))
+                            .to_str()
+                            .unwrap()
+                            .into(),
+                    }
+                    .append(&c),
+                    "state" => {
+                        let state = StateDir::new(&ctx.state.path);
+                        CommitStore::new(&state, &fixture.env).append(&c)
+                    }
+                    "nested" => {
+                        let _lock = ctx.state.lock().unwrap();
+                        store.append(&c)
+                    }
+                    _ => unreachable!(),
+                };
+                assert!(result.is_err(), "invalid case {kind}");
+                assert!(
+                    !ctx.state.exists(&denial(&fixture.env)),
+                    "invalid minted denial {kind}"
+                );
+                assert!(store.get(&b, &original.author_seq).unwrap().is_none());
+                assert!(ctx.vault.secret_for_trusted_use("alpha", None).is_ok());
+            }
+            let (_root, ctx) = cloned(fixture.b.state);
+            let store = CommitStore::new(ctx.state, &fixture.env);
+            store.append(&original).unwrap();
+            let witness = ctx.state.read_bytes(&denial(&fixture.env)).unwrap();
+            assert!(store.append(&original).is_err());
+            assert_eq!(
+                receive_commit(&store, &original, now_ms(), None).unwrap(),
+                "duplicate"
+            );
+            assert_eq!(
+                ctx.state.read_bytes(&denial(&fixture.env)).unwrap(),
+                witness
+            );
+            denied(&ctx);
+            let (_root, ctx) = cloned(fixture.b.state);
+            let store = CommitStore::new(ctx.state, &fixture.env);
+            let future = sign_commit(
+                &bk,
+                &fixture.env,
+                original.author_seq.clone(),
+                &format!("{}-0000", now_ms() + MAX_CLOCK_SKEW_MS + 100),
+                &original.seen,
+                original.ops.clone(),
+            )
+            .unwrap();
+            assert_eq!(
+                receive_commit(&store, &future, now_ms(), None).unwrap(),
+                "deferred"
+            );
+            assert!(!ctx.state.exists(&denial(&fixture.env)));
+            assert!(store.release_deferred(now_ms(), None).unwrap().is_empty());
+            std::thread::sleep(Duration::from_millis(150));
+            assert_eq!(
+                store.release_deferred(now_ms(), None).unwrap(),
+                vec![future.clone()]
+            );
+            assert!(store.deferred_commits().unwrap().is_empty());
+            assert_eq!(store.get(&b, &future.author_seq).unwrap(), Some(future));
+            denied(&ctx);
+            println!(
+                "PVBOOT_RAW_DENIAL_CASES {}",
+                json!({"invalid_cases":14,"raw_append":true,"exact_retry":true,"true_deferred_due":true})
+            );
+        }
+        #[test]
+        fn personal_removal_every_writer_io_edge_retains_monotone_denial() {
+            let fixture = install::tests::installed();
+            let bk = DeviceKey::load_or_create(fixture.b.state, fixture.b.kms).unwrap();
+            let b = bk.fingerprint().unwrap();
+            let c = signed(
+                &fixture.b,
+                &fixture.env,
+                &bk,
+                vec![json!({"op":"member.remove","fingerprint":b})],
+            );
+            let (_root, baseline) = cloned(fixture.b.state);
+            let scope = crate::import_barrier::testing::Scope::track(baseline.state, None);
+            CommitStore::new(baseline.state, &fixture.env)
+                .append(&c)
+                .unwrap();
+            let hits = scope.hits();
+            drop(scope);
+            assert!(
+                hits.iter()
+                    .any(|(name, point)| name.ends_with("local-removal-denial.json")
+                        && point == "parent-fsync-after")
+            );
+            assert!(
+                hits.iter()
+                    .any(|(name, point)| name.contains("/commits/")
+                        && point == "final-readback-after")
+            );
+            for index in 0..hits.len() {
+                let (_root, ctx) = cloned(fixture.b.state);
+                let scope = crate::import_barrier::testing::Scope::track(ctx.state, Some(index));
+                let result = CommitStore::new(ctx.state, &fixture.env).append(&c);
+                assert!(scope.fired(), "edge {index}");
+                assert!(result.is_err(), "edge {index}");
+                drop(scope);
+                let marker = ctx.state.exists(&denial(&fixture.env));
+                let stored = CommitStore::new(ctx.state, &fixture.env)
+                    .get(&b, &c.author_seq)
+                    .unwrap();
+                assert!(
+                    stored.is_none() || marker,
+                    "commit without denial at {index}"
+                );
+                let reopened =
+                    Context::open(&ctx.state.path, Config::default(), clock::system()).unwrap();
+                if marker {
+                    denied(&reopened);
+                } else {
+                    assert!(stored.is_none());
+                    assert!(reopened.vault.secret_for_trusted_use("alpha", None).is_ok());
+                }
+            }
+            println!(
+                "PVBOOT_DENIAL_IO_EDGES {}",
+                json!({"edges":hits.len(),"before_commit_denial":true,"uncertainty_preserved":true})
+            );
+        }
+        #[test]
+        fn personal_removal_crash_child() {
+            let Some(path) = std::env::var_os("PVBOOT_DENIAL_OWN_STATE") else {
+                return;
+            };
+            let env = std::env::var("PVBOOT_DENIAL_OWN_ENV").unwrap();
+            let edge: usize = std::env::var("PVBOOT_DENIAL_OWN_EDGE")
+                .unwrap()
+                .parse()
+                .unwrap();
+            let ctx = Context::open(path, Config::default(), clock::system()).unwrap();
+            let key = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+            let b = key.fingerprint().unwrap();
+            let c = signed(
+                &ctx,
+                &env,
+                &key,
+                vec![json!({"op":"member.remove","fingerprint":b})],
+            );
+            let _scope = crate::import_barrier::testing::Scope::crash(ctx.state, edge);
+            if std::env::var_os("PVBOOT_DENIAL_OWN_FACT").is_some() {
+                membership::remove_member(&ctx, None, &env, &b).unwrap();
+            } else {
+                CommitStore::new(ctx.state, &env).append(&c).unwrap();
+            }
+            panic!("crash edge not reached");
+        }
+        #[test]
+        fn personal_removal_independent_process_death_at_every_writer_edge() {
+            let fixture = install::tests::installed();
+            let bk = DeviceKey::load_or_create(fixture.b.state, fixture.b.kms).unwrap();
+            let b = bk.fingerprint().unwrap();
+            let c = signed(
+                &fixture.b,
+                &fixture.env,
+                &bk,
+                vec![json!({"op":"member.remove","fingerprint":b})],
+            );
+            let (_root, baseline) = cloned(fixture.b.state);
+            let scope = crate::import_barrier::testing::Scope::track(baseline.state, None);
+            CommitStore::new(baseline.state, &fixture.env)
+                .append(&c)
+                .unwrap();
+            let count = scope.hits().len();
+            drop(scope);
+            for edge in 0..count {
+                let (_root, ctx) = cloned(fixture.b.state);
+                let status=Command::new(std::env::current_exe().unwrap()).args(["--exact","team::commit::retained_history::personal_removal_tests::personal_removal_crash_child","--nocapture"]).env("PVBOOT_DENIAL_OWN_STATE",&ctx.state.path).env("PVBOOT_DENIAL_OWN_ENV",&fixture.env).env("PVBOOT_DENIAL_OWN_EDGE",edge.to_string()).stdout(Stdio::null()).stderr(Stdio::inherit()).status().unwrap();
+                assert_eq!(status.code(), Some(86), "crash edge {edge}");
+                let reopened =
+                    Context::open(&ctx.state.path, Config::default(), clock::system()).unwrap();
+                let marker = reopened.state.exists(&denial(&fixture.env));
+                let stored = CommitStore::new(reopened.state, &fixture.env)
+                    .get(&b, &c.author_seq)
+                    .unwrap();
+                assert!(stored.is_none() || marker);
+                if marker {
+                    denied(&reopened);
+                } else {
+                    assert!(reopened.vault.secret_for_trusted_use("alpha", None).is_ok());
+                }
+            }
+            println!(
+                "PVBOOT_DENIAL_PROCESS_DEATH {}",
+                json!({"edges":count,"hardware_power_loss_proof":false})
+            );
+        }
+
+        #[test]
+        fn personal_removal_complete_fact_io_and_child_death_keep_denial() {
+            let fixture = install::tests::installed();
+            let key = DeviceKey::load_or_create(fixture.b.state, fixture.b.kms).unwrap();
+            let b = key.fingerprint().unwrap();
+            let next = CommitStore::new(fixture.b.state, &fixture.env)
+                .last_seq(&b)
+                .unwrap()
+                + 1;
+            let (_root, baseline) = cloned(fixture.b.state);
+            let scope = crate::import_barrier::testing::Scope::track(baseline.state, None);
+            membership::remove_member(&baseline, None, &fixture.env, &b).unwrap();
+            let hits = scope.hits();
+            drop(scope);
+            assert!(hits.iter().any(|(_, point)| point == "fact-receipt-after"));
+            assert!(hits.iter().any(|(_, point)| point == "fact-refold-after"));
+            for edge in 0..hits.len() {
+                let (_root, ctx) = cloned(fixture.b.state);
+                let scope = crate::import_barrier::testing::Scope::track(ctx.state, Some(edge));
+                assert!(
+                    membership::remove_member(&ctx, None, &fixture.env, &b).is_err(),
+                    "FACT IO edge {edge}"
+                );
+                assert!(scope.fired());
+                drop(scope);
+                let stored = CommitStore::new(ctx.state, &fixture.env)
+                    .get(&b, &next)
+                    .unwrap();
+                let marker = ctx.state.exists(&denial(&fixture.env));
+                assert!(stored.is_none() || marker);
+                if marker {
+                    denied(&ctx);
+                }
+                let reopened =
+                    Context::open(&ctx.state.path, Config::default(), clock::system()).unwrap();
+                if marker {
+                    denied(&reopened);
+                }
+                let (_root, child_ctx) = cloned(fixture.b.state);
+                let status=Command::new(std::env::current_exe().unwrap()).args(["--exact","team::commit::retained_history::personal_removal_tests::personal_removal_crash_child","--nocapture"]).env("PVBOOT_DENIAL_OWN_STATE",&child_ctx.state.path).env("PVBOOT_DENIAL_OWN_ENV",&fixture.env).env("PVBOOT_DENIAL_OWN_EDGE",edge.to_string()).env("PVBOOT_DENIAL_OWN_FACT","1").stdout(Stdio::null()).stderr(Stdio::inherit()).status().unwrap();
+                assert_eq!(status.code(), Some(86), "FACT crash edge {edge}");
+                let reopened =
+                    Context::open(&child_ctx.state.path, Config::default(), clock::system())
+                        .unwrap();
+                let stored = CommitStore::new(reopened.state, &fixture.env)
+                    .get(&b, &next)
+                    .unwrap();
+                let marker = reopened.state.exists(&denial(&fixture.env));
+                assert!(stored.is_none() || marker);
+                if marker {
+                    denied(&reopened);
+                }
+            }
+            println!(
+                "PVBOOT_REMOVAL_FACT_FAULT_MATRIX {}",
+                json!({"io_edges":hits.len(),"process_death_edges":hits.len(),"audit_refold_receipt_retention_original_fact":true})
+            );
+        }
+        #[test]
+        fn personal_removal_raw_settled_facts_require_real_receipts_and_retention() {
+            let fixture = install::tests::installed();
+            let bk = DeviceKey::load_or_create(fixture.b.state, fixture.b.kms).unwrap();
+            let b = bk.fingerprint().unwrap();
+            let (_root, settled) = cloned(fixture.b.state);
+            let fact = membership::author_fact(
+                &settled,
+                None,
+                &fixture.env,
+                "secret_deleted",
+                json!({"secret_id":"alpha"}),
+            )
+            .unwrap();
+            assert!(crate::team::sync::Fact::from_dict(&fact).is_ok());
+            let (_root, raw) = cloned(settled.state);
+            let c = signed(
+                &raw,
+                &fixture.env,
+                &bk,
+                vec![json!({"op":"member.remove","fingerprint":b})],
+            );
+            CommitStore::new(raw.state, &fixture.env)
+                .append(&c)
+                .unwrap();
+            denied(&raw);
+            for missing in ["receipt", "binding"] {
+                let (_root, ctx) = cloned(settled.state);
+                if missing == "receipt" {
+                    for leaf in ["fact_admissions.json", "fact_admissions.jsonl"] {
+                        let name = format!("team/{}/{leaf}", fixture.env);
+                        if ctx.state.exists(&name) {
+                            fs::remove_file(ctx.state.path.join(name)).unwrap();
+                        }
+                    }
+                } else {
+                    let mut ledger = ctx
+                        .state
+                        .read_json(crate::tombstone::PATH, json!({}))
+                        .unwrap();
+                    ledger.as_object_mut().unwrap().remove("bindings");
+                    ctx.state
+                        .write_json(crate::tombstone::PATH, &ledger)
+                        .unwrap();
+                }
+                let c = signed(
+                    &ctx,
+                    &fixture.env,
+                    &bk,
+                    vec![json!({"op":"member.remove","fingerprint":b})],
+                );
+                let store = CommitStore::new(ctx.state, &fixture.env);
+                assert!(store.append(&c).is_err(), "raw unsettled {missing}");
+                assert!(!ctx.state.exists(&denial(&fixture.env)));
+                assert!(store.get(&b, &c.author_seq).unwrap().is_none());
+                // Context service may settle precisely the existing real fact;
+                // the raw service never acquired signing authority.
+                let history = HistorySession::open_runtime(ctx.state, &fixture.env).unwrap();
+                assert_eq!(
+                    receive_runtime_with_input(&store, &c, now_ms(), None, true, &history, &ctx)
+                        .unwrap(),
+                    "accepted"
+                );
+                drop(history);
+                denied(&ctx);
+            }
+            println!(
+                "PVBOOT_VERIFY_SETTLED_FACTS {}",
+                json!({"existing_real_fact":true,"raw_settled":true,"missing_receipt_refused":true,"missing_binding_refused":true,"runtime_same_parent_settlement":true})
+            );
+        }
+        #[test]
+        fn personal_removal_projection_collision_backup_restore_and_witness_union() {
+            use crate::vault::Vault;
+            let fixture = install::tests::installed();
+            let ak = DeviceKey::load_or_create(fixture.a.state, fixture.a.kms).unwrap();
+            let bk = DeviceKey::load_or_create(fixture.b.state, fixture.b.kms).unwrap();
+            let b = bk.fingerprint().unwrap();
+            let (_root, ctx) = cloned(fixture.b.state);
+            let before = ctx.state.read_bytes(crate::vault::VAULT_DOC).unwrap();
+            let connections = ctx.state.read_bytes(crate::policy::CONNECTIONS).unwrap();
+            let cipher = crate::team::envelope::encrypt_secret(
+                &[7; 32],
+                &fixture.env,
+                "unrelated",
+                "7777777777777777",
+                b"synthetic-hidden-collision",
+            )
+            .unwrap();
+            let c = signed(
+                &ctx,
+                &fixture.env,
+                &ak,
+                vec![
+                    json!({"op":"secret.put_version","secret_id":"unrelated","version_id":"7777777777777777","generation_id":"0123456789abcdef","kind":"api_key","ciphertext":cipher,"public":{}}),
+                    json!({"op":"secret.activate","secret_id":"unrelated","version_id":"7777777777777777"}),
+                    json!({"op":"member.remove","fingerprint":b}),
+                ],
+            );
+            accept(&ctx, &fixture.env, &c);
+            let folded = membership::refold_and_derive(&ctx, &fixture.env).unwrap();
+            assert!(folded.document["secrets"].get("unrelated").is_some());
+            assert!(folded.version_order.get("unrelated").is_some());
+            assert_eq!(
+                ctx.state.read_bytes(crate::vault::VAULT_DOC).unwrap(),
+                before
+            );
+            assert_eq!(
+                ctx.state.read_bytes(crate::policy::CONNECTIONS).unwrap(),
+                connections
+            );
+            denied(&ctx);
+            let pre = fixture.root.path().join("denial-pre.json");
+            fixture.b.vault.backup(&pre).unwrap();
+            let post = fixture.root.path().join("denial-post.json");
+            ctx.vault.backup(&post).unwrap();
+            let witness = ctx.state.read_bytes(&denial(&fixture.env)).unwrap();
+            assert!(Vault::restore(ctx.state, &pre, ctx.audit, Some(ctx.kms)).is_err());
+            assert_eq!(
+                ctx.state.read_bytes(crate::vault::VAULT_DOC).unwrap(),
+                before
+            );
+            assert_eq!(
+                ctx.state.read_bytes(&denial(&fixture.env)).unwrap(),
+                witness
+            );
+            assert!(ctx.policy.restore_pending().unwrap());
+            denied(&ctx);
+            Vault::restore(ctx.state, &post, ctx.audit, Some(ctx.kms)).unwrap();
+            assert_eq!(
+                ctx.state.read_bytes(&denial(&fixture.env)).unwrap(),
+                witness
+            );
+            denied(&ctx);
+            // A real v1 archive with its optional bootstrap field removed is a
+            // legacy archive. Recompute only its ordinary DATA checksum.
+            let mut legacy = pyjson::loads(&fs::read_to_string(&post).unwrap()).unwrap();
+            legacy["documents"]
+                .as_object_mut()
+                .unwrap()
+                .remove(crate::import_barrier::BACKUP);
+            let payload =
+                pyjson::dumps(&legacy["documents"], DumpOptions::compact_sorted()).unwrap();
+            legacy["manifest"]["sha256"] = json!(hex::encode(Sha256::digest(payload.as_bytes())));
+            let legacy_path = fixture.root.path().join("denial-legacy.json");
+            fs::write(
+                &legacy_path,
+                pyjson::dumps(&legacy, DumpOptions::default_sorted()).unwrap(),
+            )
+            .unwrap();
+            Vault::restore(ctx.state, &legacy_path, ctx.audit, Some(ctx.kms)).unwrap();
+            assert_eq!(
+                ctx.state.read_bytes(&denial(&fixture.env)).unwrap(),
+                witness
+            );
+            denied(&ctx);
+            for damage in ["truncated", "wrong_epoch", "directory", "symlink", "mode"] {
+                let (_root, copy) = cloned(ctx.state);
+                let path = copy.state.path.join(denial(&fixture.env));
+                match damage {
+                    "truncated" => fs::write(&path, b"{").unwrap(),
+                    "wrong_epoch" => {
+                        let mut value =
+                            pyjson::loads(std::str::from_utf8(&witness).unwrap()).unwrap();
+                        value["epoch"] = json!("wrong");
+                        fs::write(
+                            &path,
+                            pyjson::dumps(&value, DumpOptions::pretty_sorted()).unwrap(),
+                        )
+                        .unwrap();
+                    }
+                    "directory" => {
+                        fs::remove_file(&path).unwrap();
+                        fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
+                    }
+                    "symlink" => {
+                        fs::remove_file(&path).unwrap();
+                        std::os::unix::fs::symlink("receipt.json", &path).unwrap();
+                    }
+                    "mode" => {
+                        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap()
+                    }
+                    _ => unreachable!(),
+                };
+                denied(&copy);
+                assert!(
+                    crate::import_barrier::backup_provenance(copy.state).is_err()
+                        || damage == "truncated"
+                        || damage == "wrong_epoch"
+                );
+            }
+            let (_root, both) = cloned(fixture.b.state);
+            membership::remove_member(&both, None, &fixture.env, &b).unwrap();
+            let fact =
+                super::super::super::bootstrap::path(&fixture.env, "member-removed.json").unwrap();
+            assert!(both.state.exists(&fact));
+            assert!(both.state.exists(&denial(&fixture.env)));
+            for removed in [&fact, &denial(&fixture.env)] {
+                let (_root, one) = cloned(both.state);
+                fs::remove_file(one.state.path.join(removed)).unwrap();
+                denied(&one);
+                assert!(Vault::restore(one.state, &post, one.audit, Some(one.kms)).is_err());
+                denied(&one);
+            }
+            println!(
+                "PVBOOT_DENIAL_RESTORE_PROJECTION {}",
+                json!({"raw_projection_unchanged":true,"hidden_collision":true,"real_backups":2,"legacy_restore_denied":true,"damaged_witness_cases":5,"single_surviving_proofs":2})
+            );
+        }
+
+        #[test]
+        fn personal_removal_real_root_lock_replacement_and_deferred_parent_deadline() {
+            let fixture = install::tests::installed();
+            let bk = DeviceKey::load_or_create(fixture.b.state, fixture.b.kms).unwrap();
+            let b = bk.fingerprint().unwrap();
+            let c = signed(
+                &fixture.b,
+                &fixture.env,
+                &bk,
+                vec![json!({"op":"member.remove","fingerprint":b})],
+            );
+            for replace_root in [false, true] {
+                let (_root, ctx) = cloned(fixture.b.state);
+                let h = HistorySession::open_runtime(ctx.state, &fixture.env).unwrap();
+                let store = CommitStore::new(ctx.state, &fixture.env);
+                let prepared = PreparedAppend::prepare(&store, &c, now_ms(), &h, None)
+                    .unwrap_or_else(|failure| panic!("{}", failure.into_error().reason));
+                if replace_root {
+                    let moved = ctx.state.path.with_file_name("old-root");
+                    fs::rename(&ctx.state.path, &moved).unwrap();
+                    copy(&moved, &ctx.state.path);
+                } else {
+                    let lock = ctx.state.path.join(".lock");
+                    fs::rename(&lock, ctx.state.path.join(".old-lock")).unwrap();
+                    fs::write(&lock, b"").unwrap();
+                    fs::set_permissions(&lock, fs::Permissions::from_mode(0o600)).unwrap();
+                }
+                assert!(prepared.publish().is_err());
+                assert!(!ctx.state.exists(&denial(&fixture.env)));
+                assert!(
+                    CommitStore::new(ctx.state, &fixture.env)
+                        .get(&b, &c.author_seq)
+                        .unwrap()
+                        .is_none()
+                );
+                drop(h);
+            }
+            let (_root, ctx) = cloned(fixture.b.state);
+            let store = CommitStore::new(ctx.state, &fixture.env);
+            let first = signed(
+                &ctx,
+                &fixture.env,
+                &bk,
+                vec![json!({"op":"settings.update","sync_interval_seconds":21})],
+            );
+            let mut clock = Hlc::new(0, 0);
+            clock.observe(&first.hlc).unwrap();
+            let second = sign_commit(
+                &bk,
+                &fixture.env,
+                &first.author_seq + 1,
+                &clock.tick(None),
+                &first.seen,
+                vec![json!({"op":"member.remove","fingerprint":b})],
+            )
+            .unwrap();
+            store.defer(&first).unwrap();
+            store.defer(&second).unwrap();
+            let (scope, pause) = crate::import_barrier::testing::Scope::pause(
+                ctx.state,
+                &format!("/{}.json", second.author_seq),
+                "rename-before",
+            );
+            let release = std::thread::spawn(move || {
+                pause.wait();
+                std::thread::sleep(Duration::from_millis(5_020));
+                pause.release();
+            });
+            assert!(store.release_deferred(now_ms(), None).is_err());
+            release.join().unwrap();
+            assert!(scope.fired());
+            drop(scope);
+            assert_eq!(store.get(&b, &first.author_seq).unwrap(), Some(first));
+            assert!(store.get(&b, &second.author_seq).unwrap().is_none());
+            assert_eq!(store.deferred_commits().unwrap(), vec![second]);
+            denied(&ctx);
+            println!(
+                "PVBOOT_DENIAL_ROOT_AND_DEFERRED {}",
+                json!({"root_replacement_refused":true,"lock_replacement_refused":true,"one_budget_across_two_records":true,"later_deferred_retained":true,"permanent_denial":true})
+            );
+        }
+        #[test]
+        fn personal_removal_parent_limits_staleness_and_expiry_before_renames() {
+            let fixture = install::tests::installed();
+            let bk = DeviceKey::load_or_create(fixture.b.state, fixture.b.kms).unwrap();
+            let b = bk.fingerprint().unwrap();
+            let c = signed(
+                &fixture.b,
+                &fixture.env,
+                &bk,
+                vec![json!({"op":"member.remove","fingerprint":b})],
+            );
+            for bytes in [false, true] {
+                let (_root, ctx) = cloned(fixture.b.state);
+                let h = HistorySession::open_runtime(ctx.state, &fixture.env).unwrap();
+                assert!(
+                    h.charge(if bytes { 0 } else { WORK }, if bytes { BYTES } else { 0 })
+                        .is_err()
+                );
+                assert!(h.nested(ctx.state, &fixture.env).is_err());
+                assert!(
+                    append_with_input(
+                        &CommitStore::new(ctx.state, &fixture.env),
+                        &c,
+                        now_ms(),
+                        &h,
+                        None
+                    )
+                    .is_err()
+                );
+                assert!(!ctx.state.exists(&denial(&fixture.env)));
+            }
+            let (_root, ctx) = cloned(fixture.b.state);
+            let h = HistorySession::open_runtime(ctx.state, &fixture.env).unwrap();
+            let store = CommitStore::new(ctx.state, &fixture.env);
+            let prepared = PreparedAppend::prepare(&store, &c, now_ms(), &h, None)
+                .unwrap_or_else(|failure| panic!("{}", failure.into_error().reason));
+            let name = super::super::super::bootstrap::path(&fixture.env, "receipt.json").unwrap();
+            let bytes = ctx.state.read_bytes(&name).unwrap();
+            ctx.state.write_bytes(&name, &bytes).unwrap();
+            assert!(prepared.publish().is_err());
+            assert!(!ctx.state.exists(&denial(&fixture.env)));
+            drop(h);
+            for suffix in [
+                "local-removal-denial.json".to_string(),
+                format!("/{}.json", c.author_seq),
+            ] {
+                let (_root, ctx) = cloned(fixture.b.state);
+                let (scope, pause) = crate::import_barrier::testing::Scope::pause(
+                    ctx.state,
+                    &suffix,
+                    "rename-before",
+                );
+                let release = std::thread::spawn(move || {
+                    pause.wait();
+                    std::thread::sleep(Duration::from_millis(5_020));
+                    pause.release();
+                });
+                assert!(
+                    CommitStore::new(ctx.state, &fixture.env)
+                        .append(&c)
+                        .is_err()
+                );
+                release.join().unwrap();
+                assert!(scope.fired());
+                drop(scope);
+                assert!(
+                    CommitStore::new(ctx.state, &fixture.env)
+                        .get(&b, &c.author_seq)
+                        .unwrap()
+                        .is_none()
+                );
+                if suffix == "local-removal-denial.json" {
+                    assert!(!ctx.state.exists(&denial(&fixture.env)));
+                } else {
+                    denied(&ctx);
+                }
+            }
+            println!(
+                "PVBOOT_DENIAL_PARENT_LIMITS {}",
+                json!({"work":WORK,"charged_bytes":BYTES,"deadline_ms":5000,"rename_expiry_cases":2,"same_bytes_receipt_stale":true})
+            );
+        }
+    }
+
+    #[cfg(test)]
+    mod boundary_tests {
+        use super::*;
+        use crate::{
+            context::{Config, Context},
+            team::envelope,
+        };
+        use std::{
+            os::unix::{
+                ffi::OsStringExt,
+                fs::{PermissionsExt, symlink},
+            },
+            sync::mpsc,
+            time::Duration,
+        };
+        use tempfile::TempDir;
+        struct Fixture {
+            _root: TempDir,
+            ctx: Context,
+            env: String,
+            key: DeviceKey,
+            genesis: Commit,
+        }
+        fn fixture() -> Fixture {
+            let root = TempDir::new().unwrap();
+            let ctx = Context::initialize(
+                root.path().join("state"),
+                "synthetic-history-admin",
+                "synthetic-history-recovery",
+                Config::default(),
+                crate::clock::system(),
+            )
+            .unwrap();
+            let key = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+            let fp = key.fingerprint().unwrap();
+            let env = new_env_id(&fp).unwrap();
+            let wrap =
+                envelope::wrap_dek(&[9; 32], &env, "0123456789abcdef", &key.record().unwrap())
+                    .unwrap();
+            let genesis=sign_commit(&key,&env,1,"1000000-0000",&BTreeMap::new(),vec![json!({"op":"env.init","owner_device":key.record().unwrap().to_dict(),"owner_name":"synthetic-owner","generation_id":"0123456789abcdef","wraps":{fp:wrap}})]).unwrap();
+            assert_eq!(
+                receive_commit(
+                    &CommitStore::new(ctx.state, &env),
+                    &genesis,
+                    1_000_001,
+                    Some(ctx.audit)
+                )
+                .unwrap(),
+                "accepted"
+            );
+            Fixture {
+                _root: root,
+                ctx,
+                env,
+                key,
+                genesis,
+            }
+        }
+        fn probe(f: &Fixture) -> HistorySession<'_> {
+            HistorySession::open_probe(&f.ctx, &f.env, ProbePurpose::Invite).unwrap()
+        }
+        fn next(f: &Fixture, seq: i64, hlc: &str) -> Commit {
+            sign_commit(
+                &f.key,
+                &f.env,
+                seq,
+                hlc,
+                &BTreeMap::new(),
+                vec![json!({"op":"settings.update","sync_interval_seconds":3})],
+            )
+            .unwrap()
+        }
+        fn put(f: &Fixture, c: &Commit) {
+            f.ctx
+                .state
+                .write_json(
+                    &format!("team/{}/commits/{}/{}.json", f.env, c.author, c.author_seq),
+                    &c.to_dict(),
+                )
+                .unwrap();
+        }
+        fn reason<T>(result: Result<T>) -> String {
+            match result {
+                Ok(_) => panic!("expected refusal"),
+                Err(e) => e.reason.into_owned(),
+            }
+        }
+
+        #[test]
+        fn personal_history_ordinary_provider_keeps_legacy_lazy_falsy_layout() {
+            let root = TempDir::new().unwrap();
+            let state = StateDir::new(root.path().join("state"));
+            state.create().unwrap();
+            let env = "legacy-test-env";
+            let history = HistorySession::open_runtime(&state, env).unwrap();
+            assert!(!history.is_scoped());
+            assert!(history.acquire().unwrap().commits().unwrap().is_empty());
+            state
+                .write_json(
+                    "team/legacy-test-env/commits/legacy-author/1.json",
+                    &Value::Null,
+                )
+                .unwrap();
+            let expected = CommitStore::new(&state, env).all_commits().unwrap();
+            assert!(expected.is_empty());
+            assert_eq!(history.acquire().unwrap().commits().unwrap(), expected);
+        }
+
+        #[test]
+        fn personal_history_ordinary_resume_keeps_legacy_without_selected_deadline() {
+            let f = fixture();
+            let history = HistorySession::open_runtime(f.ctx.state, &f.env).unwrap();
+            assert!(!history.is_scoped());
+            let operation = history.into_resume().unwrap();
+            std::thread::sleep(Duration::from_millis(5_020));
+            operation.check_unlocked().unwrap();
+            let resumed = operation.resume().unwrap();
+            assert!(!resumed.is_scoped());
+            assert_eq!(
+                resumed.acquire().unwrap().commits().unwrap(),
+                vec![f.genesis.clone()]
+            );
+        }
+        #[test]
+        fn personal_history_route_transition_and_nested_parse_keep_parent_limits() {
+            let f = fixture();
+            let ordinary = HistorySession::open_runtime(f.ctx.state, &f.env).unwrap();
+            assert!(!ordinary.is_scoped());
+            let operation = ordinary.into_resume().unwrap();
+            f.ctx
+                .state
+                .write_json(
+                    &format!("team/{}/bootstrap/untrusted-route.json", f.env),
+                    &json!({}),
+                )
+                .unwrap();
+            assert_eq!(
+                reason(operation.resume()),
+                "team_bootstrap_local_state_changed"
+            );
+            // DATA can force refusal, never authenticate an owner/recipient.
+            assert!(HistorySession::open_runtime(f.ctx.state, &f.env).is_err());
+            let other = fixture();
+            let parent = probe(&other);
+            other
+                .ctx
+                .state
+                .write_bytes(crate::import_barrier::INDEX, b"{}")
+                .unwrap();
+            parent.invalidate().unwrap();
+            parent.charge(0, BYTES - 3).unwrap();
+            assert_eq!(
+                reason(raw_witness_with_budget(
+                    other.ctx.state,
+                    &other.env,
+                    Some(&parent)
+                )),
+                "team_bootstrap_limit_exceeded"
+            );
+            assert_eq!(parent.budget.counters.borrow().bytes, BYTES - 3);
+            assert!(
+                !other
+                    .ctx
+                    .state
+                    .exists(&format!("team/{}/bootstrap/receipt.json", other.env))
+            );
+        }
+        #[test]
+        fn personal_history_bridge_lossless_numbers_reserved_keys_duplicates_depth_and_trailing() {
+            let f = fixture();
+            let h = probe(&f);
+            let raw=br#"{"n":100000000000000000000000000000000000000000000000000000000000000000000000000000000,"$serde_json::private::Number":"123","$serde_json::private::RawValue":"{\"x\":7}"}"#;
+            let value = h.parse(raw).unwrap();
+            assert_eq!(
+                value["n"].to_string(),
+                "100000000000000000000000000000000000000000000000000000000000000000000000000000000"
+            );
+            assert_eq!(value["$serde_json::private::Number"], "123");
+            assert_eq!(value["$serde_json::private::RawValue"], "{\"x\":7}");
+            assert_eq!(
+                reason(h.parse(br#"{"x":0,"\u0078":1}"#)),
+                "team_checkpoint_duplicate_key"
+            );
+            for raw in [b"{}[]".as_slice(), b"[]garbage", b"{\"x\":}"] {
+                assert!(h.parse(raw).is_err());
+            }
+            let deep64 = format!("{}0{}", "[".repeat(64), "]".repeat(64));
+            assert!(h.parse(deep64.as_bytes()).is_ok());
+            let deep65 = format!("{}0{}", "[".repeat(65), "]".repeat(65));
+            assert_eq!(
+                reason(h.parse(deep65.as_bytes())),
+                "team_bootstrap_limit_exceeded"
+            );
+        }
+        #[test]
+        fn personal_history_budget_before_materialization_and_checked_shared_reservations() {
+            let f = fixture();
+            {
+                let h = probe(&f);
+                h.charge(0, BYTES - 3).unwrap();
+                // The invalid JSON would fail syntax if the bridge ran. The
+                // byte reservation refuses first, without building a tree.
+                assert_eq!(reason(h.parse(b"{")), "team_bootstrap_limit_exceeded");
+                assert_eq!(h.budget.counters.borrow().bytes, BYTES - 3);
+            }
+            {
+                let h = probe(&f);
+                h.charge(WORK - 1, 0).unwrap();
+                let nested = h.nested(f.ctx.state, &f.env).unwrap();
+                nested.charge(1, 0).unwrap();
+                assert_eq!(reason(h.charge(1, 0)), "team_bootstrap_limit_exceeded");
+                assert_eq!(
+                    reason(nested.reserve_counts([u64::MAX, 1, 1, 1, 1, 1, 1])),
+                    "team_bootstrap_limit_exceeded"
+                );
+                assert_eq!(h.budget.counters.borrow().work, WORK);
+            }
+            {
+                let h = probe(&f);
+                h.charge(17, 31).unwrap();
+                let original_budget = Rc::clone(&h.budget);
+                let resume = h.into_resume().unwrap();
+                let resumed = resume.resume().unwrap();
+                assert!(Rc::ptr_eq(&resumed.budget, &original_budget));
+                let charged = resumed.budget.counters.borrow().work;
+                assert!(charged > 17, "resume must charge its full revalidation");
+                assert!(resumed.budget.counters.borrow().bytes > 31);
+                resumed.charge(WORK - charged, 0).unwrap();
+                assert_eq!(original_budget.counters.borrow().work, WORK);
+                assert_eq!(
+                    reason(resumed.charge(1, 0)),
+                    "team_bootstrap_limit_exceeded"
+                );
+                assert_eq!(
+                    reason(resumed.charge(0, u64::MAX)),
+                    "team_bootstrap_limit_exceeded"
+                );
+            }
+        }
+        #[test]
+        fn personal_history_original_copy_reserves_work_and_heap_before_clone() {
+            let f = fixture();
+            for bytes in [false, true] {
+                let history = probe(&f);
+                let input = history.acquire().unwrap();
+                let before = history.budget.counters.borrow();
+                let work = before.work;
+                let charged = before.bytes;
+                drop(before);
+                if bytes {
+                    history.charge(0, BYTES - charged - 1).unwrap();
+                } else {
+                    history.charge(WORK - work - 1, 0).unwrap();
+                }
+                assert_eq!(
+                    reason(input.observed_commits()),
+                    "team_bootstrap_limit_exceeded"
+                );
+                assert_eq!(reason(history.check()), "team_bootstrap_limit_exceeded");
+                if bytes {
+                    assert_eq!(history.budget.counters.borrow().bytes, BYTES - 1);
+                } else {
+                    assert_eq!(history.budget.counters.borrow().work, WORK - 1);
+                }
+            }
+            assert_eq!(
+                CommitStore::new(f.ctx.state, &f.env)
+                    .get(&f.genesis.author, 1)
+                    .unwrap(),
+                Some(f.genesis.clone())
+            );
+        }
+        #[test]
+        fn personal_history_overflow_and_integer_conversion_failures_stay_on_parent() {
+            let f = fixture();
+            {
+                let history = probe(&f);
+                assert_eq!(
+                    reason(history.reserve_counts([u64::MAX, 1, 1, 1, 1, 1, 1])),
+                    "team_bootstrap_limit_exceeded"
+                );
+                assert_eq!(reason(history.check()), "team_bootstrap_limit_exceeded");
+                assert_eq!(
+                    reason(history.charge(0, 0)),
+                    "team_bootstrap_limit_exceeded"
+                );
+            }
+            {
+                let history = probe(&f);
+                assert_eq!(
+                    reason(history.reserve_writer("team/bounded-test.json", BULK + 1)),
+                    "team_bootstrap_limit_exceeded"
+                );
+                assert_eq!(reason(history.check()), "team_bootstrap_limit_exceeded");
+            }
+            {
+                let history = probe(&f);
+                let line = format!("{{\"hlc\":\"{}-{}\"}}", "9".repeat(4000), "8".repeat(4000));
+                assert!(history.parse_line(&line).is_ok());
+                assert!(history.parse_line(&line).is_ok());
+                assert_eq!(
+                    reason(history.parse_line(&line)),
+                    "team_bootstrap_limit_exceeded"
+                );
+                assert_eq!(reason(history.check()), "team_bootstrap_limit_exceeded");
+            }
+            let base = serde_json::to_string(&f.genesis.to_dict()).unwrap();
+            assert_eq!(base.matches("\"seen\":{}").count(), 1);
+            let seen = (b'a'..=b'e')
+                .map(|letter| {
+                    format!(
+                        "\"{}\":{}",
+                        (letter as char).to_string().repeat(26),
+                        "9".repeat(4000)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            let raw = base.replacen("\"seen\":{}", &format!("\"seen\":{{{seen}}}"), 1);
+            let name = format!("team/{}/commits/{}/1.json", f.env, f.genesis.author);
+            f.ctx.state.write_bytes(&name, raw.as_bytes()).unwrap();
+            let history = probe(&f);
+            assert_eq!(reason(history.acquire()), "team_bootstrap_limit_exceeded");
+            assert_eq!(reason(history.check()), "team_bootstrap_limit_exceeded");
+            assert_eq!(f.ctx.state.read_bytes(&name).unwrap(), raw.as_bytes());
+            assert!(
+                !f.ctx
+                    .state
+                    .exists(&format!("team/{}/bootstrap/receipt.json", f.env))
+            );
+        }
+        #[test]
+        fn personal_history_discarded_fact_limit_cannot_quarantine_or_reset_budget() {
+            let f = fixture();
+            let h = probe(&f);
+            let nested = h.nested(f.ctx.state, &f.env).unwrap();
+            let over_depth = format!("{}0{}", "[".repeat(65), "]".repeat(65));
+            assert!(nested.parse_line(&over_depth).ok().is_none());
+            assert_eq!(reason(h.check()), "team_bootstrap_limit_exceeded");
+            assert_eq!(reason(h.charge(0, 0)), "team_bootstrap_limit_exceeded");
+            assert!(
+                !f.ctx
+                    .state
+                    .exists(&format!("team/{}/rejected_facts.jsonl", f.env))
+            );
+            drop(nested);
+            drop(h);
+            let path = format!("team/{}/facts.jsonl", f.env);
+            let stored = format!("{over_depth}\n");
+            f.ctx.state.write_bytes(&path, stored.as_bytes()).unwrap();
+            let h = probe(&f);
+            assert_eq!(
+                reason(super::super::super::sync::load_facts_with_input(
+                    &f.ctx, &f.env, &h
+                )),
+                "team_bootstrap_limit_exceeded"
+            );
+            assert_eq!(
+                fs::read(f.ctx.state.path.join(&path)).unwrap(),
+                stored.as_bytes()
+            );
+            assert!(
+                !f.ctx
+                    .state
+                    .exists(&format!("team/{}/rejected_facts.jsonl", f.env))
+            );
+        }
+        #[test]
+        fn personal_history_node_and_jsonl_bounds_preserve_raw_inputs() {
+            let f = fixture();
+            let mut raw = String::with_capacity(NODES as usize * 2 + 1);
+            raw.push('[');
+            for i in 0..NODES {
+                if i != 0 {
+                    raw.push(',');
+                }
+                raw.push('0');
+            }
+            raw.push(']');
+            {
+                let h = probe(&f);
+                assert_eq!(
+                    reason(h.parse(raw.as_bytes())),
+                    "team_bootstrap_limit_exceeded"
+                );
+            }
+            let name = format!("team/{}/facts.jsonl", f.env);
+            let lines = "0\n".repeat(ENTRIES + 1);
+            f.ctx.state.write_bytes(&name, lines.as_bytes()).unwrap();
+            let h = probe(&f);
+            let input = h.acquire().unwrap();
+            assert_eq!(
+                reason(input.read_lines(&name)),
+                "team_bootstrap_limit_exceeded"
+            );
+            assert_eq!(
+                fs::read(f.ctx.state.path.join(&name)).unwrap(),
+                lines.as_bytes()
+            );
+        }
+        #[test]
+        fn personal_history_layout_aliases_types_utf8_and_oversize_refuse_without_dropping() {
+            let f = fixture();
+            let dir = f
+                .ctx
+                .state
+                .path
+                .join(format!("team/{}/commits/{}", f.env, f.genesis.author));
+            let canonical = dir.join("1.json");
+            let bytes = fs::read(&canonical).unwrap();
+            for alias in [
+                "01.json", "+1.json", "-1.json", "0.json", "١.json", "１.json", "².json",
+            ] {
+                let path = dir.join(alias);
+                fs::rename(&canonical, &path).unwrap();
+                {
+                    let h = probe(&f);
+                    assert!(h.acquire().is_err(), "alias {alias}");
+                }
+                assert_eq!(fs::read(&path).unwrap(), bytes);
+                fs::rename(path, &canonical).unwrap();
+            }
+            let alias = dir.join("01.json");
+            fs::copy(&canonical, &alias).unwrap();
+            {
+                let h = probe(&f);
+                assert!(h.acquire().is_err());
+            }
+            fs::remove_file(alias).unwrap();
+            let nonutf = dir.join(std::ffi::OsString::from_vec(vec![
+                0xff, b'.', b'j', b's', b'o', b'n',
+            ]));
+            fs::copy(&canonical, &nonutf).unwrap();
+            {
+                let h = probe(&f);
+                assert!(h.acquire().is_err());
+            }
+            fs::remove_file(nonutf).unwrap();
+            let link = dir.join("2.json");
+            symlink(&canonical, &link).unwrap();
+            {
+                let h = probe(&f);
+                assert!(h.acquire().is_err());
+            }
+            fs::remove_file(&link).unwrap();
+            fs::create_dir(&link).unwrap();
+            fs::set_permissions(&link, fs::Permissions::from_mode(0o700)).unwrap();
+            {
+                let h = probe(&f);
+                assert!(h.acquire().is_err());
+            }
+            fs::remove_dir(&link).unwrap();
+            f.ctx
+                .state
+                .write_bytes(
+                    &format!("team/{}/commits/{}/2.json", f.env, f.genesis.author),
+                    b"",
+                )
+                .unwrap();
+            let file = fs::OpenOptions::new().write(true).open(&link).unwrap();
+            file.set_len(BULK + 1).unwrap();
+            drop(file);
+            {
+                let h = probe(&f);
+                assert_eq!(reason(h.acquire()), "team_bootstrap_limit_exceeded");
+            }
+            assert_eq!(fs::metadata(&link).unwrap().len(), BULK + 1);
+            assert_eq!(fs::read(&canonical).unwrap(), bytes);
+        }
+        #[test]
+        fn personal_history_falsy_corrupt_duplicate_and_slot_mismatch_are_not_omissions() {
+            let f = fixture();
+            let name = format!("team/{}/commits/{}/1.json", f.env, f.genesis.author);
+            let saved = fs::read(f.ctx.state.path.join(&name)).unwrap();
+            let mut duplicate = br#"{"env_id":"duplicate","#.to_vec();
+            duplicate
+                .extend_from_slice(&saved[saved.iter().position(|b| *b == b'{').unwrap() + 1..]);
+            for raw in [
+                b"null".as_slice(),
+                b"false",
+                b"{}",
+                b"[]",
+                b"0",
+                b"{",
+                duplicate.as_slice(),
+            ] {
+                f.ctx.state.write_bytes(&name, raw).unwrap();
+                let h = probe(&f);
+                assert!(h.acquire().is_err());
+                assert_eq!(fs::read(f.ctx.state.path.join(&name)).unwrap(), raw);
+            }
+            f.ctx.state.write_bytes(&name, &saved).unwrap();
+            let c = next(&f, 2, "1000001-0000");
+            f.ctx
+                .state
+                .write_json(
+                    &format!("team/{}/commits/{}/3.json", f.env, c.author),
+                    &c.to_dict(),
+                )
+                .unwrap();
+            assert!(probe(&f).acquire().is_err());
+        }
+        #[test]
+        fn personal_history_floor_retains_all_originals_and_stable_numeric_ties() {
+            let f = fixture();
+            let two = next(&f, 2, "2000000-0000");
+            let ten = next(&f, 10, "2000000-0000");
+            put(&f, &ten);
+            put(&f, &two);
+            // Literal retained DATA fixture, not a complete-cut claim. The
+            // snapshot carries the ordinary fold's actual document/order;
+            // floor-covered signed originals must all remain in the input.
+            let all = vec![f.genesis.clone(), two.clone(), ten.clone()];
+            let folded = fold::fold(&f.env, all, None, None, None, None).unwrap();
+            f.ctx.state.write_json(&format!("team/{}/snapshots/10.json",f.env),&json!({"document":folded.document,"version_order":folded.version_order,"vector":{f.genesis.author.clone():10}})).unwrap();
+            let h = probe(&f);
+            let input = h.acquire().unwrap();
+            assert_eq!(
+                input
+                    .commits()
+                    .unwrap()
+                    .iter()
+                    .map(|c| c.author_seq.clone())
+                    .collect::<Vec<_>>(),
+                vec![PyInt::from(1), PyInt::from(2), PyInt::from(10)]
+            );
+            assert_eq!(input.vector().unwrap()[&f.genesis.author], PyInt::from(10));
+            // Ordinary finite acquisition is an independent legacy parity
+            // check; the literal sequence assertion above remains the oracle.
+            assert_eq!(
+                CommitStore::new(f.ctx.state, &f.env).all_commits().unwrap(),
+                input.commits().unwrap()
+            );
+            assert_eq!(
+                input
+                    .originals
+                    .iter()
+                    .map(|o| o.raw.clone())
+                    .collect::<Vec<_>>(),
+                [&f.genesis, &two, &ten]
+                    .iter()
+                    .map(|c| fs::read(f.ctx.state.path.join(format!(
+                        "team/{}/commits/{}/{}.json",
+                        f.env, c.author, c.author_seq
+                    )))
+                    .unwrap())
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                reason(input.replication_after(&BTreeMap::new())),
+                "team_checkpoint_history_required"
+            );
+            assert!(
+                input
+                    .replication_after(&BTreeMap::from([(
+                        f.genesis.author.clone(),
+                        PyInt::from(10)
+                    )]))
+                    .unwrap()
+                    .is_empty()
+            );
+        }
+        #[test]
+        fn personal_history_bad_signature_unknown_author_and_full_record_conflict_preserve_evidence()
+         {
+            let f = fixture();
+            let mut forged = next(&f, 2, "1000001-0000");
+            forged.sig = pybase64::b64encode(&[0; 64]);
+            put(&f, &forged);
+            let path = f
+                .ctx
+                .state
+                .path
+                .join(format!("team/{}/commits/{}/2.json", f.env, forged.author));
+            let saved = fs::read(&path).unwrap();
+            assert!(probe(&f).acquire().is_err());
+            assert_eq!(fs::read(&path).unwrap(), saved);
+            fs::remove_file(&path).unwrap();
+            let stranger = DeviceKey::generate();
+            let unknown = sign_commit(
+                &stranger,
+                &f.env,
+                1,
+                "1000001-0000",
+                &BTreeMap::new(),
+                vec![json!({"op":"settings.update","sync_interval_seconds":7})],
+            )
+            .unwrap();
+            put(&f, &unknown);
+            let unknown_path = f
+                .ctx
+                .state
+                .path
+                .join(format!("team/{}/commits/{}/1.json", f.env, unknown.author));
+            let saved = fs::read(&unknown_path).unwrap();
+            assert!(probe(&f).acquire().is_err());
+            assert_eq!(fs::read(&unknown_path).unwrap(), saved);
+            fs::remove_file(unknown_path).unwrap();
+            let original = f.key.record().unwrap();
+            let agree = DeviceKey::generate().record().unwrap().agree_pub;
+            let mut message = crate::team::identity::DEVICE_RECORD_CONTEXT.to_vec();
+            message.extend_from_slice(&agree);
+            let conflicting =
+                DeviceRecord::new(&original.sign_pub, &agree, &f.key.sign(&message).unwrap())
+                    .unwrap();
+            assert!(conflicting.verify_uncached());
+            assert_eq!(conflicting.fingerprint(), original.fingerprint());
+            assert_ne!(conflicting, original);
+            let announcement=sign_commit(&f.key,&f.env,2,"1000001-0000",&BTreeMap::new(),vec![json!({"op":"member.add","device":conflicting.to_dict(),"name":"synthetic-conflicting-record","role":"admin","wraps":{}})]).unwrap();
+            put(&f, &announcement);
+            let saved = fs::read(&path).unwrap();
+            assert!(probe(&f).acquire().is_err());
+            assert_eq!(fs::read(path).unwrap(), saved);
+        }
+
+        #[test]
+        fn personal_history_sealed_vector_rejects_raw_receipt_generation_and_wrong_parent() {
+            let f = fixture();
+            let other = fixture();
+            let h = probe(&f);
+            let input = h.acquire().unwrap();
+            let seal = input.fact_seal().unwrap();
+            assert_eq!(
+                seal.current_vector(&h).unwrap()[&f.genesis.author],
+                PyInt::from(1)
+            );
+            f.ctx
+                .state
+                .write_json(
+                    &format!("team/{}/fact_admissions.json", f.env),
+                    &json!({"changed":"original-data"}),
+                )
+                .unwrap();
+            assert_eq!(
+                reason(seal.current_vector(&h)),
+                "team_bootstrap_local_state_changed"
+            );
+            let fresh = h.acquire().unwrap().fact_seal().unwrap();
+            h.invalidate().unwrap();
+            assert_eq!(
+                reason(fresh.current_vector(&h)),
+                "team_bootstrap_local_state_changed"
+            );
+            let fresh = h.acquire().unwrap().fact_seal().unwrap();
+            let wrong = probe(&other);
+            assert_eq!(
+                reason(fresh.current_vector(&wrong)),
+                "team_bootstrap_local_state_changed"
+            );
+            assert!(h.charge(WORK, 0).is_err());
+            assert_eq!(
+                reason(fresh.current_vector(&h)),
+                "team_bootstrap_limit_exceeded"
+            );
+        }
+        #[test]
+        fn personal_history_same_thread_full_revision_and_wrong_bindings() {
+            let f = fixture();
+            let h = probe(&f);
+            let old = h.acquire().unwrap();
+            let c = next(&f, 2, "1000001-0000");
+            put(&f, &c);
+            assert_eq!(reason(old.commits()), "team_bootstrap_local_state_changed");
+            let fresh = h.acquire().unwrap();
+            assert_eq!(fresh.vector().unwrap()[&c.author], PyInt::from(2));
+            let raw = fs::read(
+                f.ctx
+                    .state
+                    .path
+                    .join(format!("team/{}/commits/{}/2.json", f.env, c.author)),
+            )
+            .unwrap();
+            f.ctx
+                .state
+                .write_bytes(&format!("team/{}/commits/{}/2.json", f.env, c.author), &raw)
+                .unwrap();
+            assert_eq!(
+                reason(fresh.recheck()),
+                "team_bootstrap_local_state_changed"
+            );
+            let fresh = h.acquire().unwrap();
+            f.ctx
+                .state
+                .write_json(
+                    &format!("team/{}/fact_admissions.json", f.env),
+                    &json!({"synthetic-forged-receipt":"invalid-signature"}),
+                )
+                .unwrap();
+            assert_eq!(
+                reason(fresh.recheck()),
+                "team_bootstrap_local_state_changed"
+            );
+            let same_path = StateDir::new(&f.ctx.state.path);
+            assert_eq!(
+                reason(h.nested(&same_path, &f.env)),
+                "team_bootstrap_local_state_changed"
+            );
+            let other = new_env_id(&f.genesis.author).unwrap();
+            assert_eq!(
+                reason(h.nested(f.ctx.state, &other)),
+                "team_bootstrap_local_state_changed"
+            );
+            let custom = CommitStore {
+                state: f.ctx.state,
+                env_id: f.env.clone(),
+                root: format!("team/{}/other", f.env),
+            };
+            assert_eq!(
+                reason(receive_with_input(&custom, &c, 1_000_002, None, true, &h)),
+                "team_bootstrap_local_state_changed"
+            );
+        }
+        #[test]
+        fn personal_history_global_discovery_counts_mapping_union_before_walkers() {
+            let f = fixture();
+            let owner = f.genesis.author.clone();
+            let mut mapping = Map::new();
+            for n in 0..256 {
+                mapping.insert(
+                    format!("{owner}-{n:032x}"),
+                    json!({"project":"synthetic","environment":"unit"}),
+                );
+            }
+            f.ctx
+                .state
+                .write_json(
+                    super::super::super::sync::ENVS_MAP_PATH,
+                    &Value::Object(mapping),
+                )
+                .unwrap();
+            assert_eq!(reason(probe(&f).acquire()), "team_bootstrap_limit_exceeded");
+            assert!(
+                f.ctx
+                    .state
+                    .path
+                    .join(format!("team/{}/commits/{}/1.json", f.env, owner))
+                    .is_file()
+            );
+        }
+        #[test]
+        fn personal_history_deadline_is_shared_through_resume_and_blocks_publication_guard() {
+            let f = fixture();
+            let h = probe(&f);
+            let started = h.budget.began;
+            let resume = h.into_resume().unwrap();
+            let remaining = Duration::from_secs(5).saturating_sub(started.elapsed());
+            std::thread::sleep(remaining + Duration::from_millis(10));
+            assert_eq!(reason(resume.resume()), "team_bootstrap_timeout");
+            assert!(
+                !f.ctx
+                    .state
+                    .exists(&format!("team/{}/bootstrap/receipt.json", f.env))
+            );
+        }
+        #[test]
+        fn personal_history_writer_child() {
+            let Some(root) = std::env::var_os("PVBOOT_HISTORY_TEST_WRITER_ROOT") else {
+                return;
+            };
+            use std::io::Write;
+            // libtest may print its test-name prefix without a newline.
+            println!("\nPVBOOT_HISTORY_WRITER_WAITING");
+            std::io::stdout().flush().unwrap();
+            let state = StateDir::new(std::path::PathBuf::from(root));
+            let _lock = state.lock().unwrap();
+            state
+                .write_json(
+                    "team/history-independent-writer.json",
+                    &json!({"written":true}),
+                )
+                .unwrap();
+        }
+        #[test]
+        fn personal_history_actual_lock_serializes_independent_process_writer() {
+            use std::{
+                io::{BufRead, BufReader},
+                process::{Child, Command, Stdio},
+                time::Instant,
+            };
+            struct OwnedChild(Child);
+            impl Drop for OwnedChild {
+                fn drop(&mut self) {
+                    if self.0.try_wait().ok().flatten().is_none() {
+                        let _ = self.0.kill();
+                    }
+                    let _ = self.0.wait();
+                }
+            }
+            let f = fixture();
+            let h = probe(&f);
+            let input = h.acquire().unwrap();
+            let selector =
+                "team::commit::retained_history::boundary_tests::personal_history_writer_child";
+            let mut child = OwnedChild(
+                Command::new(std::env::current_exe().unwrap())
+                    .args(["--exact", selector, "--nocapture"])
+                    .env("PVBOOT_HISTORY_TEST_WRITER_ROOT", &f.ctx.state.path)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+                    .unwrap(),
+            );
+            let output = child.0.stdout.take().unwrap();
+            let (tx, rx) = mpsc::channel();
+            let reader = std::thread::spawn(move || {
+                for line in BufReader::new(output).lines() {
+                    if line.unwrap() == "PVBOOT_HISTORY_WRITER_WAITING" {
+                        tx.send(()).unwrap();
+                    }
+                }
+            });
+            rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(child.0.try_wait().unwrap().is_none());
+            assert!(!f.ctx.state.exists("team/history-independent-writer.json"));
+            input.recheck().unwrap();
+            drop(input);
+            drop(h);
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                if let Some(status) = child.0.try_wait().unwrap() {
+                    assert!(status.success());
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "owned writer did not acquire released lock"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            reader.join().unwrap();
+            assert_eq!(
+                f.ctx
+                    .state
+                    .read_json("team/history-independent-writer.json", Value::Null)
+                    .unwrap()["written"],
+                true
+            );
+        }
+    }
+
+        };
+    }
+    pub(super) use define;
 }

@@ -93,6 +93,8 @@ pub struct PairingEnvOut {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PairingCreateOut {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_binding: Option<String>,
     #[serde(rename = "ref")]
     pub reference: String,
     pub expires_at: String,
@@ -141,6 +143,8 @@ pub struct PairingPreviewOut {
 /// the CLI's code for why in `detail`, such as `link_peer_offline`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PairingJoinEnv {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub local_approval_complete: Option<bool>,
     pub env: String,
     pub state: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -155,6 +159,12 @@ pub struct PairingJoinEnv {
     pub project: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub environment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bootstrap_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub self_record_binding: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inviter_record_binding: Option<String>,
 }
 
 impl PairingJoinEnv {
@@ -162,12 +172,16 @@ impl PairingJoinEnv {
         Self {
             env: env.to_owned(),
             state: "failed",
+            local_approval_complete: None,
             reason: Some(reason.to_owned()),
             detail: detail.map(str::to_owned),
             self_fingerprint: None,
             inviter_fingerprint: None,
             project: None,
             environment: None,
+            bootstrap_state: None,
+            self_record_binding: None,
+            inviter_record_binding: None,
         }
     }
 }
@@ -195,6 +209,57 @@ pub struct JoinRequest {
     pub first_seen_at: Value,
     pub last_seen_at: Value,
     pub attempts: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub record_binding: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub device_record: Option<Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PersonalJoinRequestIn {
+    pub env: String,
+    pub request_id: String,
+    pub record_binding: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PersonalJoinDecisionIn {
+    pub envs: Vec<String>,
+    pub fingerprint: String,
+    pub requests: Vec<PersonalJoinRequestIn>,
+    pub admin_passphrase: SecretString,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub enum JoinApprovalInput {
+    Legacy(JoinDecisionIn),
+    Personal(PersonalJoinDecisionIn),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PersonalPairingIn {
+    #[serde(rename = "ref")]
+    pub reference: String,
+    pub action: String,
+    pub bindings: Vec<PersonalPairingBinding>,
+    pub admin_passphrase: SecretString,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PersonalPairingBinding {
+    pub env: String,
+    pub record_binding: String,
+    pub self_record_binding: String,
+}
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub enum PairingJoinInput {
+    Legacy(RefIn),
+    Personal(PersonalPairingIn),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -584,6 +649,8 @@ impl Core {
         #[derive(Deserialize)]
         struct Created {
             #[serde(default)]
+            record_binding: Option<String>,
+            #[serde(default)]
             invite: Option<SecretString>,
             #[serde(default)]
             link: Option<SecretString>,
@@ -597,6 +664,7 @@ impl Core {
         let mut invites: Vec<PairInvite> = Vec::new();
         let mut out_envs = Vec::new();
         let mut fingerprint: Option<String> = None;
+        let mut record_binding: Option<String> = None;
         let result = (|| -> Result<(), AppError> {
             for env in &envs {
                 let (project, environment) =
@@ -612,17 +680,43 @@ impl Core {
                     })?;
                     true
                 };
+                // Public member metadata only selects the private probe. The CLI
+                // revalidates the complete owner/history profile under its own lock;
+                // this observation cannot authorize an import or an admission.
+                let members = self.team_members(super::EnvIn { env: env.clone() })?;
+                let probe_owner = members["members"].as_array().is_some_and(|members| {
+                    members.len() == 1
+                        && members[0]["owner"] == true
+                        && members[0]["role"] == "admin"
+                        && members[0]["status"] == "active"
+                });
+                let args = AdminArgs::command(&["team", "invite"])
+                    .require_admin()
+                    .opt("env", env)?
+                    .opt("role", "admin")?
+                    .opt("name", &device_name)?
+                    .opt("address", &address)?
+                    .flag("approval");
+                let args = if probe_owner {
+                    args.flag("personal-bootstrap")
+                } else {
+                    args
+                };
                 let created: Created = self.runner.run_parsed(
-                    &AdminArgs::command(&["team", "invite"])
-                        .require_admin()
-                        .opt("env", env)?
-                        .opt("role", "admin")?
-                        .opt("name", &device_name)?
-                        .opt("address", &address)?
-                        .flag("approval")
-                        .flag("link"),
+                    &args.flag("link"),
                     &Envelope::new().admin_passphrase(&input.admin_passphrase),
                 )?;
+                if let Some(binding) = created.record_binding {
+                    if binding.len() != 64
+                        || !binding
+                            .bytes()
+                            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                        || record_binding.as_ref().is_some_and(|b| b != &binding)
+                    {
+                        return Err(AppError::internal("admin_output_invalid"));
+                    }
+                    record_binding = Some(binding);
+                }
                 let invite_id = created
                     .invite_id
                     .filter(|id| is_code(id))
@@ -686,6 +780,7 @@ impl Core {
             }
         });
         Ok(PairingCreateOut {
+            record_binding,
             reference,
             expires_at: iso_utc(expires),
             peer: own,
@@ -733,6 +828,17 @@ impl Core {
                             first_seen_at: r.get("first_seen_at").cloned().unwrap_or(Value::Null),
                             last_seen_at: r.get("last_seen_at").cloned().unwrap_or(Value::Null),
                             attempts: r.get("attempts").and_then(Value::as_u64).unwrap_or(0),
+                            record_binding: r
+                                .get("record_binding")
+                                .and_then(Value::as_str)
+                                .filter(|s| {
+                                    s.len() == 64
+                                        && s.bytes().all(|b| {
+                                            b.is_ascii_digit() || (b'a'..=b'f').contains(&b)
+                                        })
+                                })
+                                .map(str::to_owned),
+                            device_record: r.get("device_record").cloned(),
                         });
                     }
                 }
@@ -747,6 +853,79 @@ impl Core {
 
     pub fn approve_join(&self, input: JoinDecisionIn) -> Result<JoinDecisionOut, AppError> {
         self.decide_join(input, true)
+    }
+
+    pub fn decide_personal_join(
+        &self,
+        input: PersonalJoinDecisionIn,
+        approve: bool,
+    ) -> Result<JoinDecisionOut, AppError> {
+        require_passphrase(&input.admin_passphrase)?;
+        check_fingerprint(&input.fingerprint)?;
+        if input.requests.is_empty() || input.requests.len() > pairing::MAX_INVITES {
+            return Err(AppError::invalid_input("invalid_argument"));
+        }
+        let expected = check_envs(&input.envs)?
+            .into_iter()
+            .collect::<BTreeSet<_>>();
+        if expected != input.requests.iter().map(|r| r.env.clone()).collect() {
+            return Err(AppError::invalid_input("invalid_argument"));
+        }
+        let mut results = Vec::new();
+        let mut seen = BTreeSet::new();
+        for request in input.requests {
+            let env = check_envs(std::slice::from_ref(&request.env))?
+                .pop()
+                .ok_or_else(|| AppError::invalid_input("invalid_argument"))?;
+            if !seen.insert(env.clone())
+                || request.request_id.len() != 32
+                || !request
+                    .request_id
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                || request.record_binding.len() != 64
+                || !request
+                    .record_binding
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            {
+                return Err(AppError::invalid_input("invalid_argument"));
+            }
+            let args =
+                AdminArgs::command(&["team", if approve { "approve-join" } else { "deny-join" }])
+                    .require_admin()
+                    .opt("env", &env)?
+                    .opt("fingerprint", &input.fingerprint)?
+                    .opt("bootstrap-request", &request.request_id)?
+                    .opt("record-binding", &request.record_binding)?;
+            match self.run(
+                args,
+                Envelope::new().admin_passphrase(&input.admin_passphrase),
+            ) {
+                Ok(out) => results.push(JoinDecisionEnv {
+                    env,
+                    ok: true,
+                    reason: None,
+                    invites: out["approved_invites"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(id_text)
+                        .collect(),
+                }),
+                Err(e) if e.error == "AuthFailed" => return Err(e),
+                Err(e) => results.push(JoinDecisionEnv {
+                    env,
+                    ok: false,
+                    reason: Some(e.reason),
+                    invites: Vec::new(),
+                }),
+            }
+        }
+        Ok(JoinDecisionOut {
+            fingerprint: input.fingerprint,
+            envs: results,
+        })
     }
 
     pub fn deny_join(&self, input: JoinDecisionIn) -> Result<JoinDecisionOut, AppError> {
@@ -996,18 +1175,39 @@ impl Core {
                     if me.is_some() {
                         self_fp.clone_from(&me);
                     }
-                    if let Some(inviter) = &inviter {
+                    let bootstrap_state = text("state");
+                    let activated = bootstrap_state
+                        .as_deref()
+                        .is_none_or(|state| matches!(state, "installed_syncing" | "ready"));
+                    if let Some(inviter) = &inviter
+                        && activated
+                    {
                         joined_now.push((inviter.clone(), format!("{local_project}/{local_env}")));
                     }
                     PairingJoinEnv {
                         env: invite.env.clone(),
-                        state: "joined",
-                        reason: None,
+                        state: if activated {
+                            "joined"
+                        } else if bootstrap_state
+                            .as_deref()
+                            .is_some_and(|s| matches!(s, "unsupported" | "recovery_required"))
+                        {
+                            "failed"
+                        } else {
+                            "pending"
+                        },
+                        reason: text("reason"),
                         detail: None,
                         self_fingerprint: me,
                         inviter_fingerprint: inviter,
                         project: Some(local_project),
                         environment: Some(local_env),
+                        local_approval_complete: out
+                            .get("local_approval_complete")
+                            .and_then(Value::as_bool),
+                        bootstrap_state,
+                        self_record_binding: text("self_record_binding"),
+                        inviter_record_binding: text("inviter_record_binding"),
                     }
                 }
                 Err(e) if e.reason == JOIN_PENDING => {
@@ -1024,6 +1224,10 @@ impl Core {
                         inviter_fingerprint: inviter,
                         project: None,
                         environment: None,
+                        local_approval_complete: None,
+                        bootstrap_state: None,
+                        self_record_binding: None,
+                        inviter_record_binding: None,
                     }
                 }
                 // `team_join_failed` names in its detail why no address answered
@@ -1074,6 +1278,65 @@ impl Core {
             done,
             peer: code.peer,
             environments: results,
+        })
+    }
+
+    pub fn pairing_personal_action(
+        &self,
+        input: PersonalPairingIn,
+    ) -> Result<PairingJoinOut, AppError> {
+        let one_at_a_time = lock(&self.pairing_lock);
+        let text = self
+            .store
+            .peek_kind(&input.reference, OneTimeKind::PairingText)?;
+        let code = PairingCode::decode(text.expose())?;
+        drop(text);
+        if input.bindings.is_empty() || input.bindings.len() > code.invites.len() {
+            return Err(AppError::invalid_input("invalid_argument"));
+        }
+        let mut seen = BTreeSet::new();
+        for binding in input.bindings {
+            if !seen.insert(binding.env.clone())
+                || !code.invites.iter().any(|i| i.env == binding.env)
+            {
+                return Err(AppError::invalid_input("invalid_argument"));
+            }
+            match input.action.as_str() {
+                "approve" => {
+                    require_passphrase(&input.admin_passphrase)?;
+                    if [&binding.record_binding, &binding.self_record_binding]
+                        .iter()
+                        .any(|s| {
+                            s.len() != 64
+                                || !s
+                                    .bytes()
+                                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                        })
+                    {
+                        return Err(AppError::invalid_input("invalid_argument"));
+                    }
+                    let args = AdminArgs::command(&["team", "bootstrap-approve"])
+                        .require_admin()
+                        .opt("env", &binding.env)?
+                        .opt("record-binding", &binding.record_binding)?
+                        .opt("self-record-binding", &binding.self_record_binding)?;
+                    self.run(
+                        args,
+                        Envelope::new().admin_passphrase(&input.admin_passphrase),
+                    )?;
+                }
+                "cancel" => {
+                    self.run_plain(
+                        AdminArgs::command(&["team", "bootstrap-cancel"])
+                            .opt("env", &binding.env)?,
+                    )?;
+                }
+                _ => return Err(AppError::invalid_input("invalid_argument")),
+            }
+        }
+        drop(one_at_a_time);
+        self.pairing_join(RefIn {
+            reference: input.reference,
         })
     }
 

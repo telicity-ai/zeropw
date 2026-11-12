@@ -13,7 +13,7 @@ use std::io::{Read, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
-use std::sync::{Condvar, Mutex};
+use std::sync::{Condvar, Mutex, OnceLock};
 use std::thread::{self, ThreadId};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -40,6 +40,23 @@ pub struct StateDir {
     // transitions depth 0 <-> 1, guarded here purely so the struct stays
     // `Sync`.
     lock_file: Mutex<Option<File>>,
+    import_identity: OnceLock<BoundImportIdentity>,
+}
+
+// Bound only by an actual Context/DeviceKey load. These are local root
+// identity DATA; callers cannot construct or install a binding.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct ImportRootIdentity {
+    normalized: PathBuf,
+    device: u64,
+    inode: u64,
+    lock_device: u64,
+    lock_inode: u64,
+}
+struct BoundImportIdentity {
+    record: crate::team::identity::DeviceRecord,
+    root: ImportRootIdentity,
+    descriptor: File,
 }
 
 impl StateDir {
@@ -52,7 +69,128 @@ impl StateDir {
             }),
             lock_cond: Condvar::new(),
             lock_file: Mutex::new(None),
+            import_identity: OnceLock::new(),
         }
+    }
+
+    pub(crate) fn bind_import_identity(
+        &self,
+        record: crate::team::identity::DeviceRecord,
+    ) -> Result<(), Error> {
+        use rustix::fs::{Mode, OFlags, open};
+        use std::os::unix::fs::MetadataExt;
+        let invalid = || Error::state("team_bootstrap_local_state_changed");
+        let _binding_lock = self.lock()?;
+        if !record.verify_uncached() {
+            return Err(invalid());
+        }
+        crate::import_barrier::private_relative(self, ".import-anchor-check")?;
+        let descriptor = File::from(
+            open(
+                &self.path,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(|_| invalid())?,
+        );
+        let metadata = descriptor.metadata().map_err(|_| invalid())?;
+        let path_metadata = fs::symlink_metadata(&self.path).map_err(|_| invalid())?;
+        if !path_metadata.is_dir()
+            || path_metadata.dev() != metadata.dev()
+            || path_metadata.ino() != metadata.ino()
+        {
+            return Err(invalid());
+        }
+        crate::import_barrier::private_relative(self, ".lock")?;
+        let lock = fs::symlink_metadata(self.path.join(".lock")).map_err(|_| invalid())?;
+        let held = self.lock_file.lock().map_err(|_| invalid())?;
+        let held = held
+            .as_ref()
+            .ok_or_else(invalid)?
+            .metadata()
+            .map_err(|_| invalid())?;
+        if !lock.is_file() || lock.dev() != held.dev() || lock.ino() != held.ino() {
+            return Err(invalid());
+        }
+        let root = ImportRootIdentity {
+            normalized: fs::canonicalize(&self.path).map_err(|_| invalid())?,
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            lock_device: lock.dev(),
+            lock_inode: lock.ino(),
+        };
+        if let Some(current) = self.import_identity.get() {
+            if current.record != record || current.root != root {
+                return Err(invalid());
+            }
+            return Ok(());
+        }
+        if let Err(candidate) = self.import_identity.set(BoundImportIdentity {
+            record,
+            root,
+            descriptor,
+        }) {
+            let actual = self.import_identity.get().ok_or_else(invalid)?;
+            if actual.record != candidate.record || actual.root != candidate.root {
+                return Err(invalid());
+            }
+        }
+        Ok(())
+    }
+    pub(crate) fn import_identity(&self) -> Option<&crate::team::identity::DeviceRecord> {
+        self.import_identity.get().map(|bound| &bound.record)
+    }
+    pub(crate) fn checked_import_root(&self) -> Result<ImportRootIdentity, Error> {
+        use std::os::unix::fs::MetadataExt;
+        let invalid = || Error::state("team_bootstrap_local_state_changed");
+        if !self.locked_by_current_thread() {
+            return Err(invalid());
+        }
+        let bound = self.import_identity.get().ok_or_else(invalid)?;
+        crate::import_barrier::private_relative(self, ".lock")?;
+        let metadata = fs::symlink_metadata(&self.path).map_err(|_| invalid())?;
+        let descriptor = bound.descriptor.metadata().map_err(|_| invalid())?;
+        if !metadata.is_dir()
+            || metadata.dev() != bound.root.device
+            || metadata.ino() != bound.root.inode
+            || descriptor.dev() != bound.root.device
+            || descriptor.ino() != bound.root.inode
+            || fs::canonicalize(&self.path).map_err(|_| invalid())? != bound.root.normalized
+        {
+            return Err(invalid());
+        }
+        let held = self.lock_file.lock().map_err(|_| invalid())?;
+        let held = held
+            .as_ref()
+            .ok_or_else(invalid)?
+            .metadata()
+            .map_err(|_| invalid())?;
+        let path = fs::symlink_metadata(self.path.join(".lock")).map_err(|_| invalid())?;
+        if !path.is_file()
+            || !held.is_file()
+            || held.dev() != path.dev()
+            || held.ino() != path.ino()
+            || path.dev() != bound.root.lock_device
+            || path.ino() != bound.root.lock_inode
+        {
+            return Err(invalid());
+        }
+        Ok(bound.root.clone())
+    }
+
+    pub(crate) fn check_import_root_descriptor(&self, file: &File) -> Result<(), Error> {
+        use std::os::unix::fs::MetadataExt;
+        let identity = self.checked_import_root()?;
+        let metadata = file
+            .metadata()
+            .map_err(|_| Error::state("team_bootstrap_local_state_changed"))?;
+        if !metadata.is_dir()
+            || metadata.dev() != identity.device
+            || metadata.ino() != identity.inode
+        {
+            return Err(Error::state("team_bootstrap_local_state_changed"));
+        }
+        Ok(())
     }
 
     /// Joins a caller-supplied `name` onto `self.path` the way Python's
@@ -217,13 +355,43 @@ impl StateDir {
     // ------------------------------------------------------------------- json
     /// `StateDir.read_json`.
     pub fn read_json(&self, name: &str, default: Value) -> Result<Value, Error> {
+        // Preserve the legacy lock-free deferred-gap observation. The first
+        // import installs a permanent epoch record before changing targets;
+        // an optimistic read that crosses that transition retries locked.
+        let team_observation = if name.starts_with("team/") {
+            Some(crate::import_barrier::index(self)?)
+        } else {
+            None
+        };
+        let _import_view = if crate::import_barrier::coherent_path(name)
+            && team_observation
+                .as_ref()
+                .is_none_or(|v| v.as_object().is_none_or(|v| !v.is_empty()))
+        {
+            Some(self.lock()?)
+        } else {
+            None
+        };
+        crate::import_barrier::require_path(self, name)?;
+        #[cfg(test)]
+        crate::import_barrier::testing::reader_hit(self, name, "reader-check-before-read")?;
         let target = self.join(name);
-        if !target.exists() {
-            return Ok(default);
+        let value = if !target.exists() {
+            default.clone()
+        } else {
+            let text = fs::read_to_string(&target)
+                .map_err(|_| Error::state("state_corrupt").with_detail(name))?;
+            pyjson::loads(&text).map_err(|_| Error::state("state_corrupt").with_detail(name))?
+        };
+        #[cfg(test)]
+        crate::import_barrier::testing::reader_hit(self, name, "reader-file-read-before-view")?;
+        if let Some(before) = team_observation
+            && crate::import_barrier::index(self)? != before
+        {
+            let _import_view = self.lock()?;
+            return self.read_json(name, default);
         }
-        let text = fs::read_to_string(&target)
-            .map_err(|_| Error::state("state_corrupt").with_detail(name))?;
-        pyjson::loads(&text).map_err(|_| Error::state("state_corrupt").with_detail(name))
+        crate::import_barrier::visible(self, name, value)
     }
 
     /// `StateDir.write_json`. Python's `try` wraps *both* the write and the
@@ -236,6 +404,14 @@ impl StateDir {
     /// (store.py:98) sit before that `try`, so their failures are the raw
     /// `OSError` ([`uncaught_os_error`]), not `state_write_failed`.
     pub fn write_json(&self, name: &str, value: &Value) -> Result<(), Error> {
+        let _import_view = if crate::import_barrier::coherent_path(name) {
+            Some(self.lock()?)
+        } else {
+            None
+        };
+        crate::import_barrier::require_path(self, name)?;
+        let guarded_value = crate::import_barrier::preserve_hidden(self, name, value)?;
+        let value = &guarded_value;
         let target = self.join(name);
         mkdir_parent(&target)?;
         let text = pyjson::dumps(value, DumpOptions::pretty_sorted())
@@ -267,6 +443,12 @@ impl StateDir {
     /// no `except` clause, so the `mkdir`, `os.open`, `os.write` and
     /// `os.fsync` failures are all the raw `OSError` ([`uncaught_os_error`]).
     pub fn append_line(&self, name: &str, line: &str) -> Result<(), Error> {
+        let _import_view = if crate::import_barrier::coherent_path(name) {
+            Some(self.lock()?)
+        } else {
+            None
+        };
+        crate::import_barrier::require_path(self, name)?;
         if line.contains('\n') {
             return Err(Error::state("state_invalid_line").with_detail(name));
         }
@@ -292,6 +474,12 @@ impl StateDir {
     /// `StateError("state_corrupt", "UnicodeDecodeError")` -- the shape the
     /// administrator CLI's `except (..., ValueError)` handler prints.
     pub fn read_lines(&self, name: &str, limit: Option<usize>) -> Result<Vec<String>, Error> {
+        let _import_view = if crate::import_barrier::coherent_path(name) {
+            Some(self.lock()?)
+        } else {
+            None
+        };
+        crate::import_barrier::require_path(self, name)?;
         let target = self.join(name);
         if !target.exists() {
             return Ok(Vec::new());
@@ -323,6 +511,12 @@ impl StateDir {
     /// (store.py:139) precede that `try`: their failures are the raw
     /// `OSError` ([`uncaught_os_error`]).
     pub fn write_bytes(&self, name: &str, data: &[u8]) -> Result<(), Error> {
+        let _import_view = if crate::import_barrier::coherent_path(name) {
+            Some(self.lock()?)
+        } else {
+            None
+        };
+        crate::import_barrier::require_path(self, name)?;
         let target = self.join(name);
         mkdir_parent(&target)?;
         let tmp = tmp_path_write_bytes(&target);
@@ -346,6 +540,12 @@ impl StateDir {
 
     /// `StateDir.read_bytes`.
     pub fn read_bytes(&self, name: &str) -> Result<Vec<u8>, Error> {
+        let _import_view = if crate::import_barrier::coherent_path(name) {
+            Some(self.lock()?)
+        } else {
+            None
+        };
+        crate::import_barrier::require_path(self, name)?;
         let target = self.join(name);
         let mut buf = Vec::new();
         File::open(&target)

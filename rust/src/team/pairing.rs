@@ -288,7 +288,7 @@ pub fn list_requests(ctx: &Context, env_id: &str) -> Result<Value> {
     let now = (ctx.clock)();
     let invites = ctx.state.read_json(&invites_path(env_id), json!({}))?;
     let requests = load_requests(ctx, env_id)?;
-    let listed: Vec<Value> = requests
+    let mut listed: Vec<Value> = requests
         .iter()
         .filter(|request| {
             invites
@@ -303,6 +303,7 @@ pub fn list_requests(ctx: &Context, env_id: &str) -> Result<Value> {
         })
         .map(Request::view)
         .collect();
+    listed.extend(super::bootstrap::approval::list(ctx, env_id)?);
     Ok(json!({"env_id": env_id, "requests": listed}))
 }
 

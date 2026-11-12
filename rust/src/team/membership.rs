@@ -195,20 +195,42 @@ fn audit(ctx: &Context, event: &str, env_id: &str, extra: Vec<(&'static str, Val
 }
 
 pub fn load_environment(ctx: &Context, env_id: &str) -> Result<FoldResult> {
-    let store = CommitStore::new(ctx.state, env_id);
-    let (facts, _, _) = sync::load_facts(ctx, env_id)?;
-    fold::fold_with_snapshot(
-        env_id,
-        store.all_commits()?,
-        ctx.state,
-        Some(&facts),
-        Some(ctx.audit),
-    )
+    let history = commit::HistorySession::open_runtime(ctx.state, env_id)?;
+    load_environment_with_input(ctx, env_id, &history)
+}
+pub(crate) fn load_environment_with_input(
+    ctx: &Context,
+    env_id: &str,
+    history: &commit::HistorySession<'_>,
+) -> Result<FoldResult> {
+    let nested = history.nested(ctx.state, env_id)?;
+    let history = &nested;
+    crate::import_barrier::require_env(ctx.state, env_id)?;
+    let (facts, _, _) = sync::load_facts_with_input(ctx, env_id, history)?;
+    let input = history.acquire()?;
+    let commits = input.commits()?;
+    history.check()?;
+    let result = input.fold_with_snapshot(commits, &facts, Some(ctx.audit))?;
+    history.check()?;
+    Ok(result)
 }
 pub(crate) fn refold_and_derive(ctx: &Context, env_id: &str) -> Result<FoldResult> {
-    let result = load_environment(ctx, env_id)?;
+    let history = commit::HistorySession::open_runtime(ctx.state, env_id)?;
+    refold_and_derive_with_input(ctx, env_id, &history)
+}
+pub(crate) fn refold_and_derive_with_input(
+    ctx: &Context,
+    env_id: &str,
+    history: &commit::HistorySession<'_>,
+) -> Result<FoldResult> {
+    let nested = history.nested(ctx.state, env_id)?;
+    let history = &nested;
+    let result = load_environment_with_input(ctx, env_id, history)?;
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
+    history.match_local_identity(&device.record()?)?;
     let (project, environment) = sync::env_project_environment(ctx.state, env_id)?;
+    history.check()?;
+    history.invalidate()?;
     fold::derive_local(
         &result,
         ctx.state,
@@ -219,6 +241,7 @@ pub(crate) fn refold_and_derive(ctx: &Context, env_id: &str) -> Result<FoldResul
         project.as_deref(),
         environment.as_deref(),
     )?;
+    history.check()?;
     Ok(result)
 }
 
@@ -248,9 +271,12 @@ fn require_editing_standing(
     env_id: &str,
     author: &str,
     ops: &[Value],
+    history: &commit::HistorySession<'_>,
 ) -> Result<fold::Facts> {
-    let (facts, _, _) = sync::load_facts(ctx, env_id)?;
-    let commits = CommitStore::new(ctx.state, env_id).all_commits()?;
+    let (facts, _, _) = sync::load_facts_with_input(ctx, env_id, history)?;
+    let input = history.acquire()?;
+    let commits = input.commits()?;
+    input.reserve_fold(&commits, Some(&facts), 1)?;
     for op in ops {
         if op["op"]
             .as_str()
@@ -269,8 +295,7 @@ fn require_editing_standing(
         if facts.removed_members.contains(author) {
             return Err(Error::policy_denied("member_removed").with_detail(REFUSAL_DETAIL));
         }
-        let doc =
-            fold::fold_with_snapshot(env_id, commits, ctx.state, Some(&facts), None)?.document;
+        let doc = input.fold_with_snapshot(commits, &facts, None)?.document;
         if !sync::is_admin(&doc, author) {
             return Err(Error::policy_denied("not_admin").with_detail(REFUSAL_DETAIL));
         }
@@ -289,9 +314,15 @@ fn refuse_unauthorized_ops(
     facts: &fold::Facts,
     mut commits: Vec<Commit>,
     commit: &Commit,
+    history: &commit::HistorySession<'_>,
 ) -> Result<()> {
+    if !std::ptr::eq(history.state(), ctx.state) || history.env() != env_id {
+        return Err(Error::state("team_bootstrap_local_state_changed"));
+    }
     commits.push(commit.clone());
-    let folded = fold::fold_with_snapshot(env_id, commits, ctx.state, Some(facts), None)?;
+    let folded = history
+        .acquire()?
+        .fold_with_snapshot(commits, facts, None)?;
     let hash = commit.hash()?;
     let refused = folded.skipped.into_iter().find(|(skipped, _, reason)| {
         *skipped == hash && UNAUTHORIZED_SKIPS.contains(&reason.as_str())
@@ -311,8 +342,28 @@ pub fn author_commit(
     env_id: &str,
     ops: Vec<Value>,
 ) -> Result<Commit> {
-    let _lock = ctx.state.lock()?;
+    let history = commit::HistorySession::open_runtime(ctx.state, env_id)?;
+    let result = author_commit_with_input(ctx, team, env_id, ops, &history);
+    drop(history);
+    if result.is_ok()
+        && let Some(team) = team
+    {
+        team.flush_deferred_sends();
+    }
+    result
+}
+pub(crate) fn author_commit_with_input(
+    ctx: &Context,
+    team: Option<&TeamSync>,
+    env_id: &str,
+    ops: Vec<Value>,
+    history: &commit::HistorySession<'_>,
+) -> Result<Commit> {
+    let nested = history.nested(ctx.state, env_id)?;
+    let history = &nested;
+    super::bootstrap::approval::recover_all_with_input(ctx, env_id, history)?;
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
+    history.match_local_identity(&device.record()?)?;
     // `env.init` precedes any membership.
     let bootstrap = ops.iter().all(|op| op["op"] == "env.init");
     let standing = if bootstrap {
@@ -323,11 +374,12 @@ pub fn author_commit(
             env_id,
             &device.fingerprint()?,
             &ops,
+            history,
         )?)
     };
     if ops.iter().any(|op| op["op"] == "secret.put_version") {
-        ensure_removal_rotations(ctx, team, env_id)?;
-        let doc = load_environment(ctx, env_id)?.document;
+        ensure_removal_rotations_with_input(ctx, team, env_id, history)?;
+        let doc = load_environment_with_input(ctx, env_id, history)?.document;
         let current = doc["dek"]["current"].as_str().unwrap_or("");
         let unsafe_current = doc["dek"]["generations"][current]["wraps"]
             .as_object()
@@ -349,7 +401,7 @@ pub fn author_commit(
     }
     let store = CommitStore::new(ctx.state, env_id);
     let mut hlc = Hlc::new(0, 0);
-    let live = store.all_commits()?;
+    let live = history.acquire()?.commits()?;
     for observed in &live {
         hlc.observe(&observed.hlc)?;
     }
@@ -364,25 +416,38 @@ pub fn author_commit(
     let wall = None;
     #[cfg(test)]
     let wall = compaction_heads::testing::author_wall();
+    history.check()?;
+    history.preflight_operations(&ops)?;
     let commit = commit::sign_commit(&device, env_id, seq, &hlc.tick(wall), &store.vector()?, ops)?;
     if let Some(facts) = standing {
         // Read again: a rekey repair above may have stored rotations.
-        refuse_unauthorized_ops(ctx, env_id, &facts, store.all_commits()?, &commit)?;
+        refuse_unauthorized_ops(
+            ctx,
+            env_id,
+            &facts,
+            history.acquire()?.commits()?,
+            &commit,
+            history,
+        )?;
     }
     let outcome = if let Some(team) = team {
-        team.submit_commit(env_id, &commit)?
+        team.submit_commit_with_input(env_id, &commit, history)?
     } else {
-        commit::receive_commit(&store, &commit, commit::now_ms(), Some(ctx.audit))?
+        commit::receive_runtime_with_input(
+            &store,
+            &commit,
+            commit::now_ms(),
+            Some(ctx.audit),
+            true,
+            history,
+            ctx,
+        )?
     };
     if outcome != "accepted" {
         return Err(Error::state(format!("team_local_commit_{outcome}")));
     }
     if team.is_none() {
-        refold_and_derive(ctx, env_id)?;
-    }
-    drop(_lock);
-    if let Some(team) = team {
-        team.flush_deferred_sends();
+        refold_and_derive_with_input(ctx, env_id, history)?;
     }
     Ok(commit)
 }
@@ -393,8 +458,19 @@ pub fn author_fact(
     kind: &str,
     target: Value,
 ) -> Result<Value> {
-    let fact = sign_authorized_fact(ctx, team, env_id, kind, target)?;
-    publish_signed_fact(ctx, team, env_id, fact)
+    let history = commit::HistorySession::open_runtime(ctx.state, env_id)?;
+    let result = if history.is_scoped() {
+        let fact = sign_authorized_fact_with_input(ctx, team, env_id, kind, target, &history)?;
+        publish_signed_fact_with_input(ctx, team, env_id, fact, &history)
+    } else {
+        let fact = sign_authorized_fact(ctx, team, env_id, kind, target)?;
+        publish_signed_fact(ctx, team, env_id, fact)
+    };
+    drop(history);
+    if let Some(team) = team {
+        team.flush_deferred_sends();
+    }
+    result
 }
 
 /// Check that this device may author the fact, and sign it without storing
@@ -406,14 +482,30 @@ fn sign_authorized_fact(
     kind: &str,
     target: Value,
 ) -> Result<sync::Fact> {
+    let history = commit::HistorySession::open_runtime(ctx.state, env_id)?;
+    sign_authorized_fact_with_input(ctx, team, env_id, kind, target, &history)
+}
+fn sign_authorized_fact_with_input(
+    ctx: &Context,
+    team: Option<&TeamSync>,
+    env_id: &str,
+    kind: &str,
+    target: Value,
+    parent: &commit::HistorySession<'_>,
+) -> Result<sync::Fact> {
+    let history = parent.nested(ctx.state, env_id)?;
     if let Some(team) = team {
-        return team.sign_authorized_fact(env_id, kind, target);
+        return if history.is_scoped() {
+            team.sign_authorized_fact_with_input(env_id, kind, target, &history)
+        } else {
+            team.sign_authorized_fact(env_id, kind, target)
+        };
     }
-    let _lock = ctx.state.lock()?;
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
-    let mut doc = load_environment(ctx, env_id)?.document;
+    history.match_local_identity(&device.record()?)?;
+    let mut doc = load_environment_with_input(ctx, env_id, &history)?.document;
     if kind == "member_removed" {
-        let (mut facts, _, authors) = sync::load_facts(ctx, env_id)?;
+        let (mut facts, _, authors) = sync::load_facts_with_input(ctx, env_id, &history)?;
         let author = device.fingerprint()?;
         let target_fp = target["fingerprint"].as_str().unwrap_or("");
         if facts.removed_members.contains(&author)
@@ -422,14 +514,11 @@ fn sign_authorized_fact(
                 .is_some_and(|set| set.len() == 1 && set.contains(target_fp))
         {
             facts.removed_members.remove(&author);
-            doc = fold::fold_with_snapshot(
-                env_id,
-                CommitStore::new(ctx.state, env_id).all_commits()?,
-                ctx.state,
-                Some(&facts),
-                Some(ctx.audit),
-            )?
-            .document;
+            let input = history.acquire()?;
+            let commits = input.commits()?;
+            doc = input
+                .fold_with_snapshot(commits, &facts, Some(ctx.audit))?
+                .document;
         }
     }
     if !sync::fact_role_ok(&doc, kind, &device.fingerprint()?, &target) {
@@ -439,7 +528,7 @@ fn sign_authorized_fact(
     // node has seen, so a removal never cuts off work it already accepted.
     let mut hlc = Hlc::new(0, 0);
     let store = CommitStore::new(ctx.state, env_id);
-    let live = store.all_commits()?;
+    let live = history.acquire()?.commits()?;
     for observed in &live {
         hlc.observe(&observed.hlc)?;
     }
@@ -448,6 +537,7 @@ fn sign_authorized_fact(
     let wall = None;
     #[cfg(test)]
     let wall = compaction_heads::testing::author_wall();
+    history.check()?;
     sync::sign_fact(&device, env_id, kind, target, &hlc.tick(wall))
 }
 
@@ -459,22 +549,47 @@ fn publish_signed_fact(
     env_id: &str,
     fact: sync::Fact,
 ) -> Result<Value> {
+    let history = commit::HistorySession::open_runtime(ctx.state, env_id)?;
+    let result = publish_signed_fact_with_input(ctx, team, env_id, fact, &history);
+    drop(history);
     if let Some(team) = team {
-        return team.publish_signed_fact(env_id, fact);
+        team.flush_deferred_sends();
     }
-    let _lock = ctx.state.lock()?;
-    sync::receipt_fact(ctx, &fact)?;
+    result
+}
+fn publish_signed_fact_with_input(
+    ctx: &Context,
+    team: Option<&TeamSync>,
+    env_id: &str,
+    fact: sync::Fact,
+    history: &commit::HistorySession<'_>,
+) -> Result<Value> {
+    if let Some(team) = team {
+        return if history.is_scoped() {
+            team.publish_signed_fact_with_input(env_id, fact, history)
+        } else {
+            team.publish_signed_fact(env_id, fact)
+        };
+    }
+    sync::receipt_fact_with_input(ctx, &fact, history)?;
+    history.invalidate()?;
+    history.effect_boundary(env_id, "fact-original-before")?;
     ctx.state.append_line(
         &format!("team/{env_id}/facts.jsonl"),
         &pyjson::dumps(&fact.to_dict(), DumpOptions::compact_sorted())?,
     )?;
+    history.effect_boundary(env_id, "fact-original-after")?;
+    history.effect_boundary(env_id, "fact-audit-before")?;
     audit(
         ctx,
         "team_fact_apply",
         env_id,
         vec![("kind", json!(fact.kind))],
     );
-    refold_and_derive(ctx, env_id)?;
+    history.effect_boundary(env_id, "fact-audit-after")?;
+    history.effect_boundary(env_id, "fact-refold-before")?;
+    refold_and_derive_with_input(ctx, env_id, history)?;
+    history.effect_boundary(env_id, "fact-refold-after")?;
     Ok(fact.to_dict())
 }
 
@@ -773,6 +888,30 @@ pub fn create_invite_opts(
     link: bool,
     approval: bool,
 ) -> Result<CreatedInvite> {
+    create_invite_with_input(
+        ctx,
+        env_id,
+        role,
+        name,
+        ttl_seconds,
+        addresses,
+        link,
+        approval,
+        None,
+    )
+}
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn create_invite_with_input(
+    ctx: &Context,
+    env_id: &str,
+    role: &str,
+    name: &str,
+    ttl_seconds: i64,
+    addresses: &[String],
+    link: bool,
+    approval: bool,
+    history: Option<&commit::HistorySession<'_>>,
+) -> Result<CreatedInvite> {
     if role != "admin" && role != "user" {
         return Err(Error::invalid_input("invalid_role"));
     }
@@ -795,13 +934,26 @@ pub fn create_invite_opts(
     {
         return Err(Error::invalid_input("invalid_address").with_detail(INVITE_ADDRESS_DETAIL));
     }
+    if let Some(history) = history {
+        super::bootstrap::approval::validate_invite_profile(ctx, env_id, history)?;
+    }
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
-    let doc = load_environment(ctx, env_id)?.document;
+    if let Some(history) = history {
+        history.match_local_identity(&device.record()?)?;
+    }
+    let doc = match history {
+        Some(history) => load_environment_with_input(ctx, env_id, history)?,
+        None => load_environment(ctx, env_id)?,
+    }
+    .document;
     if doc["owner"].is_null() {
         return Err(Error::not_found("team_env_not_found"));
     }
     if !sync::is_admin(&doc, &device.fingerprint()?) {
         return Err(Error::policy_denied("not_admin"));
+    }
+    if let Some(history) = history {
+        history.check()?;
     }
     let mut secret = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut secret);
@@ -830,6 +982,9 @@ pub fn create_invite_opts(
         entry["approval"] = json!(super::pairing::APPROVAL_REQUIRED);
     }
     invites[&id] = entry;
+    if let Some(history) = history {
+        history.check()?;
+    }
     ctx.state.write_json(&path, &invites)?;
     audit(
         ctx,
@@ -1155,6 +1310,12 @@ pub fn join(
     timeout: f64,
 ) -> Result<Value> {
     let invite = parse_invite(invite_text)?;
+    if ctx
+        .state
+        .exists(&super::bootstrap::path(&invite.env_id, "attempt.json")?)
+    {
+        return super::bootstrap::resume(ctx, invite_text, project, environment);
+    }
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
     let project = project.map(str::to_owned).unwrap_or_else(|| {
         format!(
@@ -1198,6 +1359,27 @@ pub fn join(
         // The inviter answered with JOIN_PENDING: this device's join waits for
         // the inviter's explicit approval (docs/remote-sync.md §3.2).
         if team.take_join_pending(&invite.env_id, &invite.inviter) {
+            if ctx
+                .state
+                .exists(&super::bootstrap::path(&invite.env_id, "offer.json")?)
+            {
+                let status = super::bootstrap::begin(ctx, invite_text, &project, environment)?;
+                let offer = ctx.state.read_json(
+                    &super::bootstrap::path(&invite.env_id, "offer.json")?,
+                    Value::Null,
+                )?;
+                let peer = DeviceRecord::from_dict(&offer["device_record"])?;
+                super::bootstrap::approval::observe_peer(
+                    ctx,
+                    &invite.env_id,
+                    &invite,
+                    &peer,
+                    &project,
+                    environment,
+                )?;
+                let _ = status;
+                return super::bootstrap::status(ctx, &invite.env_id);
+            }
             let mut fields = Map::new();
             fields.insert("self_fingerprint".into(), json!(device.fingerprint()?));
             fields.insert("inviter_fingerprint".into(), json!(invite.inviter));
@@ -1225,9 +1407,9 @@ pub fn remove_member(
     env_id: &str,
     fingerprint: &str,
 ) -> Result<Value> {
-    let _lock = ctx.state.lock()?;
+    let history = commit::HistorySession::open_runtime(ctx.state, env_id)?;
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
-    let doc = load_environment(ctx, env_id)?.document;
+    let doc = load_environment_with_input(ctx, env_id, &history)?.document;
     if doc["owner"].is_null() {
         return Err(Error::not_found("team_env_not_found"));
     }
@@ -1239,11 +1421,12 @@ pub fn remove_member(
     {
         // A self-removal is placed in this device's own sequence, which no
         // later commit of it can sort before (issue #27).
-        author_commit(
+        author_commit_with_input(
             ctx,
             team,
             env_id,
             vec![json!({"op":"member.remove","fingerprint":fingerprint})],
+            &history,
         )?;
     }
     let target = json!({"fingerprint":fingerprint});
@@ -1252,19 +1435,31 @@ pub fn remove_member(
         // The rotation that excludes the device also attests its history
         // (`removal_fact_hash`, issue #27). It is written before the fact
         // is published, so no node ever holds the fact without it.
-        let fact = sign_authorized_fact(ctx, team, env_id, "member_removed", target)?;
-        rotated = Some(rotate_dek_bound(
-            ctx,
-            team,
-            env_id,
-            Some(&fact.hash()?),
-            Some(fingerprint),
-        )?);
-        let fact = publish_signed_fact(ctx, team, env_id, fact)?;
-        flag_rotation_recommended(ctx, team, env_id)?;
+        let fact =
+            sign_authorized_fact_with_input(ctx, team, env_id, "member_removed", target, &history)?;
+        rotated = Some(if history.is_scoped() {
+            rotate_dek_bound_with_input(
+                ctx,
+                team,
+                env_id,
+                Some(&fact.hash()?),
+                Some(fingerprint),
+                &history,
+            )?
+        } else {
+            rotate_dek_bound(ctx, team, env_id, Some(&fact.hash()?), Some(fingerprint))?
+        });
+        let fact = publish_signed_fact_with_input(ctx, team, env_id, fact, &history)?;
+        if history.is_scoped() {
+            flag_rotation_recommended_with_input(ctx, team, env_id, &history)?;
+        } else {
+            flag_rotation_recommended(ctx, team, env_id)?;
+        }
         fact
     } else {
-        author_fact(ctx, team, env_id, "member_removed", target)?
+        let fact =
+            sign_authorized_fact_with_input(ctx, team, env_id, "member_removed", target, &history)?;
+        publish_signed_fact_with_input(ctx, team, env_id, fact, &history)?
     };
     audit(
         ctx,
@@ -1272,7 +1467,7 @@ pub fn remove_member(
         env_id,
         vec![("fingerprint", json!(fingerprint))],
     );
-    drop(_lock);
+    drop(history);
     if let Some(team) = team {
         team.flush_deferred_sends();
     }
@@ -1289,8 +1484,25 @@ fn rotate_dek_bound(
     removal: Option<&str>,
     exclude: Option<&str>,
 ) -> Result<String> {
-    let _lock = ctx.state.lock()?;
-    let doc = load_environment(ctx, env_id)?.document;
+    let history = commit::HistorySession::open_runtime(ctx.state, env_id)?;
+    let result = rotate_dek_bound_with_input(ctx, team, env_id, removal, exclude, &history);
+    drop(history);
+    if result.is_ok()
+        && let Some(team) = team
+    {
+        team.flush_deferred_sends();
+    }
+    result
+}
+fn rotate_dek_bound_with_input(
+    ctx: &Context,
+    team: Option<&TeamSync>,
+    env_id: &str,
+    removal: Option<&str>,
+    exclude: Option<&str>,
+    history: &commit::HistorySession<'_>,
+) -> Result<String> {
+    let doc = load_environment_with_input(ctx, env_id, history)?.document;
     let mut dek = [0u8; 32];
     rand::rngs::OsRng.fill_bytes(&mut dek);
     let generation = token(16);
@@ -1313,8 +1525,8 @@ fn rotate_dek_bound(
     if let Some(hash) = removal {
         op["removal_fact_hash"] = json!(hash);
     }
-    author_commit(ctx, team, env_id, vec![op])?;
-    if load_environment(ctx, env_id)?.document["dek"]["current"] != generation {
+    author_commit_with_input(ctx, team, env_id, vec![op], history)?;
+    if load_environment_with_input(ctx, env_id, history)?.document["dek"]["current"] != generation {
         return Err(Error::policy_denied("team_rekey_pending"));
     }
     audit(
@@ -1323,10 +1535,6 @@ fn rotate_dek_bound(
         env_id,
         vec![("count", json!(wraps.len()))],
     );
-    drop(_lock);
-    if let Some(team) = team {
-        team.flush_deferred_sends();
-    }
     Ok(generation)
 }
 /// Repair a received or persisted removal before accepting new secret writes.
@@ -1336,10 +1544,26 @@ pub(crate) fn ensure_removal_rotations(
     team: Option<&TeamSync>,
     env_id: &str,
 ) -> Result<()> {
-    let _lock = ctx.state.lock()?;
+    let history = commit::HistorySession::open_runtime(ctx.state, env_id)?;
+    let result = ensure_removal_rotations_with_input(ctx, team, env_id, &history);
+    drop(history);
+    if result.is_ok()
+        && let Some(team) = team
+    {
+        team.flush_deferred_sends();
+    }
+    result
+}
+fn ensure_removal_rotations_with_input(
+    ctx: &Context,
+    team: Option<&TeamSync>,
+    env_id: &str,
+    history: &commit::HistorySession<'_>,
+) -> Result<()> {
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
-    let mut doc = load_environment(ctx, env_id)?.document;
-    let (facts, _, _) = sync::load_facts(ctx, env_id)?;
+    history.match_local_identity(&device.record()?)?;
+    let mut doc = load_environment_with_input(ctx, env_id, history)?.document;
+    let (facts, _, _) = sync::load_facts_with_input(ctx, env_id, history)?;
     let removals = ctx
         .state
         .read_lines(&format!("team/{env_id}/facts.jsonl"), None)?
@@ -1397,7 +1621,7 @@ pub(crate) fn ensure_removal_rotations(
             identity_doc = Some(
                 fold::fold(
                     env_id,
-                    CommitStore::new(ctx.state, env_id).all_commits()?,
+                    history.acquire()?.commits()?,
                     Some(&relaxed),
                     None,
                     None,
@@ -1417,9 +1641,9 @@ pub(crate) fn ensure_removal_rotations(
         if !sync::is_admin(&doc, &device.fingerprint()?) {
             return Err(Error::policy_denied("team_rekey_pending"));
         }
-        flag_rotation_recommended(ctx, team, env_id)?;
-        rotate_dek_bound(ctx, team, env_id, Some(&fact.hash()?), None)?;
-        doc = load_environment(ctx, env_id)?.document;
+        flag_rotation_recommended_with_input(ctx, team, env_id, history)?;
+        rotate_dek_bound_with_input(ctx, team, env_id, Some(&fact.hash()?), None, history)?;
+        doc = load_environment_with_input(ctx, env_id, history)?.document;
     }
     let current = doc["dek"]["current"].as_str().unwrap_or("");
     let unsafe_current = doc["dek"]["generations"][current]["wraps"]
@@ -1435,21 +1659,26 @@ pub(crate) fn ensure_removal_rotations(
         if !sync::is_admin(&doc, &device.fingerprint()?) {
             return Err(Error::policy_denied("team_rekey_pending"));
         }
-        flag_rotation_recommended(ctx, team, env_id)?;
-        rotate_dek_bound(ctx, team, env_id, None, None)?;
-    }
-    drop(_lock);
-    if let Some(team) = team {
-        team.flush_deferred_sends();
+        flag_rotation_recommended_with_input(ctx, team, env_id, history)?;
+        rotate_dek_bound_with_input(ctx, team, env_id, None, None, history)?;
     }
     Ok(())
 }
 
 fn flag_rotation_recommended(ctx: &Context, team: Option<&TeamSync>, env_id: &str) -> Result<()> {
+    let history = commit::HistorySession::open_runtime(ctx.state, env_id)?;
+    flag_rotation_recommended_with_input(ctx, team, env_id, &history)
+}
+fn flag_rotation_recommended_with_input(
+    ctx: &Context,
+    team: Option<&TeamSync>,
+    env_id: &str,
+    history: &commit::HistorySession<'_>,
+) -> Result<()> {
     let doc = if let Some(team) = team {
         team.document(env_id)?
     } else {
-        load_environment(ctx, env_id)?.document
+        load_environment_with_input(ctx, env_id, history)?.document
     };
     let path = format!("team/{env_id}/rotation_flags.json");
     let _lock = ctx.state.lock()?;

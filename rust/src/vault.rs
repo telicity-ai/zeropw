@@ -958,6 +958,8 @@ impl<'a> Vault<'a> {
         version: &ResolvedVersion,
         entry: &Map<String, Value>,
     ) -> Result<SecretBytes, Error> {
+        let _import_view = self.state.lock()?;
+        crate::import_barrier::require_secret(self.state, secret_id)?;
         if entry.get("shared_env").is_some_and(|v| !json_falsy(v)) {
             return self.decrypt_shared(secret_id, entry);
         }
@@ -1584,6 +1586,7 @@ impl<'a> Vault<'a> {
         project: Option<&str>,
         environment: Option<&str>,
     ) -> Result<Vec<SecretMeta>, Error> {
+        let _import_view = self.state.lock()?;
         let project = project.filter(|s| !s.is_empty());
         let environment = environment.filter(|s| !s.is_empty());
         let doc = self.doc()?;
@@ -1668,6 +1671,7 @@ impl<'a> Vault<'a> {
         version: Option<PyInt>,
     ) -> Result<ResolvedVersion, Error> {
         let _lock = self.state.lock()?;
+        crate::import_barrier::require_secret(self.state, secret_id)?;
         let doc = self.doc()?;
         crate::tombstone::require_live(
             self.state,
@@ -1696,6 +1700,7 @@ impl<'a> Vault<'a> {
         version: Option<PyInt>,
     ) -> Result<SecretBytes, Error> {
         let _lock = self.state.lock()?;
+        crate::import_barrier::require_secret(self.state, secret_id)?;
         let doc = self.doc()?;
         let secrets_obj = Vault::secrets_obj(&doc)?;
         // Python: `entry = self._doc()["secrets"].get(secret_id); if entry is None: raise
@@ -1740,6 +1745,7 @@ impl<'a> Vault<'a> {
     /// in-process leak comparisons only. Never returned to a caller outside
     /// the trusted process.
     pub fn values_for_trusted_scan(&self) -> Result<Vec<SecretBytes>, Error> {
+        let _import_view = self.state.lock()?;
         let doc = self.doc()?;
         let secrets_obj = Vault::secrets_obj(&doc)?;
         let mut ids: Vec<String> = secrets_obj.keys().cloned().collect();
@@ -1846,6 +1852,10 @@ impl<'a> Vault<'a> {
                     (*name).to_string(),
                     self.state.read_json(name, Value::Null)?,
                 );
+            }
+            let provenance = crate::import_barrier::backup_provenance(self.state)?;
+            if !provenance.is_null() {
+                documents.insert(crate::import_barrier::BACKUP.into(), provenance);
             }
             if self.state.exists(crate::tombstone::PATH) {
                 documents.insert(
@@ -2102,6 +2112,13 @@ impl<'a> Vault<'a> {
             let mut first_write = current.clone();
             first_write.insert("restore_pending".into(), json!(true));
             state.write_json(control_doc, &Value::Object(first_write))?;
+
+            crate::import_barrier::check_restore_provenance(
+                state,
+                documents_obj
+                    .get(crate::import_barrier::BACKUP)
+                    .unwrap_or(&Value::Null),
+            )?;
 
             let current_vault = state.read_json(VAULT_DOC, Value::Null)?;
             if let Some(archived) = documents_obj.get(crate::tombstone::PATH) {

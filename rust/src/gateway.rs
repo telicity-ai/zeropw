@@ -3480,14 +3480,29 @@ impl<'a> Relay<'a> {
         }
 
         let grant_id = self.grant.as_ref().expect("checked").id.clone();
+        let import_ctx = self.ctx;
+        #[cfg(test)]
+        crate::import_barrier::testing::reader_hit(
+            import_ctx.state,
+            &connection.id,
+            "gateway-consume-before",
+        )?;
+        let import_view = import_ctx.state.lock()?;
         match self.ctx.policy.consume(&grant_id, None, None, None, None) {
             Ok(g) => self.grant = Some(g),
             Err(e) if e.is(ErrorClass::PolicyDenied) => {
+                drop(import_view);
                 return self.refuse(403, &e.reason, "denied", None, None, Vec::new(), true);
             }
             Err(e) => return Err(e),
         }
 
+        #[cfg(test)]
+        crate::import_barrier::testing::reader_hit(
+            import_ctx.state,
+            &connection.id,
+            "gateway-consume-before-decrypt",
+        )?;
         let secret = match self.ctx.vault.secret_for_trusted_use(
             &connection.secret_id,
             connection.secret_version_for_trusted_use()?,
@@ -3498,6 +3513,7 @@ impl<'a> Relay<'a> {
                     || e.is(ErrorClass::StateError)
                     || e.is(ErrorClass::InvalidInput) =>
             {
+                drop(import_view);
                 return self.refuse(
                     503,
                     "credential_unavailable",
@@ -3510,6 +3526,9 @@ impl<'a> Relay<'a> {
             }
             Err(e) => return Err(e),
         };
+        // Credential-operation start is linearized with consume and decrypt.
+        // No state lock is held for upstream I/O.
+        drop(import_view);
         let (auth_name, auth_value) = match auth_header(&connection, secret.expose()) {
             Ok(pair) => pair,
             Err(Invalid(reason)) => {

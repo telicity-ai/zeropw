@@ -1632,6 +1632,10 @@ pub fn snapshot_of_prefix(
     })
 }
 
+pub(crate) fn personal_version_order(value: &Value) -> Result<BTreeMap<String, Vec<Value>>> {
+    parse_snapshot_version_order(Some(value))?.ok_or_else(doc_corrupt)
+}
+
 /// Fixed, private observations of the ordinary complete fold. No callback can
 /// change a handler outcome or select a different authority policy.
 #[derive(Default)]
@@ -2321,7 +2325,39 @@ fn fold_from_snapshots_in(
     audit: Option<&Audit>,
     keep_unflushed: bool,
 ) -> Result<SnapshotFold> {
+    let personal = crate::import_barrier::personal_manifest(state, env_id)?;
     let schedule = history.unwrap_or(&all_commits);
+    if let Some(manifest) = &personal {
+        let floor = &manifest["vector"];
+        let removal = RemovalSchedule::new(facts.unwrap_or(&Facts::default()), schedule);
+        let cut = manifest["heads"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|h| {
+                Some((
+                    PyInt::from_json_integer(&h["hlc"]["wall_ms"])?,
+                    PyInt::from_json_integer(&h["hlc"]["counter"])?,
+                ))
+            })
+            .max();
+        let invalid = removal.bounds.iter().any(|(author, bound)| {
+            PyInt::from_json_integer(&floor[author]).is_some_and(|n| bound < &n)
+        }) || removal.pending.iter().any(|(when, author)| {
+            PyInt::from_json_integer(&floor[author]).is_some_and(|n| n > 0)
+                && cut.as_ref().is_some_and(|cut| when <= cut)
+        }) || removal
+            .self_placed
+            .iter()
+            .any(|author| PyInt::from_json_integer(&floor[author]).is_some_and(|n| n > 0));
+        if invalid {
+            return Err(crate::import_barrier::history_required(
+                state,
+                env_id,
+                &json!({"kind":"removal_prefix","bounds":removal.bounds}),
+            )?);
+        }
+    }
     let folded: BTreeSet<(&str, &PyInt)> = all_commits
         .iter()
         .map(|c| (c.author.as_str(), &c.author_seq))
@@ -2366,6 +2402,19 @@ fn fold_from_snapshots_in(
         );
         match attempt {
             Ok(Some((result, unflushed, unrecorded))) => {
+                if let Some(manifest) = &personal
+                    && manifest["vector"]
+                        .as_object()
+                        .into_iter()
+                        .flatten()
+                        .any(|(author, n)| {
+                            PyInt::from_json_integer(n).is_none_or(|floor| {
+                                result.vector.get(author).is_none_or(|n| n < &floor)
+                            })
+                        })
+                {
+                    continue;
+                }
                 return Ok(SnapshotFold {
                     result,
                     unflushed,
@@ -2387,6 +2436,13 @@ fn fold_from_snapshots_in(
             Err(SnapshotUnusable::Failed(_)) if !passed_over.is_empty() => break,
             Err(SnapshotUnusable::Failed(error)) => return Err(error),
         }
+    }
+    if personal.is_some() {
+        return Err(crate::import_barrier::history_required(
+            state,
+            env_id,
+            &json!({"kind":"snapshot_prefix_unavailable"}),
+        )?);
     }
     // A fold from scratch needs every commit since the first, whether it
     // stands in for passed-over snapshots or no snapshot is there to build
@@ -3416,46 +3472,48 @@ pub fn derive_local(
     let mut rebound = Vec::new();
     {
         let _lock = state.lock()?;
-        // F1: derive this node's local copies of every DEK generation it
-        // can unwrap BEFORE deriving vault entries, so `derive_vault` can
-        // tell (by the presence of that file) which shared secret versions
-        // it is actually able to decrypt.
-        if let (Some(device), Some(kms)) = (device, kms) {
-            derive_dek_generations(document, state, kms, device, &env_id)?;
-        }
-        let before = shared_active_version_ids(state, &env_id)?;
-        let previous_ids = shared_version_ids(state, &env_id)?;
-        let existed = shared_connection_ids(state, &env_id)?;
-        derive_vault(
-            document,
-            state,
-            &env_id,
-            &version_index,
-            audit,
-            kms,
-            project,
-            environment,
-        )?;
-        derive_connections(
-            document,
-            state,
-            &env_id,
-            &version_index,
-            &previous_ids,
-            policy,
-            audit,
-        )?;
-        // Issue #33: as a local activation does (`Vault::rebind_connections`),
-        // a new active credential re-binds the connections that follow it.
-        // Compared by version id: local version numbers can be renumbered by
-        // a late commit while naming a different credential.
-        let changed: Vec<String> = shared_active_version_ids(state, &env_id)?
-            .into_iter()
-            .filter(|(secret_id, version_id)| before.get(secret_id) != Some(version_id))
-            .map(|(secret_id, _)| secret_id)
-            .collect();
-        if !changed.is_empty() {
-            rebound = rebind_following(state, policy, &env_id, &changed, &existed)?;
+        if !crate::import_barrier::credential_projection_denied(state, &env_id)? {
+            // F1: derive this node's local copies of every DEK generation it
+            // can unwrap BEFORE deriving vault entries, so `derive_vault` can
+            // tell (by the presence of that file) which shared secret versions
+            // it is actually able to decrypt.
+            if let (Some(device), Some(kms)) = (device, kms) {
+                derive_dek_generations(document, state, kms, device, &env_id)?;
+            }
+            let before = shared_active_version_ids(state, &env_id)?;
+            let previous_ids = shared_version_ids(state, &env_id)?;
+            let existed = shared_connection_ids(state, &env_id)?;
+            derive_vault(
+                document,
+                state,
+                &env_id,
+                &version_index,
+                audit,
+                kms,
+                project,
+                environment,
+            )?;
+            derive_connections(
+                document,
+                state,
+                &env_id,
+                &version_index,
+                &previous_ids,
+                policy,
+                audit,
+            )?;
+            // Issue #33: as a local activation does (`Vault::rebind_connections`),
+            // a new active credential re-binds the connections that follow it.
+            // Compared by version id: local version numbers can be renumbered by
+            // a late commit while naming a different credential.
+            let changed: Vec<String> = shared_active_version_ids(state, &env_id)?
+                .into_iter()
+                .filter(|(secret_id, version_id)| before.get(secret_id) != Some(version_id))
+                .map(|(secret_id, _)| secret_id)
+                .collect();
+            if !changed.is_empty() {
+                rebound = rebind_following(state, policy, &env_id, &changed, &existed)?;
+            }
         }
     }
     if let Some(audit) = audit {

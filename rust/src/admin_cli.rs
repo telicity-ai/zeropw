@@ -622,7 +622,8 @@ fn build_parser() -> Parser {
     ))
     .arg(Arg::opt("--approval").flag().help(
         "the joining device also needs explicit approval of its fingerprint (team approve-join)",
-    ));
+    ))
+    .arg(Arg::opt("--personal-bootstrap").flag().suppress_help());
     add(
         team,
         "join-requests",
@@ -636,6 +637,8 @@ fn build_parser() -> Parser {
     )
     .arg(env_arg())
     .arg(Arg::opt("--fingerprint").required().metavar("FINGERPRINT"))
+    .arg(Arg::opt("--bootstrap-request").suppress_help())
+    .arg(Arg::opt("--record-binding").suppress_help())
     .arg(
         Arg::opt("--invite-id")
             .metavar("INVITE_ID")
@@ -647,7 +650,9 @@ fn build_parser() -> Parser {
         "revoke the approval invites a waiting device asked with",
     )
     .arg(env_arg())
-    .arg(Arg::opt("--fingerprint").required().metavar("FINGERPRINT"));
+    .arg(Arg::opt("--fingerprint").required().metavar("FINGERPRINT"))
+    .arg(Arg::opt("--bootstrap-request").suppress_help())
+    .arg(Arg::opt("--record-binding").suppress_help());
     add(
         team,
         "sync-status",
@@ -692,6 +697,21 @@ fn build_parser() -> Parser {
                 .help("zeropw-link daemon socket (absolute path) for the invite's zpl: addresses"),
         );
     add(team, "members", "list team members").arg(env_arg());
+    add(team, "bootstrap-status", "Personal onboarding status").arg(env_arg());
+    add(
+        team,
+        "bootstrap-approve",
+        "Confirm the pinned Personal checkpoint administrator",
+    )
+    .arg(env_arg())
+    .arg(Arg::opt("--record-binding").required())
+    .arg(Arg::opt("--self-record-binding").required());
+    add(
+        team,
+        "bootstrap-cancel",
+        "Cancel unpublished Personal onboarding",
+    )
+    .arg(env_arg());
     add(
         team,
         "remove",
@@ -1941,12 +1961,12 @@ fn resolved_int(version: &crate::vault::ResolvedVersion) -> Option<PyInt> {
 
 /// A shared environment's folded document, without audit.
 fn shared_document(ctx: &Context, env_id: &str) -> Result<Value, Error> {
-    let (facts, _, _) = crate::team::sync::load_facts(ctx, env_id)?;
-    let commits = crate::team::commit::CommitStore::new(ctx.state, env_id).all_commits()?;
-    Ok(
-        crate::team::fold::fold_with_snapshot(env_id, commits, ctx.state, Some(&facts), None)?
-            .document,
-    )
+    let history = crate::team::commit::HistorySession::open_runtime(ctx.state, env_id)?;
+    let (facts, _, _) = crate::team::sync::load_facts_with_input(ctx, env_id, &history)?;
+    let input = history.acquire()?;
+    let commits = input.commits()?;
+    input.reserve_fold(&commits, Some(&facts), 1)?;
+    Ok(input.fold_with_snapshot(commits, &facts, None)?.document)
 }
 
 /// Issue #29, shared environment: switch ops that move every live
@@ -3748,6 +3768,18 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
                 "this invite is reachable through zeropw-link only; pass --link-socket PATH",
             ));
         }
+        if ctx.state.exists(&crate::team::bootstrap::path(
+            &invite.env_id,
+            "attempt.json",
+        )?) {
+            return crate::team::bootstrap::resume(
+                &ctx,
+                M::invite_string_of(&text)?,
+                a.get("project"),
+                a.get("environment"),
+            )
+            .map(Some);
+        }
         drop(invite);
         let invite_string = M::invite_string_of(&text)?;
         let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
@@ -3781,17 +3813,37 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
                 Some(text) => ttl_seconds_for_bounded_consumer(&ttl(text)?),
                 None => M::DEFAULT_INVITE_TTL_SECONDS,
             };
-            let created = M::create_invite_opts(
-                &ctx,
-                &env_id,
-                a.req("role"),
-                a.req("name"),
-                ttl,
-                &a.list("address"),
-                a.has("link"),
-                a.has("approval"),
-            )?;
+            let created = if a.has("personal-bootstrap") {
+                crate::team::bootstrap::approval::create_invite(
+                    &ctx,
+                    &env_id,
+                    a.req("role"),
+                    a.req("name"),
+                    ttl,
+                    &a.list("address"),
+                    a.has("link"),
+                    a.has("approval"),
+                )?
+            } else {
+                M::create_invite_opts(
+                    &ctx,
+                    &env_id,
+                    a.req("role"),
+                    a.req("name"),
+                    ttl,
+                    &a.list("address"),
+                    a.has("link"),
+                    a.has("approval"),
+                )?
+            };
             let mut out = json!({"env_id":env_id,"invite":created.invite,"role":a.req("role"),"name":a.req("name"),"warning":"this string is a secret: never paste it into chat, issues, tickets, or logs"});
+            if a.has("personal-bootstrap") {
+                out["record_binding"] = json!(crate::team::bootstrap::digest(
+                    &DeviceKey::load_or_create(ctx.state, ctx.kms)?
+                        .record()?
+                        .to_dict()
+                )?);
+            }
             // Only `--link` and `--approval` add keys; the plain output is unchanged.
             if let Some(link) = created.link {
                 out["link"] = json!(link);
@@ -3804,14 +3856,46 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
             out
         }
         "join-requests" => crate::team::pairing::list_requests(&ctx, &env_id)?,
+        "approve-join" if a.get("bootstrap-request").is_some() => {
+            let pass = passphrase("ZEROPW_ADMIN_PASSPHRASE")?;
+            crate::team::bootstrap::approval::approve(
+                &ctx,
+                &env_id,
+                a.req("bootstrap-request"),
+                a.req("record-binding"),
+                &pass,
+            )?
+        }
         "approve-join" => crate::team::pairing::approve_join(
             &ctx,
             &env_id,
             a.req("fingerprint"),
             a.get("invite-id").filter(|id| !id.is_empty()),
         )?,
+        "deny-join" if a.get("bootstrap-request").is_some() => {
+            let pass = passphrase("ZEROPW_ADMIN_PASSPHRASE")?;
+            crate::team::bootstrap::approval::deny(
+                &ctx,
+                &env_id,
+                a.req("bootstrap-request"),
+                a.req("record-binding"),
+                &pass,
+            )?
+        }
         "deny-join" => crate::team::pairing::deny_join(&ctx, &env_id, a.req("fingerprint"))?,
         "sync-status" => crate::team::sync_status::status(&ctx, &env_id)?,
+        "bootstrap-status" => crate::team::bootstrap::status(&ctx, &env_id)?,
+        "bootstrap-approve" => {
+            let pass = passphrase("ZEROPW_ADMIN_PASSPHRASE")?;
+            crate::team::bootstrap::approval::approve_receiver(
+                &ctx,
+                &env_id,
+                a.req("record-binding"),
+                a.req("self-record-binding"),
+                &pass,
+            )?
+        }
+        "bootstrap-cancel" => crate::team::bootstrap::cancel(&ctx, &env_id)?,
         "invites" => M::list_invites(&ctx, &env_id)?,
         "revoke-invite" => M::revoke_invite(&ctx, &env_id, a.req("id"))?,
         "members" => {
@@ -3864,9 +3948,9 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
             json!({"env_id":env_id,"vector":vector,"commits_folded":vector.values().fold(crate::pyint::PyInt::zero(),|acc,v|crate::pyint::PyInt(acc.0+&v.0)),"skipped_ops":folded.skipped.len(),"rejected_commits":rejected,"pending_deferred":store.deferred_commits()?.len(),"note":"sessions/synced_at reflect a running `serve --team-listen`; this one-shot CLI holds none"})
         }
         "log" => {
-            let store = CommitStore::new(ctx.state, &env_id);
-            let commits = sort_total_order(store.all_commits()?)?;
-            let folded = M::load_environment(&ctx, &env_id)?;
+            let history = crate::team::commit::HistorySession::open_runtime(ctx.state, &env_id)?;
+            let folded = M::load_environment_with_input(&ctx, &env_id, &history)?;
+            let commits = sort_total_order(history.acquire()?.commits()?)?;
             let mut skips: BTreeMap<String, Vec<String>> = BTreeMap::new();
             for (hash, _, reason) in folded.skipped {
                 skips.entry(hash).or_default().push(reason);
@@ -3887,9 +3971,9 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
             view
         }
         "diff" => {
-            let store = CommitStore::new(ctx.state, &env_id);
-            let commits = sort_total_order(store.all_commits()?)?;
-            let (facts, _, _) = sync::load_facts(&ctx, &env_id)?;
+            let history = crate::team::commit::HistorySession::open_runtime(ctx.state, &env_id)?;
+            let (facts, _, _) = sync::load_facts_with_input(&ctx, &env_id, &history)?;
+            let commits = sort_total_order(history.acquire()?.commits()?)?;
             let find = |prefix: &str| -> Result<usize, Error> {
                 let matches = commits
                     .iter()
@@ -3908,14 +3992,27 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
             let left = find(&a.positional[0])?;
             let right = find(&a.positional[1])?;
             let view = |index: usize| -> Result<Value, Error> {
-                let folded = crate::team::fold::fold(
-                    &env_id,
-                    commits[..=index].to_vec(),
-                    Some(&facts),
-                    None,
-                    None,
-                    None,
-                )?;
+                history
+                    .acquire()?
+                    .reserve_fold(&commits[..=index], Some(&facts), 1)?;
+                let folded = if history.is_scoped() {
+                    if index + 1 != commits.len() {
+                        return Err(Error::state("team_checkpoint_history_required"));
+                    }
+                    history
+                        .acquire()?
+                        .fold_with_snapshot(commits.clone(), &facts, None)?
+                } else {
+                    crate::team::fold::fold(
+                        &env_id,
+                        commits[..=index].to_vec(),
+                        Some(&facts),
+                        None,
+                        None,
+                        None,
+                    )?
+                };
+                history.check()?;
                 Ok(crate::team::humanview::strip_document(&folded.document))
             };
             json!({"env_id":env_id,"left":{"hash":commits[left].hash()?,"view":view(left)?},"right":{"hash":commits[right].hash()?,"view":view(right)?}})
@@ -4559,5 +4656,41 @@ mod tests {
             };
             assert_eq!(actual, expected, "limit {text:?}");
         }
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod personal_history_test_cli {
+    use super::*;
+    static SERIAL: Mutex<()> = Mutex::new(());
+    // Actual parser/envelope/command entry, with its normal Context reopen.
+    // This avoids exposing any instrumentation in the production CLI binary.
+    pub(crate) fn shared(ctx: &Context, env: &str) -> Result<Value, Error> {
+        shared_document(ctx, env)
+    }
+    pub(crate) fn command(
+        ctx: &Context,
+        args: &[&str],
+        value: Value,
+    ) -> std::result::Result<Value, String> {
+        let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let mut argv = vec![
+            "--state-dir".to_owned(),
+            ctx.state.path.to_str().unwrap().to_owned(),
+            "--input-envelope".to_owned(),
+        ];
+        argv.extend(args.iter().map(|a| a.to_string()));
+        let args = parse(&argv).map_err(|_| "synthetic_cli_parse".to_owned())?;
+        if args.command != "team" {
+            return Err("synthetic_cli_scope".into());
+        }
+        let input = pyjson::dumps(&value, DumpOptions::compact_sorted())
+            .map_err(|_| "synthetic_envelope".to_owned())?;
+        let envelope =
+            InputEnvelope::read_from(std::io::Cursor::new(input)).map_err(|e| e.reason)?;
+        let _scope = EnvelopeScope::install(envelope);
+        team_command(&args)
+            .map_err(|e| e.reason)?
+            .ok_or_else(|| "synthetic_cli_no_value".to_owned())
     }
 }
