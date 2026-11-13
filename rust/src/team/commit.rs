@@ -4433,20 +4433,28 @@ mod retained_history {
         Limit,
         Timeout,
     }
-    struct HistoryBudget {
+    pub(crate) struct HistoryBudget {
         began: Instant,
+        byte_cap: u64,
         counters: RefCell<Counters>,
         failure: Cell<Option<BudgetFailure>>,
     }
     impl HistoryBudget {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             Self {
                 began: Instant::now(),
+                byte_cap: BYTES,
                 counters: RefCell::new(Counters { work: 0, bytes: 0 }),
                 failure: Cell::new(None),
             }
         }
-        fn check(&self) -> Result<()> {
+        pub(crate) fn new_guard() -> Self {
+            Self {
+                byte_cap: 268_435_456,
+                ..Self::new()
+            }
+        }
+        pub(crate) fn check(&self) -> Result<()> {
             if self.failure.get().is_none() && self.began.elapsed() >= Duration::from_secs(5) {
                 self.failure.set(Some(BudgetFailure::Timeout));
             }
@@ -4456,11 +4464,11 @@ mod retained_history {
                 None => Ok(()),
             }
         }
-        fn charge(&self, work: u64, bytes: u64) -> Result<()> {
+        pub(crate) fn charge(&self, work: u64, bytes: u64) -> Result<()> {
             self.check()?;
             let mut c = self.counters.borrow_mut();
             let w = c.work.checked_add(work).filter(|n| *n <= WORK);
-            let b = c.bytes.checked_add(bytes).filter(|n| *n <= BYTES);
+            let b = c.bytes.checked_add(bytes).filter(|n| *n <= self.byte_cap);
             let (Some(w), Some(b)) = (w, b) else {
                 self.failure.set(Some(BudgetFailure::Limit));
                 return Err(limit());
@@ -4474,6 +4482,8 @@ mod retained_history {
         raw: Vec<u8>,
     }
     struct Inventory {
+        stamps: BTreeMap<String, Option<Vec<u64>>>,
+        root: crate::import_barrier::ImportRootObservation,
         files: BTreeMap<String, FileImage>,
         layout: BTreeSet<(String, bool)>,
         revision: [u8; 32],
@@ -4485,14 +4495,28 @@ mod retained_history {
         raw: Vec<u8>,
         parsed: Commit,
     }
+    // Original DATA only, owned by this explicit operation. No authorization,
+    // settled facts or readiness result is retained. Semantic boundaries still
+    // recompare the complete raw revision; every getter checks held-lock/root,
+    // generation and all captured path revisions before using these originals.
+    struct CapturedHistory {
+        generation: u64,
+        inventory: Rc<Inventory>,
+        originals: Rc<Vec<RetainedOriginal>>,
+        vector: Rc<BTreeMap<String, PyInt>>,
+        floor: Rc<BTreeMap<String, PyInt>>,
+    }
     pub(crate) struct HistoryOperation<'a> {
         state: &'a StateDir,
         env: String,
         selection: Selection,
         identity: Option<DeviceRecord>,
-        root: Option<crate::store::ImportRootIdentity>,
+        root: Option<crate::store::ImportRootRevision>,
+        root_observation: RefCell<Option<crate::store::ImportRootRevision>>,
         budget: Rc<HistoryBudget>,
         generation: Rc<Cell<u64>>,
+        paths: Rc<crate::import_barrier::ImportPathCache>,
+        retained: RefCell<Option<CapturedHistory>>,
         _thread: PhantomData<Rc<()>>,
     }
     pub(crate) struct HistorySession<'a> {
@@ -4519,6 +4543,10 @@ mod retained_history {
     }
     impl<'a> HistoryOperation<'a> {
         fn lock_session(self: &Rc<Self>) -> Result<HistorySession<'a>> {
+            if !self.state.locked_by_current_thread() {
+                self.generation
+                    .set(self.generation.get().checked_add(1).ok_or_else(limit)?);
+            }
             let lock = self.state.lock()?;
             let session = HistorySession::from_operation(self.clone(), lock);
             session.check()?;
@@ -4579,10 +4607,10 @@ mod retained_history {
     pub(crate) struct RetainedInput<'s, 'a> {
         session: &'s HistorySession<'a>,
         generation: u64,
-        inventory: Option<Inventory>,
-        originals: Vec<RetainedOriginal>,
-        vector: BTreeMap<String, PyInt>,
-        floor: BTreeMap<String, PyInt>,
+        inventory: Option<Rc<Inventory>>,
+        originals: Rc<Vec<RetainedOriginal>>,
+        vector: Rc<BTreeMap<String, PyInt>>,
+        floor: Rc<BTreeMap<String, PyInt>>,
         _thread: PhantomData<Rc<()>>,
     }
     impl<'a> HistorySession<'a> {
@@ -4606,19 +4634,42 @@ mod retained_history {
             lock: StateLock<'a>,
             budget: Rc<HistoryBudget>,
         ) -> Result<Self> {
+            Self::new_locked_seeded(
+                state,
+                env,
+                selection,
+                lock,
+                budget,
+                Rc::new(Cell::new(0)),
+                Rc::new(crate::import_barrier::ImportPathCache::empty()),
+            )
+        }
+        fn new_locked_seeded(
+            state: &'a StateDir,
+            env: &str,
+            selection: Selection,
+            lock: StateLock<'a>,
+            budget: Rc<HistoryBudget>,
+            generation: Rc<Cell<u64>>,
+            paths: Rc<crate::import_barrier::ImportPathCache>,
+        ) -> Result<Self> {
             let root = if matches!(selection, Selection::Ordinary) {
                 None
             } else {
-                Some(state.checked_import_root()?)
+                state.checked_import_root()?;
+                Some(state.import_root_revision()?)
             };
             let operation = Rc::new(HistoryOperation {
                 state,
                 env: env.into(),
                 selection,
                 identity: state.import_identity().cloned(),
+                root_observation: RefCell::new(root.clone()),
                 root,
                 budget,
-                generation: Rc::new(Cell::new(0)),
+                generation,
+                paths,
+                retained: RefCell::new(None),
                 _thread: PhantomData,
             });
             let session = Self::from_operation(operation, lock);
@@ -4771,11 +4822,23 @@ mod retained_history {
             // A Context just initialized in this process has not reopened its
             // device file. Bind the actual KMS-loaded full local record here;
             // cached labels or caller-created StateDir objects are not proof.
-            let device = DeviceKey::load_or_create(state, ctx.kms)?;
-            let identity = device.record()?;
-            state.bind_import_identity(identity.clone())?;
+            let io = crate::import_barrier::ImportIo::bootstrap(state, budget.clone())?;
+            let (_, source) = DeviceKey::load_or_create_in(&io, ctx.kms)?;
+            state.bind_import_identity(&source)?;
+            let generation = io.shared_generation();
+            let paths = io.shared_paths();
+            drop(source);
+            drop(io);
             budget.check()?;
-            Self::new_locked(state, env, Selection::Probe(purpose), lock, budget)
+            Self::new_locked_seeded(
+                state,
+                env,
+                Selection::Probe(purpose),
+                lock,
+                budget,
+                generation,
+                paths,
+            )
         }
         pub(crate) fn nested(&self, state: &'a StateDir, env: &str) -> Result<Self> {
             self.check()?;
@@ -4818,6 +4881,27 @@ mod retained_history {
                 self.check()
             })();
             self.resource_result(result)
+        }
+        pub(crate) fn load_device(&self, ctx: &crate::context::Context) -> Result<DeviceKey> {
+            if !std::ptr::eq(ctx.state, self.state) {
+                return Err(stale());
+            }
+            let io = self.import_io()?;
+            let (device, source) = if self.is_scoped() {
+                DeviceKey::load_in(&io, ctx.kms)?
+            } else {
+                // Ordinary sharing can create its device before a Context has
+                // an import binding. Keep that legacy contract within the
+                // same finite I/O parent; it grants no imported authority.
+                DeviceKey::load_or_create_in(&io, ctx.kms)?
+            };
+            source.check(self.state)?;
+            self.match_local_identity(source.record())?;
+            if self.is_scoped() && self.state.import_key_hash()? != Some(source.raw_hash()) {
+                return Err(stale());
+            }
+            self.check()?;
+            Ok(device)
         }
         pub(crate) fn local_record(&self) -> Result<&DeviceRecord> {
             self.check()?;
@@ -4938,6 +5022,135 @@ mod retained_history {
             })();
             self.resource_result(result)
         }
+        fn measure_import_record(&self, value: &Value) -> Result<(u64, u64, u64)> {
+            let mut pending = vec![(value, 0u64)];
+            let (mut nodes, mut nonempty, mut sort) = (0u64, 0u64, 0u64);
+            while let Some((value, depth)) = pending.pop() {
+                self.charge_import(1, 64)?;
+                nodes = nodes
+                    .checked_add(1)
+                    .filter(|n| *n <= NODES)
+                    .ok_or_else(limit)?;
+                if depth > 64 {
+                    return Err(limit());
+                }
+                let scalar = match value {
+                    Value::String(text) => text.len() as u64,
+                    Value::Number(number) => number.as_str().len() as u64,
+                    _ => 0,
+                };
+                // This reserves the unchanged encoded_len UTF-8/numeric walk
+                // before that helper executes; its output is only a size.
+                self.charge_import(
+                    scalar.checked_mul(2).ok_or_else(limit)?,
+                    scalar.checked_mul(4).ok_or_else(limit)?,
+                )?;
+                match value {
+                    Value::Array(values) => {
+                        if !values.is_empty() {
+                            nonempty += 1;
+                        }
+                        self.charge_import(
+                            values.len() as u64,
+                            (values.len() as u64).checked_mul(64).ok_or_else(limit)?,
+                        )?;
+                        if pending
+                            .len()
+                            .checked_add(values.len())
+                            .is_none_or(|n| n > NODES as usize)
+                        {
+                            return Err(limit());
+                        }
+                        pending.extend(values.iter().map(|value| (value, depth + 1)));
+                    }
+                    Value::Object(values) => {
+                        if !values.is_empty() {
+                            nonempty += 1;
+                        }
+                        let count = values.len() as u64;
+                        nodes = nodes
+                            .checked_add(count)
+                            .filter(|n| *n <= NODES)
+                            .ok_or_else(limit)?;
+                        let width = values
+                            .keys()
+                            .map(|key| key.len() as u64 + 1)
+                            .max()
+                            .unwrap_or(1);
+                        sort = sort
+                            .checked_add(
+                                count
+                                    .checked_mul(count)
+                                    .and_then(|n| n.checked_mul(width))
+                                    .ok_or_else(limit)?,
+                            )
+                            .ok_or_else(limit)?;
+                        if pending
+                            .len()
+                            .checked_add(values.len())
+                            .is_none_or(|n| n > NODES as usize)
+                        {
+                            return Err(limit());
+                        }
+                        for (key, value) in values {
+                            self.charge_import(
+                                1 + 2 * key.len() as u64,
+                                64 + 4 * key.len() as u64,
+                            )?;
+                            pending.push((value, depth + 1));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let size = (crate::import_barrier::encoded_len(value)? as u64)
+                .checked_sub(nonempty)
+                .ok_or_else(limit)?;
+            self.check_import_deadline()?;
+            Ok((size, nodes, sort))
+        }
+        pub(crate) fn clone_import_record(&self, value: &Value) -> Result<Value> {
+            let (size, nodes, _) = self.measure_import_record(value)?;
+            self.charge_import(
+                size.checked_add(nodes).ok_or_else(limit)?,
+                size.checked_add(nodes.checked_mul(64).ok_or_else(limit)?)
+                    .ok_or_else(limit)?,
+            )?;
+            let value = value.clone();
+            self.check_import_deadline()?;
+            Ok(value)
+        }
+        pub(crate) fn encode_import_record(&self, value: &Value) -> Result<Vec<u8>> {
+            let (size, nodes, sort) = self.measure_import_record(value)?;
+            self.charge_import(
+                size.checked_mul(4)
+                    .and_then(|n| n.checked_add(sort))
+                    .ok_or_else(limit)?,
+                size.checked_mul(4)
+                    .and_then(|n| n.checked_add(nodes.checked_mul(64)?))
+                    .ok_or_else(limit)?,
+            )?;
+            let raw = pyjson::dumps(value, DumpOptions::pretty_sorted())?.into_bytes();
+            if raw.len() as u64 != size {
+                return Err(invalid());
+            }
+            self.check_import_deadline()?;
+            Ok(raw)
+        }
+        pub(crate) fn reserve_import_signature(&self, value: &Value) -> Result<()> {
+            let (size, nodes, sort) = self.measure_import_record(value)?;
+            // Canonical encoding, message hashing and the bounded signature
+            // primitive; verification additionally clones its unsigned record.
+            self.charge_import(
+                size.checked_mul(6)
+                    .and_then(|n| n.checked_add(sort))
+                    .and_then(|n| n.checked_add(4096 + nodes))
+                    .ok_or_else(limit)?,
+                size.checked_mul(8)
+                    .and_then(|n| n.checked_add(nodes.checked_mul(128)?))
+                    .ok_or_else(limit)?,
+            )
+        }
         pub(crate) fn preflight_operations(&self, ops: &[Value]) -> Result<()> {
             let result = (|| {
                 if !self.is_scoped() {
@@ -5039,20 +5252,15 @@ mod retained_history {
             }
             self.check()
         }
-        pub(crate) fn journal_record(&self) -> Result<Value> {
-            let inventory = self.collect()?;
-            let name = format!("team/{}/bootstrap/journal.json", self.env);
-            let image = inventory.files.get(&name).ok_or_else(invalid)?;
-            let bytes = image.raw.len() as u64;
-            self.charge(
-                bytes.checked_mul(8).ok_or_else(limit)?,
-                bytes.checked_mul(8).ok_or_else(limit)?,
+        pub(crate) fn journal_record(&self, raw: &[u8]) -> Result<Value> {
+            self.screen(raw, INVENTORY)?;
+            let n = raw.len() as u64;
+            self.charge_import(
+                n.checked_mul(5).ok_or_else(limit)?,
+                n.checked_mul(96).ok_or_else(limit)?,
             )?;
-            self.screen(&image.raw, INVENTORY)?;
-            // Journal parsing remains the existing authenticated local format.
-            // Its opaque walk was reserved, its raw bytes/depth/nodes bounded.
-            let value = pyjson::loads(std::str::from_utf8(&image.raw).map_err(|_| invalid())?)
-                .map_err(|_| invalid())?;
+            let value =
+                checkpoint::retained_original(raw).map_err(|error| Error::state(error.reason()))?;
             self.check()?;
             Ok(value)
         }
@@ -5116,6 +5324,35 @@ mod retained_history {
         pub(crate) fn state(&self) -> &'a StateDir {
             self.state
         }
+        pub(crate) fn mutation_generation(&self) -> Result<u64> {
+            self.check_import_deadline()?;
+            Ok(self.generation.get())
+        }
+        pub(crate) fn check_import_deadline(&self) -> Result<()> {
+            self.budget.check()?;
+            if !self.state.locked_by_current_thread() {
+                return Err(stale());
+            }
+            Ok(())
+        }
+        pub(crate) fn charge_import(&self, work: u64, bytes: u64) -> Result<()> {
+            self.budget.charge(work, bytes)?;
+            #[cfg(test)]
+            {
+                let counters = self.budget.counters.borrow();
+                testing::charge(self.state, work, bytes, counters.work, counters.bytes);
+            }
+            Ok(())
+        }
+        pub(crate) fn import_io(&self) -> Result<crate::import_barrier::ImportIo<'_, 'a>> {
+            crate::import_barrier::ImportIo::with_history(self)
+        }
+        pub(crate) fn import_budget(&self) -> Rc<HistoryBudget> {
+            self.budget.clone()
+        }
+        pub(crate) fn import_paths(&self) -> Rc<crate::import_barrier::ImportPathCache> {
+            self.operation.paths.clone()
+        }
         pub(crate) fn env(&self) -> &str {
             &self.env
         }
@@ -5134,11 +5371,45 @@ mod retained_history {
                 return Err(stale());
             }
             if self.is_scoped() {
-                self.budget.check()?;
+                // Reserve the bounded descriptor/root reobservation before its
+                // syscalls. ACL/private-path validation belongs to this held
+                // operation; a complete changed root/lock revision refuses.
+                self.budget.charge(
+                    64 + 4 * self.state.path.as_os_str().len() as u64,
+                    256 + 4 * self.state.path.as_os_str().len() as u64,
+                )?;
+                let current_root = self.state.import_root_revision()?;
                 if self.state.import_identity() != self.identity.as_ref()
-                    || self.operation.root.as_ref() != Some(&self.state.checked_import_root()?)
+                    || self
+                        .operation
+                        .root
+                        .as_ref()
+                        .is_none_or(|root| !root.same_anchor(&current_root))
                 {
+                    #[cfg(test)]
+                    crate::import_barrier::opus_cost::note(
+                        self.state,
+                        &self.env,
+                        &format!(
+                            "root_revision_changed:{:x}",
+                            self.operation
+                                .root
+                                .as_ref()
+                                .map_or(0, |old| old.changed_fields(&current_root))
+                        ),
+                    );
                     return Err(stale());
+                }
+                if self.operation.root_observation.borrow().as_ref() != Some(&current_root) {
+                    self.budget.charge(
+                        4096 + 8 * self.state.path.as_os_str().len() as u64,
+                        4096 + 8 * self.state.path.as_os_str().len() as u64,
+                    )?;
+                    self.state.checked_import_root()?;
+                    if self.state.import_root_revision()? != current_root {
+                        return Err(stale());
+                    }
+                    *self.operation.root_observation.borrow_mut() = Some(current_root);
                 }
             }
             Ok(())
@@ -5163,12 +5434,52 @@ mod retained_history {
                         session: self,
                         generation,
                         inventory: None,
-                        originals: Vec::new(),
-                        vector: BTreeMap::new(),
-                        floor: BTreeMap::new(),
+                        originals: Rc::new(Vec::new()),
+                        vector: Rc::new(BTreeMap::new()),
+                        floor: Rc::new(BTreeMap::new()),
                         _thread: PhantomData,
                     });
                 }
+                let cached = {
+                    let retained = self.operation.retained.borrow();
+                    retained
+                        .as_ref()
+                        .filter(|captured| captured.generation == generation)
+                        .map(|captured| RetainedInput {
+                            session: self,
+                            generation,
+                            inventory: Some(captured.inventory.clone()),
+                            originals: captured.originals.clone(),
+                            vector: captured.vector.clone(),
+                            floor: captured.floor.clone(),
+                            _thread: PhantomData,
+                        })
+                };
+                if let Some(input) = cached {
+                    self.charge(4, 256)?;
+                    // authenticate_selection already checks the complete raw
+                    // revision both before and after its pure validation.
+                    let checked =
+                        if matches!(self.selection, Selection::Owner | Selection::Recipient) {
+                            input.authenticate_selection()
+                        } else {
+                            input.current()
+                        };
+                    match checked {
+                        Ok(()) => return Ok(input),
+                        Err(error) if error.reason == "team_bootstrap_local_state_changed" => {
+                            // A fresh acquisition may follow an observed local
+                            // writer. Invalidate all older sealed generations,
+                            // then recapture the complete originals on the SAME
+                            // budget. No stale input or settled fact survives.
+                            self.check()?;
+                            self.invalidate()?;
+                            self.operation.retained.borrow_mut().take();
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+                let generation = self.generation.get();
                 let inventory = self.collect()?;
                 #[cfg(test)]
                 testing::acquired(self.state, inventory.entries as u64);
@@ -5384,15 +5695,24 @@ mod retained_history {
                 let input = RetainedInput {
                     session: self,
                     generation,
-                    inventory: Some(inventory),
-                    originals,
-                    vector,
-                    floor,
+                    inventory: Some(Rc::new(inventory)),
+                    originals: Rc::new(originals),
+                    vector: Rc::new(vector),
+                    floor: Rc::new(floor),
                     _thread: PhantomData,
                 };
                 if matches!(self.selection, Selection::Owner | Selection::Recipient) {
                     input.authenticate_selection()?;
+                } else {
+                    input.current()?;
                 }
+                *self.operation.retained.borrow_mut() = Some(CapturedHistory {
+                    generation,
+                    inventory: input.inventory.as_ref().ok_or_else(invalid)?.clone(),
+                    originals: input.originals.clone(),
+                    vector: input.vector.clone(),
+                    floor: input.floor.clone(),
+                });
                 Ok(input)
             })();
             self.resource_result(result)
@@ -5503,9 +5823,14 @@ mod retained_history {
             let result = (|| {
                 #[cfg(test)]
                 let _stage = testing::span(self.state, "history_collect");
+                let io = self.import_io()?;
+                let root = io.anchor_revision()?;
                 let mut files = BTreeMap::new();
+                let mut stamps = BTreeMap::new();
                 let mut layout = BTreeSet::new();
                 let mut hash = Sha256::new();
+                self.charge(176, 176)?;
+                root.visit_words(|word| hash.update(word.to_be_bytes()));
                 let mut entries = 0usize;
                 let mut bytes = 0u64;
                 let envroot = format!("team/{}", self.env);
@@ -5518,18 +5843,15 @@ mod retained_history {
                     let path = self.state.path.join(&name);
                     let metadata = match fs::symlink_metadata(&path) {
                         Ok(v) => v,
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                            stamps.insert(name.clone(), None);
+                            continue;
+                        }
                         Err(_) => return Err(invalid()),
                     };
+                    stamps.insert(name.clone(), Some(stamp(&metadata)));
                     layout.insert((name.clone(), metadata.is_dir()));
-                    if metadata.is_dir() {
-                        crate::import_barrier::private_relative(
-                            self.state,
-                            &format!("{name}/.history-layout-check"),
-                        )?;
-                    } else {
-                        crate::import_barrier::private_relative(self.state, &name)?;
-                    }
+                    io.validate_relative(&name, metadata.is_dir())?;
                     self.charge(name.len() as u64, name.len() as u64)?;
                     hash.update((name.len() as u64).to_be_bytes());
                     hash.update(name.as_bytes());
@@ -5610,7 +5932,29 @@ mod retained_history {
                             .checked_add(metadata.len())
                             .filter(|n| *n <= INVENTORY)
                             .ok_or_else(limit)?;
-                        let raw = self.read_file(&name, cap, &metadata)?;
+                        // Cold evidence is inventory, never a hot history/fold
+                        // input. Payload integrity is streamed by the borrowed
+                        // visibility epoch before use, without materialization.
+                        if name
+                            == format!(
+                                "team/{}/bootstrap/provenance/install-journal.json",
+                                self.env
+                            )
+                            || name
+                                == format!("team/{}/bootstrap/provenance/payload.json", self.env)
+                        {
+                            let cold_cap = if name.ends_with("/install-journal.json") {
+                                INVENTORY
+                            } else {
+                                BULK
+                            };
+                            if metadata.len() > cold_cap {
+                                return Err(limit());
+                            }
+                            self.charge(1, 256)?;
+                            continue;
+                        }
+                        let raw = self.read_file(&io, &name, cap, &metadata)?;
                         if name.ends_with(".json") {
                             self.screen(&raw, cap)?;
                         }
@@ -5652,6 +5996,11 @@ mod retained_history {
                 let mut listed = 0usize;
                 let mut journal_bytes = 0u64;
                 let team = self.state.path.join("team");
+                self.charge(1, 256)?;
+                stamps.insert(
+                    "team".into(),
+                    Some(stamp(&fs::symlink_metadata(&team).map_err(|_| invalid())?)),
+                );
                 let mut global_names = Vec::new();
                 for entry in fs::read_dir(&team).map_err(|_| invalid())? {
                     listed = listed
@@ -5679,6 +6028,7 @@ mod retained_history {
                 for leaf in global_names {
                     let directory =
                         fs::symlink_metadata(team.join(&leaf)).map_err(|_| invalid())?;
+                    stamps.insert(format!("team/{leaf}"), Some(stamp(&directory)));
                     hash.update(leaf.as_bytes());
                     for item in stamp(&directory) {
                         hash.update(item.to_be_bytes());
@@ -5689,10 +6039,7 @@ mod retained_history {
                     if !directory.is_dir() {
                         return Err(invalid());
                     }
-                    crate::import_barrier::private_relative(
-                        self.state,
-                        &format!("team/{leaf}/.history-layout-check"),
-                    )?;
+                    io.validate_relative(&format!("team/{leaf}"), true)?;
                     discovered.insert(leaf.clone());
                     if discovered.len() > 256 {
                         return Err(limit());
@@ -5700,9 +6047,13 @@ mod retained_history {
                     let name = format!("team/{leaf}/bootstrap/journal.json");
                     let metadata = match fs::symlink_metadata(self.state.path.join(&name)) {
                         Ok(v) => v,
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                            stamps.insert(name.clone(), None);
+                            continue;
+                        }
                         Err(_) => return Err(invalid()),
                     };
+                    stamps.insert(name.clone(), Some(stamp(&metadata)));
                     journal_bytes = journal_bytes
                         .checked_add(metadata.len())
                         .filter(|n| *n <= INVENTORY)
@@ -5710,8 +6061,8 @@ mod retained_history {
                     if let std::collections::btree_map::Entry::Vacant(slot) =
                         files.entry(name.clone())
                     {
-                        crate::import_barrier::private_relative(self.state, &name)?;
-                        let raw = self.read_file(&name, INVENTORY, &metadata)?;
+                        io.validate_relative(&name, false)?;
+                        let raw = self.read_file(&io, &name, INVENTORY, &metadata)?;
                         self.screen(&raw, INVENTORY)?;
                         // Existing journals are signed local records. Reserve the
                         // bounded opaque index/parser walk before calling it.
@@ -5742,18 +6093,20 @@ mod retained_history {
                     let metadata = match fs::symlink_metadata(self.state.path.join(name)) {
                         Ok(v) => v,
                         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                            stamps.insert(name.into(), None);
                             hash.update(name.as_bytes());
                             hash.update([0]);
                             continue;
                         }
                         Err(_) => return Err(invalid()),
                     };
+                    stamps.insert(name.into(), Some(stamp(&metadata)));
                     shared = shared
                         .checked_add(metadata.len())
                         .filter(|n| *n <= INVENTORY)
                         .ok_or_else(limit)?;
-                    crate::import_barrier::private_relative(self.state, name)?;
-                    let raw = self.read_file(name, INVENTORY, &metadata)?;
+                    io.validate_relative(name, false)?;
+                    let raw = self.read_file(&io, name, INVENTORY, &metadata)?;
                     self.screen(&raw, INVENTORY)?;
                     if [
                         crate::import_barrier::INDEX,
@@ -5791,9 +6144,10 @@ mod retained_history {
                 // device-key material. Any same-thread key-file rewrite changes its
                 // inode/ctime revision; signing also compares the loaded full record.
                 let identity_path = crate::team::identity::DEVICE_KEY_FILE;
-                crate::import_barrier::private_relative(self.state, identity_path)?;
+                io.validate_relative(identity_path, false)?;
                 let metadata = fs::symlink_metadata(self.state.path.join(identity_path))
                     .map_err(|_| invalid())?;
+                stamps.insert(identity_path.into(), Some(stamp(&metadata)));
                 layout.insert((identity_path.into(), false));
                 self.charge(1, 256)?;
                 hash.update(identity_path.as_bytes());
@@ -5811,7 +6165,12 @@ mod retained_history {
                     sum.checked_add(image.raw.len() as u64).ok_or_else(limit)
                 })?;
                 self.check()?;
+                if io.anchor_revision()? != root {
+                    return Err(stale());
+                }
                 Ok(Inventory {
+                    stamps,
+                    root,
                     files,
                     layout,
                     revision: hash.finalize().into(),
@@ -5821,24 +6180,15 @@ mod retained_history {
             })();
             self.resource_result(result)
         }
-        fn read_file(&self, name: &str, cap: u64, before: &fs::Metadata) -> Result<Vec<u8>> {
-            if before.len() > cap {
-                return Err(limit());
-            }
-            let read_bound = before.len().checked_add(1).ok_or_else(limit)?;
-            self.charge(read_bound, read_bound.checked_mul(4).ok_or_else(limit)?)?;
-            let file = anchored_file(self.state, name)?;
-            if stamp(&file.metadata().map_err(|_| invalid())?) != stamp(before) {
-                return Err(stale());
-            }
-            let mut raw = Vec::new();
-            (&file)
-                .take(read_bound)
-                .read_to_end(&mut raw)
-                .map_err(|_| invalid())?;
+        fn read_file(
+            &self,
+            io: &crate::import_barrier::ImportIo<'_, '_>,
+            name: &str,
+            cap: u64,
+            before: &fs::Metadata,
+        ) -> Result<Vec<u8>> {
+            let raw = io.read(name, cap)?.ok_or_else(invalid)?;
             if raw.len() as u64 != before.len()
-                || stamp(&file.metadata().map_err(|_| invalid())?) != stamp(before)
-                || raw.len() as u64 > cap
                 || stamp(&fs::symlink_metadata(self.state.path.join(name)).map_err(|_| invalid())?)
                     != stamp(before)
             {
@@ -5848,6 +6198,7 @@ mod retained_history {
             Ok(raw)
         }
     }
+
     fn anchored_file(state: &StateDir, name: &str) -> Result<std::fs::File> {
         use rustix::fs::{Mode, OFlags, open, openat};
         let mut directory = open(
@@ -5909,10 +6260,29 @@ mod retained_history {
             if self.generation != self.session.generation.get() {
                 return Err(stale());
             }
-            Ok(())
-        }
-        pub(crate) fn recheck(&self) -> Result<()> {
-            self.current()?;
+            if let Some(inventory) = &self.inventory {
+                let io = self.session.import_io()?;
+                if io.anchor_revision()? != inventory.root {
+                    return Err(stale());
+                }
+                for (name, expected) in &inventory.stamps {
+                    self.session
+                        .charge(1 + name.len() as u64, 256 + name.len() as u64)?;
+                    let observed = match fs::symlink_metadata(self.session.state.path.join(name)) {
+                        Ok(metadata) => Some(stamp(&metadata)),
+                        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                        Err(_) => return Err(stale()),
+                    };
+                    if &observed != expected {
+                        return Err(stale());
+                    }
+                }
+            }
+            // Metadata stamps are a cheap negative check, never freshness
+            // authority. A new canonical slot can appear within the same
+            // directory timestamp quantum. Re-enumerate and hash the complete
+            // bounded raw inventory on the SAME operation budget before any
+            // retained DATA is reused.
             if let Some(before) = &self.inventory
                 && self.session.collect()?.revision != before.revision
             {
@@ -5920,12 +6290,15 @@ mod retained_history {
             }
             Ok(())
         }
+        pub(crate) fn recheck(&self) -> Result<()> {
+            self.current()
+        }
         pub(crate) fn commits(&self) -> Result<Vec<Commit>> {
-            self.recheck()?;
+            self.current()?;
             self.observed_commits()
         }
         fn observed_commits(&self) -> Result<Vec<Commit>> {
-            self.current()?;
+            self.session.check()?;
             if self.inventory.is_none() {
                 return CommitStore::new(self.session.state, &self.session.env).all_commits();
             }
@@ -5933,13 +6306,13 @@ mod retained_history {
                 sum.checked_add(o.raw.len() as u64).ok_or_else(limit)
             })?;
             self.session.charge(
-                size.checked_mul(16).ok_or_else(limit)?,
+                size.checked_mul(2).ok_or_else(limit)?,
                 size.checked_mul(64).ok_or_else(limit)?,
             )?;
             Ok(self.originals.iter().map(|o| o.parsed.clone()).collect())
         }
         pub(crate) fn vector(&self) -> Result<BTreeMap<String, PyInt>> {
-            self.recheck()?;
+            self.current()?;
             if self.inventory.is_none() {
                 CommitStore::new(self.session.state, &self.session.env).vector()
             } else {
@@ -5951,18 +6324,18 @@ mod retained_history {
                 })?;
                 self.session
                     .charge(size, size.checked_mul(8).ok_or_else(limit)?)?;
-                Ok(self.vector.clone())
+                Ok(self.vector.as_ref().clone())
             }
         }
         pub(crate) fn replication_after(
             &self,
             peer: &BTreeMap<String, PyInt>,
         ) -> Result<Vec<Commit>> {
-            self.recheck()?;
+            self.current()?;
             if self.inventory.is_none() {
                 return Err(invalid());
             }
-            for (author, floor) in &self.floor {
+            for (author, floor) in self.floor.iter() {
                 if peer.get(author).cloned().unwrap_or_else(PyInt::zero) < *floor {
                     return Err(Error::state("team_checkpoint_history_required"));
                 }
@@ -5971,7 +6344,7 @@ mod retained_history {
                 sum.checked_add(original.raw.len() as u64).ok_or_else(limit)
             })?;
             self.session.charge(
-                size.checked_mul(16).ok_or_else(limit)?,
+                size.checked_mul(2).ok_or_else(limit)?,
                 size.checked_mul(64).ok_or_else(limit)?,
             )?;
             Ok(self
@@ -5989,11 +6362,11 @@ mod retained_history {
                 .collect())
         }
         pub(crate) fn read_json(&self, name: &str, default: Value) -> Result<Value> {
-            self.recheck()?;
+            self.current()?;
             self.observed_json(name, default)
         }
         fn observed_json(&self, name: &str, default: Value) -> Result<Value> {
-            self.current()?;
+            self.session.check()?;
             if let Some(inventory) = &self.inventory {
                 match inventory.files.get(name) {
                     None => Ok(default),
@@ -6004,11 +6377,11 @@ mod retained_history {
             }
         }
         pub(crate) fn read_lines(&self, name: &str) -> Result<Vec<String>> {
-            self.recheck()?;
+            self.current()?;
             self.observed_lines(name)
         }
         fn observed_lines(&self, name: &str) -> Result<Vec<String>> {
-            self.current()?;
+            self.session.check()?;
             if let Some(inventory) = &self.inventory {
                 let Some(file) = inventory.files.get(name) else {
                     return Ok(Vec::new());
@@ -6038,11 +6411,11 @@ mod retained_history {
             }
         }
         pub(crate) fn shared_facts(&self) -> Result<Vec<Value>> {
-            self.recheck()?;
+            self.current()?;
             self.observed_shared_facts()
         }
         fn observed_shared_facts(&self) -> Result<Vec<Value>> {
-            self.current()?;
+            self.session.check()?;
             if let Some(inventory) = &self.inventory
                 && let Some(file) = inventory.files.get(crate::tombstone::PATH)
             {
@@ -6056,9 +6429,14 @@ mod retained_history {
             self.session.check()?;
             Ok(values)
         }
-        // These batches are untrusted DATA for the one fact engine. There is
-        // no callback/effect between captured reads. The engine closes the
-        // transaction with full revision checks before authority is returned.
+        // These batches are untrusted DATA for the one fact engine. Their
+        // public entry/final checks validate the complete raw revision under
+        // the actual held lock. Private observed_* copies only check the SAME
+        // session budget/root/generation: there is no callback, filesystem
+        // mutation or authority return between those bounded copies. All fact
+        // and selection seals still close with a complete raw recheck. Avoid
+        // repeating the identical inventory scan inside each copy; no spent
+        // work is refunded and no nested operation gains a fresh budget.
         // Ordinary acquisition order stays lazy.
         pub(crate) fn fact_sources(&self) -> Result<(Vec<String>, Vec<Value>)> {
             self.recheck()?;
@@ -6079,6 +6457,7 @@ mod retained_history {
             Ok((receipts, lines))
         }
         pub(crate) fn shared_fact_seal(&self) -> Result<(Vec<Value>, FactSeal<'a>)> {
+            self.current()?;
             let values = self.observed_shared_facts()?;
             let seal = self.fact_seal()?;
             Ok((values, seal))
@@ -6104,7 +6483,7 @@ mod retained_history {
                 operation: self.session.operation.clone(),
                 generation: self.generation,
                 revision,
-                vector: self.vector.clone(),
+                vector: self.vector.as_ref().clone(),
             })
         }
         pub(crate) fn target_revision(&self) -> Result<String> {
@@ -6118,6 +6497,10 @@ mod retained_history {
             let volatile = ["sync_state.json", "peers.json", "peer_vectors.json"]
                 .map(|leaf| format!("team/{}/{leaf}", self.session.env));
             let mut hash = Sha256::new();
+            self.session.charge(176, 176)?;
+            inventory
+                .root
+                .visit_words(|word| hash.update(word.to_be_bytes()));
             for (name, directory) in &inventory.layout {
                 if (name == &prefix || name.starts_with(&format!("{prefix}/")))
                     && !pins.contains(name)
@@ -6150,6 +6533,10 @@ mod retained_history {
             let volatile = ["sync_state.json", "peers.json", "peer_vectors.json"]
                 .map(|leaf| format!("team/{}/{leaf}", self.session.env));
             let mut hash = Sha256::new();
+            self.session.charge(176, 176)?;
+            inventory
+                .root
+                .visit_words(|word| hash.update(word.to_be_bytes()));
             for (name, directory) in &inventory.layout {
                 if volatile.contains(name) {
                     continue;
@@ -6179,7 +6566,7 @@ mod retained_history {
                     n.checked_add(o.path.len() as u64).ok_or_else(limit)
                 })?;
                 self.session.charge(inventory.entries as u64, paths)?;
-                for original in &self.originals {
+                for original in self.originals.iter() {
                     if inventory
                         .files
                         .get(&original.path)
@@ -6315,8 +6702,24 @@ mod retained_history {
             }
             // D counts input document/version-order nodes; a pure fold has no
             // document seed. Every conservative prefix reservation is charged.
+            let prefix = format!("team/{}/", self.session.env);
+            let fold_bytes = inventory
+                .files
+                .iter()
+                .try_fold(0u64, |sum, (path, image)| {
+                    if path == crate::tombstone::PATH
+                        || path == &format!("{prefix}facts.jsonl")
+                        || ["commits/", "snapshots/", "snapshot_records/"]
+                            .iter()
+                            .any(|directory| path.starts_with(&format!("{prefix}{directory}")))
+                    {
+                        sum.checked_add(image.raw.len() as u64).ok_or_else(limit)
+                    } else {
+                        Ok(sum)
+                    }
+                })?;
             self.session
-                .reserve_counts([c, o, t, f, d, snapshots, inventory.bytes])
+                .reserve_counts([c, o, t, f, d, snapshots, fold_bytes])
         }
         fn authenticate_selection(&self) -> Result<()> {
             self.current()?;
@@ -6462,7 +6865,7 @@ mod retained_history {
                 Selection::Recipient => {
                     // B's authentic committed index+journal and immutable
                     // receipt/manifest/payload are independent of attempt flags.
-                    let index = crate::import_barrier::index(self.session.state)?;
+                    let index = crate::import_barrier::index_in(&self.session.import_io()?)?;
                     if index[&self.session.env]["state"] != "committed" {
                         return Err(Error::state(
                             if index[&self.session.env]["reason"]
@@ -6509,6 +6912,10 @@ mod retained_history {
                         }
                     }
                     if journal["state"] != "COMMITTED"
+                        || journal["layout"] != "compact_committed_v1"
+                        || journal["signer_record"] != owner.to_dict()
+                        || journal["recipient_record"] != local.to_dict()
+                        || journal["genesis_hash"] != genesis.parsed.hash()?
                         || journal["epoch"] != index[&self.session.env]["epoch"]
                         || journal["receipt"] != receipt
                         || journal["manifest_hash"] != index[&self.session.env]["manifest_hash"]
@@ -6760,7 +7167,7 @@ mod retained_history {
         candidate: Commit,
         encoded: Vec<u8>,
         hash: String,
-        before: Inventory,
+        before: Rc<Inventory>,
         metadata: BTreeMap<String, Vec<u64>>,
         global_names: BTreeSet<String>,
         denial: Option<(String, Vec<u8>)>,
@@ -7263,6 +7670,81 @@ mod retained_history {
         history.check()
     }
 
+    #[cfg(test)]
+    mod opus_epoch_budget_tests {
+        use super::*;
+        #[test]
+        fn ordinary_share_and_authoring_keep_unbound_context_and_finite_parent() {
+            let root = tempfile::tempdir().unwrap();
+            let ctx = crate::context::Context::initialize(
+                root.path().join("state"),
+                "synthetic-admin",
+                "synthetic-recovery",
+                crate::context::Config::default(),
+                crate::clock::system(),
+            )
+            .unwrap();
+            ctx.projects.create("demo", &["dev"]).unwrap();
+            assert!(ctx.state.import_identity().is_none());
+            let shared = crate::team::membership::share_environment(
+                &ctx,
+                None,
+                "demo",
+                "dev",
+                "owner",
+                "synthetic-admin",
+            )
+            .unwrap();
+            let env = shared["env_id"].as_str().unwrap();
+            let history = HistorySession::open_runtime(ctx.state, env).unwrap();
+            assert!(!history.is_scoped());
+            let device = history.load_device(&ctx).unwrap();
+            assert!(device.record().unwrap().verify_uncached());
+            assert!(ctx.state.import_identity().is_none());
+            assert!(ctx.state.import_key_hash().unwrap().is_none());
+            let counters = history.budget.counters.borrow();
+            assert!(counters.work > 0 && counters.bytes > 0);
+            drop(counters);
+            drop(history);
+            let edited = crate::team::membership::author_commit(
+                &ctx,
+                None,
+                env,
+                vec![serde_json::json!({"op":"settings.update","sync_interval_seconds":31})],
+            )
+            .unwrap();
+            assert_eq!(edited.author_seq, 2);
+            assert_eq!(edited.author, device.fingerprint().unwrap());
+            assert_eq!(
+                CommitStore::new(ctx.state, env)
+                    .get(&edited.author, &edited.author_seq)
+                    .unwrap(),
+                Some(edited)
+            );
+            assert!(ctx.state.import_identity().is_none());
+            assert!(!ctx.state.exists(crate::import_barrier::INDEX));
+        }
+
+        #[test]
+        fn actual_identity_loading_debits_parent_before_first_acquisition() {
+            let fixture = crate::team::bootstrap::install::tests::pending();
+            let history =
+                HistorySession::open_probe(&fixture.a, &fixture.env, ProbePurpose::Invite).unwrap();
+            let (work, bytes) = {
+                let counters = history.budget.counters.borrow();
+                (counters.work, counters.bytes)
+            };
+            assert!(work > 0 && bytes > 3);
+            eprintln!("PVBOOT_INITIAL_PARENT_CHARGE work={work} bytes={bytes}");
+            // Pin the actual conflict with an absolute-from-zero fill: this
+            // must refuse now that actual identity I/O belongs to the parent.
+            assert_eq!(
+                history.charge(0, BYTES - 3).unwrap_err().reason,
+                "team_bootstrap_limit_exceeded"
+            );
+        }
+    }
+
     // Keep private-access tests in their original expansion scope; their
     // definitions live in a top-level test-only module, like other suites.
     #[cfg(test)]
@@ -7383,7 +7865,15 @@ mod retained_history {
 }
 #[cfg(test)]
 pub(crate) use retained_history::testing as history_testing;
-pub(crate) use retained_history::{FactSeal, HistoryResume, HistorySession, ProbePurpose};
+pub(crate) use retained_history::{
+    FactSeal, HistoryBudget as ImportHistoryBudget, HistoryResume, HistorySession, ProbePurpose,
+};
+
+// Syntax only. ImportIo reserves the raw walk and materialization before this
+// bridge; signed records and retained-history authority are checked separately.
+pub(crate) fn retained_import_json(raw: &[u8]) -> Result<Value> {
+    super::checkpoint::retained_original(raw).map_err(|error| Error::state(error.reason()))
+}
 
 // Both suites expand inside retained_history, retaining private field access
 // and exact test selectors. No production item is defined by this macro.
@@ -8402,6 +8892,53 @@ mod retained_history_test_bodies {
         }
 
         #[test]
+        fn personal_removal_deferred_parent_deadline_independent() {
+            let fixture = install::tests::installed();
+            let bk = DeviceKey::load_or_create(fixture.b.state, fixture.b.kms).unwrap();
+            let b = bk.fingerprint().unwrap();
+            let (_root, ctx) = cloned(fixture.b.state);
+            let store = CommitStore::new(ctx.state, &fixture.env);
+            let first = signed(
+                &ctx,
+                &fixture.env,
+                &bk,
+                vec![json!({"op":"settings.update","sync_interval_seconds":21})],
+            );
+            let mut clock = Hlc::new(0, 0);
+            clock.observe(&first.hlc).unwrap();
+            let second = sign_commit(
+                &bk,
+                &fixture.env,
+                &first.author_seq + 1,
+                &clock.tick(None),
+                &first.seen,
+                vec![json!({"op":"member.remove","fingerprint":b})],
+            )
+            .unwrap();
+            store.defer(&first).unwrap();
+            store.defer(&second).unwrap();
+            let (scope, pause) = crate::import_barrier::testing::Scope::pause(
+                ctx.state,
+                &format!("/{}.json", second.author_seq),
+                "rename-before",
+            );
+            let release = std::thread::spawn(move || {
+                pause.wait();
+                std::thread::sleep(Duration::from_millis(5_020));
+                pause.release();
+            });
+            assert!(store.release_deferred(now_ms(), None).is_err());
+            release.join().unwrap();
+            assert!(scope.fired());
+            drop(scope);
+            assert_eq!(store.get(&b, &first.author_seq).unwrap(), Some(first));
+            assert!(store.get(&b, &second.author_seq).unwrap().is_none());
+            assert_eq!(store.deferred_commits().unwrap(), vec![second]);
+            denied(&ctx);
+            eprintln!("PVBOOT_DENIAL_DEFERRED_DEADLINE independent=true first_committed=true second_blocked=true original_budget=true permanent_denial=true");
+        }
+
+        #[test]
         fn personal_removal_real_root_lock_replacement_and_deferred_parent_deadline() {
             let fixture = install::tests::installed();
             let bk = DeviceKey::load_or_create(fixture.b.state, fixture.b.kms).unwrap();
@@ -8430,11 +8967,18 @@ mod retained_history_test_bodies {
                 }
                 assert!(prepared.publish().is_err());
                 assert!(!ctx.state.exists(&denial(&fixture.env)));
-                assert!(
+                assert_eq!(
                     CommitStore::new(ctx.state, &fixture.env)
                         .get(&b, &c.author_seq)
-                        .unwrap()
-                        .is_none()
+                        .unwrap_err()
+                        .reason,
+                    "team_bootstrap_local_state_changed"
+                );
+                assert_eq!(
+                    fs::symlink_metadata(ctx.state.path.join(store.commit_path(&b, &c.author_seq)))
+                        .unwrap_err()
+                        .kind(),
+                    std::io::ErrorKind::NotFound
                 );
                 drop(h);
             }
@@ -8716,7 +9260,8 @@ mod retained_history_test_bodies {
                 .write_bytes(crate::import_barrier::INDEX, b"{}")
                 .unwrap();
             parent.invalidate().unwrap();
-            parent.charge(0, BYTES - 3).unwrap();
+            let charged_bytes = parent.budget.counters.borrow().bytes;
+            parent.charge(0, BYTES - charged_bytes - 3).unwrap();
             assert_eq!(
                 reason(raw_witness_with_budget(
                     other.ctx.state,
@@ -8765,7 +9310,8 @@ mod retained_history_test_bodies {
             let f = fixture();
             {
                 let h = probe(&f);
-                h.charge(0, BYTES - 3).unwrap();
+                let charged_bytes = h.budget.counters.borrow().bytes;
+                h.charge(0, BYTES - charged_bytes - 3).unwrap();
                 // The invalid JSON would fail syntax if the bridge ran. The
                 // byte reservation refuses first, without building a tree.
                 assert_eq!(reason(h.parse(b"{")), "team_bootstrap_limit_exceeded");
@@ -8773,8 +9319,9 @@ mod retained_history_test_bodies {
             }
             {
                 let h = probe(&f);
-                h.charge(WORK - 1, 0).unwrap();
                 let nested = h.nested(f.ctx.state, &f.env).unwrap();
+                let charged_work = h.budget.counters.borrow().work;
+                h.charge(WORK - charged_work - 1, 0).unwrap();
                 nested.charge(1, 0).unwrap();
                 assert_eq!(reason(h.charge(1, 0)), "team_bootstrap_limit_exceeded");
                 assert_eq!(
@@ -8786,13 +9333,17 @@ mod retained_history_test_bodies {
             {
                 let h = probe(&f);
                 h.charge(17, 31).unwrap();
+                let before_resume = {
+                    let counters = h.budget.counters.borrow();
+                    (counters.work, counters.bytes)
+                };
                 let original_budget = Rc::clone(&h.budget);
                 let resume = h.into_resume().unwrap();
                 let resumed = resume.resume().unwrap();
                 assert!(Rc::ptr_eq(&resumed.budget, &original_budget));
                 let charged = resumed.budget.counters.borrow().work;
-                assert!(charged > 17, "resume must charge its full revalidation");
-                assert!(resumed.budget.counters.borrow().bytes > 31);
+                assert!(charged > before_resume.0, "resume must charge its full revalidation");
+                assert!(resumed.budget.counters.borrow().bytes > before_resume.1);
                 resumed.charge(WORK - charged, 0).unwrap();
                 assert_eq!(original_budget.counters.borrow().work, WORK);
                 assert_eq!(
@@ -8998,12 +9549,25 @@ mod retained_history_test_bodies {
             let nonutf = dir.join(std::ffi::OsString::from_vec(vec![
                 0xff, b'.', b'j', b's', b'o', b'n',
             ]));
-            fs::copy(&canonical, &nonutf).unwrap();
-            {
-                let h = probe(&f);
-                assert!(h.acquire().is_err());
+            match fs::copy(&canonical, &nonutf) {
+                Ok(_) => {
+                    let h = probe(&f);
+                    assert!(h.acquire().is_err());
+                    drop(h);
+                    fs::remove_file(&nonutf).unwrap();
+                }
+                #[cfg(target_os = "macos")]
+                Err(error) if error.raw_os_error() == Some(92) => {
+                    // APFS rejects this name before it can enter the store.
+                    assert!(fs::read_dir(&dir).unwrap().all(|entry| {
+                        entry.unwrap().file_name().as_os_str() != nonutf.file_name().unwrap()
+                    }));
+                    assert_eq!(fs::read(&canonical).unwrap(), bytes);
+                    let h = probe(&f);
+                    assert!(h.acquire().is_ok());
+                }
+                Err(error) => panic!("invalid UTF-8 fixture creation failed: {error}"),
             }
-            fs::remove_file(nonutf).unwrap();
             let link = dir.join("2.json");
             symlink(&canonical, &link).unwrap();
             {
@@ -9277,6 +9841,78 @@ mod retained_history_test_bodies {
                 reason(receive_with_input(&custom, &c, 1_000_002, None, true, &h)),
                 "team_bootstrap_local_state_changed"
             );
+        }
+        #[test]
+        fn personal_history_same_thread_revision_stage_regression() {
+            fn stage_reason<T>(stage: &str, result: Result<T>) -> String {
+                match result {
+                    Ok(_) => panic!("expected refusal at {stage}"),
+                    Err(error) => error.reason.into_owned(),
+                }
+            }
+            for _ in 0..32 {
+            let f = fixture();
+            let h = probe(&f);
+            let old = h.acquire().unwrap();
+            let c = next(&f, 2, "1000001-0000");
+            put(&f, &c);
+            assert_eq!(stage_reason("old_input_after_append", old.commits()), "team_bootstrap_local_state_changed");
+            let fresh = h.acquire().unwrap();
+            assert_eq!(fresh.vector().unwrap()[&c.author], PyInt::from(2));
+            let raw = fs::read(
+                f.ctx
+                    .state
+                    .path
+                    .join(format!("team/{}/commits/{}/2.json", f.env, c.author)),
+            )
+            .unwrap();
+            f.ctx
+                .state
+                .write_bytes(&format!("team/{}/commits/{}/2.json", f.env, c.author), &raw)
+                .unwrap();
+            let replacement = fresh.recheck();
+            if replacement.is_ok() {
+                let before = fresh.inventory.as_ref().unwrap();
+                let after = h.collect().unwrap();
+                let changed_stamps = before.stamps.iter().filter(|(name, stamp)| after.stamps.get(*name) != Some(*stamp)).count();
+                eprintln!("PVBOOT_REVISION_UNEXPECTED_ACCEPT {}", json!({"same_raw_rewrite":true,"changed_stamps":changed_stamps,"root_same":before.root==after.root,"full_revision_same":before.revision==after.revision}));
+            }
+            assert_eq!(
+                stage_reason("same_bytes_atomic_replacement", replacement),
+                "team_bootstrap_local_state_changed"
+            );
+            let fresh = h.acquire().unwrap();
+            f.ctx
+                .state
+                .write_json(
+                    &format!("team/{}/fact_admissions.json", f.env),
+                    &json!({"synthetic-forged-receipt":"invalid-signature"}),
+                )
+                .unwrap();
+            assert_eq!(
+                stage_reason("fact_admission_write", fresh.recheck()),
+                "team_bootstrap_local_state_changed"
+            );
+            let same_path = StateDir::new(&f.ctx.state.path);
+            assert_eq!(
+                stage_reason("different_state_object", h.nested(&same_path, &f.env)),
+                "team_bootstrap_local_state_changed"
+            );
+            let other = new_env_id(&f.genesis.author).unwrap();
+            assert_eq!(
+                stage_reason("different_env", h.nested(f.ctx.state, &other)),
+                "team_bootstrap_local_state_changed"
+            );
+            let custom = CommitStore {
+                state: f.ctx.state,
+                env_id: f.env.clone(),
+                root: format!("team/{}/other", f.env),
+            };
+            assert_eq!(
+                stage_reason("different_store_root", receive_with_input(&custom, &c, 1_000_002, None, true, &h)),
+                "team_bootstrap_local_state_changed"
+            );
+            }
         }
         #[test]
         fn personal_history_global_discovery_counts_mapping_union_before_walkers() {

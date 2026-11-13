@@ -69,7 +69,7 @@ use std::{
 
 static ACTIVE: LazyLock<Mutex<BTreeSet<(std::path::PathBuf, String)>>> =
     LazyLock::new(|| Mutex::new(BTreeSet::new()));
-struct Slot {
+pub(super) struct Slot {
     key: (std::path::PathBuf, String),
     _lease: std::fs::File,
 }
@@ -82,6 +82,46 @@ impl Slot {
             return Err(bad("team_bootstrap_busy"));
         }
         Ok(Self { key, _lease: lease })
+    }
+    pub(super) fn registration<'s>(
+        &'s self,
+        ctx: &Context,
+        env: &str,
+    ) -> Result<BootstrapRegistration<'s>> {
+        if self.key != (ctx.state.path.clone(), env.to_owned()) {
+            return Err(bad("team_bootstrap_local_state_changed"));
+        }
+        use std::os::unix::fs::MetadataExt;
+        let held = self
+            ._lease
+            .metadata()
+            .map_err(|_| bad("team_bootstrap_storage_failed"))?;
+        let named = std::fs::symlink_metadata(ctx.state.path.join(path(env, "transfer.lock")?))
+            .map_err(|_| bad("team_bootstrap_storage_failed"))?;
+        if !named.is_file()
+            || named.dev() != held.dev()
+            || named.ino() != held.ino()
+            || named.nlink() != 1
+            || named.mode() & 0o777 != 0o600
+        {
+            return Err(bad("team_bootstrap_local_state_changed"));
+        }
+        Ok(BootstrapRegistration { slot: self })
+    }
+    pub(super) fn take_registration(ctx: &Context, env: &str) -> Result<Option<Self>> {
+        let witness = ctx.state.path.join(path(env, "journal.json")?);
+        match std::fs::symlink_metadata(witness) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            _ => Self::take(ctx, env).map(Some),
+        }
+    }
+}
+pub(crate) struct BootstrapRegistration<'s> {
+    slot: &'s Slot,
+}
+impl BootstrapRegistration<'_> {
+    pub(super) fn check(&self, ctx: &Context, env: &str) -> Result<()> {
+        self.slot.registration(ctx, env).map(|_| ())
     }
 }
 impl Drop for Slot {
@@ -184,23 +224,21 @@ fn status_with_input(
 ) -> Result<Value> {
     let history = parent.nested(ctx.state, env)?;
     history.preflight_inventory()?;
-    // Four private <=64KiB control records plus bounded index/identity reads;
-    // reserve their opaque parsing/copies before any materialization.
-    history.charge(16 * 1024 * 1024, 64 * 1024 * 1024)?;
-    let attempt = ctx
-        .state
-        .read_json(&path(env, "attempt.json")?, Value::Null)?;
+    let io = history.import_io()?;
+    let attempt = io
+        .json(&path(env, "attempt.json")?, 65_536)?
+        .unwrap_or(Value::Null);
     if attempt.is_null() {
         return Ok(
             json!({"env_id":env,"state":"unsupported","reason":"team_bootstrap_attempt_not_found"}),
         );
     }
-    let observed = ctx
-        .state
-        .read_json(&path(env, "observed.json")?, Value::Null)?;
-    let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?.record()?;
+    let observed = io
+        .json(&path(env, "observed.json")?, 65_536)?
+        .unwrap_or(Value::Null);
+    let device = history.local_record()?;
     let mut state = attempt["state"].as_str().unwrap_or("recovery_required");
-    let visibility = import_barrier::index(ctx.state)?;
+    let visibility = import_barrier::index_in(&io)?;
     let mut reason = attempt["reason"].clone();
     let known_state = matches!(
         state,
@@ -235,7 +273,11 @@ fn status_with_input(
     } else if visibility.get(env).is_some() && visibility[env]["state"] != "committed" {
         state = "recovery_required";
         reason = visibility[env]["reason"].clone();
-    } else if known_state && visibility[env]["state"] == "committed" {
+    } else if visibility[env]["state"] == "committed" && ctx.policy.restore_pending()? {
+        state = "recovery_required";
+        reason = json!("team_bootstrap_recovery_required");
+    } else if visibility[env]["state"] == "committed" {
+        validate_receiver_continuation(ctx, env, &history, &attempt, &visibility)?;
         // Only a freshly authenticated committed runtime view can become
         // ready. The attempt label and an old receipt are DATA, not proof.
         let runtime = history.continue_runtime()?;
@@ -245,7 +287,7 @@ fn status_with_input(
         {
             state = "ready";
         }
-        let current = import_barrier::index(ctx.state)?;
+        let current = import_barrier::index_in(&runtime.import_io()?)?;
         if current[env]["local_member_removed"] == true {
             state = "recovery_required";
             reason = json!("team_member_removed");
@@ -299,6 +341,175 @@ fn update(ctx: &Context, env: &str, state: &str, reason: Option<&str>) -> Result
     import_barrier::json(ctx.state, &p, &attempt)
 }
 
+fn update_with_input(
+    ctx: &Context,
+    env: &str,
+    attempt_id: &Value,
+    state: &str,
+    reason: Option<&str>,
+    history: &super::commit::HistorySession<'_>,
+) -> Result<()> {
+    let io = history.import_io()?;
+    let name = path(env, "attempt.json")?;
+    let mut attempt = io
+        .json(&name, 65_536)?
+        .ok_or_else(|| bad("team_bootstrap_attempt_not_found"))?;
+    if &attempt["attempt_id"] != attempt_id {
+        return Err(bad("team_bootstrap_local_state_changed"));
+    }
+    if attempt["state"] == "cancelled" && state != "installed_syncing" {
+        return Err(bad("team_bootstrap_cancelled"));
+    }
+    if reason.is_some() {
+        attempt["failed_from"] = attempt["state"].clone();
+    }
+    attempt["state"] = json!(state);
+    attempt["reason"] = json!(reason);
+    let raw = history.encode_import_record(&attempt)?;
+    history.reserve_writer(&name, raw.len() as u64)?;
+    io.invalidate()?;
+    import_barrier::write(ctx.state, &name, &raw)?;
+    io.check()
+}
+
+enum RestartDisposition {
+    AwaitApproval,
+    ContinueCommitted,
+    ClosedInterrupted,
+    Blocked,
+}
+
+fn validate_receiver_continuation(
+    ctx: &Context,
+    env: &str,
+    history: &super::commit::HistorySession<'_>,
+    attempt: &Value,
+    imports: &Value,
+) -> Result<()> {
+    let io = history.import_io()?;
+    let receipt = install::receipt_evidence(ctx, env, history)?;
+    let receiver = io
+        .json(&path(env, "receiver.json")?, 65_536)?
+        .ok_or_else(|| bad("team_bootstrap_recovery_required"))?;
+    let local = history.local_record()?;
+    let compact = io
+        .json(&path(env, "journal.json")?, 1_048_576)?
+        .ok_or_else(|| bad("team_bootstrap_recovery_required"))?;
+    verify_peer_signature(&receiver, local)?;
+    let owner = super::identity::DeviceRecord::from_dict(&receiver["signer_record"])?;
+    let invitation = ctx
+        .kms
+        .unwrap(&WrappedKey::from_dict(&attempt["invite"])?)?;
+    let invite = membership::parse_invite(
+        std::str::from_utf8(invitation.expose())
+            .map_err(|_| bad("team_bootstrap_state_invalid"))?,
+    )?;
+    if receiver["domain"] != "zeropw-personal-bootstrap-approval-v1"
+        || receiver["state"] != "approved"
+        || receiver["signer_record"] != compact["signer_record"]
+        || receiver["recipient_role"] != "admin"
+        || receiver["recipient_record"] != local.to_dict()
+        || receiver["env_id"] != env
+        || receiver["approval_id"] != receipt["approval_id"]
+        || receiver["invite_id"] != attempt["invite_id"]
+        || receiver["project"] != imports[env]["project"]
+        || receiver["environment"] != imports[env]["environment"]
+        || attempt["project"] != imports[env]["project"]
+        || attempt["environment"] != imports[env]["environment"]
+        || invite.env_id != env
+        || invite.inviter != owner.fingerprint()
+        || membership::invite_id(invite.invite_secret.expose()) != attempt["invite_id"]
+        || !owner.verify_uncached()
+    {
+        return Err(bad("team_bootstrap_recovery_required"));
+    }
+    history.check()?;
+    Ok(())
+}
+
+fn reconcile_receiver(
+    ctx: &Context,
+    env: &str,
+    slot: &Slot,
+    history: &super::commit::HistorySession<'_>,
+) -> Result<RestartDisposition> {
+    slot.registration(ctx, env)?.check(ctx, env)?;
+    install::recover_with_input(ctx, env, history)?;
+    let io = history.import_io()?;
+    let attempt = io
+        .json(&path(env, "attempt.json")?, 65_536)?
+        .ok_or_else(|| bad("team_bootstrap_attempt_not_found"))?;
+    let imports = import_barrier::index_in(&io)?;
+    if imports[env]["state"] == "committed" {
+        // The label cannot select authority. Authenticate the full durable
+        // continuation, exact original invite/approval/mapping and admission.
+        validate_receiver_continuation(ctx, env, history, &attempt, &imports)?;
+        let local = history.local_record()?;
+        let continuation = history.continue_runtime()?;
+        let folded = membership::load_environment_with_input(ctx, env, &continuation)?;
+        if imports[env]["local_member_removed"] == true
+            || folded.document["members"][local.fingerprint()]["status"] != "active"
+            || ctx.policy.restore_pending()?
+        {
+            update_with_input(
+                ctx,
+                env,
+                &attempt["attempt_id"],
+                "recovery_required",
+                Some("team_bootstrap_recovery_required"),
+                history,
+            )?;
+            return Ok(RestartDisposition::Blocked);
+        }
+        update_with_input(
+            ctx,
+            env,
+            &attempt["attempt_id"],
+            "installed_syncing",
+            None,
+            history,
+        )?;
+        return Ok(RestartDisposition::ContinueCommitted);
+    }
+    if imports.get(env).is_some() && !install::prepared_without_publication(ctx, env, history)? {
+        return Ok(RestartDisposition::Blocked);
+    }
+    match attempt["state"].as_str() {
+        Some("approval_pending") => {
+            if attempt["invitation_expires_at_ms"]
+                .as_u64()
+                .is_some_and(|expiry| expiry <= ((ctx.clock)() * 1000.0) as u64)
+            {
+                update_with_input(
+                    ctx,
+                    env,
+                    &attempt["attempt_id"],
+                    "unsupported",
+                    Some("team_bootstrap_authorization_expired"),
+                    history,
+                )?;
+                Ok(RestartDisposition::ClosedInterrupted)
+            } else {
+                Ok(RestartDisposition::AwaitApproval)
+            }
+        }
+        Some("transferring" | "verifying" | "installing") => {
+            install::discard_prepared_with_input(ctx, env, history)?;
+            update_with_input(
+                ctx,
+                env,
+                &attempt["attempt_id"],
+                "unsupported",
+                Some("team_bootstrap_transfer_interrupted"),
+                history,
+            )?;
+            Ok(RestartDisposition::ClosedInterrupted)
+        }
+        Some("cancelled" | "unsupported") => Ok(RestartDisposition::ClosedInterrupted),
+        _ => Ok(RestartDisposition::Blocked),
+    }
+}
+
 pub(crate) fn cancel(ctx: &Context, env: &str) -> Result<Value> {
     let history = super::commit::HistorySession::open_recovery_entry(ctx, env)?;
     history.preflight_inventory()?;
@@ -321,7 +532,7 @@ pub(crate) fn cancel(ctx: &Context, env: &str) -> Result<Value> {
     if index.get(env).is_none()
         && let Ok(_lease) = import_barrier::transfer_lease(ctx.state, env)
     {
-        install::discard_prepared(ctx, env)?;
+        install::discard_prepared_with_input(ctx, env, &history)?;
     }
     status_with_input(ctx, env, &history)
 }
@@ -565,7 +776,7 @@ pub(crate) fn serve(ctx: &Context, session: &dyn Session) -> Result<()> {
     if ctx.state.read_json(&ap, Value::Null)?["cancelled"] == true {
         return Err(bad("team_bootstrap_cancelled"));
     }
-    if request["type"] == "BOOTSTRAP_INSTALLED" {
+    let activation = if request["type"] == "BOOTSTRAP_INSTALLED" {
         protocol::fields(
             &request,
             &[
@@ -577,7 +788,9 @@ pub(crate) fn serve(ctx: &Context, session: &dyn Session) -> Result<()> {
                 "manifest_hash",
             ],
         )?;
-        let auth = ctx.state.read_json(&ap, Value::Null)?;
+        let history = super::commit::HistorySession::open_runtime(ctx.state, env)?;
+        let auth = history.acquire()?.read_json(&ap, Value::Null)?;
+        let continuation = history.into_resume()?;
         if request["env_id"] != env
             || request["session_nonce"] != session_nonce
             || request["signer"] != auth["last_manifest"]["signer"]
@@ -587,7 +800,9 @@ pub(crate) fn serve(ctx: &Context, session: &dyn Session) -> Result<()> {
             return Err(bad("team_bootstrap_receipt_invalid"));
         }
         let challenge = random(32);
-        let auth = ctx.state.read_json(&ap, Value::Null)?;
+        continuation.check_unlocked()?;
+        #[cfg(test)]
+        import_barrier::opus_cost::metric(ctx.state, "receipt_queries_sent", 1);
         send(
             session,
             &json!({"type":"BOOTSTRAP_RECEIPT_QUERY","env_id":env,"session_nonce":session_nonce,"challenge":challenge,"manifest_hash":auth["last_manifest_hash"]}),
@@ -616,6 +831,7 @@ pub(crate) fn serve(ctx: &Context, session: &dyn Session) -> Result<()> {
         }
         verify_peer_signature(&reply, &session.peer())?;
         verify_receipt(&reply["receipt"], &auth, &session.peer())?;
+        (auth, continuation)
     } else {
         protocol::fields(
             &request,
@@ -716,6 +932,10 @@ pub(crate) fn serve(ctx: &Context, session: &dyn Session) -> Result<()> {
             auth["last_ready"] = ready.clone();
             import_barrier::json(ctx.state, &ap, &auth)?;
         }
+        let history = super::commit::HistorySession::open_runtime(ctx.state, env)?;
+        let observed_auth = history.acquire()?.read_json(&ap, Value::Null)?;
+        let continuation = history.into_resume()?;
+        continuation.check_unlocked()?;
         send(session, &ready)?;
         let ack = loop {
             let (_, value) = recv(ctx, session, &mut deadline)?;
@@ -749,16 +969,35 @@ pub(crate) fn serve(ctx: &Context, session: &dyn Session) -> Result<()> {
         {
             return Err(bad("team_bootstrap_receipt_invalid"));
         }
-        let auth = ctx.state.read_json(&ap, Value::Null)?;
-        verify_receipt(&ack["receipt"], &auth, &session.peer())?;
+        verify_receipt(&ack["receipt"], &observed_auth, &session.peer())?;
+        (observed_auth, continuation)
+    };
+    let (observed_auth, continuation) = activation;
+    let history = continuation.resume()?;
+    let mut auth = history.acquire()?.read_json(&ap, Value::Null)?;
+    if auth != observed_auth || auth["device_record"] != session.peer().to_dict() {
+        return Err(bad("team_bootstrap_approval_changed"));
     }
-    let _lock = ctx.state.lock()?;
-    let mut auth = ctx.state.read_json(&ap, Value::Null)?;
+    let folded = membership::load_environment_with_input(ctx, env, &history)?;
+    let local = history.local_record()?;
+    let peer = session.peer();
+    if folded.document["owner"] != local.fingerprint()
+        || folded.document["members"][local.fingerprint()]["status"] != "active"
+        || folded.document["members"][peer.fingerprint()]["status"] != "active"
+        || folded.document["members"][peer.fingerprint()]["device"] != peer.to_dict()
+    {
+        return Err(bad("team_bootstrap_recovery_required"));
+    }
     if auth["cancelled"] == true {
         return Err(bad("team_bootstrap_cancelled"));
     }
     auth["activated"] = json!(true);
-    import_barrier::json(ctx.state, &ap, &auth)?;
+    let raw = history.encode_import_record(&auth)?;
+    history.reserve_writer(&ap, raw.len() as u64)?;
+    history.acquire()?.recheck()?;
+    history.invalidate()?;
+    import_barrier::write(ctx.state, &ap, &raw)?;
+    history.check()?;
     Ok(())
 }
 
@@ -850,12 +1089,19 @@ fn verify_peer_signature(value: &Value, peer: &crate::team::identity::DeviceReco
 fn receive(
     team: &Arc<TeamSync>,
     env: &str,
+    slot: &Slot,
     stop: &AtomicBool,
     session_slot: &Mutex<Option<Arc<dyn Session>>>,
 ) -> Result<()> {
     let ctx = &team.ctx;
-    install::recover(ctx, env)?;
-    install::discard_prepared(ctx, env)?;
+    let committed = {
+        let history = super::commit::HistorySession::open_recovery_entry(ctx, env)?;
+        match reconcile_receiver(ctx, env, slot, &history)? {
+            RestartDisposition::ContinueCommitted => true,
+            RestartDisposition::AwaitApproval => false,
+            RestartDisposition::ClosedInterrupted | RestartDisposition::Blocked => return Ok(()),
+        }
+    };
     let attempt = ctx
         .state
         .read_json(&path(env, "attempt.json")?, Value::Null)?;
@@ -878,7 +1124,6 @@ fn receive(
     });
     let mut found = None;
     let mut address = String::new();
-    let committed = import_barrier::index(ctx.state)?[env]["state"] == "committed";
     let mut addresses = Vec::new();
     if committed {
         // Successful normal sync/discovery can learn a newer endpoint than
@@ -953,7 +1198,15 @@ fn receive(
         // protocol is authoritative for routing, never for import visibility
         // or readiness. Re-enter fresh ordinary vector/M1 agreement with both
         // already-received controls, before another reader owns the session.
-        team.personal_adopt_ordinary(env, session.clone(), &address, &peer_caps, &hello)?;
+        team.personal_adopt_ordinary(
+            env,
+            session.clone(),
+            &address,
+            &peer_caps,
+            &hello,
+            &slot.registration(ctx, env)?,
+        )?;
+        team.personal_handoff_complete(env, &session)?;
         *session_slot
             .lock()
             .map_err(|_| bad("team_bootstrap_busy"))? = None;
@@ -968,6 +1221,14 @@ fn receive(
     }
     let session_nonce = text(&hello, "session_nonce")?;
     if let Some(receipt) = receipt {
+        let receipt_operation = {
+            let history = super::commit::HistorySession::open_runtime(ctx.state, env)?;
+            if install::receipt_with_input(ctx, env, &history)? != receipt {
+                return Err(bad("team_bootstrap_receipt_invalid"));
+            }
+            history.into_resume()?
+        };
+        receipt_operation.check_unlocked()?;
         send(
             session.as_ref(),
             &json!({"type":"BOOTSTRAP_INSTALLED","env_id":env,"session_nonce":session_nonce,"signer":receipt["signer"],"recipient":receipt["recipient"],"manifest_hash":receipt["manifest_hash"]}),
@@ -991,9 +1252,25 @@ fn receive(
         {
             return Err(bad("team_bootstrap_receipt_invalid"));
         }
-        let mut reply = json!({"type":"BOOTSTRAP_RECEIPT_REPLY","domain":"zeropw-team-bootstrap-receipt-query-v1","env_id":env,"session_nonce":session_nonce,"challenge":query["challenge"],"receipt":receipt});
-        let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
-        reply["sig"] = json!(crate::pybase64::b64encode(&device.sign(&bytes(&reply)?)?));
+        let reply = {
+            let history = receipt_operation.resume()?;
+            let fresh = install::receipt_with_input(ctx, env, &history)?;
+            if fresh != receipt {
+                return Err(bad("team_bootstrap_receipt_invalid"));
+            }
+            let mut reply = json!({"type":"BOOTSTRAP_RECEIPT_REPLY","domain":"zeropw-team-bootstrap-receipt-query-v1","env_id":env,"session_nonce":session_nonce,"challenge":query["challenge"],"receipt":fresh});
+            history.reserve_import_signature(&reply)?;
+            let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
+            history.match_local_identity(&device.record()?)?;
+            let input = history.acquire()?;
+            input.recheck()?;
+            history.check()?;
+            reply["sig"] = json!(crate::pybase64::b64encode(&device.sign(&bytes(&reply)?)?));
+            input.recheck()?;
+            history.check()?;
+            reply
+        };
+        receipt_operation.check_unlocked()?;
         send(session.as_ref(), &reply)?;
     } else {
         let onboarding_nonce = random(32);
@@ -1102,8 +1379,28 @@ fn receive(
             &json!({"type":"BOOTSTRAP_ACK","receipt":receipt}),
         )?;
     }
-    team.register_env(env)?;
-    team.adopt_outbound_session_checked(env, session.clone(), &address)?;
+    {
+        let history = super::commit::HistorySession::open_recovery_entry(ctx, env)?;
+        team.register_env_with_bootstrap_slot(env, &slot.registration(ctx, env)?, &history)?;
+    }
+    #[cfg(test)]
+    import_barrier::opus_cost::protocol_event(
+        ctx.state,
+        env,
+        "receiver_registered_before_ordinary_handoff",
+    );
+    let adopted = team.adopt_outbound_session_checked(env, session.clone(), &address);
+    #[cfg(test)]
+    if let Err(error) = &adopted {
+        eprintln!(
+            "PVBOOT_OPUS_ORDINARY_HANDOFF_REFUSED reason={}",
+            closed_reason(&error.reason)
+        );
+    }
+    adopted?;
+    #[cfg(test)]
+    import_barrier::opus_cost::protocol_event(ctx.state, env, "receiver_ordinary_handoff_returned");
+    team.personal_handoff_complete(env, &session)?;
     *session_slot
         .lock()
         .map_err(|_| bad("team_bootstrap_busy"))? = None;
@@ -1118,6 +1415,8 @@ pub(crate) struct Runtime {
     jobs: Mutex<BTreeMap<String, Job>>,
     stop: Arc<AtomicBool>,
     last: Mutex<Instant>,
+    // Protocol ownership only. Never used for membership, visibility or READY.
+    ordinary_sessions: Mutex<BTreeMap<String, std::sync::Weak<dyn Session>>>,
 }
 impl Default for Runtime {
     fn default() -> Self {
@@ -1125,6 +1424,7 @@ impl Default for Runtime {
             jobs: Mutex::new(BTreeMap::new()),
             stop: Arc::new(AtomicBool::new(false)),
             last: Mutex::new(Instant::now() - Duration::from_secs(3)),
+            ordinary_sessions: Mutex::new(BTreeMap::new()),
         }
     }
 }
@@ -1141,7 +1441,19 @@ impl Runtime {
         let handle = thread::spawn(move || {
             match serve(&team.ctx, session.as_ref()) {
                 Ok(()) => {
+                    #[cfg(test)]
+                    import_barrier::opus_cost::protocol_event(
+                        team.ctx.state,
+                        session.env_id(),
+                        "activation_serve_returned",
+                    );
                     team.personal_adopt_inbound(session.clone());
+                    #[cfg(test)]
+                    import_barrier::opus_cost::protocol_event(
+                        team.ctx.state,
+                        session.env_id(),
+                        "activation_ordinary_handoff_returned",
+                    );
                 }
                 Err(error) => {
                     let reason = closed_reason(&error.reason);
@@ -1179,6 +1491,41 @@ impl Runtime {
         );
         Ok(())
     }
+    // Coordination observation only: no membership, receipt or use authority.
+    pub(super) fn has_job(&self, env: &str) -> bool {
+        self.jobs
+            .lock()
+            .map(|jobs| jobs.get(env).is_some_and(|job| !job.handle.is_finished()))
+            .unwrap_or(true)
+    }
+    pub(super) fn handed_to_ordinary(&self, env: &str, session: &Arc<dyn Session>) -> Result<()> {
+        let mut sessions = self
+            .ordinary_sessions
+            .lock()
+            .map_err(|_| bad("team_bootstrap_busy"))?;
+        sessions.retain(|_, session| {
+            session
+                .upgrade()
+                .is_some_and(|session| !session.is_closed())
+        });
+        if !sessions.contains_key(env) && sessions.len() >= 256 {
+            return Err(bad("team_bootstrap_limit_exceeded"));
+        }
+        sessions.insert(env.into(), Arc::downgrade(session));
+        Ok(())
+    }
+    fn ordinary_owns_session(&self, env: &str) -> Result<bool> {
+        let mut sessions = self
+            .ordinary_sessions
+            .lock()
+            .map_err(|_| bad("team_bootstrap_busy"))?;
+        sessions.retain(|_, session| {
+            session
+                .upgrade()
+                .is_some_and(|session| !session.is_closed())
+        });
+        Ok(sessions.contains_key(env))
+    }
     pub(crate) fn poll(&self, team: Arc<TeamSync>) -> Result<()> {
         let mut last = self.last.lock().map_err(|_| bad("team_bootstrap_busy"))?;
         if last.elapsed() < Duration::from_secs(3) {
@@ -1189,60 +1536,90 @@ impl Runtime {
         if self.stop.load(Ordering::SeqCst) {
             return Ok(());
         }
-        let mut jobs = self.jobs.lock().map_err(|_| bad("team_bootstrap_busy"))?;
-        let finished = jobs
-            .iter()
-            .filter(|(_, j)| j.handle.is_finished())
-            .map(|(id, _)| id.clone())
-            .collect::<Vec<_>>();
-        for id in finished {
-            if let Some(job) = jobs.remove(&id) {
-                let _ = job.handle.join();
-            }
+        let finished = {
+            let mut jobs = self.jobs.lock().map_err(|_| bad("team_bootstrap_busy"))?;
+            let ids = jobs
+                .iter()
+                .filter(|(_, job)| job.handle.is_finished())
+                .map(|(env, _)| env.clone())
+                .collect::<Vec<_>>();
+            ids.into_iter()
+                .filter_map(|env| jobs.remove(&env))
+                .collect::<Vec<_>>()
+        };
+        for job in finished {
+            let _ = job.handle.join();
         }
-        for env in crate::team::local_env_ids(team.ctx.state)? {
-            if jobs.len() >= 2 || jobs.contains_key(&env) {
-                continue;
+        // Discovery is bounded routing DATA, not a continuation proof. Never
+        // hold the jobs mutex over filesystem work or a worker's Slot/lock.
+        let candidates = {
+            let io = import_barrier::ImportIo::open(team.ctx.state)?;
+            let index = io
+                .json(import_barrier::INDEX, 1_048_576)?
+                .unwrap_or(Value::Null);
+            let mut names = io
+                .list("team")?
+                .into_iter()
+                .filter(|env| super::commit::valid_env_id(env))
+                .collect::<BTreeSet<_>>();
+            names.extend(
+                index
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .map(|(env, _)| env.clone()),
+            );
+            if names.len() > 256 {
+                return Err(bad("team_bootstrap_limit_exceeded"));
             }
-            let attempt = team
-                .ctx
-                .state
-                .read_json(&path(&env, "attempt.json")?, Value::Null)?;
-            if attempt.is_null()
-                || !matches!(
-                    attempt["state"].as_str(),
-                    Some("approval_pending" | "installed_syncing" | "recovery_required")
-                )
-            {
-                continue;
-            }
-            if attempt["state"] == "installed_syncing" && team.personal_session_open(&env) {
-                continue;
-            }
-            if attempt["state"] == "approval_pending" {
-                if attempt["invitation_expires_at_ms"]
-                    .as_u64()
-                    .is_some_and(|t| t <= ((team.ctx.clock)() * 1000.0) as u64)
+            let mut candidates = Vec::new();
+            for env in names {
+                if !super::commit::valid_env_id(&env) {
+                    return Err(bad("team_bootstrap_state_invalid"));
+                }
+                let attempt = io
+                    .json(&path(&env, "attempt.json")?, 65_536)?
+                    .unwrap_or(Value::Null);
+                io.charge(1, 256)?;
+                let journal = !matches!(std::fs::symlink_metadata(team.ctx.state.path.join(path(&env, "journal.json")?)), Err(error) if error.kind() == std::io::ErrorKind::NotFound);
+                let witnessed = journal || index.get(&env).is_some();
+                if attempt.is_null() && !witnessed {
+                    continue;
+                }
+                if !witnessed
+                    && matches!(attempt["state"].as_str(), Some("cancelled" | "unsupported"))
                 {
-                    update(
-                        &team.ctx,
-                        &env,
-                        "unsupported",
-                        Some("team_bootstrap_authorization_expired"),
-                    )?;
                     continue;
                 }
-                let observed = team
-                    .ctx
-                    .state
-                    .read_json(&path(&env, "observed.json")?, Value::Null)?;
-                let receiver = team
-                    .ctx
-                    .state
-                    .read_json(&path(&env, "receiver.json")?, Value::Null)?;
-                if !observed.is_null() && receiver.is_null() {
-                    continue;
+                if !witnessed && attempt["state"] == "approval_pending" {
+                    let observed = io
+                        .json(&path(&env, "observed.json")?, 65_536)?
+                        .unwrap_or(Value::Null);
+                    let receiver = io
+                        .json(&path(&env, "receiver.json")?, 65_536)?
+                        .unwrap_or(Value::Null);
+                    if !observed.is_null() && receiver.is_null() {
+                        continue;
+                    }
                 }
+                candidates.push(env);
+            }
+            io.check()?;
+            candidates
+        };
+        for env in candidates {
+            // Only this Runtime's completed protocol handoff owns a live
+            // ordinary session. A cold process has no such handoff and must
+            // reconcile its durable receipt regardless of the attempt label.
+            // Temporary vector/M1 disagreement after a handoff belongs to
+            // ordinary sync, which must retain the session to deliver changes
+            // and removal notices. This is scheduling, never READY authority.
+            if self.has_job(&env) || self.ordinary_owns_session(&env)? {
+                continue;
+            }
+            let mut jobs = self.jobs.lock().map_err(|_| bad("team_bootstrap_busy"))?;
+            if self.stop.load(Ordering::SeqCst) || jobs.len() >= 2 || jobs.contains_key(&env) {
+                continue;
             }
             let this = team.clone();
             let target = env.clone();
@@ -1252,6 +1629,7 @@ impl Runtime {
             let handle = thread::spawn(move || receive_job(this, target, stop, shared));
             jobs.insert(env, Job { handle, session });
         }
+
         Ok(())
     }
     pub(crate) fn stop(&self) {
@@ -1290,9 +1668,10 @@ fn receive_job(
         .ok()
         .map(|v| v["attempt_id"].clone())
         .unwrap_or(Value::Null);
-    let outcome = match failure {
-        Some(error) => Err(error),
-        None => receive(&this, &target, &stop, &shared),
+    let outcome = match (failure, slot.as_ref()) {
+        (Some(error), _) => Err(error),
+        (None, Some(slot)) => receive(&this, &target, slot, &stop, &shared),
+        (None, None) => Err(bad("team_bootstrap_busy")),
     };
     if let Err(error) = outcome {
         #[cfg(test)]

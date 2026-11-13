@@ -112,7 +112,11 @@ fn observe(
         return Err(bootstrap::bad("team_bootstrap_local_state_changed"));
     }
     crate::import_barrier::validate_inventory(state, env)?;
-    let imports = crate::import_barrier::index(state)?;
+    // A PREPARED transaction is a public deny witness. The sealed preimage
+    // observation reads the original index/mapping DATA under its parent;
+    // it does not turn that unpublished journal into visibility authority.
+    let io = history.import_io()?;
+    let imports = crate::import_barrier::raw_index_in(&io)?;
     if imports.get(env).is_some()
         || imports.as_object().into_iter().flatten().any(|(_, r)| {
             r["project"] == mapping.project && r["environment"] == mapping.environment
@@ -123,12 +127,14 @@ fn observe(
     let vault = state.read_json(crate::vault::VAULT_DOC, Value::Null)?;
     let connections = state.read_json(crate::policy::CONNECTIONS, json!({}))?;
     let ledger = crate::tombstone::load(state)?;
-    let maps = sync::read_env_mapping(state)?;
+    let maps = io
+        .json(sync::ENVS_MAP_PATH, 67_108_864)?
+        .unwrap_or_else(|| json!({}));
     let projects = state.read_json(crate::projects::DOC, json!({}))?;
     let control = state.read_json(crate::policy::CONTROL, json!({}))?;
     let known = state.read_json(&bootstrap::path(env, "known-facts.json")?, json!({}))?;
     let commits = input.commits()?;
-    let facts = state.read_lines(&format!("team/{env}/facts.jsonl"), None)?;
+    let facts = state.read_lines_in(&io, &format!("team/{env}/facts.jsonl"), None)?;
     let mut checkpoints = 0;
     for name in ["snapshots", "snapshot_records"] {
         let p = state.path.join(format!("team/{env}/{name}"));
@@ -208,6 +214,19 @@ fn observe(
         environment: m["environment"].as_str().unwrap_or("").into(),
         env_id: env.clone(),
     });
+    #[cfg(test)]
+    for (label, value) in [
+        ("imports", &imports),
+        ("vault", &vault),
+        ("connections", &connections),
+        ("ledger", &ledger),
+        ("maps", &maps),
+        ("projects", &projects),
+        ("control", &control),
+        ("known", &known),
+    ] {
+        crate::import_barrier::opus_cost::note_hash(state, env, label, value);
+    }
     let revision = bootstrap::digest(
         &json!({"imports":imports,"vault":vault,"connections":connections,"ledger":ledger,"maps":maps,"projects":projects,"control":control,"known_facts":known,"commits":commits.iter().map(commit::Commit::to_dict).collect::<Vec<_>>(),"facts":facts,"checkpoints":checkpoints}),
     )?;
@@ -249,9 +268,10 @@ fn observe(
         },
     )
     .map_err(|e| bootstrap::bad(e.reason()))?;
-    let revision = bootstrap::digest(
-        &json!({"semantic":revision,"raw_targets":history.acquire()?.target_revision()?}),
-    )?;
+    let raw_targets = history.acquire()?.target_revision()?;
+    #[cfg(test)]
+    crate::import_barrier::opus_cost::note(state, env, &format!("raw_targets:{raw_targets}"));
+    let revision = bootstrap::digest(&json!({"semantic":revision,"raw_targets":raw_targets}))?;
     Ok(Observation { local, revision })
 }
 

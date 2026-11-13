@@ -121,7 +121,7 @@ pub(crate) fn create(
         return Err(bad("team_bootstrap_cancelled"));
     }
     let admission = Commit::from_dict(&auth["admission"])?;
-    let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
+    let device = history.load_device(ctx)?;
     history.match_local_identity(&device.record()?)?;
     let owner = device.record()?;
     let receiver = &request["approval"];

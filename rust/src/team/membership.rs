@@ -362,7 +362,7 @@ pub(crate) fn author_commit_with_input(
     let nested = history.nested(ctx.state, env_id)?;
     let history = &nested;
     super::bootstrap::approval::recover_all_with_input(ctx, env_id, history)?;
-    let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
+    let device = history.load_device(ctx)?;
     history.match_local_identity(&device.record()?)?;
     // `env.init` precedes any membership.
     let bootstrap = ops.iter().all(|op| op["op"] == "env.init");
@@ -501,7 +501,7 @@ fn sign_authorized_fact_with_input(
             team.sign_authorized_fact(env_id, kind, target)
         };
     }
-    let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
+    let device = history.load_device(ctx)?;
     history.match_local_identity(&device.record()?)?;
     let mut doc = load_environment_with_input(ctx, env_id, &history)?.document;
     if kind == "member_removed" {

@@ -329,6 +329,7 @@ impl Context {
             owned_dirs: Vec::new(),
             owned_dir_registry: registry,
         };
+        crate::team::bootstrap::install::migrate_committed(&ctx)?;
         ctx.apply_config_defaults()?;
         ctx.audit.record(
             "init",
@@ -370,13 +371,14 @@ impl Context {
         let kms: &'static (dyn Kms + Send + Sync) =
             Box::leak(Box::new(LocalFileKms::load(&state.path.join(KMS_FILE))?));
         if state.exists(crate::team::identity::DEVICE_KEY_FILE)
-            && let Ok(device) = crate::team::identity::DeviceKey::load(state, kms)
+            && let Ok(io) = crate::import_barrier::ImportIo::open(state)
+            && let Ok((_, source)) = crate::team::identity::DeviceKey::load_in(&io, kms)
         {
             // Opening an ordinary legacy state keeps its existing behavior
             // (including later path/mode refusals). An unavailable private
             // anchor grants no import identity: selected entry points and
             // visibility validation still fail closed without that binding.
-            let _ = state.bind_import_identity(device.record()?);
+            let _ = state.bind_import_identity(&source);
         }
         let audit: &'static Audit<'static> = Box::leak(Box::new(Audit::new(state, clock.clone())));
         let projects: &'static Projects<'static> = Box::leak(Box::new(Projects::new(state)));

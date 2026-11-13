@@ -194,40 +194,33 @@ fn requests(ctx: &Context, env: &str) -> Result<Value> {
     Ok(v)
 }
 
-fn sole_pending_admission(ctx: &Context, env: &str) -> Result<Option<Commit>> {
-    let directory = ctx.state.path.join(path(env, "authorizations")?);
-    if !directory.exists() {
-        return Ok(None);
-    }
+fn sole_pending_admission(
+    ctx: &Context,
+    env: &str,
+    history: &commit::HistorySession<'_>,
+) -> Result<Option<Commit>> {
+    let io = history.import_io()?;
+    let directory = path(env, "authorizations")?;
     let mut found = None;
-    for entry in std::fs::read_dir(directory).map_err(|_| bad("team_bootstrap_state_invalid"))? {
-        let entry = entry.map_err(|_| bad("team_bootstrap_state_invalid"))?;
-        if !entry
-            .file_type()
+    for name in io.list(&directory)? {
+        history.check()?;
+        io.charge(1 + name.len() as u64, 256)?;
+        if !std::fs::symlink_metadata(ctx.state.path.join(&directory).join(&name))
             .map_err(|_| bad("team_bootstrap_state_invalid"))?
             .is_file()
             || found.is_some()
         {
             return Err(bad("team_bootstrap_semantic_scope_unsupported"));
         }
-        let value = ctx.state.read_json(
-            &path(
-                env,
-                &format!(
-                    "authorizations/{}",
-                    entry
-                        .file_name()
-                        .to_str()
-                        .ok_or_else(|| bad("team_bootstrap_state_invalid"))?
-                ),
-            )?,
-            Value::Null,
-        )?;
+        let value = io
+            .json(&format!("{directory}/{name}"), 65_536)?
+            .unwrap_or(Value::Null);
         if value["activated"] == true {
             return Err(bad("team_bootstrap_semantic_scope_unsupported"));
         }
         found = Some(Commit::from_dict(&value["admission"])?);
     }
+    history.check()?;
     Ok(found)
 }
 
@@ -284,14 +277,14 @@ fn enable_with_input(
     {
         return Ok(());
     }
-    let existing = sole_pending_admission(ctx, env)?;
+    let existing = sole_pending_admission(ctx, env, history)?;
     profile_with_input(ctx, env, existing.as_ref(), history)?;
     let input = history.acquire()?;
     let v = input.read_json(&format!("team/{env}/invites.json"), Value::Null)?;
     if v[invite]["approval"] != "required" || v[invite]["role"] != "admin" {
         return Err(bad("team_bootstrap_semantic_scope_unsupported"));
     }
-    let owner = DeviceKey::load_or_create(ctx.state, ctx.kms)?.record()?;
+    let owner = history.local_record()?.clone();
     let genesis = live
         .iter()
         .find(|c| c.author_seq == 1 && c.ops.first().is_some_and(|op| op["op"] == "env.init"))
@@ -358,6 +351,11 @@ pub(crate) fn approve(
         }
         Some(Commit::from_dict(&existing["admission"])?)
     };
+    // A failed first admission remains the only supported pending join. Do
+    // not approve another peer while its durable authorization still exists.
+    if sole_pending_admission(ctx, env, &history)?.is_some() && existing.is_null() {
+        return Err(bad("team_bootstrap_semantic_scope_unsupported"));
+    }
     profile_with_input(ctx, env, admission.as_ref(), &history)?;
     let invite = text(v, "invite_id")?.to_owned();
     let invites = ctx
@@ -478,6 +476,11 @@ pub(crate) fn check(
     {
         return Err(bad("team_bootstrap_semantic_scope_unsupported"));
     }
+    // Recheck at the consumer too: this peer may have been approved before
+    // another peer published an admission intent and failed to append it.
+    if sole_pending_admission(ctx, env, &history)?.is_some() && previous.is_null() {
+        return Err(bad("team_bootstrap_semantic_scope_unsupported"));
+    }
     let mut r = requests(ctx, env)?;
     let map = r
         .as_object_mut()
@@ -546,7 +549,7 @@ fn prepare(
 ) -> Result<Commit> {
     let history = parent.nested(ctx.state, env)?;
     profile_with_input(ctx, env, None, &history)?;
-    let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
+    let device = history.load_device(ctx)?;
     history.match_local_identity(&device.record()?)?;
     let doc = membership::load_environment_with_input(ctx, env, &history)?.document;
     let mut wraps = serde_json::Map::new();
@@ -608,7 +611,7 @@ pub(crate) fn recover_admission(
         Some(existing) if existing.to_dict() == c.to_dict() => {}
         Some(_) => return Err(bad("team_bootstrap_admission_conflict")),
         None => {
-            let owner = DeviceKey::load_or_create(ctx.state, ctx.kms)?.record()?;
+            let owner = history.local_record()?.clone();
             #[cfg(test)]
             import_barrier::testing::hit(ctx.state, env, "admission-append-before")?;
             if !commit::verify_commit(&c, &owner)
@@ -710,7 +713,7 @@ pub(crate) fn validate_invite_profile(
     env: &str,
     history: &commit::HistorySession<'_>,
 ) -> Result<()> {
-    let admission = sole_pending_admission(ctx, env)?;
+    let admission = sole_pending_admission(ctx, env, history)?;
     profile_with_input(ctx, env, admission.as_ref(), history)
 }
 pub(crate) fn profile_with_input(
@@ -744,7 +747,7 @@ pub(crate) fn profile_with_input(
             return Err(bad("team_bootstrap_semantic_scope_unsupported"));
         }
     }
-    let owner = DeviceKey::load_or_create(ctx.state, ctx.kms)?.record()?;
+    let owner = history.local_record()?.clone();
     let fp = owner.fingerprint();
     if commit::env_owner_fingerprint(env)? != fp {
         return Err(bad("team_bootstrap_semantic_scope_unsupported"));
