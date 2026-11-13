@@ -1,5 +1,11 @@
 # Proposed remote-sync milestones: snapshots and whole-secret deletion
 
+Current release scope: the user's 2026-11-13 instruction prioritizes a usable
+personal MLP and defers noncritical bugs and expansion. See the
+[minimal release scope](decisions/2026-11-13-personal-mlp-release-scope.md).
+This dated proposal remains historical design input, not an additional list of
+features that must all ship before the personal beta.
+
 Prepared 2026-11-07 by `gpt-6-astra` from read-only inspection of ZeroPW Rust
 source `41d217f26a030042c9f0b1caac9417715470c0e1` (Rust tree
 `f2c67647fcba83ae78dd6fd10418b6f42a58a6f8`, unchanged in compared revision
