@@ -3805,7 +3805,48 @@ fn team_command(a: &Args) -> Result<Option<Value>, Error> {
         team.stop();
         return result.map(Some);
     }
-    let env_id = team_env_id(&ctx, a.req("env"))?;
+    let env_id = match team_env_id(&ctx, a.req("env")) {
+        Ok(env) => env,
+        Err(error)
+            if error.reason == "team_env_not_found"
+                && matches!(
+                    a.action.as_str(),
+                    "bootstrap-status" | "bootstrap-approve" | "bootstrap-cancel"
+                ) =>
+        {
+            // Pending/denied import mappings are intentionally projected out.
+            // An attempt is only a bounded route to the existing authenticated
+            // status/reauthentication operation, never evidence of admission.
+            let reference = a.req("env");
+            let (project, environment) = reference
+                .split_once('/')
+                .ok_or_else(|| Error::invalid_input("invalid_env_ref"))?;
+            let io = crate::import_barrier::ImportIo::open(ctx.state)?;
+            let mut found = None;
+            let mut count = 0usize;
+            for env in io.list("team")? {
+                if !crate::team::commit::valid_env_id(&env) {
+                    continue;
+                }
+                count += 1;
+                if count > 256 {
+                    return Err(Error::state("team_bootstrap_limit_exceeded"));
+                }
+                let attempt = io
+                    .json(&crate::team::bootstrap::path(&env, "attempt.json")?, 65_536)?
+                    .unwrap_or(Value::Null);
+                if attempt["project"] == project
+                    && attempt["environment"] == environment
+                    && found.replace(env).is_some()
+                {
+                    return Err(Error::state("team_bootstrap_state_invalid"));
+                }
+            }
+            io.check()?;
+            found.ok_or(error)?
+        }
+        Err(error) => return Err(error),
+    };
     let out = match a.action.as_str() {
         "invite" => {
             // `_parse_ttl(args.ttl) if args.ttl else DEFAULT_INVITE_TTL_SECONDS`.

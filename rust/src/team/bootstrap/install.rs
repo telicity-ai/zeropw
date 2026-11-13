@@ -5,15 +5,14 @@ use super::{
     protocol::{self, Deadline},
     random, text,
 };
+#[cfg(test)]
+use crate::team::{commit::CommitStore, identity::DeviceKey};
 use crate::{
     context::Context,
     errors::Result,
     import_barrier, pyjson,
     store::StateDir,
-    team::{
-        checkpoint::personal::Plan, commit::CommitStore, fold, identity::DeviceKey,
-        transport::Session,
-    },
+    team::{checkpoint::personal::Plan, fold, transport::Session},
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -54,18 +53,193 @@ fn signed(
     mut record: Value,
     history: &crate::team::commit::HistorySession<'_>,
 ) -> Result<Value> {
+    history.reserve_import_signature(&record)?;
     record
         .as_object_mut()
         .ok_or_else(|| bad("team_bootstrap_state_invalid"))?
         .remove("sig");
-    let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
+    let device = history.load_device(ctx)?;
     history.match_local_identity(&device.record()?)?;
     history.check()?;
     record["sig"] = json!(crate::pybase64::b64encode(&device.sign(&bytes(&record)?)?));
     history.check()?;
     Ok(record)
 }
-fn verified(ctx: &Context, record: &Value) -> Result<()> {
+
+fn compact_committed(
+    ctx: &Context,
+    env: &str,
+    journal: &Value,
+    full_raw: &[u8],
+    history: &crate::team::commit::HistorySession<'_>,
+) -> Result<Value> {
+    use crate::team::{
+        commit::{Commit, verify_commit},
+        identity::DeviceRecord,
+    };
+    let io = history.import_io()?;
+    let manifest_raw = io
+        .read(&path(env, "provenance/manifest.json")?, 65_536)?
+        .ok_or_else(|| bad("team_bootstrap_recovery_required"))?;
+    let manifest = io.parse(&manifest_raw, 65_536)?;
+    let receiver = io
+        .json(&path(env, "receiver.json")?, 65_536)?
+        .ok_or_else(|| bad("team_bootstrap_recovery_required"))?;
+    verified(ctx, &receiver, history)?;
+    let owner = DeviceRecord::from_dict(&receiver["signer_record"])?;
+    let recipient = history.local_record()?;
+    if receiver["recipient_record"] != recipient.to_dict()
+        || receiver["env_id"] != env
+        || !owner.verify_uncached()
+        || crate::team::commit::env_owner_fingerprint(env)? != owner.fingerprint()
+        || journal["state"] != "COMMITTED"
+        || journal["env_id"] != env
+        || journal["manifest_hash"] != digest(&manifest)?
+        || receiver["approval_id"] != manifest["approval_id"]
+    {
+        return Err(bad("team_bootstrap_recovery_required"));
+    }
+    let mut genesis = None;
+    let mut admission = false;
+    for op in journal["ops"]
+        .as_array()
+        .ok_or_else(|| bad("team_bootstrap_recovery_required"))?
+    {
+        history.check()?;
+        let name = text(op, "path")?;
+        if !name.starts_with(&format!("team/{env}/commits/")) {
+            continue;
+        }
+        let encoded = text(op, "data_b64")?;
+        history.charge_import(encoded.len() as u64 * 4 + 4096, encoded.len() as u64 * 8)?;
+        let raw = crate::pybase64::b64decode_strict(encoded)
+            .map_err(|_| bad("team_bootstrap_recovery_required"))?;
+        let value = io.parse(&raw, 16_777_216)?;
+        let commit = Commit::from_dict(&value)?;
+        if commit.env_id != env || !verify_commit(&commit, &owner) {
+            return Err(bad("team_bootstrap_recovery_required"));
+        }
+        let hash = commit.hash()?;
+        if commit.author_seq == 1
+            && commit
+                .ops
+                .first()
+                .is_some_and(|op| op["op"] == "env.init" && op["owner_device"] == owner.to_dict())
+            && genesis.replace(hash.clone()).is_some()
+        {
+            return Err(bad("team_bootstrap_recovery_required"));
+        }
+        if hash == manifest["recipient_admission_commit_hash"] {
+            if commit.ops.len() != 1
+                || commit.ops[0]["op"] != "member.add"
+                || commit.ops[0]["role"] != "admin"
+                || commit.ops[0]["device"] != recipient.to_dict()
+            {
+                return Err(bad("team_bootstrap_recovery_required"));
+            }
+            admission = true;
+        }
+    }
+    if !admission {
+        return Err(bad("team_bootstrap_recovery_required"));
+    }
+    let compact = json!({"domain":"zeropw-personal-import-journal-v1","v":1,"layout":"compact_committed_v1","state":"COMMITTED","env_id":env,"epoch":journal["epoch"],"manifest_hash":journal["manifest_hash"],"ready":journal["ready"],"receipt":journal["receipt"],"visibility":journal["visibility"],"signer_record":owner.to_dict(),"recipient_record":recipient.to_dict(),"genesis_hash":genesis.ok_or_else(||bad("team_bootstrap_recovery_required"))?,"admission_hash":manifest["recipient_admission_commit_hash"],"manifest_raw_sha256":io.hash(&manifest_raw)?,"payload_sha256":manifest["payload"]["sha256"],"payload_length":manifest["payload"]["byte_length"],"cold_journal_sha256":io.hash(full_raw)?,"cold_journal_length":full_raw.len()});
+    signed(ctx, compact, history)
+}
+
+fn publish_committed_metadata(
+    ctx: &Context,
+    env: &str,
+    journal: &mut Value,
+    history: &crate::team::commit::HistorySession<'_>,
+    original_committed: Option<&[u8]>,
+) -> Result<Value> {
+    #[cfg(test)]
+    import_barrier::testing::hit(ctx.state, env, "compact-plan-before")?;
+    let journal_name = path(env, "journal.json")?;
+    let archive_name = path(env, "provenance/install-journal.json")?;
+    let full_raw = if let Some(original) = original_committed {
+        if journal["state"] != "COMMITTED" {
+            return Err(bad("team_bootstrap_recovery_required"));
+        }
+        history.charge_import(original.len() as u64, original.len() as u64)?;
+        original.to_vec()
+    } else {
+        journal["state"] = json!("COMMITTED");
+        *journal = signed(ctx, history.clone_import_record(journal)?, history)?;
+        history.encode_import_record(journal)?
+    };
+    let io = history.import_io()?;
+    let old_journal = io
+        .read(&journal_name, 67_108_864)?
+        .ok_or_else(|| bad("team_bootstrap_recovery_required"))?;
+    let index_raw = io
+        .read(import_barrier::INDEX, 1_048_576)?
+        .ok_or_else(|| bad("team_bootstrap_recovery_required"))?;
+    let mut index = io.parse(&index_raw, 1_048_576)?;
+    verified(ctx, &index[env], history)?;
+    if index[env]["epoch"] != journal["epoch"]
+        || index[env]["manifest_hash"] != journal["manifest_hash"]
+        || !matches!(
+            index[env]["state"].as_str(),
+            Some("installing" | "committed")
+        )
+    {
+        return Err(bad("team_bootstrap_recovery_required"));
+    }
+    let compact = compact_committed(ctx, env, journal, &full_raw, history)?;
+    #[cfg(test)]
+    import_barrier::testing::hit(ctx.state, env, "compact-plan-after")?;
+    let compact_raw = history.encode_import_record(&compact)?;
+    if compact_raw.len() > 1_048_576 {
+        return Err(bad("team_bootstrap_limit_exceeded"));
+    }
+    match io.read(&archive_name, 67_108_864)? {
+        Some(existing) if existing == full_raw => {
+            import_barrier::confirm_denial_durable(history, &archive_name)?
+        }
+        Some(_) => return Err(bad("team_bootstrap_recovery_required")),
+        None => import_barrier::write_with_history(history, &archive_name, &full_raw)?,
+    }
+    #[cfg(test)]
+    import_barrier::testing::hit(ctx.state, env, "archive-publication-after")?;
+    // Immutable archive first; compact active journal next; index visibility
+    // last. No committed recovery can replay the original target patches.
+    if old_journal != compact_raw {
+        import_barrier::replace_import_metadata(
+            history,
+            &journal_name,
+            &old_journal,
+            &compact_raw,
+        )?;
+    }
+    #[cfg(test)]
+    import_barrier::testing::hit(ctx.state, env, "compact-publication-after")?;
+    index[env]["state"] = json!("committed");
+    index[env]["receipt_sha256"] = json!(digest(&journal["receipt"])?);
+    index[env]["commit_journal_sha256"] = json!(io.hash(&compact_raw)?);
+    index[env] = signed(ctx, history.clone_import_record(&index[env])?, history)?;
+    let new_index = history.encode_import_record(&index)?;
+    history.check()?;
+    import_barrier::replace_import_metadata(
+        history,
+        import_barrier::INDEX,
+        &index_raw,
+        &new_index,
+    )?;
+    #[cfg(test)]
+    import_barrier::testing::hit(ctx.state, env, "committed-index-publication-after")?;
+    Ok(journal["receipt"].clone())
+}
+fn verified(
+    ctx: &Context,
+    record: &Value,
+    history: &crate::team::commit::HistorySession<'_>,
+) -> Result<()> {
+    history.reserve_import_signature(record)?;
+    if !std::ptr::eq(ctx.state, history.state()) {
+        return Err(bad("team_bootstrap_local_state_changed"));
+    }
     let mut unsigned = record.clone();
     let signature = unsigned
         .as_object_mut()
@@ -78,7 +252,7 @@ fn verified(ctx: &Context, record: &Value) -> Result<()> {
             .ok_or_else(|| bad("team_bootstrap_recovery_required"))?,
     )
     .map_err(|_| bad("team_bootstrap_recovery_required"))?;
-    let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?.record()?;
+    let device = history.local_record()?;
     if !crate::crypto::ed25519::verify(&device.sign_pub, &bytes(&unsigned)?, &signature) {
         return Err(bad("team_bootstrap_recovery_required"));
     }
@@ -268,7 +442,9 @@ pub(crate) fn ready(
     plan.recheck(ctx)?;
     let manifest = plan.manifest();
     let env = text(manifest, "env_id")?;
-    discard_prepared(ctx, env)?;
+    discard_prepared_with_input(ctx, env, &history)?;
+    #[cfg(test)]
+    import_barrier::opus_cost::note(ctx.state, env, "ready-initial-recheck-after");
     protocol::fields(
         control,
         &[
@@ -357,7 +533,7 @@ pub(crate) fn ready(
         }
     }
     let policy = crate::policy::Policy::new(&stage, ctx.clock.clone());
-    let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
+    let device = history.load_device(ctx)?;
     fold::derive_local(
         plan.folded(),
         &stage,
@@ -369,6 +545,8 @@ pub(crate) fn ready(
         Some(&plan.mapping().environment),
     )?;
     import_barrier::sync_staging(ctx.state, env)?;
+    #[cfg(test)]
+    import_barrier::opus_cost::note(ctx.state, env, "stage-derived-after");
     let mut ops = Vec::new();
     let (manifest_raw, payload_raw) = plan.originals();
     ops.push(file_op(
@@ -531,12 +709,14 @@ pub(crate) fn ready(
     check_budget(ctx, env, &journal)?;
     journal = signed(ctx, journal, &history)?;
     import_barrier::json(ctx.state, &path(env, "journal.json")?, &journal)?;
+    #[cfg(test)]
+    import_barrier::opus_cost::note(ctx.state, env, "journal-publication-after");
     deadline.check()?;
     plan.recheck(ctx)?;
     if session.is_closed() {
         return Err(bad("team_bootstrap_peer_offline"));
     }
-    let mut index = import_barrier::index(ctx.state)?;
+    let mut index = import_barrier::raw_index_in(&history.import_io()?)?;
     if index.get(env).is_some()
         || index
             .as_object()
@@ -548,52 +728,190 @@ pub(crate) fn ready(
     {
         return Err(bad("team_bootstrap_busy"));
     }
-    ctx.state.bind_import_identity(device.record()?)?;
+    // The same parent loaded/bound the actual recipient identity before Plan.
+    history.match_local_identity(&device.record()?)?;
     index[env] = visibility;
     // Persist the barrier before the first ordinary target write. A PREPARED
     // journal is discardable; this durable INSTALLING intent is recoverable.
     history.check()?;
     import_barrier::json(ctx.state, import_barrier::INDEX, &index)?;
+    #[cfg(test)]
+    import_barrier::opus_cost::note(ctx.state, env, "installing-index-after");
+    #[cfg(test)]
+    import_barrier::testing::hit(ctx.state, env, "installing-index-after")?;
     journal["state"] = json!("INSTALLING");
     journal = signed(ctx, journal, &history)?;
     import_barrier::json(ctx.state, &path(env, "journal.json")?, &journal)?;
+    #[cfg(test)]
+    import_barrier::opus_cost::note(ctx.state, env, "journal-publication-after");
     let receipt = finish(ctx, env, &mut journal, &history)?;
     import_barrier::discard_staging(ctx.state, env)?;
     history.check()?;
     Ok(receipt)
 }
 
+pub(crate) fn prepared_without_publication(
+    ctx: &Context,
+    env: &str,
+    history: &crate::team::commit::HistorySession<'_>,
+) -> Result<bool> {
+    let io = history.import_io()?;
+    if import_barrier::raw_index_in(&io)?.get(env).is_some() {
+        return Ok(false);
+    }
+    for leaf in [
+        "receipt.json",
+        "provenance",
+        "member-removed.json",
+        import_barrier::LOCAL_REMOVAL_DENIAL,
+        "history-required.json",
+    ] {
+        io.charge(1 + leaf.len() as u64, 256)?;
+        match fs::symlink_metadata(ctx.state.path.join(path(env, leaf)?)) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            _ => return Ok(false),
+        }
+    }
+    let Some(raw) = io.read(&path(env, "journal.json")?, 67_108_864)? else {
+        for directory in ["commits", "snapshots", "snapshot_records"] {
+            let mut pending = vec![format!("team/{env}/{directory}")];
+            let mut count = 0u64;
+            while let Some(name) = pending.pop() {
+                for leaf in io.list(&name)? {
+                    count = count
+                        .checked_add(1)
+                        .filter(|n| *n <= 65_536)
+                        .ok_or_else(|| bad("team_bootstrap_limit_exceeded"))?;
+                    let name = format!("{name}/{leaf}");
+                    io.charge(1 + name.len() as u64, 256)?;
+                    let metadata = fs::symlink_metadata(ctx.state.path.join(&name))
+                        .map_err(|_| bad("team_bootstrap_recovery_required"))?;
+                    if metadata.is_dir() {
+                        pending.push(name);
+                    } else {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+        if io
+            .read(&format!("team/{env}/facts.jsonl"), 67_108_864)?
+            .is_some_and(|raw| raw.iter().any(|b| !b.is_ascii_whitespace()))
+        {
+            return Ok(false);
+        }
+        for (name, nested) in [
+            (crate::vault::VAULT_DOC, true),
+            (crate::policy::CONNECTIONS, false),
+        ] {
+            let value = io.json(name, 67_108_864)?.unwrap_or(Value::Null);
+            let entries = if nested { &value["secrets"] } else { &value };
+            if entries
+                .as_object()
+                .into_iter()
+                .flatten()
+                .any(|(_, v)| v["shared_env"] == env)
+            {
+                return Ok(false);
+            }
+        }
+        return Ok(true);
+    };
+    let journal = io.parse(&raw, 67_108_864)?;
+    verified(ctx, &journal, history)?;
+    if journal["state"] != "PREPARED"
+        || !journal["layout"].is_null()
+        || journal["env_id"] != env
+        || journal["domain"] != "zeropw-personal-import-journal-v1"
+    {
+        return Ok(false);
+    }
+    for op in journal["ops"]
+        .as_array()
+        .ok_or_else(|| bad("team_bootstrap_recovery_required"))?
+    {
+        let name = text(op, "path")?;
+        if op["kind"] == "file" {
+            let value = io.read(name, 16_777_216)?;
+            let current = value
+                .as_ref()
+                .map(|raw| io.hash(raw).map(Value::String))
+                .transpose()?
+                .unwrap_or(Value::Null);
+            if current != op["before"] {
+                return Ok(false);
+            }
+        } else if op["kind"] == "patch" {
+            let value = io.json(name, 67_108_864)?.unwrap_or(Value::Null);
+            let mut current = &value;
+            for key in op["keys"]
+                .as_array()
+                .ok_or_else(|| bad("team_bootstrap_recovery_required"))?
+            {
+                current = &current[key
+                    .as_str()
+                    .ok_or_else(|| bad("team_bootstrap_recovery_required"))?];
+            }
+            if current != &op["before"] {
+                return Ok(false);
+            }
+        } else if op["kind"] == "project_environment" && name == crate::projects::DOC {
+            let value = io.json(name, 67_108_864)?.unwrap_or(Value::Null);
+            if value[text(op, "project")?]["environments"]
+                .as_array()
+                .is_some_and(|v| v.contains(&op["environment"]))
+            {
+                return Ok(false);
+            }
+        } else {
+            return Ok(false);
+        }
+    }
+    history.check()?;
+    Ok(true)
+}
+
 pub(crate) fn discard_prepared(ctx: &Context, env: &str) -> Result<()> {
-    let _lock = ctx.state.lock()?;
-    if import_barrier::index(ctx.state)?.get(env).is_some() {
+    let history = crate::team::commit::HistorySession::open_probe(
+        ctx,
+        env,
+        crate::team::commit::ProbePurpose::Recipient,
+    )?;
+    discard_prepared_with_input(ctx, env, &history)
+}
+pub(crate) fn discard_prepared_with_input(
+    ctx: &Context,
+    env: &str,
+    history: &crate::team::commit::HistorySession<'_>,
+) -> Result<()> {
+    let io = history.import_io()?;
+    if import_barrier::raw_index_in(&io)?.get(env).is_some() {
         return Ok(());
     }
-    let p = path(env, "journal.json")?;
-    if let Some(data) = raw(ctx.state, &p)? {
-        let journal = pyjson::loads(
-            std::str::from_utf8(&data).map_err(|_| bad("team_bootstrap_recovery_required"))?,
-        )
-        .map_err(|_| bad("team_bootstrap_recovery_required"))?;
-        verified(ctx, &journal)?;
-        if journal["state"] != "PREPARED"
-            || journal["env_id"] != env
-            || journal["domain"] != "zeropw-personal-import-journal-v1"
-        {
-            return Err(bad("team_bootstrap_recovery_required"));
-        }
-        fs::remove_file(ctx.state.path.join(&p))
+    if !prepared_without_publication(ctx, env, history)? {
+        return Err(bad("team_bootstrap_recovery_required"));
+    }
+    let name = path(env, "journal.json")?;
+    if io.read(&name, 67_108_864)?.is_some() {
+        history.charge_import(16 * (name.len() as u64 + 1), 16 * (name.len() as u64 + 1))?;
+        history.invalidate()?;
+        fs::remove_file(ctx.state.path.join(&name))
             .map_err(|_| bad("team_bootstrap_storage_failed"))?;
+        history.check()?;
+        history.invalidate()?;
         fs::File::open(
             ctx.state
                 .path
-                .join(&p)
+                .join(&name)
                 .parent()
                 .ok_or_else(|| bad("team_bootstrap_storage_failed"))?,
         )
-        .and_then(|f| f.sync_all())
+        .and_then(|file| file.sync_all())
         .map_err(|_| bad("team_bootstrap_storage_failed"))?;
     }
-    import_barrier::discard_staging(ctx.state, env)
+    history.check()?;
+    import_barrier::discard_staging(ctx.state, env)?;
+    history.check()
 }
 
 fn finish(
@@ -602,7 +920,7 @@ fn finish(
     journal: &mut Value,
     history: &crate::team::commit::HistorySession<'_>,
 ) -> Result<Value> {
-    verified(ctx, journal)?;
+    verified(ctx, journal, history)?;
     check_budget(ctx, env, journal)?;
     let ops = journal["ops"]
         .as_array()
@@ -648,21 +966,12 @@ fn finish(
         #[cfg(test)]
         crate::import_barrier::testing::hit(ctx.state, env, "audit-parent-fsync-after")?;
     }
-    let mut index = import_barrier::index(ctx.state)?;
-    if index[env]["epoch"] != journal["epoch"] {
-        return Err(bad("team_bootstrap_install_conflict"));
-    }
-    index[env]["state"] = json!("committed");
-    index[env]["receipt_sha256"] = json!(digest(&journal["receipt"])?);
-    index[env] = signed(ctx, index[env].clone(), history)?;
-    history.check()?;
-    import_barrier::json(ctx.state, import_barrier::INDEX, &index)?;
-    journal["state"] = json!("COMMITTED");
-    *journal = signed(ctx, journal.clone(), history)?;
-    import_barrier::json(ctx.state, &path(env, "journal.json")?, journal)?;
-    Ok(journal["receipt"].clone())
+    publish_committed_metadata(ctx, env, journal, history, None)
 }
 
+// Compatibility entry for focused recovery callers; runtime borrows its Slot
+// and existing parent through recover_with_input instead.
+#[allow(dead_code)]
 pub(crate) fn recover(ctx: &Context, env: &str) -> Result<()> {
     // An ordinary environment has no import journal or recovery work. Keep
     // that path lazy, including its absence of device-key creation.
@@ -681,94 +990,246 @@ pub(crate) fn recover(ctx: &Context, env: &str) -> Result<()> {
     )?;
     recover_with_input(ctx, env, &history)
 }
+pub(crate) fn migrate_committed(ctx: &Context) -> Result<()> {
+    // Conversion is deliberately unavailable to a bare StateDir. Only this
+    // actual reopened Context and an owned Slot may extend legacy metadata.
+    if matches!(fs::symlink_metadata(ctx.state.path.join(import_barrier::INDEX)), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+    {
+        return Ok(());
+    }
+    let candidates = {
+        let io = import_barrier::ImportIo::open(ctx.state)?;
+        let index = import_barrier::raw_index_in(&io)?;
+        if index.as_object().is_none_or(|m| m.len() > 256) {
+            return Err(bad("team_bootstrap_limit_exceeded"));
+        }
+        index
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(_, record)| {
+                record["state"] == "committed" && record["commit_journal_sha256"].is_null()
+            })
+            .map(|(env, _)| env.clone())
+            .collect::<Vec<_>>()
+    };
+    for env in candidates {
+        let slot = match super::Slot::take_registration(ctx, &env) {
+            Ok(Some(slot)) => slot,
+            Ok(None) => continue,
+            Err(error) if error.reason == "team_bootstrap_busy" => continue,
+            Err(error) => return Err(error),
+        };
+        slot.registration(ctx, &env)?.check(ctx, &env)?;
+        let history = crate::team::commit::HistorySession::open_probe(
+            ctx,
+            &env,
+            crate::team::commit::ProbePurpose::Recipient,
+        )?;
+        // An invalid environment remains denied; it cannot make an unrelated
+        // ordinary environment unavailable merely by being opened.
+        if let Err(error) = recover_with_input(ctx, &env, &history)
+            && matches!(
+                error.reason.as_ref(),
+                "team_bootstrap_timeout" | "team_bootstrap_limit_exceeded"
+            )
+        {
+            return Err(error);
+        }
+    }
+    Ok(())
+}
 pub(crate) fn recover_with_input(
     ctx: &Context,
     env: &str,
     parent: &crate::team::commit::HistorySession<'_>,
 ) -> Result<()> {
-    if matches!(fs::symlink_metadata(ctx.state.path.join(format!("team/{env}/bootstrap/journal.json"))),Err(error) if error.kind()==std::io::ErrorKind::NotFound)
-    {
-        return Ok(());
-    }
     let history = parent.nested(ctx.state, env)?;
-    let p = path(env, "journal.json")?;
-    if !ctx.state.exists(&p) {
+    let io = history.import_io()?;
+    let name = path(env, "journal.json")?;
+    let Some(raw) = io.read(&name, 67_108_864)? else {
         return Ok(());
-    }
-    let mut journal = history.journal_record()?;
-    verified(ctx, &journal)?;
+    };
+    let mut journal = history.journal_record(&raw)?;
+    verified(ctx, &journal, &history)?;
     if journal["env_id"] != env || journal["domain"] != "zeropw-personal-import-journal-v1" {
         return Err(bad("team_bootstrap_recovery_required"));
     }
-    // The visibility record is the commit point. A crash immediately after
-    // it must never replay initial patches over ordinary post-cut edits.
-    let visibility = import_barrier::index(ctx.state)?;
-    if visibility[env]["state"] == "committed" {
-        if visibility[env]["epoch"] != journal["epoch"]
-            || receipt_evidence(ctx, env, &history)? != journal["receipt"]
+    let index = import_barrier::raw_index_in(&io)?;
+    if index.get(env).is_none() {
+        return if journal["state"] == "PREPARED" && journal["layout"].is_null() {
+            Ok(())
+        } else {
+            Err(bad("team_bootstrap_recovery_required"))
+        };
+    }
+    verified(ctx, &index[env], &history)?;
+    if index[env]["epoch"] != journal["epoch"]
+        || index[env]["manifest_hash"] != journal["manifest_hash"]
+    {
+        return Err(bad("team_bootstrap_recovery_required"));
+    }
+    if journal["layout"] == "compact_committed_v1" {
+        if index[env]["state"] == "committed"
+            && index[env]["commit_journal_sha256"] == io.hash(&raw)?
+        {
+            // Compact/index is the hot authenticated metadata route. The full
+            // archive is consumed only when a cold completion needs its ops.
+            receipt_evidence(ctx, env, &history)?;
+            import_barrier::discard_staging(ctx.state, env)?;
+            return Ok(());
+        }
+        let archive = io
+            .read(&path(env, "provenance/install-journal.json")?, 67_108_864)?
+            .ok_or_else(|| bad("team_bootstrap_recovery_required"))?;
+        if journal["cold_journal_sha256"] != io.hash(&archive)?
+            || journal["cold_journal_length"] != archive.len() as u64
         {
             return Err(bad("team_bootstrap_recovery_required"));
         }
-        if journal["state"] != "COMMITTED" {
-            journal["state"] = json!("COMMITTED");
-            journal = signed(ctx, journal, &history)?;
-            import_barrier::json(ctx.state, &p, &journal)?;
+        let full = io.parse(&archive, 67_108_864)?;
+        verified(ctx, &full, &history)?;
+        if full["state"] != "COMMITTED"
+            || full["env_id"] != env
+            || full["epoch"] != journal["epoch"]
+            || full["receipt"] != journal["receipt"]
+            || full["visibility"] != journal["visibility"]
+            || full["ready"] != journal["ready"]
+        {
+            return Err(bad("team_bootstrap_recovery_required"));
         }
-        import_barrier::discard_staging(ctx.state, env)?;
-        return Ok(());
+        if index[env]["state"] == "installing" {
+            verify_installed_targets(ctx, &full, &history)?;
+        } else if index[env]["state"] != "committed"
+            || !index[env]["commit_journal_sha256"].is_null()
+        {
+            return Err(bad("team_bootstrap_recovery_required"));
+        }
+        // Interrupted legacy conversion requires BOTH original committed index
+        // and the matching compact/archive. No target replay in either case.
+        verify_immutable_install(ctx, env, &full, &history)?;
+        let mut full = full;
+        publish_committed_metadata(ctx, env, &mut full, &history, Some(&archive))?;
+    } else if !journal["layout"].is_null() {
+        return Err(bad("team_bootstrap_recovery_required"));
+    } else if index[env]["state"] == "committed" {
+        // Authentic legacy committed conversion is metadata-only, even when
+        // ordinary post-cut edits have replaced the original target values.
+        verify_immutable_install(ctx, env, &journal, &history)?;
+        if index[env]["receipt_sha256"] != digest(&journal["receipt"])? {
+            return Err(bad("team_bootstrap_recovery_required"));
+        }
+        publish_committed_metadata(ctx, env, &mut journal, &history, Some(&raw))?;
+    } else if index[env]["state"] == "installing"
+        && matches!(journal["state"].as_str(), Some("PREPARED" | "INSTALLING"))
+    {
+        finish(ctx, env, &mut journal, &history)?;
+    } else {
+        return Err(bad("team_bootstrap_recovery_required"));
     }
-    match journal["state"].as_str() {
-        Some("PREPARED") if import_barrier::index(ctx.state)?.get(env).is_none() => Ok(()),
-        Some("PREPARED" | "INSTALLING") => {
-            finish(ctx, env, &mut journal, &history)?;
-            import_barrier::discard_staging(ctx.state, env)?;
-            Ok(())
-        }
-        Some("COMMITTED") => {
-            receipt_evidence(ctx, env, &history)?;
-            Ok(())
-        }
-        _ => Err(bad("team_bootstrap_recovery_required")),
+    import_barrier::discard_staging(ctx.state, env)?;
+    history.check()
+}
+
+fn verify_immutable_install(
+    ctx: &Context,
+    env: &str,
+    journal: &Value,
+    history: &crate::team::commit::HistorySession<'_>,
+) -> Result<()> {
+    let io = history.import_io()?;
+    let receipt = io
+        .json(&path(env, "receipt.json")?, 65_536)?
+        .ok_or_else(|| bad("team_bootstrap_recovery_required"))?;
+    verified(ctx, &receipt, history)?;
+    let raw_manifest = io
+        .read(&path(env, "provenance/manifest.json")?, 65_536)?
+        .ok_or_else(|| bad("team_bootstrap_recovery_required"))?;
+    let manifest = io.parse(&raw_manifest, 65_536)?;
+    let payload = io
+        .read(&path(env, "provenance/payload.json")?, 16_777_216)?
+        .ok_or_else(|| bad("team_bootstrap_recovery_required"))?;
+    if receipt != journal["receipt"]
+        || receipt["epoch"] != journal["epoch"]
+        || receipt["env_id"] != env
+        || receipt["manifest_hash"] != digest(&manifest)?
+        || receipt["payload_sha256"] != io.hash(&payload)?
+        || manifest["payload"]["byte_length"] != payload.len() as u64
+        || receipt["ready_sha256"] != digest(&journal["ready"])?
+    {
+        return Err(bad("team_bootstrap_recovery_required"));
     }
+    history.check()
+}
+
+fn verify_installed_targets(
+    ctx: &Context,
+    journal: &Value,
+    history: &crate::team::commit::HistorySession<'_>,
+) -> Result<()> {
+    let io = history.import_io()?;
+    for op in journal["ops"]
+        .as_array()
+        .ok_or_else(|| bad("team_bootstrap_recovery_required"))?
+    {
+        let name = text(op, "path")?;
+        if op["kind"] == "file" {
+            let raw = io
+                .read(name, 16_777_216)?
+                .ok_or_else(|| bad("team_bootstrap_recovery_required"))?;
+            if io.hash(&raw)? != op["after"] {
+                return Err(bad("team_bootstrap_recovery_required"));
+            }
+        } else {
+            let value = io.json(name, 67_108_864)?.unwrap_or(Value::Null);
+            if patched(value.clone(), op)? != value {
+                return Err(bad("team_bootstrap_recovery_required"));
+            }
+        }
+    }
+    let _ = ctx;
+    history.check()
 }
 
 pub(crate) fn receipt(ctx: &Context, env: &str) -> Result<Value> {
     let history = crate::team::commit::HistorySession::open_runtime(ctx.state, env)?;
-    let value = receipt_evidence(ctx, env, &history)?;
-    if import_barrier::index(ctx.state)?[env]["local_member_removed"] == true
-        || ctx.policy.restore_pending()?
-    {
-        return Err(bad("team_bootstrap_recovery_required"));
-    }
-    Ok(value)
+    receipt_with_input(ctx, env, &history)
 }
-fn receipt_evidence(
+pub(crate) fn receipt_with_input(
     ctx: &Context,
     env: &str,
     parent: &crate::team::commit::HistorySession<'_>,
 ) -> Result<Value> {
     let history = parent.nested(ctx.state, env)?;
-    history.preflight_inventory()?;
-    let value = raw_json(ctx.state, &path(env, "receipt.json")?)?;
-    verified(ctx, &value)?;
-    let index = import_barrier::index(ctx.state)?;
+    let value = receipt_evidence(ctx, env, &history)?;
+    if import_barrier::index_in(&history.import_io()?)?[env]["local_member_removed"] == true
+        || ctx.policy.restore_pending()?
+    {
+        return Err(bad("team_bootstrap_recovery_required"));
+    }
+    history.check()?;
+    Ok(value)
+}
+pub(crate) fn receipt_evidence(
+    ctx: &Context,
+    env: &str,
+    parent: &crate::team::commit::HistorySession<'_>,
+) -> Result<Value> {
+    let history = parent.nested(ctx.state, env)?;
+    let io = history.import_io()?;
+    let index = import_barrier::index_in(&io)?;
+    let value = io
+        .json(&path(env, "receipt.json")?, 65_536)?
+        .ok_or_else(|| bad("team_bootstrap_recovery_required"))?;
+    verified(ctx, &value, &history)?;
     if index[env]["state"] != "committed"
         || index[env]["epoch"] != value["epoch"]
         || index[env]["receipt_sha256"] != digest(&value)?
     {
         return Err(bad("team_bootstrap_recovery_required"));
     }
-    import_barrier::immutable(ctx.state, env, &index[env])?;
-    let manifest = raw(ctx.state, &path(env, "provenance/manifest.json")?)?
-        .ok_or_else(|| bad("team_bootstrap_recovery_required"))?;
-    let manifest = pyjson::loads(
-        std::str::from_utf8(&manifest).map_err(|_| bad("team_bootstrap_recovery_required"))?,
-    )
-    .map_err(|_| bad("team_bootstrap_recovery_required"))?;
-    if digest(&manifest)? != text(&value, "manifest_hash")? {
-        return Err(bad("team_bootstrap_recovery_required"));
-    }
-    let vector = CommitStore::new(ctx.state, env).vector()?;
+    let input = history.acquire()?;
+    let vector = input.vector()?;
     for (fp, seq) in value["vector"].as_object().into_iter().flatten() {
         let floor = crate::pyint::PyInt::from_json_integer(seq)
             .ok_or_else(|| bad("team_bootstrap_recovery_required"))?;
@@ -776,17 +1237,7 @@ fn receipt_evidence(
             return Err(bad("team_bootstrap_recovery_required"));
         }
     }
-    let journal = history.journal_record()?;
-    verified(ctx, &journal)?;
-    if journal["domain"] != "zeropw-personal-import-journal-v1"
-        || journal["env_id"] != env
-        || journal["epoch"] != value["epoch"]
-        || journal["receipt"] != value
-        || journal["manifest_hash"] != value["manifest_hash"]
-        || !matches!(journal["state"].as_str(), Some("INSTALLING" | "COMMITTED"))
-    {
-        return Err(bad("team_bootstrap_recovery_required"));
-    }
+    input.recheck()?;
     history.check()?;
     Ok(value)
 }
@@ -1313,6 +1764,156 @@ pub(crate) mod tests {
         println!("PVBOOT_ADMISSION_FAULT_EDGES={}", edges.len());
     }
     #[test]
+    fn personal_bootstrap_pending_admission_refuses_another_peer_without_poisoning_owner() {
+        use hmac::{Hmac, Mac};
+
+        let Pending {
+            root,
+            a,
+            b,
+            env,
+            invitation,
+            stop,
+            ..
+        } = pending();
+        drop(stop);
+        let first_peer = DeviceKey::load_or_create(b.state, b.kms)
+            .unwrap()
+            .record()
+            .unwrap();
+        let other = context(&root.path().join("root03-other-peer"));
+        let other_peer = DeviceKey::load_or_create(other.state, other.kms)
+            .unwrap()
+            .record()
+            .unwrap();
+        let second_invitation = membership::create_invite_opts(
+            &a,
+            &env,
+            "admin",
+            "second pending peer",
+            600,
+            &["127.0.0.1:9".to_owned()],
+            false,
+            true,
+        )
+        .unwrap();
+        approval::enable(&a, &env, &second_invitation.invite_id, None).unwrap();
+        let transcript = b"synthetic-root03-pending-admission";
+        let parsed = membership::parse_invite(&invitation.invite).unwrap();
+        let mut mac = Hmac::<Sha256>::new_from_slice(parsed.invite_secret.expose()).unwrap();
+        mac.update(transcript);
+        let first_proof = mac.finalize().into_bytes();
+        let parsed = membership::parse_invite(&second_invitation.invite).unwrap();
+        let mut mac = Hmac::<Sha256>::new_from_slice(parsed.invite_secret.expose()).unwrap();
+        mac.update(transcript);
+        let other_proof = mac.finalize().into_bytes();
+        assert!(matches!(
+            approval::check(&a, &env, &other_peer, transcript, &other_proof).unwrap(),
+            Some(crate::team::transport::InviteDecision::PendingPersonal)
+        ));
+        let request = approval::list(&a, &env).unwrap().remove(0);
+        assert_eq!(request["device_record"], other_peer.to_dict());
+        let before_approval = root.path().join("root03-other-pending");
+        copy_tree(&a.state.path, &before_approval);
+        approval::approve(
+            &a,
+            &env,
+            text(&request, "request_id").unwrap(),
+            text(&request, "record_binding").unwrap(),
+            PASS,
+        )
+        .unwrap();
+        let already_approved = root.path().join("root03-other-approved");
+        copy_tree(&a.state.path, &already_approved);
+
+        for (copy, preapproved) in [(before_approval, false), (already_approved, true)] {
+            let ctx = Context::open(&copy, Config::default(), clock::system()).unwrap();
+            let failure = import_barrier::testing::Scope::named(
+                ctx.state,
+                &env,
+                "admission-append-before",
+                1,
+            );
+            assert!(approval::check(&ctx, &env, &first_peer, transcript, &first_proof).is_err());
+            assert!(failure.fired());
+            drop(failure);
+            let first_path = path(
+                &env,
+                &format!("authorizations/{}.json", first_peer.fingerprint()),
+            )
+            .unwrap();
+            let original_auth = ctx.state.read_json(&first_path, Value::Null).unwrap();
+            let original = Commit::from_dict(&original_auth["admission"]).unwrap();
+            assert!(
+                CommitStore::new(ctx.state, &env)
+                    .get(&original.author, original.author_seq.clone())
+                    .unwrap()
+                    .is_none()
+            );
+            let requests_path = path(&env, "requests.json").unwrap();
+            let requests_before = fs::read(ctx.state.path.join(&requests_path)).unwrap();
+            if !preapproved {
+                assert_eq!(
+                    approval::approve(
+                        &ctx,
+                        &env,
+                        text(&request, "request_id").unwrap(),
+                        text(&request, "record_binding").unwrap(),
+                        PASS,
+                    )
+                    .unwrap_err()
+                    .reason,
+                    "team_bootstrap_semantic_scope_unsupported"
+                );
+            }
+            assert_eq!(
+                approval::check(&ctx, &env, &other_peer, transcript, &other_proof)
+                    .unwrap_err()
+                    .reason,
+                "team_bootstrap_semantic_scope_unsupported"
+            );
+            assert_eq!(
+                fs::read(ctx.state.path.join(&requests_path)).unwrap(),
+                requests_before
+            );
+            assert_eq!(
+                ctx.state.read_json(&first_path, Value::Null).unwrap(),
+                original_auth
+            );
+            assert!(
+                !ctx.state.exists(
+                    &path(
+                        &env,
+                        &format!("authorizations/{}.json", other_peer.fingerprint()),
+                    )
+                    .unwrap()
+                )
+            );
+            assert_eq!(
+                fs::read_dir(ctx.state.path.join(path(&env, "authorizations").unwrap()))
+                    .unwrap()
+                    .count(),
+                1
+            );
+            approval::recover_all(&ctx, &env).unwrap();
+            assert_eq!(
+                CommitStore::new(ctx.state, &env)
+                    .get(&original.author, original.author_seq.clone())
+                    .unwrap()
+                    .unwrap()
+                    .to_dict(),
+                original.to_dict()
+            );
+            let document = membership::load_environment(&ctx, &env).unwrap().document;
+            assert_eq!(
+                document["members"][first_peer.fingerprint()]["status"],
+                "active"
+            );
+            assert!(document["members"].get(other_peer.fingerprint()).is_none());
+        }
+    }
+
+    #[test]
     fn personal_bootstrap_attempt_label_cannot_publish_ready_without_committed_epoch() {
         let fixture = pending();
         let p = path(&fixture.env, "attempt.json").unwrap();
@@ -1394,5 +1995,700 @@ pub(crate) mod tests {
             bootstrap::status(&expires, env).unwrap()["state"].as_str(),
             Some("unsupported")
         ));
+    }
+}
+
+#[cfg(test)]
+mod opus_fix_tests {
+    use super::*;
+
+    fn installed_with_trace() -> tests::Pending {
+        use std::time::{Duration, Instant};
+        let fixture = tests::pending();
+        let trace = import_barrier::testing::Scope::track(fixture.b.state, None);
+        let costs = import_barrier::opus_cost::Scope::begin(fixture.b.state, &fixture.env);
+        super::super::approval::approve_receiver(
+            &fixture.b,
+            &fixture.env,
+            text(&fixture.pending, "inviter_record_binding").unwrap(),
+            text(&fixture.pending, "self_record_binding").unwrap(),
+            "synthetic-install-fault-administrator",
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(35);
+        while import_barrier::index(fixture.b.state).unwrap()[&fixture.env]["state"] != "committed"
+        {
+            let attempt = raw_json(
+                fixture.b.state,
+                &path(&fixture.env, "attempt.json").unwrap(),
+            )
+            .unwrap();
+            let terminal = matches!(
+                attempt["state"].as_str(),
+                Some("unsupported" | "recovery_required")
+            );
+            if terminal || Instant::now() >= deadline {
+                let points = trace
+                    .hits()
+                    .into_iter()
+                    .rev()
+                    .take(24)
+                    .map(|(_, point)| point)
+                    .collect::<Vec<_>>();
+                eprintln!("PVBOOT_COST_NOTES {:?}", costs.notes());
+                eprintln!("PVBOOT_COST_METRICS {:?}", costs.metrics());
+                panic!(
+                    "real install did not commit: state={} reason={} recent_points={points:?}",
+                    attempt["state"].as_str().unwrap_or("invalid"),
+                    attempt["reason"].as_str().unwrap_or("none")
+                );
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        for ctx in [&fixture.b, &fixture.a] {
+            crate::team::sync::attached(ctx).unwrap().stop();
+        }
+        drop(trace);
+        fixture
+    }
+
+    #[test]
+    fn compact_archive_real_install_reopens_without_replaying_targets() {
+        let fixture = installed_with_trace();
+        let ctx = &fixture.b;
+        let env = &fixture.env;
+        let compact_raw =
+            fs::read(ctx.state.path.join(path(env, "journal.json").unwrap())).unwrap();
+        let compact = pyjson::loads(std::str::from_utf8(&compact_raw).unwrap()).unwrap();
+        assert_eq!(compact["layout"], "compact_committed_v1");
+        assert!(compact.get("ops").is_none());
+        let cold_raw = fs::read(
+            ctx.state
+                .path
+                .join(path(env, "provenance/install-journal.json").unwrap()),
+        )
+        .unwrap();
+        let cold = pyjson::loads(std::str::from_utf8(&cold_raw).unwrap()).unwrap();
+        assert_eq!(cold["state"], "COMMITTED");
+        assert!(cold["ops"].as_array().unwrap().len() > 5);
+        assert_eq!(
+            compact["cold_journal_sha256"],
+            hex::encode(Sha256::digest(&cold_raw))
+        );
+        assert_eq!(compact["cold_journal_length"], cold_raw.len() as u64);
+        assert_eq!(compact["receipt"], cold["receipt"]);
+        let receipt = fs::read(ctx.state.path.join(path(env, "receipt.json").unwrap())).unwrap();
+        let reopened = Context::open(
+            &ctx.state.path,
+            crate::context::Config::default(),
+            crate::clock::system(),
+        )
+        .unwrap();
+        recover(&reopened, env).unwrap();
+        assert_eq!(
+            fs::read(ctx.state.path.join(path(env, "receipt.json").unwrap())).unwrap(),
+            receipt
+        );
+        assert_eq!(
+            crate::team::sync::resolve_env_id(reopened.state, "personal", "vault")
+                .unwrap()
+                .as_deref(),
+            Some(env.as_str())
+        );
+    }
+
+    #[test]
+    fn pending_mapping_survives_authenticated_context_reopen() {
+        let fixture = tests::pending();
+        let env = &fixture.env;
+        let mapping_raw =
+            fs::read(fixture.b.state.path.join(crate::team::sync::ENVS_MAP_PATH)).unwrap();
+        let reopened = Context::open(
+            &fixture.b.state.path,
+            crate::context::Config::default(),
+            crate::clock::system(),
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read(fixture.b.state.path.join(crate::team::sync::ENVS_MAP_PATH)).unwrap(),
+            mapping_raw
+        );
+        assert_eq!(
+            crate::team::sync::resolve_env_id(reopened.state, "personal", "vault")
+                .unwrap()
+                .as_deref(),
+            Some(env.as_str())
+        );
+    }
+}
+
+#[cfg(test)]
+mod opus_process_death_tests {
+    use super::*;
+    use crate::team::{
+        commit, membership,
+        sync::{self, TeamSync},
+        transport::TcpTransport,
+    };
+    use std::{
+        io::{BufRead, BufReader, Write},
+        process::{Child, Command, Stdio},
+        sync::{Arc, mpsc},
+        thread,
+        time::{Duration, Instant},
+    };
+    const CHILD_TEST: &str =
+        "team::bootstrap::install::opus_process_death_tests::owned_receiver_process";
+    const DELTA: &[u8] = b"synthetic-personal-after-install-process-death";
+
+    struct OwnedProcess {
+        child: Child,
+        lines: mpsc::Receiver<String>,
+        reader: Option<thread::JoinHandle<()>>,
+        receiver_root: std::path::PathBuf,
+        owner_root: std::path::PathBuf,
+        env: String,
+        recipient: String,
+        owner_team: Arc<TeamSync>,
+    }
+    impl OwnedProcess {
+        fn spawn(ctx: &Context, owner: &Context, env: &str, mode: &str) -> Self {
+            let mut child = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", CHILD_TEST, "--nocapture", "--test-threads=1"])
+                .env("PVBOOT_OPUS_OWN_RECEIVER", &ctx.state.path)
+                .env("PVBOOT_OPUS_OWN_ENV", env)
+                .env("PVBOOT_OPUS_OWN_MODE", mode)
+                .env("RUST_TEST_THREADS", "1")
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit())
+                .spawn()
+                .expect("spawn exact owned receiver test process");
+            eprintln!("PVBOOT_OPUS_CHILD_SPAWN pid={} mode={mode}", child.id());
+            let stdout = child.stdout.take().unwrap();
+            let (send, lines) = mpsc::channel();
+            let reader = thread::spawn(move || {
+                for line in BufReader::new(stdout).lines() {
+                    let line = line.expect("read owned child metadata");
+                    if line.starts_with("PVBOOT_OPUS_") && send.send(line).is_err() {
+                        break;
+                    }
+                }
+            });
+            Self {
+                child,
+                lines,
+                reader: Some(reader),
+                receiver_root: ctx.state.path.clone(),
+                owner_root: owner.state.path.clone(),
+                env: env.into(),
+                recipient: ctx.state.import_identity().unwrap().fingerprint(),
+                owner_team: sync::attached(owner).unwrap(),
+            }
+        }
+        fn expect(&self, marker: &str, deadline: Instant) {
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .expect("35-second child deadline elapsed");
+            let observed = self.lines.recv_timeout(remaining);
+            if observed.is_err() {
+                self.diagnose();
+            }
+            assert_eq!(
+                observed.expect("owned receiver did not report expected metadata"),
+                marker
+            );
+            eprintln!("PVBOOT_OPUS_PARENT_OBSERVED {marker}");
+        }
+        fn diagnose(&self) {
+            let mut result = serde_json::Map::new();
+            for (side, root) in [("a", &self.owner_root), ("b", &self.receiver_root)] {
+                let state = StateDir::new(root);
+                let read = |name: String| raw_json(&state, &name).unwrap_or(Value::Null);
+                let attempt = read(path(&self.env, "attempt.json").unwrap());
+                let journal = read(path(&self.env, "journal.json").unwrap());
+                let index = read(import_barrier::INDEX.into());
+                let status = read(format!("team/{}/sync_state.json", self.env));
+                let auth = read(
+                    path(
+                        &self.env,
+                        &format!("authorizations/{}.json", self.recipient),
+                    )
+                    .unwrap(),
+                );
+                let sender = read(path(&self.env, "sender-status.json").unwrap());
+                let peers = status["peers"].as_object().into_iter().flatten().take(2).map(|(peer,p)| (peer.clone(),json!({"session":p["session"],"peer_vector":p["peer_vector"],"vector_received_at":p["vector_received_at"],"transport":p["transport"],"dial_failures":p["dial_failures"],"last_error":p["last_error"],"tombstone_agreement":p["tombstone_agreement"]}))).collect::<serde_json::Map<_,_>>();
+                result.insert(side.into(), json!({"attempt_state":attempt["state"],"attempt_reason":attempt["reason"],"failed_from":attempt["failed_from"],"journal_state":journal["state"],"layout":journal["layout"],"index_state":index[&self.env]["state"],"removed":index[&self.env]["local_member_removed"],"authorization_activated":auth["activated"],"sender_reason":sender["reason"],"peers":peers}));
+            }
+            result.insert(
+                "owner_cached_recipient_active".into(),
+                json!(self.owner_team.is_active_member(&self.env, &self.recipient)),
+            );
+            result.insert(
+                "owner_import_guard_reason".into(),
+                json!(
+                    import_barrier::require_env(self.owner_team.ctx.state, &self.env)
+                        .err()
+                        .map(|error| error.reason.into_owned())
+                ),
+            );
+            let fresh_membership = membership::load_environment(&self.owner_team.ctx, &self.env);
+            result.insert("owner_fresh_membership".into(), match fresh_membership {
+                Ok(folded) => json!({"recipient_status":folded.document["members"][&self.recipient]["status"],"recipient_record_present":folded.document["members"][&self.recipient]["device"].is_object(),"member_count":folded.document["members"].as_object().map(|members|members.len()),"vector":folded.vector}),
+                Err(error) => json!({"reason":error.reason}),
+            });
+            let witnesses = [
+                "receipt.json",
+                "journal.json",
+                "provenance",
+                "history-required.json",
+                "member-removed.json",
+                import_barrier::LOCAL_REMOVAL_DENIAL,
+            ]
+            .into_iter()
+            .map(|leaf| {
+                (
+                    leaf.to_owned(),
+                    json!(
+                        fs::symlink_metadata(self.owner_root.join(path(&self.env, leaf).unwrap()))
+                            .is_ok()
+                    ),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
+            result.insert("owner_witness_presence".into(), Value::Object(witnesses));
+            eprintln!("PVBOOT_OPUS_REOPEN_METADATA {}", Value::Object(result));
+        }
+        fn send(&mut self, command: Value) {
+            let input = self.child.stdin.as_mut().unwrap();
+            writeln!(
+                input,
+                "{}",
+                pyjson::dumps(&command, pyjson::DumpOptions::compact_sorted()).unwrap()
+            )
+            .unwrap();
+            input.flush().unwrap();
+        }
+        fn join_reader(&mut self) {
+            if let Some(reader) = self.reader.take() {
+                reader.join().unwrap();
+            }
+        }
+        fn kill_wait(&mut self) {
+            use std::os::unix::process::ExitStatusExt;
+            self.child
+                .kill()
+                .expect("kill only the directly spawned receiver");
+            let status = self.child.wait().expect("wait directly spawned receiver");
+            assert_eq!(status.signal(), Some(libc::SIGKILL));
+            eprintln!(
+                "PVBOOT_OPUS_CHILD_WAIT pid={} signal={}",
+                self.child.id(),
+                libc::SIGKILL
+            );
+            self.join_reader();
+        }
+        fn finish(&mut self) {
+            self.send(json!({"phase":"stop"}));
+            assert!(self.child.wait().expect("wait owned receiver").success());
+            eprintln!("PVBOOT_OPUS_CHILD_WAIT pid={} exit=0", self.child.id());
+            self.join_reader();
+        }
+    }
+    impl Drop for OwnedProcess {
+        fn drop(&mut self) {
+            if self.reader.is_none() {
+                return;
+            }
+            if self.child.try_wait().ok().flatten().is_none() {
+                let _ = self.child.kill();
+            }
+            use std::os::unix::process::ExitStatusExt;
+            match self.child.wait() {
+                Ok(status) => eprintln!(
+                    "PVBOOT_OPUS_CHILD_UNWIND_WAIT pid={} exit={:?} signal={:?}",
+                    self.child.id(),
+                    status.code(),
+                    status.signal()
+                ),
+                Err(error) => eprintln!(
+                    "PVBOOT_OPUS_CHILD_UNWIND_WAIT_ERROR pid={} kind={:?}",
+                    self.child.id(),
+                    error.kind()
+                ),
+            }
+            if let Some(reader) = self.reader.take() {
+                let joined = reader.join().is_ok();
+                eprintln!(
+                    "PVBOOT_OPUS_CHILD_READER_JOIN pid={} joined={joined}",
+                    self.child.id()
+                );
+            }
+        }
+    }
+    fn emit(marker: &str) {
+        println!("\n{marker}");
+        std::io::stdout().flush().unwrap();
+    }
+    fn wait_until(mut predicate: impl FnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(35);
+        while !predicate() {
+            assert!(
+                Instant::now() < deadline,
+                "35-second personal agreement deadline"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn owned_receiver_process() {
+        let Some(root) = std::env::var_os("PVBOOT_OPUS_OWN_RECEIVER") else {
+            return;
+        };
+        let env = std::env::var("PVBOOT_OPUS_OWN_ENV").unwrap();
+        let mode = std::env::var("PVBOOT_OPUS_OWN_MODE").unwrap();
+        let ctx = Arc::new(
+            Context::open(
+                root,
+                crate::context::Config::default(),
+                crate::clock::system(),
+            )
+            .unwrap(),
+        );
+        let _protocol_trace = import_barrier::opus_cost::Scope::protocol_trace(ctx.state, &env);
+        let owner = commit::env_owner_fingerprint(&env).unwrap();
+        let device = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+        let me = device.fingerprint().unwrap();
+        let pause = if let Some(point) = mode.strip_prefix("pause:") {
+            assert!(matches!(
+                point,
+                "installing-index-after" | "committed-index-publication-after"
+            ));
+            Some(import_barrier::testing::Scope::pause(
+                ctx.state, &env, point,
+            ))
+        } else {
+            assert_eq!(mode, "reopen");
+            None
+        };
+        let transport = TcpTransport::new(device.clone(), Arc::new(|_, _| None), 64);
+        let team = TeamSync::new(ctx.clone(), Arc::new(transport), device);
+        assert!(
+            team.synced_at(&env).is_none(),
+            "new process must not inherit old readiness"
+        );
+        team.enable_sync_state();
+        team.start(None).unwrap();
+        if let Some((scope, pause)) = pause {
+            let waited = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| pause.wait()));
+            if let Err(panic) = waited {
+                let attempt = raw_json(ctx.state, &path(&env, "attempt.json").unwrap())
+                    .unwrap_or(Value::Null);
+                let index = raw_json(ctx.state, import_barrier::INDEX).unwrap_or(Value::Null);
+                let journal = raw_json(ctx.state, &path(&env, "journal.json").unwrap())
+                    .unwrap_or(Value::Null);
+                let recent = scope
+                    .hits()
+                    .into_iter()
+                    .rev()
+                    .take(12)
+                    .map(|(_, point)| point)
+                    .collect::<Vec<_>>();
+                eprintln!(
+                    "PVBOOT_OPUS_BOUNDARY_DIAGNOSTIC {}",
+                    json!({"attempt_state":attempt["state"],"reason":attempt["reason"],"failed_from":attempt["failed_from"],"index_state":index[&env]["state"],"journal_state":journal["state"],"recent_points":recent})
+                );
+                std::panic::resume_unwind(panic);
+            }
+            emit("PVBOOT_OPUS_DURABLE_INSTALL_BOUNDARY");
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input).unwrap();
+            panic!("parent must kill this exact child at the durable boundary");
+        }
+        wait_until(|| team.synced_at(&env).is_some());
+        assert!(
+            ctx.vault
+                .secret_for_trusted_use("alpha", None)
+                .unwrap()
+                .ct_eq(b"synthetic-install-fault-value")
+        );
+        assert!(matches!(
+            super::super::status(&ctx, &env).unwrap()["state"].as_str(),
+            Some("ready" | "installed_syncing")
+        ));
+        emit("PVBOOT_OPUS_REOPEN_FRESH_AGREEMENT");
+        for line in std::io::stdin().lock().lines() {
+            let command = pyjson::loads(&line.unwrap()).unwrap();
+            match command["phase"].as_str().unwrap() {
+                "delta" => {
+                    let sequence =
+                        crate::pyint::PyInt::from_json_integer(&command["sequence"]).unwrap();
+                    wait_until(|| {
+                        CommitStore::new(ctx.state, &env)
+                            .get(&owner, &sequence)
+                            .ok()
+                            .flatten()
+                            .is_some_and(|commit| commit.hash().unwrap() == command["hash"])
+                            && ctx
+                                .vault
+                                .secret_for_trusted_use("after-death", None)
+                                .is_ok_and(|value| value.ct_eq(DELTA))
+                    });
+                    emit("PVBOOT_OPUS_ORDINARY_DELTA_AND_USE");
+                }
+                "removed" => {
+                    let fact_hash = command["fact_hash"].as_str().unwrap();
+                    let started = Instant::now();
+                    let deadline = started + Duration::from_secs(35);
+                    let mut diagnosed = false;
+                    loop {
+                        let facts = sync::load_facts(&ctx, &env);
+                        let admitted = facts
+                            .as_ref()
+                            .is_ok_and(|(_, admitted, _)| admitted.contains(fact_hash));
+                        let alpha_denied = ctx.vault.secret_for_trusted_use("alpha", None).is_err();
+                        let delta_denied = ctx
+                            .vault
+                            .secret_for_trusted_use("after-death", None)
+                            .is_err();
+                        if admitted && alpha_denied && delta_denied {
+                            break;
+                        }
+                        if !diagnosed && started.elapsed() >= Duration::from_secs(10) {
+                            diagnosed = true;
+                            let status =
+                                raw_json(ctx.state, &format!("team/{env}/sync_state.json"))
+                                    .unwrap_or(Value::Null);
+                            let peers = status["peers"].as_object().into_iter().flatten().take(2).map(|(peer,p)| (peer.clone(),json!({"session":p["session"],"last_error":p["last_error"]}))).collect::<serde_json::Map<_,_>>();
+                            eprintln!(
+                                "PVBOOT_OPUS_REMOVAL_PREDICATES {}",
+                                json!({"fact_admitted":admitted,"fact_reason":facts.as_ref().err().map(|e|e.reason.as_ref()),"alpha_denied":alpha_denied,"delta_denied":delta_denied,"peers":peers,"deny_witness":fs::symlink_metadata(ctx.state.path.join(path(&env,import_barrier::LOCAL_REMOVAL_DENIAL).unwrap())).is_ok(),"fact_witness":fs::symlink_metadata(ctx.state.path.join(path(&env,"member-removed.json").unwrap())).is_ok()})
+                            );
+                        }
+                        assert!(
+                            Instant::now() < deadline,
+                            "35-second ordinary removal admission and credential denial deadline"
+                        );
+                        thread::sleep(Duration::from_millis(20));
+                    }
+                    assert!(
+                        !ctx.vault
+                            .list_secrets(None, None)
+                            .unwrap()
+                            .iter()
+                            .any(|secret| matches!(secret.id.as_str(), "alpha" | "after-death"))
+                    );
+                    assert!(
+                        ctx.vault
+                            .secret_for_trusted_use("unrelated", None)
+                            .unwrap()
+                            .ct_eq(b"synthetic-install-fault-value")
+                    );
+                    let folded = membership::load_environment(&ctx, &env).unwrap();
+                    assert_eq!(folded.document["members"][&me]["status"], "removed");
+                    assert_eq!(
+                        super::super::status(&ctx, &env).unwrap()["state"],
+                        "recovery_required"
+                    );
+                    emit("PVBOOT_OPUS_ORDINARY_REMOVAL_DENIES_CACHED_USE");
+                }
+                "stop" => break,
+                _ => panic!("unknown owned test command"),
+            }
+        }
+        team.stop();
+    }
+
+    #[test]
+    fn killed_install_reopens_challenges_activates_and_delivers_ordinary_revocation() {
+        for point in [
+            "installing-index-after",
+            "committed-index-publication-after",
+        ] {
+            let fixture = tests::pending();
+            sync::attached(&fixture.a).unwrap().enable_sync_state();
+            sync::attached(&fixture.b).unwrap().stop();
+            super::super::approval::approve_receiver(
+                &fixture.b,
+                &fixture.env,
+                text(&fixture.pending, "inviter_record_binding").unwrap(),
+                text(&fixture.pending, "self_record_binding").unwrap(),
+                "synthetic-install-fault-administrator",
+            )
+            .unwrap();
+            let bfp = DeviceKey::load_or_create(fixture.b.state, fixture.b.kms)
+                .unwrap()
+                .fingerprint()
+                .unwrap();
+            let auth_name = path(&fixture.env, &format!("authorizations/{bfp}.json")).unwrap();
+            assert_ne!(
+                raw_json(fixture.a.state, &auth_name).unwrap()["activated"],
+                true
+            );
+            let mut killed = OwnedProcess::spawn(
+                &fixture.b,
+                &fixture.a,
+                &fixture.env,
+                &format!("pause:{point}"),
+            );
+            killed.expect(
+                "PVBOOT_OPUS_DURABLE_INSTALL_BOUNDARY",
+                Instant::now() + Duration::from_secs(35),
+            );
+            killed.kill_wait();
+            let auth = raw_json(fixture.a.state, &auth_name).unwrap();
+            let admission = commit::Commit::from_dict(&auth["admission"]).unwrap();
+            let admission_hash = admission.hash().unwrap();
+            assert_ne!(auth["activated"], true);
+            let journal = raw_json(
+                fixture.b.state,
+                &path(&fixture.env, "journal.json").unwrap(),
+            )
+            .unwrap();
+            let epoch = journal["epoch"].clone();
+            if point == "committed-index-publication-after" {
+                assert_eq!(journal["layout"], "compact_committed_v1");
+            }
+            let queries =
+                import_barrier::opus_cost::Scope::protocol_trace(fixture.a.state, &fixture.env);
+            let agreement_deadline = Instant::now() + Duration::from_secs(35);
+            let mut reopened = OwnedProcess::spawn(&fixture.b, &fixture.a, &fixture.env, "reopen");
+            reopened.expect("PVBOOT_OPUS_REOPEN_FRESH_AGREEMENT", agreement_deadline);
+            let a = sync::attached(&fixture.a).unwrap();
+            while raw_json(fixture.a.state, &auth_name).unwrap()["activated"] != true
+                || a.synced_at(&fixture.env).is_none()
+            {
+                assert!(
+                    Instant::now() < agreement_deadline,
+                    "same 35-second fresh A/B agreement deadline"
+                );
+                thread::sleep(Duration::from_millis(20));
+            }
+            assert_eq!(queries.metrics().get("receipt_queries_sent"), Some(&1));
+            let active = raw_json(fixture.a.state, &auth_name).unwrap();
+            assert_eq!(active["admission"], auth["admission"]);
+            let receipt = fs::read(
+                fixture
+                    .b
+                    .state
+                    .path
+                    .join(path(&fixture.env, "receipt.json").unwrap()),
+            )
+            .unwrap();
+            assert_eq!(
+                raw_json(
+                    fixture.b.state,
+                    &path(&fixture.env, "journal.json").unwrap()
+                )
+                .unwrap()["epoch"],
+                epoch
+            );
+            let cipher = crate::team::envelope::encrypt_secret(
+                &[7; 32],
+                &fixture.env,
+                "after-death",
+                "eeeeeeeeeeeeeeee",
+                DELTA,
+            )
+            .unwrap();
+            let delta = membership::author_commit(&fixture.a, Some(a.as_ref()), &fixture.env, vec![
+                json!({"op":"secret.put_version","secret_id":"after-death","version_id":"eeeeeeeeeeeeeeee","generation_id":"0123456789abcdef","kind":"api_key","ciphertext":cipher,"public":{}}),
+                json!({"op":"secret.activate","secret_id":"after-death","version_id":"eeeeeeeeeeeeeeee"}),
+            ]).unwrap();
+            reopened.send(json!({"phase":"delta","sequence":delta.author_seq.value(),"hash":delta.hash().unwrap()}));
+            reopened.expect(
+                "PVBOOT_OPUS_ORDINARY_DELTA_AND_USE",
+                Instant::now() + Duration::from_secs(35),
+            );
+            let removed =
+                membership::remove_member(&fixture.a, Some(a.as_ref()), &fixture.env, &bfp)
+                    .unwrap();
+            let fact = sync::Fact::from_dict(&removed["fact"]).unwrap();
+            assert_eq!(fact.kind, "member_removed");
+            assert_eq!(fact.target["fingerprint"], bfp);
+            reopened.send(json!({"phase":"removed","fact_hash":fact.hash().unwrap()}));
+            reopened.expect(
+                "PVBOOT_OPUS_ORDINARY_REMOVAL_DENIES_CACHED_USE",
+                Instant::now() + Duration::from_secs(35),
+            );
+            reopened.finish();
+            let denied_reopen = Context::open(
+                &fixture.b.state.path,
+                crate::context::Config::default(),
+                crate::clock::system(),
+            )
+            .unwrap();
+            assert!(
+                sync::load_facts(&denied_reopen, &fixture.env)
+                    .unwrap()
+                    .1
+                    .contains(&fact.hash().unwrap())
+            );
+            assert!(
+                denied_reopen
+                    .vault
+                    .secret_for_trusted_use("alpha", None)
+                    .is_err()
+            );
+            assert!(
+                denied_reopen
+                    .vault
+                    .secret_for_trusted_use("after-death", None)
+                    .is_err()
+            );
+            assert!(
+                !denied_reopen
+                    .vault
+                    .list_secrets(None, None)
+                    .unwrap()
+                    .iter()
+                    .any(|secret| matches!(secret.id.as_str(), "alpha" | "after-death"))
+            );
+            assert!(
+                denied_reopen
+                    .vault
+                    .secret_for_trusted_use("unrelated", None)
+                    .unwrap()
+                    .ct_eq(b"synthetic-install-fault-value")
+            );
+            assert_eq!(
+                super::super::status(&denied_reopen, &fixture.env).unwrap()["state"],
+                "recovery_required"
+            );
+            assert_eq!(
+                fs::read(
+                    fixture
+                        .b
+                        .state
+                        .path
+                        .join(path(&fixture.env, "receipt.json").unwrap())
+                )
+                .unwrap(),
+                receipt
+            );
+            let commits = CommitStore::new(fixture.a.state, &fixture.env)
+                .all_commits()
+                .unwrap();
+            assert_eq!(
+                commits
+                    .iter()
+                    .filter(|commit| commit.hash().unwrap() == admission_hash)
+                    .count(),
+                1
+            );
+            assert_eq!(
+                commits
+                    .iter()
+                    .flat_map(|commit| &commit.ops)
+                    .filter(|op| op["op"] == "member.add" && op["device"] == auth["device_record"])
+                    .count(),
+                1
+            );
+            assert_eq!(queries.metrics().get("receipt_queries_sent"), Some(&1));
+            eprintln!(
+                "PVBOOT_OPUS_REAL_KILL_REOPEN_ACTIVATION point={point} one_admission=true fresh_queries=1 ordinary_delta=true ordinary_removal_denied=true denial_after_reopen=true"
+            );
+        }
     }
 }

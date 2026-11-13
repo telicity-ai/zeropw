@@ -53,10 +53,34 @@ pub(crate) struct ImportRootIdentity {
     lock_device: u64,
     lock_inode: u64,
 }
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct ImportRootRevision {
+    root: [u64; 11],
+    lock: [u64; 11],
+}
+impl ImportRootRevision {
+    pub(crate) fn same_anchor(&self, other: &Self) -> bool {
+        self.root[..5] == other.root[..5] && self.lock[..6] == other.lock[..6]
+    }
+}
+#[cfg(test)]
+impl ImportRootRevision {
+    pub(crate) fn changed_fields(&self, other: &Self) -> u32 {
+        self.root
+            .iter()
+            .chain(self.lock.iter())
+            .zip(other.root.iter().chain(other.lock.iter()))
+            .enumerate()
+            .fold(0u32, |mask, (index, (old, new))| {
+                mask | (u32::from(old != new) << index)
+            })
+    }
+}
 struct BoundImportIdentity {
     record: crate::team::identity::DeviceRecord,
     root: ImportRootIdentity,
     descriptor: File,
+    key_hash: Mutex<[u8; 32]>,
 }
 
 impl StateDir {
@@ -75,12 +99,14 @@ impl StateDir {
 
     pub(crate) fn bind_import_identity(
         &self,
-        record: crate::team::identity::DeviceRecord,
+        source: &crate::team::identity::ImportIdentitySource<'_, '_>,
     ) -> Result<(), Error> {
         use rustix::fs::{Mode, OFlags, open};
         use std::os::unix::fs::MetadataExt;
         let invalid = || Error::state("team_bootstrap_local_state_changed");
         let _binding_lock = self.lock()?;
+        source.check(self)?;
+        let record = source.record().clone();
         if !record.verify_uncached() {
             return Err(invalid());
         }
@@ -123,12 +149,14 @@ impl StateDir {
             if current.record != record || current.root != root {
                 return Err(invalid());
             }
+            *current.key_hash.lock().map_err(|_| invalid())? = source.raw_hash();
             return Ok(());
         }
         if let Err(candidate) = self.import_identity.set(BoundImportIdentity {
             record,
             root,
             descriptor,
+            key_hash: Mutex::new(source.raw_hash()),
         }) {
             let actual = self.import_identity.get().ok_or_else(invalid)?;
             if actual.record != candidate.record || actual.root != candidate.root {
@@ -139,6 +167,18 @@ impl StateDir {
     }
     pub(crate) fn import_identity(&self) -> Option<&crate::team::identity::DeviceRecord> {
         self.import_identity.get().map(|bound| &bound.record)
+    }
+    pub(crate) fn import_key_hash(&self) -> Result<Option<[u8; 32]>, Error> {
+        self.import_identity
+            .get()
+            .map(|bound| {
+                bound
+                    .key_hash
+                    .lock()
+                    .map(|hash| *hash)
+                    .map_err(|_| Error::state("team_bootstrap_local_state_changed"))
+            })
+            .transpose()
     }
     pub(crate) fn checked_import_root(&self) -> Result<ImportRootIdentity, Error> {
         use std::os::unix::fs::MetadataExt;
@@ -191,6 +231,91 @@ impl StateDir {
             return Err(Error::state("team_bootstrap_local_state_changed"));
         }
         Ok(())
+    }
+
+    /// Reobserve the descriptor/path revision after the operation has made
+    /// its full private-path/ACL check. No timestamp or vector grants import
+    /// authority; signed raw inputs are checked separately before use.
+    pub(crate) fn import_root_revision(&self) -> Result<ImportRootRevision, Error> {
+        use std::os::unix::fs::MetadataExt;
+        let invalid = || Error::state("team_bootstrap_local_state_changed");
+        if !self.locked_by_current_thread() {
+            return Err(invalid());
+        }
+        let bound = self.import_identity.get().ok_or_else(invalid)?;
+        let root = fs::symlink_metadata(&self.path).map_err(|_| invalid())?;
+        let descriptor = bound.descriptor.metadata().map_err(|_| invalid())?;
+        let lock = fs::symlink_metadata(self.path.join(".lock")).map_err(|_| invalid())?;
+        let held = self.lock_file.lock().map_err(|_| invalid())?;
+        let held = held
+            .as_ref()
+            .ok_or_else(invalid)?
+            .metadata()
+            .map_err(|_| invalid())?;
+        let stamp = |m: &fs::Metadata| {
+            [
+                m.dev(),
+                m.ino(),
+                m.mode() as u64,
+                m.uid() as u64,
+                m.gid() as u64,
+                m.nlink(),
+                m.len(),
+                m.mtime() as u64,
+                m.mtime_nsec() as u64,
+                m.ctime() as u64,
+                m.ctime_nsec() as u64,
+            ]
+        };
+        if !root.is_dir()
+            || root.uid() != nix::unistd::geteuid().as_raw()
+            || root.mode() & 0o777 != DIR_MODE
+            || root.dev() != bound.root.device
+            || root.ino() != bound.root.inode
+            || stamp(&root) != stamp(&descriptor)
+            || !lock.is_file()
+            || lock.uid() != nix::unistd::geteuid().as_raw()
+            || lock.mode() & 0o777 != FILE_MODE
+            || lock.nlink() != 1
+            || lock.dev() != bound.root.lock_device
+            || lock.ino() != bound.root.lock_inode
+            || stamp(&lock) != stamp(&held)
+            || fs::canonicalize(&self.path).map_err(|_| invalid())? != bound.root.normalized
+        {
+            return Err(invalid());
+        }
+        Ok(ImportRootRevision {
+            root: stamp(&root),
+            lock: stamp(&lock),
+        })
+    }
+
+    /// Identity of the actual held descriptor, including during key loading
+    /// before a Context can promote an unbound import I/O parent.
+    pub(crate) fn import_lock_identity(&self) -> Result<(u64, u64), Error> {
+        use std::os::unix::fs::MetadataExt;
+        let invalid = || Error::state("team_bootstrap_local_state_changed");
+        if !self.locked_by_current_thread() {
+            return Err(invalid());
+        }
+        let held = self.lock_file.lock().map_err(|_| invalid())?;
+        let held = held
+            .as_ref()
+            .ok_or_else(invalid)?
+            .metadata()
+            .map_err(|_| invalid())?;
+        let path = fs::symlink_metadata(self.path.join(".lock")).map_err(|_| invalid())?;
+        if !held.is_file()
+            || !path.is_file()
+            || path.uid() != nix::unistd::geteuid().as_raw()
+            || path.mode() & 0o777 != FILE_MODE
+            || path.nlink() != 1
+            || held.dev() != path.dev()
+            || held.ino() != path.ino()
+        {
+            return Err(invalid());
+        }
+        Ok((held.dev(), held.ino()))
     }
 
     /// Joins a caller-supplied `name` onto `self.path` the way Python's
@@ -355,26 +480,39 @@ impl StateDir {
     // ------------------------------------------------------------------- json
     /// `StateDir.read_json`.
     pub fn read_json(&self, name: &str, default: Value) -> Result<Value, Error> {
-        // Preserve the legacy lock-free deferred-gap observation. The first
-        // import installs a permanent epoch record before changing targets;
-        // an optimistic read that crosses that transition retries locked.
-        let team_observation = if name.starts_with("team/") {
-            Some(crate::import_barrier::index(self)?)
-        } else {
+        if !crate::import_barrier::coherent_path(name) {
+            #[cfg(test)]
+            crate::import_barrier::testing::reader_hit(self, name, "reader-check-before-read")?;
+            let value = self.read_json_raw(name, default)?;
+            #[cfg(test)]
+            crate::import_barrier::testing::reader_hit(self, name, "reader-file-read-before-view")?;
+            return Ok(value);
+        }
+        let before = crate::import_barrier::routing_witness(self)?;
+        if before.present() {
+            let io = crate::import_barrier::ImportIo::open_routed(self, &before)?;
+            return self.read_json_in(&io, name, default);
+        }
+        // Ordinary deferred observation remains lock-free. A publication
+        // crossing that read gets exactly one locked retry, never recursion.
+        let _ordinary_view = if name.starts_with("team/") {
             None
-        };
-        let _import_view = if crate::import_barrier::coherent_path(name)
-            && team_observation
-                .as_ref()
-                .is_none_or(|v| v.as_object().is_none_or(|v| !v.is_empty()))
-        {
+        } else {
             Some(self.lock()?)
-        } else {
-            None
         };
-        crate::import_barrier::require_path(self, name)?;
         #[cfg(test)]
         crate::import_barrier::testing::reader_hit(self, name, "reader-check-before-read")?;
+        let value = self.read_json_raw(name, default.clone())?;
+        #[cfg(test)]
+        crate::import_barrier::testing::reader_hit(self, name, "reader-file-read-before-view")?;
+        let after = crate::import_barrier::routing_witness(self)?;
+        if before.unchanged(&after) && !after.present() {
+            return Ok(value);
+        }
+        let io = crate::import_barrier::ImportIo::open_routed(self, &after)?;
+        self.read_json_in(&io, name, default)
+    }
+    fn read_json_raw(&self, name: &str, default: Value) -> Result<Value, Error> {
         let target = self.join(name);
         let value = if !target.exists() {
             default.clone()
@@ -383,15 +521,38 @@ impl StateDir {
                 .map_err(|_| Error::state("state_corrupt").with_detail(name))?;
             pyjson::loads(&text).map_err(|_| Error::state("state_corrupt").with_detail(name))?
         };
+        Ok(value)
+    }
+    pub(crate) fn read_json_in(
+        &self,
+        io: &crate::import_barrier::ImportIo<'_, '_>,
+        name: &str,
+        default: Value,
+    ) -> Result<Value, Error> {
+        if !std::ptr::eq(self, io.state()) {
+            return Err(Error::state("team_bootstrap_local_state_changed"));
+        }
+        let mut view = crate::import_barrier::VisibilityEpoch::capture(io)?;
+        let value = self.read_json_with_view(&mut view, name, default)?;
+        view.finish()?;
+        Ok(value)
+    }
+    pub(crate) fn read_json_with_view(
+        &self,
+        view: &mut crate::import_barrier::VisibilityEpoch<'_, '_, '_>,
+        name: &str,
+        default: Value,
+    ) -> Result<Value, Error> {
+        if !std::ptr::eq(self, view.state()) {
+            return Err(Error::state("team_bootstrap_local_state_changed"));
+        }
+        view.require_path(name)?;
+        #[cfg(test)]
+        crate::import_barrier::testing::reader_hit(self, name, "reader-check-before-read")?;
+        let value = view.raw_json(name, default)?;
         #[cfg(test)]
         crate::import_barrier::testing::reader_hit(self, name, "reader-file-read-before-view")?;
-        if let Some(before) = team_observation
-            && crate::import_barrier::index(self)? != before
-        {
-            let _import_view = self.lock()?;
-            return self.read_json(name, default);
-        }
-        crate::import_barrier::visible(self, name, value)
+        view.filter(name, value)
     }
 
     /// `StateDir.write_json`. Python's `try` wraps *both* the write and the
@@ -500,6 +661,41 @@ impl StateDir {
         {
             lines = lines.split_off(lines.len() - limit);
         }
+        Ok(lines)
+    }
+
+    pub(crate) fn read_lines_in(
+        &self,
+        io: &crate::import_barrier::ImportIo<'_, '_>,
+        name: &str,
+        limit: Option<usize>,
+    ) -> Result<Vec<String>, Error> {
+        if !std::ptr::eq(self, io.state()) {
+            return Err(Error::state("team_bootstrap_local_state_changed"));
+        }
+        let Some(raw) = io.read(name, 67_108_864)? else {
+            return Ok(Vec::new());
+        };
+        let n = raw.len() as u64;
+        io.charge(
+            n.checked_mul(4)
+                .ok_or_else(|| Error::state("team_bootstrap_limit_exceeded"))?,
+            n.checked_mul(8)
+                .ok_or_else(|| Error::state("team_bootstrap_limit_exceeded"))?,
+        )?;
+        let text = String::from_utf8(raw)
+            .map_err(|_| Error::state("state_corrupt").with_detail("UnicodeDecodeError"))?;
+        let mut lines = split_universal_newlines(&text);
+        if lines.len() > 65_536 {
+            return Err(Error::state("team_bootstrap_limit_exceeded"));
+        }
+        if let Some(limit) = limit
+            && limit != 0
+            && lines.len() > limit
+        {
+            lines = lines.split_off(lines.len() - limit);
+        }
+        io.check()?;
         Ok(lines)
     }
 
