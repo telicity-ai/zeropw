@@ -864,3 +864,131 @@ fn personal_bootstrap_crash_external_sync_status_uses_current_committed_epoch() 
             .is_some_and(|peers| !peers.is_empty())
     );
 }
+
+#[test]
+fn personal_bootstrap_crash_cold_ordinary_handoff_preserves_protocol_route() {
+    let empty = true;
+    use std::{
+        sync::Arc,
+        time::{Duration, Instant},
+    };
+    use zeropw::team::{sync::TeamSync, transport::TcpTransport};
+    struct Stop(Vec<Arc<TeamSync>>);
+    impl Drop for Stop {
+        fn drop(&mut self) {
+            for team in self.0.iter().rev() {
+                team.stop();
+            }
+        }
+    }
+    let f = runtime::installed(empty);
+    for team in f.teams.iter().rev() {
+        team.stop();
+    }
+    let ak = DeviceKey::load_or_create(f.a.state, f.a.kms).unwrap();
+    let bk = DeviceKey::load_or_create(f.b.state, f.b.kms).unwrap();
+    let afp = ak.fingerprint().unwrap();
+    let bfp = bk.fingerprint().unwrap();
+    let auth =
+        f.a.state
+            .read_json(
+                &format!("team/{}/bootstrap/authorizations/{bfp}.json", f.env),
+                Value::Null,
+            )
+            .unwrap();
+    assert_eq!(auth["activated"], true);
+    let receipt_path =
+        f.b.state
+            .path
+            .join(format!("team/{}/bootstrap/receipt.json", f.env));
+    let receipt = std::fs::read(&receipt_path).unwrap();
+    let journal_path =
+        f.b.state
+            .path
+            .join(format!("team/{}/bootstrap/journal.json", f.env));
+    let journal = std::fs::read(&journal_path).unwrap();
+    let trace = Arc::new(RestartTrace::default());
+    let at = TcpTransport::new(ak.clone(), Arc::new(|_, _| None), 64);
+    let bt = TcpTransport::new(bk.clone(), Arc::new(|_, _| None), 64);
+    // Keep A inbound-only and B's background ordinary fallback disabled so
+    // success must use the real committed-receiver reconnect path itself.
+    let ta = TeamSync::new(
+        f.a.clone(),
+        Arc::new(RestartTransport {
+            inner: at.clone(),
+            side: "a",
+            trace: trace.clone(),
+            dial: RestartDial::InboundOnly,
+        }),
+        ak,
+    );
+    let tb = TeamSync::new(
+        f.b.clone(),
+        Arc::new(RestartTransport {
+            inner: bt,
+            side: "b",
+            trace: trace.clone(),
+            dial: RestartDial::PersonalOnly,
+        }),
+        bk,
+    );
+    let _stop = Stop(vec![ta.clone(), tb.clone()]);
+    ta.enable_sync_state();
+    tb.enable_sync_state();
+    ta.start(Some("127.0.0.1:0")).unwrap();
+    tb.register_env(&f.env).unwrap();
+    tb.set_peer_address(&f.env, &afp, &at.bound_address().unwrap())
+        .unwrap();
+    assert!(ta.synced_at(&f.env).is_none());
+    assert!(tb.synced_at(&f.env).is_none());
+    tb.start(None).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(35);
+    loop {
+        let a_ready = ta.synced_at(&f.env).is_some();
+        let b_ready = tb.synced_at(&f.env).is_some();
+        if a_ready && b_ready {
+            break;
+        }
+        if Instant::now() >= deadline {
+            println!(
+                "PVBOOT_CURRENT_ENDPOINT_METADATA {}",
+                json!({"predicates":{"a_ready":a_ready,"b_ready":b_ready},"a":restart_metadata(&f.a,&f.env,&bfp),"b":restart_metadata(&f.b,&f.env,&afp),"wire":trace.snapshot()})
+            );
+            panic!("activated owner and committed receiver did not reach fresh ordinary agreement");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let wire = trace.snapshot();
+    println!(
+        "PVBOOT_CURRENT_ENDPOINT_PROTOCOL_ROUTE {}",
+        json!({"wire":wire,"a":restart_metadata(&f.a,&f.env,&bfp),"b":restart_metadata(&f.b,&f.env,&afp)})
+    );
+    assert!(
+        wire.as_object()
+            .unwrap()
+            .keys()
+            .all(|key| !key.contains("BOOTSTRAP_")),
+        "activated-owner restart must not replay bootstrap controls"
+    );
+    assert!(
+        wire.as_object()
+            .unwrap()
+            .keys()
+            .any(|key| key.starts_with("b:") && key.ends_with(":recv:VECTOR"))
+    );
+    assert_eq!(std::fs::read(receipt_path).unwrap(), receipt);
+    assert_eq!(std::fs::read(journal_path).unwrap(), journal);
+    let commits = CommitStore::new(f.a.state, &f.env).all_commits().unwrap();
+    assert_eq!(
+        commits
+            .iter()
+            .flat_map(|c| &c.ops)
+            .filter(|op| op["op"] == "member.add")
+            .count(),
+        1
+    );
+    println!(
+        "PVBOOT_CURRENT_ENDPOINT_FRESH_AGREEMENT {}",
+        json!({"receipt_unchanged":true,"journal_unchanged":true,"member_add_count":1,"wire":wire})
+    );
+}

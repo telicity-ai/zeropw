@@ -1625,7 +1625,16 @@ pub fn snapshot_of_prefix(
     history: &[Commit],
     audit: Option<&Audit>,
 ) -> Result<FoldResult> {
-    let fold = fold_from_snapshots_in(env_id, commits, Some(history), state, facts, audit, true)?;
+    let fold = fold_from_snapshots_in(
+        env_id,
+        commits,
+        Some(history),
+        state,
+        facts,
+        audit,
+        true,
+        None,
+    )?;
     Ok(FoldResult {
         document: fold.unflushed.ok_or_else(doc_corrupt)?,
         ..fold.result
@@ -2252,8 +2261,32 @@ pub fn fold_for_refold(
     facts: Option<&Facts>,
     audit: Option<&Audit>,
 ) -> Result<Refold> {
+    fold_for_refold_using(env_id, all_commits, state, facts, audit, None)
+}
+
+pub(crate) fn fold_for_refold_retained(
+    env_id: &str,
+    all_commits: Vec<Commit>,
+    state: &StateDir,
+    facts: Option<&Facts>,
+    audit: Option<&Audit>,
+    input: &commit::RetainedInput<'_, '_>,
+) -> Result<Refold> {
+    input.with_retained_io(state, env_id, |reads| {
+        fold_for_refold_using(env_id, all_commits, state, facts, audit, Some(reads))
+    })
+}
+
+fn fold_for_refold_using(
+    env_id: &str,
+    all_commits: Vec<Commit>,
+    state: &StateDir,
+    facts: Option<&Facts>,
+    audit: Option<&Audit>,
+    input: Option<&commit::RetainedIo<'_, '_, '_>>,
+) -> Result<Refold> {
     let record = snapshot_record(facts, &all_commits);
-    let fold = fold_from_snapshots(env_id, all_commits, state, facts, audit, true)?;
+    let fold = fold_from_snapshots_in(env_id, all_commits, None, state, facts, audit, true, input)?;
     let snapshot = FoldResult {
         document: fold.unflushed.ok_or_else(doc_corrupt)?,
         ..fold.result.clone()
@@ -2309,13 +2342,36 @@ fn fold_from_snapshots(
         facts,
         audit,
         keep_unflushed,
+        None,
     )
+}
+
+pub(crate) fn fold_with_snapshot_retained(
+    env_id: &str,
+    all_commits: Vec<Commit>,
+    state: &StateDir,
+    facts: Option<&Facts>,
+    audit: Option<&Audit>,
+    input: &commit::RetainedIo<'_, '_, '_>,
+) -> Result<FoldResult> {
+    Ok(fold_from_snapshots_in(
+        env_id,
+        all_commits,
+        None,
+        state,
+        facts,
+        audit,
+        false,
+        Some(input),
+    )?
+    .result)
 }
 
 /// [`fold_from_snapshots`] of `all_commits`, or, with `history`, of that
 /// prefix of every stored commit: removals are then placed from all of
 /// `history`, and a snapshot covering any commit past the prefix is no
 /// base for it.
+#[allow(clippy::too_many_arguments)]
 fn fold_from_snapshots_in(
     env_id: &str,
     all_commits: Vec<Commit>,
@@ -2324,8 +2380,15 @@ fn fold_from_snapshots_in(
     facts: Option<&Facts>,
     audit: Option<&Audit>,
     keep_unflushed: bool,
+    input: Option<&commit::RetainedIo<'_, '_, '_>>,
 ) -> Result<SnapshotFold> {
-    let personal = crate::import_barrier::personal_manifest(state, env_id)?;
+    let personal = match input {
+        Some(input) => {
+            input.require_target(state, env_id)?;
+            input.personal_manifest()?
+        }
+        None => crate::import_barrier::personal_manifest(state, env_id)?,
+    };
     let schedule = history.unwrap_or(&all_commits);
     if let Some(manifest) = &personal {
         let floor = &manifest["vector"];
@@ -2369,7 +2432,9 @@ fn fold_from_snapshots_in(
             .collect()
     });
     let directory = state.path.join(snapshot_dir(env_id));
-    let mut numbers = if directory.is_dir() {
+    let mut numbers = if let Some(input) = input {
+        input.snapshot_numbers()?
+    } else if directory.is_dir() {
         commit::digit_stems(&directory)?
     } else {
         Vec::new()
@@ -2399,6 +2464,7 @@ fn fold_from_snapshots_in(
             keep_unflushed || !passed_over.is_empty(),
             audited_up_to.as_ref(),
             &mut may_check_unrecorded,
+            input,
         );
         match attempt {
             Ok(Some((result, unflushed, unrecorded))) => {
@@ -2505,12 +2571,14 @@ fn fold_on_snapshot(
     keep_unflushed: bool,
     audited_up_to: Option<&Value>,
     may_check_unrecorded: &mut bool,
+    input: Option<&commit::RetainedIo<'_, '_, '_>>,
 ) -> std::result::Result<Option<(FoldResult, Option<Value>, bool)>, SnapshotUnusable> {
     {
-        let snapshot = state.read_json(
-            &format!("{}/{}.json", snapshot_dir(env_id), number),
-            Value::Null,
-        )?;
+        let name = format!("{}/{}.json", snapshot_dir(env_id), number);
+        let snapshot = match input {
+            Some(input) => input.read_json(&name, Value::Null)?,
+            None => state.read_json(&name, Value::Null)?,
+        };
         if snapshot.is_null() {
             return Ok(None);
         }
@@ -2570,6 +2638,7 @@ fn fold_on_snapshot(
                 facts,
                 schedule,
                 may_check_unrecorded,
+                input,
             )? {
                 Check::Matches => {}
                 Check::MatchesUnrecorded => unrecorded = true,
@@ -2703,6 +2772,7 @@ fn check_snapshot(
     facts: Option<&Facts>,
     all_commits: &[Commit],
     may_fold: &mut bool,
+    input: Option<&commit::RetainedIo<'_, '_, '_>>,
 ) -> Result<Check> {
     let mut last = None;
     for commit in covered {
@@ -2719,9 +2789,12 @@ fn check_snapshot(
             return Ok(Check::Stale);
         }
     }
-    let recorded = state
-        .read_json(&snapshot_record_path(env_id, number), Value::Null)
-        .unwrap_or(Value::Null);
+    let name = snapshot_record_path(env_id, number);
+    let recorded = match input {
+        Some(input) => input.read_json(&name, Value::Null),
+        None => state.read_json(&name, Value::Null),
+    }
+    .unwrap_or(Value::Null);
     if !recorded.is_null() {
         return Ok(if recorded == snapshot_record(facts, all_commits) {
             Check::Matches
