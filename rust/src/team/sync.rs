@@ -5121,56 +5121,295 @@ pub fn fact_role_ok(doc: &Value, kind: &str, author: &str, target: &Value) -> bo
 /// Admission receipts authenticate the local authorization decision. They are
 /// local only: peers must perform their own signature and authority checks.
 pub(crate) fn receipt_fact(ctx: &Context, fact: &Fact) -> Result<()> {
-    let _lock = ctx.state.lock()?;
+    let history = commit::HistorySession::open_runtime(ctx.state, &fact.env_id)?;
+    receipt_fact_with_input(ctx, fact, &history)
+}
+pub(crate) fn receipt_fact_with_input(
+    ctx: &Context,
+    fact: &Fact,
+    history: &commit::HistorySession<'_>,
+) -> Result<()> {
+    let nested = history.nested(ctx.state, &fact.env_id)?;
+    let history = &nested;
+    history.invalidate()?;
+    history.effect_boundary(&fact.env_id, "fact-deny-before")?;
+    crate::import_barrier::admitted_fact(ctx.state, fact)?;
+    history.effect_boundary(&fact.env_id, "fact-deny-after")?;
     let device = DeviceKey::load_or_create(ctx.state, ctx.kms)?;
     let hash = fact.hash()?;
     let message = canon(
         &json!({"domain":"zeropw-local-fact-admission-v1","env_id":fact.env_id,"hash":hash}),
     )?;
+    history.match_local_identity(&device.record()?)?;
+    history.check()?;
+    let signature = device.sign(&message)?;
+    history.check()?;
+    history.invalidate()?;
+    history.effect_boundary(&fact.env_id, "fact-receipt-before")?;
     ctx.state.append_line(
         &format!("team/{}/fact_admissions.jsonl", fact.env_id),
         &pyjson::dumps(
-            &json!({"hash":hash,"sig":pybase64::b64encode(&device.sign(&message)?)}),
+            &json!({"hash":hash,"sig":pybase64::b64encode(&signature)}),
             DumpOptions::compact_sorted(),
         )?,
     )?;
-    crate::tombstone::retain_fact(ctx.state, fact)
+    history.effect_boundary(&fact.env_id, "fact-receipt-after")?;
+    history.invalidate()?;
+    history.effect_boundary(&fact.env_id, "fact-retention-before")?;
+    crate::tombstone::retain_fact_with_input(history, fact)?;
+    history.effect_boundary(&fact.env_id, "fact-retention-after")
+}
+
+pub(crate) fn personal_tombstone_digest(facts: &Facts) -> Result<String> {
+    super::tombstone_gate::digest(&facts.tombstone_facts)
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum FactServices<'c> {
+    Runtime(&'c Context),
+    VerifySettled,
+}
+pub(crate) struct SettledFacts<'a> {
+    facts: Facts,
+    hashes: HashSet<String>,
+    authors: HashMap<String, HashSet<String>>,
+    seal: commit::FactSeal<'a>,
+}
+// Stack-owned continuation of one selected VECTOR operation. The borrowed
+// control observation only defers background work; it grants no readiness.
+// Cost selection only: this never validates a fact or supplies authority.
+// For the exact seven-field shape below, coercion copies six strings and
+// the target tree. Object target keys are strings: the legacy merge makes
+// p*(p-1)/2 string comparisons; insertion needs at most p*p comparisons,
+// each bounded by w bytes. 64*n covers the bounded copies/field lookups and
+// 16*(p+1)^2*(w+1) covers both comparison loops with their fixed overhead.
+// Other Python-compatible shapes retain the byte-quadratic reservation.
+// The caller screens/parses the same original bytes and precharges the
+// n-byte shape scan before calling; the 64*n byte reservation is unchanged.
+fn fact_replay_parse_reservation(n: u64, value: &Value) -> Result<(u64, u64)> {
+    let limit = || Error::state("team_bootstrap_limit_exceeded");
+    let fields = ["format", "env_id", "kind", "author", "hlc", "sig"];
+    let target = value
+        .as_object()
+        .filter(|object| {
+            object.len() == 7
+                && fields
+                    .iter()
+                    .all(|field| object.get(*field).is_some_and(Value::is_string))
+        })
+        .and_then(|object| object.get("target"))
+        .and_then(Value::as_object);
+    let work = if let Some(target) = target {
+        let p = u64::try_from(target.len())
+            .map_err(|_| limit())?
+            .checked_add(1)
+            .ok_or_else(limit)?;
+        let width = u64::try_from(target.keys().map(String::len).max().unwrap_or(0))
+            .map_err(|_| limit())?
+            .checked_add(1)
+            .ok_or_else(limit)?;
+        n.checked_mul(64)
+            .and_then(|base| {
+                p.checked_mul(p)
+                    .and_then(|pairs| pairs.checked_mul(width))
+                    .and_then(|pairs| pairs.checked_mul(16))
+                    .and_then(|pairs| base.checked_add(pairs))
+            })
+            .ok_or_else(limit)?
+    } else {
+        n.checked_mul(n)
+            .and_then(|work| work.checked_mul(8))
+            .ok_or_else(limit)?
+    };
+    Ok((work, n.checked_mul(64).ok_or_else(limit)?))
+}
+
+struct VectorCompletion<'a> {
+    operation: Option<commit::HistoryResume<'a>>,
+    receiving: Option<super::bootstrap::OrdinaryReception<'a>>,
+}
+struct TombstoneCompletion<'a> {
+    held: Option<commit::HistorySession<'a>>,
+    settled: Option<SettledFacts<'a>>,
+}
+
+impl SettledFacts<'_> {
+    fn current_with_vector<'s>(
+        &'s self,
+        history: &commit::HistorySession<'_>,
+    ) -> Result<(&'s Facts, BTreeMap<String, PyInt>)> {
+        let vector = self.seal.current_vector(history)?;
+        Ok((&self.facts, vector))
+    }
+    fn into_parts(self) -> (Facts, HashSet<String>, HashMap<String, HashSet<String>>) {
+        (self.facts, self.hashes, self.authors)
+    }
+    pub(crate) fn checked<'s>(&'s self, history: &commit::HistorySession<'_>) -> Result<&'s Facts> {
+        self.seal.check(history)?;
+        Ok(&self.facts)
+    }
+    pub(crate) fn digest(&self, history: &commit::HistorySession<'_>) -> Result<String> {
+        self.seal.check(history)?;
+        let hashes = self
+            .hashes
+            .iter()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        super::bootstrap::digest(&json!(hashes))
+    }
+}
+fn unsettled_facts() -> Error {
+    Error::state("team_bootstrap_recovery_required")
 }
 
 pub fn load_facts(
     ctx: &Context,
     env_id: &str,
 ) -> Result<(Facts, HashSet<String>, HashMap<String, HashSet<String>>)> {
-    let _lock = ctx.state.lock()?;
-    let state = ctx.state;
-    let path = format!("team/{env_id}/facts.jsonl");
-    let stored_lines = state.read_lines(&path, None)?;
-    let mut lines = stored_lines.clone();
-    for fact in crate::tombstone::shared_facts(state, env_id)? {
-        let line = pyjson::dumps(&fact, DumpOptions::compact_sorted())?;
-        if !lines.contains(&line) {
-            lines.push(line);
-        }
+    let history = commit::HistorySession::open_runtime(ctx.state, env_id)?;
+    load_facts_with_input(ctx, env_id, &history)
+}
+pub(crate) fn load_facts_with_input(
+    ctx: &Context,
+    env_id: &str,
+    history: &commit::HistorySession<'_>,
+) -> Result<(Facts, HashSet<String>, HashMap<String, HashSet<String>>)> {
+    if !std::ptr::eq(ctx.state, history.state()) || env_id != history.env() {
+        return Err(Error::state("team_bootstrap_local_state_changed"));
     }
+    Ok(load_facts_core(history, FactServices::Runtime(ctx))?.into_parts())
+}
+pub(crate) fn load_facts_core<'a>(
+    parent: &commit::HistorySession<'a>,
+    services: FactServices<'_>,
+) -> Result<SettledFacts<'a>> {
+    if let FactServices::Runtime(ctx) = services
+        && !std::ptr::eq(ctx.state, parent.state())
+    {
+        return Err(Error::state("team_bootstrap_local_state_changed"));
+    }
+    let nested = parent.nested(parent.state(), parent.env())?;
+    let history = &nested;
+    let input = history.acquire()?;
+    let state = history.state();
+    let env_id = history.env();
+    let path = format!("team/{env_id}/facts.jsonl");
+    // Adjacent original-DATA copies have one complete raw boundary on each
+    // side. No settlement, callback, publication or mutation occurs in this
+    // prelude; the actual fact engine and all of its effect ordering follow.
+    // Ordinary reads keep their original lazy order and errors.
+    struct FactData {
+        stored_lines: Vec<String>,
+        lines: Vec<String>,
+        local: DeviceRecord,
+        receipts: Value,
+        commits: Vec<commit::Commit>,
+    }
+    let read_data = |reads: Option<&commit::RetainedIo<'_, '_, '_>>| -> Result<Option<FactData>> {
+        let (stored_lines, shared_originals) = match reads {
+            Some(reads) => reads.fact_sources()?,
+            None => input.fact_sources()?,
+        };
+        history.charge(
+            stored_lines.len() as u64,
+            stored_lines.iter().map(|line| line.len() as u64).sum(),
+        )?;
+        let mut lines = stored_lines.clone();
+        for fact in shared_originals {
+            let line = pyjson::dumps(&fact, DumpOptions::compact_sorted())?;
+            history.charge(
+                (lines.len() as u64)
+                    .checked_mul(line.len() as u64)
+                    .ok_or_else(|| Error::state("team_bootstrap_limit_exceeded"))?,
+                line.len() as u64,
+            )?;
+            if !lines.contains(&line) {
+                lines.push(line);
+            }
+        }
+        if lines.is_empty() {
+            return Ok(None);
+        }
+        // Reserve the bounded hash/public-record/fact/receipt signature walks
+        // before legacy predicates that may discard individual malformed lines.
+        // Resource errors stay sticky and cannot turn into a processed-prefix
+        // rewrite. This changes neither fact predicates nor their effect order.
+        let line_bytes = lines.iter().try_fold(0u64, |sum, line| {
+            sum.checked_add(line.len() as u64)
+                .ok_or_else(|| Error::state("team_bootstrap_limit_exceeded"))
+        })?;
+        history.charge(
+            (lines.len() as u64)
+                .checked_mul(16_384)
+                .ok_or_else(|| Error::state("team_bootstrap_limit_exceeded"))?,
+            line_bytes
+                .checked_mul(8)
+                .ok_or_else(|| Error::state("team_bootstrap_limit_exceeded"))?,
+        )?;
+        let local = match services {
+            FactServices::Runtime(_) if history.is_scoped() => {
+                // The session already binds this exact Context StateDir to the
+                // FULL public record loaded through its KMS and anchored root.
+                // Receipt creation still loads/signs with the real Context key.
+                history.local_record()?.clone()
+            }
+            FactServices::Runtime(ctx) => {
+                let record = DeviceKey::load_or_create(state, ctx.kms)?.record()?;
+                history.match_local_identity(&record)?;
+                record
+            }
+            FactServices::VerifySettled => history.local_record()?.clone(),
+        };
+        let (mut receipts, receipt_lines) = match reads {
+            Some(reads) => reads.fact_admissions()?,
+            None => input.fact_admissions()?,
+        };
+        for line in receipt_lines {
+            history.check()?;
+            if let Ok(entry) = history.parse_line(&line)
+                && let (Some(hash), Some(sig)) = (entry["hash"].as_str(), entry["sig"].as_str())
+            {
+                if let Some(map) = receipts.as_object_mut() {
+                    map.insert(hash.into(), json!(sig));
+                }
+            }
+        }
+        let commits = match reads {
+            Some(reads) => reads.commits()?,
+            None => input.commits()?,
+        };
+        Ok(Some(FactData {
+            stored_lines,
+            lines,
+            local,
+            receipts,
+            commits,
+        }))
+    };
+    let data = if history.is_scoped() {
+        input.with_retained_io(state, env_id, |reads| read_data(Some(reads)))?
+    } else {
+        read_data(None)?
+    };
     let mut facts = Facts::default();
     let mut hashes = HashSet::new();
     let mut authors: HashMap<String, HashSet<String>> = HashMap::new();
-    if lines.is_empty() {
-        return Ok((facts, hashes, authors));
-    }
-    let local = DeviceKey::load_or_create(state, ctx.kms)?.record()?;
-    let mut receipts =
-        state.read_json(&format!("team/{env_id}/fact_admissions.json"), json!({}))?;
-    for line in state.read_lines(&format!("team/{env_id}/fact_admissions.jsonl"), None)? {
-        if let Ok(entry) = pyjson::loads(&line)
-            && let (Some(hash), Some(sig)) = (entry["hash"].as_str(), entry["sig"].as_str())
-        {
-            if let Some(map) = receipts.as_object_mut() {
-                map.insert(hash.into(), json!(sig));
-            }
-        }
-    }
-    let commits = CommitStore::new(state, env_id).all_commits()?;
+    let Some(FactData {
+        stored_lines,
+        lines,
+        local,
+        receipts,
+        commits,
+    }) = data
+    else {
+        return Ok(SettledFacts {
+            facts,
+            hashes,
+            authors,
+            seal: input.fact_seal()?,
+        });
+    };
+    input.reserve_fold(&commits, None, 0)?;
     let identity = fold::fold(env_id, commits.clone(), None, None, None, None)?.document;
     // Irreversible historical revocations survive later role changes. A
     // signed history prefix proves the author once had the required role.
@@ -5178,7 +5417,7 @@ pub fn load_facts(
     let mut historical_members = HashSet::new();
     let needs_history = lines
         .iter()
-        .filter_map(|line| pyjson::loads(line).ok())
+        .filter_map(|line| history.parse_line(line).ok())
         .filter_map(|value| Fact::from_dict(&value).ok())
         .any(|fact| {
             if fact.kind == "member_removed" {
@@ -5199,6 +5438,18 @@ pub fn load_facts(
         });
     if needs_history {
         let mut ordered = commits.clone();
+        let width = ordered
+            .iter()
+            .map(|c| c.author.len() + c.author_seq.to_string().len() + c.hlc.len())
+            .max()
+            .unwrap_or(1) as u64;
+        history.charge(
+            (ordered.len() as u64)
+                .checked_mul(ordered.len() as u64)
+                .and_then(|n| n.checked_mul(width))
+                .ok_or_else(|| Error::state("team_bootstrap_limit_exceeded"))?,
+            0,
+        )?;
         ordered.sort_by(|a, b| {
             Hlc::parse(&a.hlc)
                 .unwrap_or_else(|_| (0.into(), 0.into()))
@@ -5207,8 +5458,10 @@ pub fn load_facts(
                 .then(a.author_seq.cmp(&b.author_seq))
         });
         for count in 1..=ordered.len() {
+            input.reserve_fold(&ordered[..count], None, 0)?;
             let doc =
                 fold::fold(env_id, ordered[..count].to_vec(), None, None, None, None)?.document;
+            history.check()?;
             if let Some(members) = doc["members"].as_object() {
                 for (fp, member) in members {
                     if member["status"] == "active" {
@@ -5222,8 +5475,11 @@ pub fn load_facts(
         }
     }
     let mut retained = Vec::new();
+    let mut required_deny_receipts = HashSet::new();
     for line in &lines {
-        let candidate = pyjson::loads(line)
+        history.check()?;
+        let candidate = history
+            .parse_line(line)
             .ok()
             .and_then(|v| Fact::from_dict(&v).ok());
         let mut accepted = false;
@@ -5262,15 +5518,98 @@ pub fn load_facts(
                     {
                         prefix.removed_members.remove(&fact.author);
                     }
+                    history
+                        .acquire()?
+                        .reserve_fold(&commits, Some(&prefix), 0)?;
                     let doc = fold::fold(env_id, commits.clone(), Some(&prefix), None, None, None)?
                         .document;
                     fact_role_ok(&doc, &fact.kind, &fact.author, &fact.target)
                 };
                 if authorized {
+                    history.check()?;
                     if !admitted {
-                        receipt_fact(ctx, &fact)?;
+                        match services {
+                            FactServices::Runtime(ctx) => {
+                                receipt_fact_with_input(ctx, &fact, history)?
+                            }
+                            FactServices::VerifySettled => return Err(unsettled_facts()),
+                        }
                     }
-                    crate::tombstone::retain_fact(state, &fact)?;
+                    match services {
+                        FactServices::Runtime(_) => {
+                            // Retention invalidates immediately before its actual
+                            // writer. Reading an already retained fact is not a
+                            // mutation and must not discard the same locked input.
+                            history.effect_boundary(env_id, "fact-retention-before")?;
+                            crate::tombstone::retain_fact_with_input(history, &fact)?;
+                            history.effect_boundary(env_id, "fact-retention-after")?;
+                            if fact.kind == "member_removed" {
+                                history.invalidate()?;
+                            }
+                            history.effect_boundary(env_id, "fact-deny-before")?;
+                            crate::import_barrier::admitted_fact(state, &fact)?;
+                            history.effect_boundary(env_id, "fact-deny-after")?;
+                        }
+                        FactServices::VerifySettled => {
+                            if !admitted {
+                                return Err(unsettled_facts());
+                            }
+                            if fact.kind == "secret_deleted" {
+                                let input = history.acquire()?;
+                                let ledger = input.read_json(crate::tombstone::PATH, json!({}))?;
+                                if ledger["shared"][env_id][&hash] != fact.to_dict() {
+                                    return Err(unsettled_facts());
+                                }
+                                let vault = input.read_json(crate::vault::VAULT_DOC, json!({}))?;
+                                let id = fact.target["secret_id"]
+                                    .as_str()
+                                    .ok_or_else(unsettled_facts)?;
+                                let entry = &vault["secrets"][id];
+                                if entry["shared_env"] == env_id {
+                                    let mapping = input.read_json(ENVS_MAP_PATH, json!({}))?;
+                                    let mut bindings = vec![
+                                        json!({"project":entry["project"],"environment":entry["environment"]}),
+                                    ];
+                                    if let (Some(project), Some(environment)) = (
+                                        mapping[env_id]["project"].as_str(),
+                                        mapping[env_id]["environment"].as_str(),
+                                    ) {
+                                        bindings.push(
+                                            json!({"project":project,"environment":environment}),
+                                        );
+                                    }
+                                    for binding in bindings {
+                                        if !ledger["bindings"][env_id][id]
+                                            .as_array()
+                                            .is_some_and(|scopes| scopes.contains(&binding))
+                                        {
+                                            return Err(unsettled_facts());
+                                        }
+                                    }
+                                }
+                            }
+                            if fact.kind == "member_removed"
+                                && state.import_identity().is_some_and(|record| {
+                                    fact.target["fingerprint"] == record.fingerprint()
+                                })
+                                && crate::import_barrier::index(state)?.get(env_id).is_some()
+                            {
+                                let name = super::bootstrap::path(env_id, "member-removed.json")?;
+                                crate::import_barrier::private_relative(state, &name)?;
+                                let value = history.acquire()?.read_json(&name, Value::Null)?;
+                                let witness =
+                                    Fact::from_dict(&value).map_err(|_| unsettled_facts())?;
+                                if witness.to_dict() != value
+                                    || witness.env_id != env_id
+                                    || witness.kind != "member_removed"
+                                    || witness.target["fingerprint"] != local.fingerprint()
+                                {
+                                    return Err(unsettled_facts());
+                                }
+                                required_deny_receipts.insert(witness.hash()?);
+                            }
+                        }
+                    }
                     hashes.insert(hash);
                     apply_fact(&mut facts, &fact);
                     if fact.kind == "member_removed"
@@ -5285,6 +5624,11 @@ pub fn load_facts(
         if accepted {
             retained.push(line.as_str());
         } else {
+            history.check()?;
+            if matches!(services, FactServices::VerifySettled) {
+                return Err(unsettled_facts());
+            }
+            history.invalidate()?;
             state.append_line(
                 &format!("team/{env_id}/rejected_facts.jsonl"),
                 &pyjson::dumps(
@@ -5299,15 +5643,32 @@ pub fn load_facts(
         if !text.is_empty() {
             text.push('\n');
         }
+        history.check()?;
+        if matches!(services, FactServices::VerifySettled) {
+            return Err(unsettled_facts());
+        }
+        history.invalidate()?;
         state.write_bytes(&path, text.as_bytes())?;
+        history.check()?;
     }
-    for value in crate::tombstone::shared_facts(state, env_id)? {
+    let final_input = history.acquire()?;
+    let (shared_final, seal) = final_input.shared_fact_seal()?;
+    for value in shared_final {
         let fact = Fact::from_dict(&value)?;
         if !hashes.contains(&fact.hash()?) {
             return Err(Error::state("team_tombstone_history_unavailable"));
         }
     }
-    Ok((facts, hashes, authors))
+    history.check()?;
+    if !required_deny_receipts.is_subset(&hashes) {
+        return Err(unsettled_facts());
+    }
+    Ok(SettledFacts {
+        facts,
+        hashes,
+        authors,
+        seal,
+    })
 }
 pub fn read_env_mapping(state: &StateDir) -> Result<Value> {
     let doc = state.read_json(ENVS_MAP_PATH, json!({}))?;
@@ -5417,6 +5778,16 @@ fn member_device_record(doc: &Value, fp: &str) -> Option<DeviceRecord> {
 /// `AttributeError`/`TypeError`) is `state_corrupt` (PORTING.md §3.5).
 fn read_dict_or_empty(state: &StateDir, path: &str) -> Result<Map<String, Value>> {
     match state.read_json(path, json!({}))? {
+        Value::Object(map) => Ok(map),
+        other if super::json_falsy(&other) => Ok(Map::new()),
+        _ => Err(Error::state("state_corrupt").with_detail(path)),
+    }
+}
+
+// Same dictionary coercion at the sealed registration acquisition boundary;
+// the ordinary reader above keeps its original body and lazy error behavior.
+fn read_dict_value(value: Value, path: &str) -> Result<Map<String, Value>> {
+    match value {
         Value::Object(map) => Ok(map),
         other if super::json_falsy(&other) => Ok(Map::new()),
         _ => Err(Error::state("state_corrupt").with_detail(path)),
@@ -5703,6 +6074,7 @@ pub struct TeamSync {
     sync_state: AtomicBool,
     /// When each invitation's join request was last audited.
     join_request_audits: Mutex<HashMap<String, Instant>>,
+    bootstrap_runtime: super::bootstrap::Runtime,
     /// Test observability: how many relaxed-document folds actually ran.
     #[cfg(test)]
     relaxed_folds: std::sync::atomic::AtomicUsize,
@@ -5718,6 +6090,12 @@ pub fn attached(ctx: &Context) -> Option<Arc<TeamSync>> {
 }
 impl TeamSync {
     pub fn new(ctx: Arc<Context>, transport: Arc<dyn Transport>, device: DeviceKey) -> Arc<Self> {
+        if let Ok(io) = crate::import_barrier::ImportIo::open(ctx.state)
+            && let Ok((loaded, source)) = DeviceKey::load_in(&io, ctx.kms)
+            && loaded.record().ok() == device.record().ok()
+        {
+            let _ = ctx.state.bind_import_identity(&source);
+        }
         let this = Arc::new_cyclic(|this| Self {
             ctx,
             transport,
@@ -5733,6 +6111,7 @@ impl TeamSync {
             poll_failures: Mutex::new(HashMap::new()),
             sync_state: AtomicBool::new(false),
             join_request_audits: Mutex::new(HashMap::new()),
+            bootstrap_runtime: Default::default(),
             #[cfg(test)]
             relaxed_folds: std::sync::atomic::AtomicUsize::new(0),
             #[cfg(test)]
@@ -5795,6 +6174,7 @@ impl TeamSync {
     /// and join the receive threads.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::SeqCst);
+        self.bootstrap_runtime.stop();
         let poll_thread = self
             .poll_thread
             .lock()
@@ -5911,6 +6291,63 @@ impl TeamSync {
         );
     }
     pub fn register_env(&self, env_id: &str) -> Result<()> {
+        let slot = match super::bootstrap::Slot::take_registration(&self.ctx, env_id) {
+            Ok(slot) => slot,
+            Err(error) if error.reason == "team_bootstrap_busy" => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        let recovery = commit::HistorySession::open_recovery_entry(&self.ctx, env_id)?;
+        if let Some(slot) = &slot {
+            return self.register_env_with_bootstrap_slot(
+                env_id,
+                &slot.registration(&self.ctx, env_id)?,
+                &recovery,
+            );
+        }
+        self.register_env_with_input(env_id, &recovery)
+    }
+    pub(crate) fn register_env_with_bootstrap_slot(
+        &self,
+        env_id: &str,
+        registration: &super::bootstrap::BootstrapRegistration<'_>,
+        parent: &commit::HistorySession<'_>,
+    ) -> Result<()> {
+        registration.check(&self.ctx, env_id)?;
+        parent.check()?;
+        // Initial join can have registered an empty pre-import projection.
+        // A newly registered environment is folded by the common loader;
+        // an existing one must be refreshed before FULL-session adoption.
+        // This observation only selects a refresh, never history authority.
+        let registered = self
+            .envs
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .contains_key(env_id);
+        self.register_env_with_input(env_id, parent)?;
+        if registered {
+            let history = parent.continue_runtime()?;
+            self.refold_with_input(env_id, &history)?;
+        }
+        parent.check()?;
+        Ok(())
+    }
+    fn register_env_with_input(
+        &self,
+        env_id: &str,
+        parent: &commit::HistorySession<'_>,
+    ) -> Result<()> {
+        #[cfg(test)]
+        let _stage = commit::history_testing::span(self.ctx.state, "register_env");
+        let recovery = parent.nested(self.ctx.state, env_id)?;
+        super::bootstrap::install::recover_with_input(&self.ctx, env_id, &recovery)?;
+        let history = recovery.continue_runtime()?;
+        drop(recovery);
+        if history.is_scoped() {
+            super::bootstrap::approval::recover_all_with_input(&self.ctx, env_id, &history)?;
+        } else {
+            super::bootstrap::approval::recover_all(&self.ctx, env_id)?;
+        }
+        crate::import_barrier::require_env(self.ctx.state, env_id)?;
         if self
             .envs
             .lock()
@@ -5919,11 +6356,15 @@ impl TeamSync {
         {
             return Ok(());
         }
-        let (facts, hashes, authors) = load_facts(&self.ctx, env_id)?;
+        let (facts, hashes, authors) = load_facts_with_input(&self.ctx, env_id, &history)?;
+        let input = history.acquire()?;
         let mut env = EnvState::new(facts, hashes, authors);
         // `self._read_peers(env_id).items()`: a truthy non-dict document
         // raises in Python before the environment is loaded (§3.5).
-        let peers = read_dict_or_empty(self.ctx.state, &format!("team/{env_id}/peers.json"))?;
+        let peers = read_dict_value(
+            input.read_json(&format!("team/{env_id}/peers.json"), json!({}))?,
+            &format!("team/{env_id}/peers.json"),
+        )?;
         for (fp, addrs) in &peers {
             if valid_fp(fp) {
                 if let Some(addrs) = addrs.as_array() {
@@ -5941,8 +6382,10 @@ impl TeamSync {
         // `(read_json(...) or {}).items()`: a truthy non-dict raises (§3.5);
         // each dict-valued entry keeps `{str(k): int(v) ... if isinstance(v,
         // int) and not isinstance(v, bool)}` -- any magnitude, any sign.
-        let peer_vectors =
-            read_dict_or_empty(self.ctx.state, &format!("team/{env_id}/peer_vectors.json"))?;
+        let peer_vectors = read_dict_value(
+            input.read_json(&format!("team/{env_id}/peer_vectors.json"), json!({}))?,
+            &format!("team/{env_id}/peer_vectors.json"),
+        )?;
         for (fp, vector) in &peer_vectors {
             if !valid_fp(fp) {
                 continue;
@@ -5959,10 +6402,7 @@ impl TeamSync {
                 );
             }
         }
-        let persisted_lines = self
-            .ctx
-            .state
-            .read_lines(&format!("team/{env_id}/facts.jsonl"), None)?;
+        let persisted_lines = input.read_lines(&format!("team/{env_id}/facts.jsonl"))?;
         env.known_fact_lines = persisted_lines.len();
         for line in persisted_lines {
             if let Ok(value) = pyjson::loads(&line)
@@ -5993,11 +6433,7 @@ impl TeamSync {
                 Some(_) => return Err(corrupt()),
             };
         }
-        for line in self
-            .ctx
-            .state
-            .read_lines(&format!("team/{env_id}/incident_outbox.jsonl"), None)?
-        {
+        for line in input.read_lines(&format!("team/{env_id}/incident_outbox.jsonl"))? {
             if let Ok(value) = pyjson::loads(&line) {
                 if let Ok(fact) = Fact::from_dict(&value) {
                     if fact.env_id == env_id && fact.kind == "incident" {
@@ -6012,7 +6448,7 @@ impl TeamSync {
         // iterable (a dict's keys, a string's characters); a truthy number or
         // `true` is not iterable (`TypeError`, §3.5).
         let alerted_path = format!("team/{env_id}/overridden_alerted.json");
-        let alerted = self.ctx.state.read_json(&alerted_path, json!([]))?;
+        let alerted = input.read_json(&alerted_path, json!([]))?;
         if !super::json_falsy(&alerted) {
             env.alerted_overrides = python_list(&alerted)
                 .ok_or_else(|| Error::state("state_corrupt").with_detail(&alerted_path))?
@@ -6025,16 +6461,21 @@ impl TeamSync {
         }
         // A restarted serve still tells `offline` from `never_connected`.
         env.sync.last_contact = super::sync_status::previous_contacts(&self.ctx, env_id);
+        history.check()?;
         self.envs
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(env_id.into(), env);
         self.write_sync_state(env_id, true);
-        self.refold(env_id)?;
+        if history.is_scoped() {
+            self.refold_with_input(env_id, &history)?;
+        } else {
+            self.refold(env_id)?;
+        }
         // `env.last_known_vector = dict(env.store.vector())` runs after
         // `_refold`, so a failing refold leaves the registered environment
         // with the empty baseline.
-        let vector = CommitStore::new(self.ctx.state, env_id).vector()?;
+        let vector = history.acquire()?.vector()?;
         if let Some(env) = self
             .envs
             .lock()
@@ -6049,11 +6490,24 @@ impl TeamSync {
     /// refold until one succeeds (section 6.4, issue #51). Noted under the
     /// state lock, so in the order concurrent refolds ran.
     fn refold(&self, env_id: &str) -> Result<FoldResult> {
-        let lock = self.ctx.state.lock();
-        let folded = match &lock {
-            Ok(_) => self.fold_env(env_id),
-            Err(error) => Err(error.clone()),
-        };
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id);
+        match history {
+            Ok(history) if history.is_scoped() => self.refold_with_input(env_id, &history),
+            Ok(_history) => self.note_refold_result(env_id, self.fold_env(env_id)),
+            Err(error) => self.note_refold_result(env_id, Err(error)),
+        }
+    }
+    fn refold_with_input(
+        &self,
+        env_id: &str,
+        history: &commit::HistorySession<'_>,
+    ) -> Result<FoldResult> {
+        #[cfg(test)]
+        let _stage = commit::history_testing::span(self.ctx.state, "refold_with_input");
+        let folded = self.fold_env_with_input(env_id, history);
+        self.note_refold_result(env_id, folded)
+    }
+    fn note_refold_result(&self, env_id: &str, folded: Result<FoldResult>) -> Result<FoldResult> {
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(env) = envs.get_mut(env_id) {
             if folded.is_err() {
@@ -6105,25 +6559,75 @@ impl TeamSync {
         Err(error)
     }
     fn fold_env(&self, env_id: &str) -> Result<FoldResult> {
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        self.fold_env_with_input(env_id, &history)
+    }
+    fn fold_env_with_input(
+        &self,
+        env_id: &str,
+        parent: &commit::HistorySession<'_>,
+    ) -> Result<FoldResult> {
+        self.fold_env_with_settled(env_id, parent, None)
+    }
+    fn refold_with_settled<'a>(
+        &self,
+        env_id: &str,
+        parent: &commit::HistorySession<'a>,
+        settled: &SettledFacts<'a>,
+    ) -> Result<FoldResult> {
+        let result = self.fold_env_with_settled(env_id, parent, Some(settled));
+        self.note_refold_result(env_id, result)
+    }
+    fn fold_env_with_settled<'a>(
+        &self,
+        env_id: &str,
+        parent: &commit::HistorySession<'a>,
+        settled: Option<&SettledFacts<'a>>,
+    ) -> Result<FoldResult> {
+        #[cfg(test)]
+        let _stage = commit::history_testing::span(self.ctx.state, "fold_env_with_settled");
         #[cfg(test)]
         self.refolds_run.fetch_add(1, Ordering::SeqCst);
-        let _lock = self.ctx.state.lock()?;
-        let (facts, _, _) = load_facts(&self.ctx, env_id)?;
-        let commits = CommitStore::new(self.ctx.state, env_id).all_commits()?;
+        let history = parent.nested(self.ctx.state, env_id)?;
+        let facts = if let Some(settled) = settled {
+            let facts = settled.checked(&history)?;
+            let input = history.acquire()?;
+            let commits = input.commits()?;
+            input.reserve_fold(&commits, Some(facts), 1)?;
+            facts.clone()
+        } else {
+            load_facts_with_input(&self.ctx, env_id, &history)?.0
+        };
+        let input = history.acquire()?;
+        let commits = input.commits()?;
+        input.reserve_fold(&commits, Some(&facts), 1)?;
         let fold::Refold {
             result,
             snapshot,
             record,
             stale_snapshots,
             unrecorded_snapshot,
-        } = fold::fold_for_refold(
-            env_id,
-            commits,
-            self.ctx.state,
-            Some(&facts),
-            Some(self.ctx.audit),
-        )?;
+        } = if history.is_scoped() {
+            fold::fold_for_refold_retained(
+                env_id,
+                commits.clone(),
+                self.ctx.state,
+                Some(&facts),
+                Some(self.ctx.audit),
+                &input,
+            )?
+        } else {
+            fold::fold_for_refold(
+                env_id,
+                commits.clone(),
+                self.ctx.state,
+                Some(&facts),
+                Some(self.ctx.audit),
+            )?
+        };
+        input.verify_folded_authority(&commits, &facts, &result)?;
         let (project, environment) = env_project_environment(self.ctx.state, env_id)?;
+        history.invalidate()?;
         fold::derive_local(
             &result,
             self.ctx.state,
@@ -6134,11 +6638,18 @@ impl TeamSync {
             project.as_deref(),
             environment.as_deref(),
         )?;
+        history.check()?;
         // `total = sum(result.vector.values())`: exact Python ints.
         let total = result
             .vector
             .values()
             .fold(PyInt::zero(), |acc, v| PyInt(acc.0 + &v.0));
+        #[cfg(test)]
+        crate::import_barrier::opus_cost::protocol_members(
+            self.ctx.state,
+            env_id,
+            &result.document,
+        );
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
         let env = envs
             .get_mut(env_id)
@@ -6154,6 +6665,7 @@ impl TeamSync {
         env.synced_at = None;
         env.facts = facts;
         env.document = result.document.clone();
+
         env.relaxed_cache = None;
         env.relaxed_generation = env.relaxed_generation.wrapping_add(1);
         // `total - env.last_snapshot_total >= SNAPSHOT_INTERVAL_COMMITS`,
@@ -6163,23 +6675,39 @@ impl TeamSync {
             .sub(&env.last_snapshot_total)
             .ok_or_else(|| Error::state("state_corrupt").with_detail("team_snapshot"))?
             .ge_int(&SNAPSHOT_INTERVAL_COMMITS.into());
+        // The StateDir lock serializes refolds; the environment mutex only
+        // protects the in-memory update and never covers snapshot I/O.
+        drop(envs);
         // Stale snapshots are replaced at once, so the next refold does not
         // pass them over again (issue #35).
         if due || !stale_snapshots.is_empty() {
+            history.invalidate()?;
             fold::save_snapshot(self.ctx.state, env_id, &total, &snapshot)?;
+            history.invalidate()?;
             fold::save_snapshot_record(self.ctx.state, env_id, &total, &record)?;
             for number in stale_snapshots.iter().filter(|number| **number != total) {
+                history.invalidate()?;
                 fold::remove_snapshot(self.ctx.state, env_id, number);
+                history.check()?;
             }
-            env.last_snapshot_total = PyNumber::Int(total.0);
+            if let Some(env) = self
+                .envs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_mut(env_id)
+            {
+                env.last_snapshot_total = PyNumber::Int(total.0);
+            }
         }
         // Only spares the next fold a check: a record not written is checked
         // again.
         if let Some(number) = unrecorded_snapshot {
+            history.invalidate()?;
             let _ = fold::save_snapshot_record(self.ctx.state, env_id, &number, &record);
         }
-        drop(envs);
+        history.invalidate()?;
         self.record_overrides(env_id, &result.overridden)?;
+        history.check()?;
         Ok(result)
     }
     fn record_overrides(&self, env_id: &str, overridden: &[Value]) -> Result<()> {
@@ -6270,6 +6798,16 @@ impl TeamSync {
         proof: &[u8],
     ) -> InviteDecision {
         use super::membership::InviteOutcome;
+        match super::bootstrap::approval::check(&self.ctx, env_id, record, hash, proof) {
+            Ok(Some(decision)) => {
+                if decision == InviteDecision::Accept && self.refold(env_id).is_err() {
+                    return InviteDecision::Reject;
+                }
+                return decision;
+            }
+            Ok(None) => {}
+            Err(_) => return InviteDecision::Reject,
+        }
         let joiner = record.fingerprint();
         let outcome = super::membership::check_invite(&self.ctx, env_id, hash, proof, &joiner);
         match outcome {
@@ -6341,6 +6879,8 @@ impl TeamSync {
         );
     }
     pub fn document(&self, env_id: &str) -> Result<Value> {
+        let _import_view = self.ctx.state.lock()?;
+        crate::import_barrier::require_env(self.ctx.state, env_id)?;
         self.envs
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -6352,6 +6892,12 @@ impl TeamSync {
     /// refuse a device whose removal fact no refold has folded in yet
     /// ([`EnvState::active_member`]).
     pub fn is_active_member(&self, env_id: &str, fp: &str) -> bool {
+        let Ok(_import_view) = self.ctx.state.lock() else {
+            return false;
+        };
+        if crate::import_barrier::require_env(self.ctx.state, env_id).is_err() {
+            return false;
+        }
         let Ok(envs) = self.envs.lock() else {
             return false;
         };
@@ -6359,6 +6905,20 @@ impl TeamSync {
             env.document["members"][fp]["status"] == "active"
                 && member_device_record(&env.document, fp).is_some()
         })
+    }
+
+    // Compatibility observation retained; protocol scheduling now tracks the
+    // exact handed-off session instead of treating any open socket as proof.
+    #[allow(dead_code)]
+    pub(crate) fn personal_session_open(&self, env_id: &str) -> bool {
+        self.envs
+            .lock()
+            .ok()
+            .and_then(|envs| {
+                envs.get(env_id)
+                    .map(|env| env.sessions.values().any(|session| !session.is_closed()))
+            })
+            .unwrap_or(false)
     }
     pub fn set_peer_address(&self, env_id: &str, fp: &str, address: &str) -> Result<()> {
         // A `zpl:` address must be a well-formed link address
@@ -6414,6 +6974,20 @@ impl TeamSync {
             .add_if_new(&hash)
     }
     pub fn submit_commit(&self, env_id: &str, commit: &Commit) -> Result<&'static str> {
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        let result = self.submit_commit_with_input(env_id, commit, &history);
+        drop(history);
+        if result.is_ok() {
+            self.flush_deferred_sends();
+        }
+        result
+    }
+    pub(crate) fn submit_commit_with_input(
+        &self,
+        env_id: &str,
+        commit: &Commit,
+        history: &commit::HistorySession<'_>,
+    ) -> Result<&'static str> {
         if !self
             .envs
             .lock()
@@ -6423,12 +6997,14 @@ impl TeamSync {
             return Err(Error::invalid_input("team_env_unknown"));
         }
         let result = {
-            let _lock = self.ctx.state.lock()?;
-            commit::receive_commit(
+            commit::receive_runtime_with_input(
                 &CommitStore::new(self.ctx.state, env_id),
                 commit,
                 commit::now_ms(),
                 Some(self.ctx.audit),
+                true,
+                history,
+                &self.ctx,
             )?
         };
         if result == "accepted" {
@@ -6436,7 +7012,7 @@ impl TeamSync {
             // `pick_up_local_commits`, as in Python: resetting it here would
             // swallow a commit another process wrote meanwhile. The seen-set
             // keeps that pickup from broadcasting this commit a second time.
-            self.refold(env_id)?;
+            self.refold_with_input(env_id, history)?;
             if self.commit_first_seen(commit) {
                 self.broadcast(
                     env_id,
@@ -6448,12 +7024,18 @@ impl TeamSync {
         Ok(result)
     }
     pub fn publish_fact(&self, env_id: &str, kind: &str, target: Value) -> Result<Value> {
-        let _lock = self.ctx.state.lock()?;
-        let fact = self.sign_authorized_fact(env_id, kind, target)?;
-        let stored = self.store_and_apply_fact(env_id, &fact)?;
-        drop(_lock);
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        let fact = self.sign_authorized_fact_with_input(env_id, kind, target, &history)?;
+        let stored = if history.is_scoped() {
+            self.store_and_apply_fact_with_input(env_id, &fact, &history)?
+        } else {
+            self.store_and_apply_fact(env_id, &fact)?
+        };
+        history.check()?;
+        let defer_notice = history.is_scoped(); // Routing only, never authority.
+        drop(history);
         if let Some(folded) = stored {
-            self.announce_fact(env_id, &fact);
+            self.announce_fact(env_id, &fact, defer_notice);
             folded?;
         }
         Ok(fact.to_dict())
@@ -6466,28 +7048,51 @@ impl TeamSync {
         kind: &str,
         target: Value,
     ) -> Result<Fact> {
-        let _lock = self.ctx.state.lock()?;
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        self.sign_authorized_fact_with_input(env_id, kind, target, &history)
+    }
+    pub(crate) fn sign_authorized_fact_with_input(
+        &self,
+        env_id: &str,
+        kind: &str,
+        target: Value,
+        parent: &commit::HistorySession<'_>,
+    ) -> Result<Fact> {
+        let history = parent.nested(self.ctx.state, env_id)?;
+        history.match_local_identity(&self.device.record()?)?;
         validate_fact_target(kind, &target)?;
         let fp = self.device.fingerprint()?;
         let doc = if kind == "member_removed" {
-            self.role_document_for_removal(
+            self.role_document_for_removal_with_input(
                 env_id,
                 &fp,
                 target["fingerprint"].as_str().unwrap_or(""),
+                &history,
             )?
         } else {
-            crate::team::membership::load_environment(&self.ctx, env_id)?.document
+            crate::team::membership::load_environment_with_input(&self.ctx, env_id, &history)?
+                .document
         };
         if !fact_role_ok(&doc, kind, &fp, &target) {
             return Err(Error::policy_denied("team_fact_not_authorized"));
         }
         let store = CommitStore::new(self.ctx.state, env_id);
-        let observed = store.all_commits()?;
+        let input = history.acquire()?;
+        let observed = input.commits()?;
         let mut observed_clock = Hlc::default();
         for commit in &observed {
             observed_clock.observe(&commit.hlc)?;
         }
-        compaction_heads::observe_cached_hlcs(&store, &observed, &mut observed_clock)?;
+        if history.is_scoped() {
+            compaction_heads::observe_cached_hlcs_with_input(
+                &store,
+                &observed,
+                &mut observed_clock,
+                &input,
+            )?;
+        } else {
+            compaction_heads::observe_cached_hlcs(&store, &observed, &mut observed_clock)?;
+        }
         let hlc = {
             let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             let env = envs
@@ -6500,16 +7105,28 @@ impl TeamSync {
             let wall = compaction_heads::testing::author_wall();
             env.hlc.tick(wall)
         };
+        history.check()?;
         sign_fact(&self.device, env_id, kind, target, &hlc)
     }
     /// Store, apply and broadcast a fact [`Self::sign_authorized_fact`]
     /// signed.
     pub(crate) fn publish_signed_fact(&self, env_id: &str, fact: Fact) -> Result<Value> {
-        let _lock = self.ctx.state.lock()?;
-        let stored = self.store_and_apply_fact(env_id, &fact)?;
-        drop(_lock);
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        let result = self.publish_signed_fact_with_input(env_id, fact, &history);
+        drop(history);
+        self.flush_deferred_sends();
+        result
+    }
+    pub(crate) fn publish_signed_fact_with_input(
+        &self,
+        env_id: &str,
+        fact: Fact,
+        history: &commit::HistorySession<'_>,
+    ) -> Result<Value> {
+        let stored = self.store_and_apply_fact_with_input(env_id, &fact, history)?;
         if let Some(folded) = stored {
-            self.announce_fact(env_id, &fact);
+            history.check()?;
+            self.announce_fact(env_id, &fact, history.is_scoped());
             folded?;
         }
         Ok(fact.to_dict())
@@ -6518,7 +7135,16 @@ impl TeamSync {
     /// refold's outcome. A fact is announced even when that refold failed:
     /// it is stored, and the poll's retry folds it in (issue #51).
     fn store_and_apply_fact(&self, env_id: &str, fact: &Fact) -> Result<Option<Result<()>>> {
-        if !self.store_fact(env_id, fact)? {
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        self.store_and_apply_fact_with_input(env_id, fact, &history)
+    }
+    fn store_and_apply_fact_with_input(
+        &self,
+        env_id: &str,
+        fact: &Fact,
+        history: &commit::HistorySession<'_>,
+    ) -> Result<Option<Result<()>>> {
+        if !self.store_fact_with_input(env_id, fact, history)? {
             return Ok(None);
         }
         if fact.kind == "member_removed"
@@ -6526,16 +7152,36 @@ impl TeamSync {
         {
             self.drain_removed(env_id, fp);
         }
-        Ok(Some(self.refold(env_id).map(|_| ())))
+        Ok(Some(self.refold_with_input(env_id, history).map(|_| ())))
     }
-    fn announce_fact(&self, env_id: &str, fact: &Fact) {
+    fn announce_fact(&self, env_id: &str, fact: &Fact, defer_notice: bool) {
         self.audit_fact_apply(env_id, fact);
         self.broadcast(env_id, &json!({"type":"FACT","fact":fact.to_dict()}), None);
         if fact.kind == "member_removed" && fact.target["fingerprint"].as_str().is_some() {
-            self.send_removal_notice(env_id, fact, None);
+            if defer_notice {
+                // Only untrusted DATA enters this unchanged bounded queue.
+                // A live publisher still holds its lock: flush then does
+                // nothing. After it fully ends, notification owns one fresh
+                // bounded operation and authenticates everything again.
+                self.defer_send(env_id, fact.to_dict(), None, true);
+                self.flush_deferred_sends();
+            } else {
+                self.send_removal_notice(env_id, fact, None);
+            }
         }
     }
     fn store_fact(&self, env_id: &str, fact: &Fact) -> Result<bool> {
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        self.store_fact_with_input(env_id, fact, &history)
+    }
+    fn store_fact_with_input(
+        &self,
+        env_id: &str,
+        fact: &Fact,
+        history: &commit::HistorySession<'_>,
+    ) -> Result<bool> {
+        let nested = history.nested(self.ctx.state, env_id)?;
+        let history = &nested;
         let hash = fact.hash()?;
         let _lock = self.ctx.state.lock()?;
         {
@@ -6547,7 +7193,7 @@ impl TeamSync {
                 return Ok(false);
             }
         }
-        receipt_fact(&self.ctx, fact)?;
+        receipt_fact_with_input(&self.ctx, fact, history)?;
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
         let env = envs
             .get_mut(env_id)
@@ -6556,9 +7202,11 @@ impl TeamSync {
             return Ok(false);
         }
         let line = pyjson::dumps(&fact.to_dict(), DumpOptions::compact_sorted())?;
+        history.check()?;
         self.ctx
             .state
             .append_line(&format!("team/{env_id}/facts.jsonl"), &line)?;
+        history.check()?;
         env.fact_hashes.insert(hash.clone());
         apply_fact(&mut env.facts, fact);
         if fact.kind == "secret_deleted" {
@@ -6658,7 +7306,6 @@ impl TeamSync {
         // Never withheld: the target is draining, and a held frame would
         // only go out with an answer to a VECTOR a draining session no
         // longer gets.
-        let notice = json!({"type":"FACT","fact":fact.to_dict()});
         let session = self
             .envs
             .lock()
@@ -6666,11 +7313,181 @@ impl TeamSync {
             .get(env_id)
             .and_then(|env| env.sessions.get(target))
             .cloned();
-        if let Some(session) = session
-            && self.send_replication(env_id, &session, &notice).is_err()
-        {
-            self.drop_session(env_id, target, Some(&session));
+        #[cfg(test)]
+        crate::import_barrier::opus_cost::protocol_event(
+            self.ctx.state,
+            env_id,
+            if session.is_some() {
+                "removal_notice_has_session"
+            } else {
+                "removal_notice_no_session"
+            },
+        );
+        #[cfg(test)]
+        if let Some(session) = session.as_ref() {
+            crate::import_barrier::opus_cost::protocol_event(
+                self.ctx.state,
+                env_id,
+                if self.replication_allowed(env_id, session) {
+                    "removal_notice_gate_open"
+                } else {
+                    "removal_notice_gate_closed"
+                },
+            );
         }
+        if let Some(session) = session {
+            match self.send_personal_removal_notice(env_id, fact, exclude, &session, None) {
+                Ok(Some(())) => return,
+                Ok(None) => {} // Keep the ordinary gate and send unchanged.
+                Err(_) => {
+                    self.drop_session(env_id, target, Some(&session));
+                    return;
+                }
+            }
+            let notice = json!({"type":"FACT","fact":fact.to_dict()});
+            if self.send_replication(env_id, &session, &notice).is_err() {
+                self.drop_session(env_id, target, Some(&session));
+            }
+        }
+    }
+
+    // DEPENDENCY10: only a negative FACT may cross the removed recipient's
+    // invalidated ordinary gate. No proof escapes this helper. Existing locked
+    // callers enqueue DATA before reaching it; the publisher has fully ended
+    // when an independent flush establishes this one notification operation.
+    // An explicitly retained parent instead supplies the SAME lease/budget.
+    fn send_personal_removal_notice(
+        &self,
+        env_id: &str,
+        fact: &Fact,
+        exclude: Option<&str>,
+        session: &Arc<dyn Session>,
+        parent: Option<&commit::HistoryResume<'_>>,
+    ) -> Result<Option<()>> {
+        let refused = || Error::state("team_bootstrap_local_state_changed");
+        if parent.is_none() && self.ctx.state.locked_by_current_thread() {
+            return Err(refused());
+        }
+        let history = match parent {
+            Some(parent) => parent.resume()?,
+            None => commit::HistorySession::open_runtime(self.ctx.state, env_id)?,
+        };
+        if !std::ptr::eq(history.state(), self.ctx.state) || history.env() != env_id {
+            return Err(refused());
+        }
+        if !history.is_scoped() {
+            return Ok(None);
+        }
+        history.match_local_identity(&self.device.record()?)?;
+        if fact.env_id != env_id || fact.kind != "member_removed" {
+            return Err(refused());
+        }
+        validate_fact_target(&fact.kind, &fact.target)?;
+        let target = fact.target["fingerprint"].as_str().ok_or_else(refused)?;
+        if exclude == Some(target) || session.env_id() != env_id || session.is_closed() {
+            return Err(refused());
+        }
+        // Bound all caller-owned strings before canonicalization/cloning or
+        // signature work. The target validator above permits one fixed FP.
+        let size = [
+            &fact.format,
+            &fact.env_id,
+            &fact.kind,
+            &fact.author,
+            &fact.hlc,
+            &fact.sig,
+        ]
+        .iter()
+        .try_fold(512u64, |n, value| {
+            n.checked_add(value.len() as u64)
+                .ok_or_else(|| Error::state("team_bootstrap_limit_exceeded"))
+        })?;
+        history.charge(
+            size.checked_mul(16)
+                .and_then(|n| n.checked_add(4096))
+                .ok_or_else(|| Error::state("team_bootstrap_limit_exceeded"))?,
+            size.checked_mul(128)
+                .ok_or_else(|| Error::state("team_bootstrap_limit_exceeded"))?,
+        )?;
+        // VerifySettled cannot sign, create admission receipts or bless a raw
+        // queued FACT. Only the current single engine's admitted original set
+        // plus its revision/generation seal can authorize this negative send.
+        let settled = load_facts_core(&history, FactServices::VerifySettled)?;
+        let facts = settled.checked(&history)?;
+        let hash = fact.hash()?;
+        if !settled.hashes.contains(&hash) || !facts.removed_members.contains(target) {
+            return Err(refused());
+        }
+        let input = history.acquire()?;
+        let commits = input.commits()?;
+        let folded = input.fold_with_snapshot(commits, facts, None)?;
+        let recipient = member_device_record(&folded.document, target).ok_or_else(refused)?;
+        let author = member_device_record(&folded.document, &fact.author).ok_or_else(refused)?;
+        if recipient != session.peer()
+            || recipient.fingerprint() != target
+            || !verify_fact(fact, &author)
+        {
+            return Err(refused());
+        }
+        {
+            let envs = self.envs.lock().unwrap_or_else(|error| error.into_inner());
+            let env = envs.get(env_id).ok_or_else(refused)?;
+            if env
+                .sessions
+                .get(target)
+                .is_none_or(|current| !Arc::ptr_eq(current, session))
+                || env
+                    .draining
+                    .get(target)
+                    .is_none_or(|deadline| Instant::now() >= *deadline)
+                || env.gates.get(target).is_none_or(|gate| !gate.caps_sent)
+            {
+                return Err(refused());
+            }
+        }
+        let notice = json!({"type":"FACT","fact":fact.to_dict()});
+        input.recheck()?;
+        settled.checked(&history)?;
+        history.check()?;
+        drop(input);
+        drop(settled);
+        let operation = history.into_resume()?;
+        if self.ctx.state.locked_by_current_thread() {
+            // A supplied parent's outer lock still lives. Queue only DATA;
+            // the later independent notification must reauthenticate again.
+            operation.check_unlocked()?;
+            self.defer_send(env_id, fact.to_dict(), exclude, true);
+            return Ok(Some(()));
+        }
+        #[cfg(test)]
+        crate::import_barrier::testing::reader_hit(
+            self.ctx.state,
+            &format!("team/{env_id}/bootstrap/negative-notice"),
+            "personal-negative-notice-before-send",
+        )?;
+        {
+            let envs = self.envs.lock().unwrap_or_else(|error| error.into_inner());
+            let env = envs.get(env_id).ok_or_else(refused)?;
+            if env
+                .sessions
+                .get(target)
+                .is_none_or(|current| !Arc::ptr_eq(current, session))
+                || env
+                    .draining
+                    .get(target)
+                    .is_none_or(|deadline| Instant::now() >= *deadline)
+                || session.is_closed()
+                || session.peer() != recipient
+            {
+                return Err(refused());
+            }
+        }
+        operation.check_unlocked()?;
+        if let Err(error) = session.send(&notice) {
+            self.drop_session(env_id, target, Some(session));
+            return Err(error);
+        }
+        Ok(Some(()))
     }
 
     fn drain_removed(&self, env_id: &str, fp: &str) {
@@ -6695,7 +7512,45 @@ impl TeamSync {
         }
     }
     pub fn synced_at(&self, env_id: &str) -> Option<String> {
-        self.update_readiness(env_id).ok()?;
+        // A bootstrap worker still reconciling receipt/activation is pending.
+        // Before a selected handler has published agreement, defer competing
+        // queries between its bounded stages. Scheduling observations never
+        // grant READY: every positive query runs the full validation below.
+        if self.bootstrap_runtime.has_job(env_id) {
+            #[cfg(test)]
+            crate::import_barrier::opus_cost::protocol_event(
+                self.ctx.state,
+                env_id,
+                if self.personal_ordinary_owns_session(env_id).unwrap_or(false) {
+                    "readiness_waits_handed_job"
+                } else {
+                    "readiness_waits_bootstrap_job"
+                },
+            );
+            if let Some(env) = self.envs.lock().ok()?.get_mut(env_id) {
+                env.synced_at = None;
+            }
+            return None;
+        }
+        if self.personal_control_busy(env_id)
+            && self
+                .envs
+                .lock()
+                .ok()?
+                .get(env_id)
+                .is_none_or(|env| env.synced_at.is_none())
+        {
+            return None;
+        }
+        // A previously validated timestamp only schedules this full fresh
+        // query; it is never returned as authority. Do not erase a handler's
+        // actual publication merely because its scheduling guard still lives.
+        let checked = self.update_readiness(env_id);
+        #[cfg(test)]
+        if let Err(error) = &checked {
+            crate::import_barrier::opus_cost::protocol_error(self.ctx.state, env_id, &error.reason);
+        }
+        checked.ok()?;
         self.envs
             .lock()
             .ok()?
@@ -6704,6 +7559,20 @@ impl TeamSync {
             .map(|ts| iso(Some(ts)))
     }
 
+    pub(crate) fn synced_at_with_input(
+        &self,
+        env_id: &str,
+        parent: &commit::HistorySession<'_>,
+    ) -> Result<Option<String>> {
+        self.update_readiness_with_input(env_id, parent)?;
+        Ok(self
+            .envs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(env_id)
+            .and_then(|env| env.synced_at)
+            .map(|ts| iso(Some(ts))))
+    }
     fn accept_session(&self, env_id: &str, session: Arc<dyn Session>, inbound: bool) -> bool {
         self.accept_session_with_transport(env_id, session, inbound, None)
     }
@@ -6714,6 +7583,38 @@ impl TeamSync {
         inbound: bool,
         transport_hint: Option<&'static str>,
     ) -> bool {
+        self.accept_session_for_handoff(env_id, session, inbound, transport_hint, false)
+    }
+    fn accept_session_for_handoff(
+        &self,
+        env_id: &str,
+        session: Arc<dyn Session>,
+        inbound: bool,
+        transport_hint: Option<&'static str>,
+        preserve_current: bool,
+    ) -> bool {
+        self.accept_session_after_capabilities(
+            env_id,
+            session,
+            inbound,
+            transport_hint,
+            preserve_current,
+            None,
+        )
+    }
+    fn accept_session_after_capabilities(
+        &self,
+        env_id: &str,
+        session: Arc<dyn Session>,
+        inbound: bool,
+        transport_hint: Option<&'static str>,
+        preserve_current: bool,
+        sent_capabilities: Option<&super::bootstrap::SentCapabilities>,
+    ) -> bool {
+        if sent_capabilities.is_some_and(|sent| !sent.matches(env_id, &session)) {
+            session.close();
+            return false;
+        }
         let fp = session.peer().fingerprint();
         let mine = self.device.fingerprint().unwrap_or_default();
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
@@ -6737,7 +7638,21 @@ impl TeamSync {
             if Arc::ptr_eq(current, &session) {
                 return true;
             }
-            let keep_new = if mine < fp { !inbound } else { inbound };
+            // Negative routing rule only, checked atomically with ordinary
+            // acceptance. A completed bootstrap's delayed S0 cannot evict
+            // the FULL-matching ordinary S1 already current on this device.
+            if preserve_current
+                && current.peer() == session.peer()
+                && Self::personal_current_recipient(env, current)
+            {
+                session.close();
+                return false;
+            }
+            // A private authenticated handoff may replace a dead slot even
+            // when its direction would lose the generic ordinary tie-break.
+            // A live FULL current winner was protected above.
+            let keep_new = (preserve_current && current.is_closed())
+                || if mine < fp { !inbound } else { inbound };
             if !keep_new {
                 session.close();
                 return false;
@@ -6770,12 +7685,16 @@ impl TeamSync {
             None => env.sync.transport.remove(&fp),
         };
         env.sessions.insert(fp.clone(), session.clone());
+        if Self::personal_current_recipient(env, &session) {
+            self.bootstrap_runtime
+                .observe_ordinary_replacement(env_id, &session);
+        }
         drop(envs);
         // Publish the revoked agreement before this replacement starts any
         // exchange; CLI readers must not reuse its predecessor's cached ACK.
         self.write_sync_state(env_id, true);
-        if session
-            .send(&json!({"type":"SYNC_CAPS","v":1,"features":[super::tombstone_gate::FEATURE]}))
+        if sent_capabilities.is_none() && session
+            .send(&json!({"type":"SYNC_CAPS","v":1,"features":[super::tombstone_gate::FEATURE,super::bootstrap::FEATURE]}))
             .is_err()
         {
             self.drop_session(env_id, &fp, Some(&session));
@@ -6796,12 +7715,111 @@ impl TeamSync {
         }
         true
     }
+    fn personal_inbound_needs_serve(&self, session: &Arc<dyn Session>) -> Result<bool> {
+        let env_id = session.env_id();
+        let fp = session.peer().fingerprint();
+        let cold_current = {
+            let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+            match envs.get(env_id).and_then(|env| {
+                env.sessions
+                    .get(&fp)
+                    .filter(|current| Self::personal_current_recipient(env, current))
+            }) {
+                Some(current) => !self
+                    .bootstrap_runtime
+                    .ordinary_owns_session(env_id, current)?,
+                None => false,
+            }
+        };
+        if !cold_current {
+            return super::bootstrap::needs_serve(&self.ctx, session.as_ref());
+        }
+        // A cold owner's already-preferred ordinary connection can reject
+        // the recipient's recovery dial before it reaches ordinary adoption.
+        // Authenticated receipt recovery must precede handoff ownership even
+        // when this owner durably activated the earlier ACK. Select that
+        // existing protocol here; never infer handoff/READY from the socket.
+        // Use the same bounded common-I/O reader as needs_serve. There is no
+        // caller history lease at this transport-dispatch entry, and routing
+        // never publishes evidence or passes a cached authorization to serve.
+        let auth = self.ctx.state.read_json(
+            &super::bootstrap::path(env_id, &format!("authorizations/{fp}.json"))?,
+            Value::Null,
+        )?;
+        if auth.is_null() {
+            return Ok(false);
+        }
+        if auth["device_record"] != session.peer().to_dict() {
+            return Err(Error::state("team_bootstrap_approval_changed"));
+        }
+        // This is routing DATA only. serve takes its own Slot and freshly
+        // authenticates the current owner, FULL recipient and signed receipt
+        // before either side can hand off to its still-current winner.
+        Ok(true)
+    }
     fn on_inbound_session(self: &Arc<Self>, session: Arc<dyn Session>) {
+        match self.personal_inbound_needs_serve(&session) {
+            Ok(true) => {
+                #[cfg(test)]
+                crate::import_barrier::opus_cost::protocol_event(
+                    self.ctx.state,
+                    session.env_id(),
+                    "inbound_selects_bootstrap",
+                );
+                let _ = self.bootstrap_runtime.inbound(self.clone(), session);
+                return;
+            }
+            Ok(false) => {
+                #[cfg(test)]
+                crate::import_barrier::opus_cost::protocol_event(
+                    self.ctx.state,
+                    session.env_id(),
+                    "inbound_selects_ordinary",
+                );
+            }
+            Err(_) => {
+                #[cfg(test)]
+                crate::import_barrier::opus_cost::protocol_event(
+                    self.ctx.state,
+                    session.env_id(),
+                    "inbound_protocol_selection_refused",
+                );
+                session.close();
+                return;
+            }
+        }
+        let _ = self.accept_ordinary_inbound(session);
+    }
+    fn accept_ordinary_inbound(&self, session: Arc<dyn Session>) -> bool {
+        self.accept_ordinary_inbound_for_handoff(session, false)
+    }
+    fn accept_ordinary_inbound_for_handoff(
+        &self,
+        session: Arc<dyn Session>,
+        preserve_current: bool,
+    ) -> bool {
         let env_id = session.env_id().to_owned();
         let fp = session.peer().fingerprint();
-        if !self.accept_session(&env_id, session.clone(), true) {
-            return;
+        let accepted = if preserve_current {
+            self.accept_session_for_handoff(&env_id, session.clone(), true, None, true)
+        } else {
+            self.accept_session(&env_id, session.clone(), true)
+        };
+        if !accepted {
+            #[cfg(test)]
+            crate::import_barrier::opus_cost::protocol_event(
+                self.ctx.state,
+                &env_id,
+                "ordinary_inbound_accept_refused",
+            );
+            return false;
         }
+        #[cfg(test)]
+        crate::import_barrier::opus_cost::protocol_event(
+            self.ctx.state,
+            &env_id,
+            "ordinary_inbound_accept_succeeded",
+        );
         let pending = {
             let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             envs.get_mut(&env_id)
@@ -6822,7 +7840,7 @@ impl TeamSync {
                     },
                 );
                 self.drop_session(&env_id, &fp, Some(&session));
-                return;
+                return false;
             }
         }
         // docs/remote-sync.md §3.1: the link peer this authenticated member
@@ -6830,15 +7848,173 @@ impl TeamSync {
         if let Some(address) = session.link_address() {
             let _ = self.set_peer_address(&env_id, &fp, &address);
         }
+        if preserve_current && self.personal_handoff_complete(&env_id, &session).is_err() {
+            self.drop_session(&env_id, &fp, Some(&session));
+            return false;
+        }
         self.audit_event("team_session_open", &env_id, Some(&fp), None, None);
         self.start_receiver(env_id.clone(), session.clone());
-        self.send_vector(&env_id, &session);
-        // Python lets `_send_peers`'s exception (corrupt/non-dict peers.json)
-        // escape `_on_inbound_session`, skipping the remaining step.
-        if self.send_peers(&env_id, &session).is_err() {
+        if !self.send_initial_vector_after_acceptance(&env_id, &session) {
+            // Python lets `_send_peers`'s exception (corrupt/non-dict peers.json)
+            // escape `_on_inbound_session`, skipping the remaining step.
+            if self.send_peers(&env_id, &session).is_err() {
+                return false;
+            }
+            self.retry_pending_incidents_to(&env_id, &session);
+        }
+        true
+    }
+    // The return value only defers initial routing traffic until real CAPS;
+    // it grants no membership, import visibility, data permission or READY.
+    fn send_initial_vector_after_acceptance(
+        &self,
+        env_id: &str,
+        session: &Arc<dyn Session>,
+    ) -> bool {
+        let Ok(history) = commit::HistorySession::open_runtime(self.ctx.state, env_id) else {
+            return false;
+        };
+        if history.check().is_err() {
+            return false;
+        }
+        if history.is_scoped() {
+            // The selected CAPS handler already starts the first vector
+            // exchange. A second initial send can queue an obsolete vector
+            // ahead of the current one while this peer processes catch-up.
+            // This is only a negative scheduling choice, never readiness or
+            // membership authority. Periodic/early sends remain unchanged.
+            #[cfg(test)]
+            crate::import_barrier::opus_cost::protocol_event(
+                self.ctx.state,
+                env_id,
+                "initial_vector_waits_caps",
+            );
+            return true;
+        }
+        drop(history);
+        self.send_vector(env_id, session);
+        false
+    }
+    fn personal_current_recipient(env: &EnvState, session: &Arc<dyn Session>) -> bool {
+        let fp = session.peer().fingerprint();
+        !session.is_closed()
+            && !env.draining.contains_key(&fp)
+            && !env.facts.removed_members.contains(&fp)
+            && env.document["members"][&fp]["status"] == "active"
+            && env.document["members"][&fp]["device"] == session.peer().to_dict()
+            && env
+                .sessions
+                .get(&fp)
+                .is_some_and(|current| Arc::ptr_eq(current, session))
+    }
+    pub(super) fn personal_ordinary_owns_session(&self, env: &str) -> Result<bool> {
+        let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(state) = envs.get(env) else {
+            return Ok(false);
+        };
+        for session in state.sessions.values() {
+            if Self::personal_current_recipient(state, session)
+                && self.bootstrap_runtime.ordinary_owns_session(env, session)?
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+    fn personal_control_busy(&self, env: &str) -> bool {
+        self.envs.lock().is_ok_and(|envs| {
+            envs.get(env).is_some_and(|state| {
+                state.sessions.values().any(|session| {
+                    Self::personal_current_recipient(state, session)
+                        && self.bootstrap_runtime.ordinary_control_busy(env, session)
+                })
+            })
+        })
+    }
+    fn personal_control_started<'a>(
+        &'a self,
+        env: &str,
+        session: &Arc<dyn Session>,
+    ) -> Option<super::bootstrap::OrdinaryReception<'a>> {
+        let envs = self.envs.lock().ok()?;
+        let state = envs.get(env)?;
+        if !Self::personal_current_recipient(state, session) {
+            return None;
+        }
+        self.bootstrap_runtime
+            .ordinary_control_started(env, session)
+    }
+    fn selected_control_started<'a>(
+        &'a self,
+        env: &str,
+        session: &Arc<dyn Session>,
+        history: &commit::HistorySession<'_>,
+    ) -> Option<super::bootstrap::OrdinaryReception<'a>> {
+        if !history.is_scoped()
+            || !std::ptr::eq(history.state(), self.ctx.state)
+            || history.env() != env
+            || history.check().is_err()
+        {
+            return None;
+        }
+        history
+            .charge_import(1 + env.len() as u64, 256 + 2 * env.len() as u64)
+            .ok()?;
+        let envs = self.envs.lock().ok()?;
+        if !Self::personal_current_recipient(envs.get(env)?, session) {
+            return None;
+        }
+        self.bootstrap_runtime
+            .selected_control_started(env, session)
+    }
+    pub(super) fn personal_handoff_complete(
+        &self,
+        env: &str,
+        session: &Arc<dyn Session>,
+    ) -> Result<()> {
+        let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+        let state = envs
+            .get(env)
+            .ok_or_else(|| Error::state("team_session_closed"))?;
+        let current = state
+            .sessions
+            .get(&session.peer().fingerprint())
+            .filter(|current| {
+                current.peer() == session.peer() && Self::personal_current_recipient(state, current)
+            })
+            .ok_or_else(|| Error::state("team_session_closed"))?;
+        // A delayed completion follows S1, never the closed/replaced S0.
+        self.bootstrap_runtime.handed_to_ordinary(env, current)
+    }
+    pub(super) fn personal_adopt_outbound(
+        &self,
+        env: &str,
+        session: Arc<dyn Session>,
+        address: &str,
+    ) -> Result<bool> {
+        let fp = session.peer().fingerprint();
+        self.wire_dialed_session_for_handoff(env, &fp, address, session, true)
+    }
+    pub(crate) fn personal_adopt_inbound(self: &Arc<Self>, session: Arc<dyn Session>) {
+        // Receipt activation authenticates current retained membership. Bring
+        // the live transport projection to that same current state before its
+        // per-frame membership callback can decide this accepted session.
+        if let Err(error) = self.refold(session.env_id()) {
+            #[cfg(test)]
+            crate::import_barrier::opus_cost::protocol_error(
+                self.ctx.state,
+                session.env_id(),
+                &error.reason,
+            );
+            #[cfg(not(test))]
+            let _ = error;
+            session.close();
             return;
         }
-        self.retry_pending_incidents_to(&env_id, &session);
+        let _accepted = self.accept_ordinary_inbound_for_handoff(session.clone(), true);
+        // serve already authenticated and activated this exact recipient.
+        // A concurrent preferred replacement may have won before acceptance.
+        let _ = self.personal_handoff_complete(session.env_id(), &session);
     }
     fn admit_member(
         &self,
@@ -6848,8 +8024,10 @@ impl TeamSync {
         name: &str,
     ) -> Result<()> {
         use crate::kms::WrappedKey;
-        let _lock = self.ctx.state.lock()?;
-        let doc = crate::team::membership::load_environment(&self.ctx, env_id)?.document;
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        let doc =
+            crate::team::membership::load_environment_with_input(&self.ctx, env_id, &history)?
+                .document;
         let mut wraps = Map::new();
         if let Some(gens) = doc["dek"]["generations"].as_object() {
             for gen_id in gens.keys() {
@@ -6876,7 +8054,13 @@ impl TeamSync {
         if !wraps.is_empty() {
             op["wraps"] = Value::Object(wraps);
         }
-        crate::team::membership::author_commit(&self.ctx, Some(self), env_id, vec![op])?;
+        crate::team::membership::author_commit_with_input(
+            &self.ctx,
+            Some(self),
+            env_id,
+            vec![op],
+            &history,
+        )?;
         // Python: extra={"env_id", "fingerprint", "role"} (the role is not a
         // fact/op `kind`).
         let _ = self.ctx.audit.record(
@@ -6891,7 +8075,7 @@ impl TeamSync {
                 ..Default::default()
             },
         );
-        drop(_lock);
+        drop(history);
         self.flush_deferred_sends();
         Ok(())
     }
@@ -6913,11 +8097,58 @@ impl TeamSync {
                         // An approval inviter's only frame to an unapproved
                         // joiner (docs/remote-sync.md §3.2): `join` reports it.
                         if !heard && message["type"] == JOIN_PENDING_TYPE {
+                            if message["personal_bootstrap"] == true {
+                                let _ =
+                                    super::bootstrap::offer(&this.ctx, &env_id, &session.peer());
+                            }
                             this.note_join_pending(&env_id, &session.peer().fingerprint());
                             break;
                         }
                         this.note_contact(&env_id, &session.peer().fingerprint());
-                        if this.handle_message(&env_id, &session, &message).is_err() {
+                        #[cfg(test)]
+                        let message_observation = (
+                            Instant::now(),
+                            match message["type"].as_str() {
+                                Some("SYNC_CAPS") => "ordinary_caps",
+                                Some("TOMBSTONE_STATE") => "ordinary_state",
+                                Some("TOMBSTONE_ACK") => "ordinary_ack",
+                                Some("VECTOR") => "ordinary_vector",
+                                Some("FACT") => "ordinary_fact",
+                                _ => "ordinary_other",
+                            },
+                        );
+                        #[cfg(test)]
+                        crate::import_barrier::opus_cost::control_gate(
+                            this.ctx.state,
+                            &env_id,
+                            message_observation.1,
+                            json!({"entered":true,"session":Arc::as_ptr(&session) as *const () as usize}),
+                        );
+                        let handled = this.handle_message(&env_id, &session, &message);
+                        #[cfg(test)]
+                        crate::import_barrier::opus_cost::control_gate(
+                            this.ctx.state,
+                            &env_id,
+                            message_observation.1,
+                            json!({"entered":false,"elapsed_us":message_observation.0.elapsed().as_micros(),"ok":handled.is_ok(),"session":Arc::as_ptr(&session) as *const () as usize}),
+                        );
+                        if let Err(error) = handled {
+                            #[cfg(test)]
+                            if error.reason == "team_bootstrap_timeout" {
+                                crate::import_barrier::opus_cost::protocol_event(
+                                    this.ctx.state,
+                                    &env_id,
+                                    "ordinary_operation_budget_expired",
+                                );
+                            }
+                            #[cfg(test)]
+                            crate::import_barrier::opus_cost::protocol_error(
+                                this.ctx.state,
+                                &env_id,
+                                &error.reason,
+                            );
+                            #[cfg(not(test))]
+                            let _ = error;
                             break;
                         }
                         if !heard {
@@ -6926,7 +8157,25 @@ impl TeamSync {
                         }
                     }
                     Ok(None) => {}
-                    Err(_) => break,
+                    Err(error) => {
+                        #[cfg(test)]
+                        {
+                            crate::import_barrier::opus_cost::protocol_error(
+                                this.ctx.state,
+                                &env_id,
+                                error.0,
+                            );
+                            crate::import_barrier::opus_cost::control_gate(
+                                this.ctx.state,
+                                &env_id,
+                                "ordinary_receiver_closed",
+                                json!({"session":Arc::as_ptr(&session) as *const () as usize,"closed":session.is_closed(),"current_active":this.current_fact_session(&env_id,&session.peer().fingerprint(),&session)}),
+                            );
+                        }
+                        #[cfg(not(test))]
+                        let _ = error;
+                        break;
+                    }
                 }
             }
             if let Some(this) = weak.upgrade() {
@@ -6976,6 +8225,29 @@ impl TeamSync {
     }
     fn replication_allowed(&self, env_id: &str, session: &Arc<dyn Session>) -> bool {
         let required = crate::tombstone::support_required(self.ctx.state, env_id).unwrap_or(true);
+        self.replication_allowed_with_required(env_id, session, required)
+    }
+    fn replication_allowed_with_input(
+        &self,
+        env_id: &str,
+        session: &Arc<dyn Session>,
+        parent: &commit::HistorySession<'_>,
+    ) -> Result<bool> {
+        let history = parent.nested(self.ctx.state, env_id)?;
+        let required = if history.is_scoped() {
+            crate::tombstone::support_required_with_input(&history)?
+        } else {
+            crate::tombstone::support_required(self.ctx.state, env_id).unwrap_or(true)
+        };
+        history.check()?;
+        Ok(self.replication_allowed_with_required(env_id, session, required))
+    }
+    fn replication_allowed_with_required(
+        &self,
+        env_id: &str,
+        session: &Arc<dyn Session>,
+        required: bool,
+    ) -> bool {
         let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
         envs.get(env_id).is_some_and(|env| {
             env.sessions
@@ -7001,14 +8273,79 @@ impl TeamSync {
         }
         Ok(())
     }
+    fn send_replication_with_operation(
+        &self,
+        env_id: &str,
+        session: &Arc<dyn Session>,
+        message: &Value,
+        operation: &commit::HistoryResume<'_>,
+    ) -> Result<()> {
+        let completion = self.service_tombstones_stage(env_id, session, operation, true, true)?;
+        self.send_replication_after_service(env_id, session, message, operation, completion)
+    }
+    fn send_replication_from_settled<'a>(
+        &self,
+        env_id: &str,
+        session: &Arc<dyn Session>,
+        message: &Value,
+        history: commit::HistorySession<'a>,
+        settled: SettledFacts<'a>,
+    ) -> Result<()> {
+        let operation = history.lease()?;
+        let completion = self.service_tombstones_stage_with_input(
+            env_id,
+            session,
+            history,
+            true,
+            true,
+            Some(settled),
+        )?;
+        self.send_replication_after_service(env_id, session, message, &operation, completion)
+    }
+    fn send_replication_after_service<'a>(
+        &self,
+        env_id: &str,
+        session: &Arc<dyn Session>,
+        message: &Value,
+        operation: &commit::HistoryResume<'a>,
+        completion: TombstoneCompletion<'a>,
+    ) -> Result<()> {
+        let history = match completion.held {
+            Some(history) => history,
+            None => operation.resume()?,
+        };
+        let allowed = self.replication_allowed_with_input(env_id, session, &history)?;
+        history.check()?;
+        drop(history);
+        operation.check_unlocked()?;
+        if allowed {
+            session.send(message)?;
+        }
+        Ok(())
+    }
+    #[cfg(test)]
     fn handle_tombstone_control(
         &self,
         env_id: &str,
         session: &Arc<dyn Session>,
         message: &Value,
     ) -> Result<()> {
+        if let Some(operation) = self.prepare_tombstone_control(env_id, session, message)? {
+            self.service_tombstones_with_operation(env_id, session, &operation)?;
+        }
+        Ok(())
+    }
+    fn prepare_tombstone_control(
+        &self,
+        env_id: &str,
+        session: &Arc<dyn Session>,
+        message: &Value,
+    ) -> Result<Option<commit::HistoryResume<'_>>> {
         super::tombstone_gate::validate(message)?;
-        let state_lock = self.ctx.state.lock()?;
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        #[cfg(test)]
+        let _observation = history.observe_control("control_prepare");
+        history.preflight_inventory()?;
         let fp = session.peer().fingerprint();
         {
             let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
@@ -7019,12 +8356,13 @@ impl TeamSync {
                         .get(&fp)
                         .is_none_or(|current| !Arc::ptr_eq(current, session))
             }) {
-                return Ok(());
+                return Ok(None);
             }
         }
         if message["type"] == "TOMBSTONE_STATE"
             && message["digest"] != super::tombstone_gate::empty_digest()
         {
+            history.invalidate()?;
             crate::tombstone::require_support(self.ctx.state, env_id)?;
         }
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
@@ -7039,7 +8377,7 @@ impl TeamSync {
                 .get(&fp)
                 .is_none_or(|current| !Arc::ptr_eq(current, session))
         {
-            return Ok(());
+            return Ok(None);
         }
         let digest = super::tombstone_gate::digest(&env.facts.tombstone_facts)?;
         let gate = env
@@ -7063,14 +8401,119 @@ impl TeamSync {
             Some("TOMBSTONE_ACK") if gate.caps == Some(true) => gate.receive_ack(message, &digest),
             _ => return Err(Error::invalid_input("team_sync_control_malformed")),
         }
+        #[cfg(test)]
+        crate::import_barrier::opus_cost::control_gate(
+            self.ctx.state,
+            env_id,
+            match message["type"].as_str() {
+                Some("SYNC_CAPS") => "caps_received",
+                Some("TOMBSTONE_STATE") => "state_received",
+                _ => "ack_received",
+            },
+            json!({"session":Arc::as_ptr(session) as *const () as usize,"caps_sent":gate.caps_sent,"caps":gate.caps,"announced":gate.announced,"acked":gate.acked,"peer_state":gate.peer_state.is_some()}),
+        );
         drop(envs);
-        drop(state_lock);
-        self.write_sync_state(env_id, true);
-        self.service_tombstones(env_id, session)
+        history.check()?;
+        let selected = history.is_scoped();
+        if selected {
+            #[cfg(test)]
+            let _status_observation = history.observe_control("control_status_write");
+            self.write_sync_state_with_input(env_id, true, &history);
+            history.check()?;
+        }
+        let operation = history.into_resume()?;
+        if !selected {
+            #[cfg(test)]
+            let _status_observation = operation.observe_control("control_status_write");
+            self.write_sync_state(env_id, true);
+        }
+        operation.check_unlocked()?;
+        Ok(Some(operation))
     }
     /// Announce our computed set before ordinary data; ACK only a matching
     /// complete admitted set after a successful durable fold/derivation.
     fn service_tombstones(&self, env_id: &str, session: &Arc<dyn Session>) -> Result<()> {
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        let operation = history.into_resume()?;
+        self.service_tombstones_with_operation(env_id, session, &operation)
+            .map(|_| ())
+    }
+    fn service_tombstones_with_operation<'a>(
+        &self,
+        env_id: &str,
+        session: &Arc<dyn Session>,
+        parent: &commit::HistoryResume<'a>,
+    ) -> Result<Option<SettledFacts<'a>>> {
+        self.service_tombstones_from(env_id, session, parent, false)
+    }
+    fn service_tombstones_from<'a>(
+        &self,
+        env_id: &str,
+        session: &Arc<dyn Session>,
+        parent: &commit::HistoryResume<'a>,
+        receiving_frame: bool,
+    ) -> Result<Option<SettledFacts<'a>>> {
+        Ok(self
+            .service_tombstones_stage(env_id, session, parent, receiving_frame, false)?
+            .settled)
+    }
+    fn service_tombstones_and_readiness_with_operation<'a>(
+        &self,
+        env_id: &str,
+        session: &Arc<dyn Session>,
+        parent: &commit::HistoryResume<'a>,
+    ) -> Result<()> {
+        let completion = self.service_tombstones_stage(env_id, session, parent, true, true)?;
+        match completion.held {
+            Some(history) => {
+                self.readiness_with_current_input(env_id, &history, completion.settled.as_ref())
+            }
+            None => self.readiness_after_service(env_id, parent, completion.settled.as_ref()),
+        }
+    }
+    fn service_tombstones_stage<'a>(
+        &self,
+        env_id: &str,
+        session: &Arc<dyn Session>,
+        parent: &commit::HistoryResume<'a>,
+        receiving_frame: bool,
+        retain_local_stage: bool,
+    ) -> Result<TombstoneCompletion<'a>> {
+        #[cfg(test)]
+        let _resume_observation = parent.observe_control("service_resume");
+        let history = parent.resume()?;
+        self.service_tombstones_stage_with_input(
+            env_id,
+            session,
+            history,
+            receiving_frame,
+            retain_local_stage,
+            None,
+        )
+    }
+    fn service_tombstones_stage_with_input<'a>(
+        &self,
+        env_id: &str,
+        session: &Arc<dyn Session>,
+        history: commit::HistorySession<'a>,
+        receiving_frame: bool,
+        retain_local_stage: bool,
+        mut settled: Option<SettledFacts<'a>>,
+    ) -> Result<TombstoneCompletion<'a>> {
+        if !std::ptr::eq(history.state(), self.ctx.state) || history.env() != env_id {
+            return Err(Error::state("team_bootstrap_local_state_changed"));
+        }
+        history.check()?;
+        if let Some(current) = settled.as_ref() {
+            current.checked(&history)?;
+        }
+        let operation = history.lease()?;
+        #[cfg(test)]
+        let _stage =
+            commit::history_testing::span(self.ctx.state, "service_tombstones_with_operation");
+        #[cfg(test)]
+        let _observation = history.observe_control("control_service");
+        history.preflight_inventory()?;
         let fp = session.peer().fingerprint();
         let known = self
             .envs
@@ -7078,9 +8521,34 @@ impl TeamSync {
             .unwrap_or_else(|e| e.into_inner())
             .get(env_id)
             .is_some_and(|env| !env.facts.tombstone_facts.is_empty());
-        if known || crate::tombstone::support_required(self.ctx.state, env_id)? {
-            let lock = self.ctx.state.lock()?;
-            let (facts, _, _) = load_facts(&self.ctx, env_id)?;
+        if known
+            || (if history.is_scoped() {
+                crate::tombstone::support_required_with_input(&history)?
+            } else {
+                crate::tombstone::support_required(self.ctx.state, env_id)?
+            })
+        {
+            let ordinary;
+            let facts = if history.is_scoped() {
+                let reusable = match settled.as_ref().map(|value| value.checked(&history)) {
+                    Some(Ok(_)) => true,
+                    Some(Err(error)) if error.reason == "team_bootstrap_local_state_changed" => {
+                        false
+                    }
+                    Some(Err(error)) => return Err(error),
+                    None => false,
+                };
+                if !reusable {
+                    settled = Some(load_facts_core(&history, FactServices::Runtime(&self.ctx))?);
+                }
+                settled
+                    .as_ref()
+                    .ok_or_else(|| Error::state("team_bootstrap_recovery_required"))?
+                    .checked(&history)?
+            } else {
+                ordinary = load_facts_with_input(&self.ctx, env_id, &history)?.0;
+                &ordinary
+            };
             let changed = self
                 .envs
                 .lock()
@@ -7088,15 +8556,45 @@ impl TeamSync {
                 .get(env_id)
                 .is_some_and(|env| env.facts.tombstone_facts != facts.tombstone_facts);
             if changed {
-                self.refold(env_id)?;
+                if let Some(current) = &settled {
+                    self.refold_with_settled(env_id, &history, current)?;
+                    settled = None;
+                } else {
+                    self.refold(env_id)?;
+                }
             }
-            drop(lock);
         }
-        let required = crate::tombstone::support_required(self.ctx.state, env_id)?;
+        let required = if history.is_scoped() {
+            crate::tombstone::support_required_with_input(&history)?
+        } else {
+            crate::tombstone::support_required(self.ctx.state, env_id)?
+        };
+        // The current authenticated Personal receiver is already making
+        // progress through an ordered stream. Requeueing an unchanged STATE
+        // on every slow frame puts retries ahead of its pending ACK/vector.
+        // Keep first/new-digest announcements here; idle polling owns retries.
+        // This observation schedules traffic and grants no readiness.
+        let defer_state_retry =
+            history.is_scoped() && (receiving_frame || self.personal_control_busy(env_id));
+        // A selected completion may retain this actual lock only when no
+        // network effect is needed. Ordinary callers release at the original
+        // point. The request flag is not proof; the returned owned session
+        // still enforces the same root/identity/generation/budget checks.
+        let mut held = Some(history);
+        if !retain_local_stage || !held.as_ref().is_some_and(|history| history.is_scoped()) {
+            drop(
+                held.take()
+                    .ok_or_else(|| Error::state("team_bootstrap_local_state_changed"))?
+                    .into_resume()?,
+            );
+        }
         let (state, ack, unsupported) = {
             let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             let Some(env) = envs.get_mut(env_id) else {
-                return Ok(());
+                return Ok(TombstoneCompletion {
+                    held,
+                    settled: None,
+                });
             };
             if env
                 .sessions
@@ -7104,14 +8602,23 @@ impl TeamSync {
                 .is_none_or(|current| !Arc::ptr_eq(current, session))
                 || env.draining.contains_key(&fp)
             {
-                return Ok(());
+                return Ok(TombstoneCompletion {
+                    held,
+                    settled: None,
+                });
             }
             let digest = super::tombstone_gate::digest(&env.facts.tombstone_facts)?;
             let Some(gate) = env.gates.get_mut(&fp) else {
-                return Ok(());
+                return Ok(TombstoneCompletion {
+                    held,
+                    settled: None,
+                });
             };
             if !gate.caps_sent {
-                return Ok(());
+                return Ok(TombstoneCompletion {
+                    held,
+                    settled: None,
+                });
             }
             let unsupported = required
                 && gate.caps != Some(true)
@@ -7129,8 +8636,9 @@ impl TeamSync {
                     || (!gate.acked
                         && gate
                             .last_state_send
-                            .is_none_or(|at| at.elapsed() >= Duration::from_secs(1))))
-                .then_some(request_state);
+                            .is_none_or(|at| at.elapsed() >= Duration::from_secs(1))
+                        && !defer_state_retry))
+                    .then_some(request_state);
                 let ack = gate
                     .peer_state
                     .as_ref()
@@ -7142,12 +8650,34 @@ impl TeamSync {
                 (None, None, unsupported)
             }
         };
+        if !unsupported && state.is_none() && ack.is_none() && held.is_some() {
+            if let Some(history) = held.as_ref() {
+                history.check()?;
+            }
+            return Ok(TombstoneCompletion { held, settled });
+        }
+        // Every STATE/ACK send uses the original unlocked path. A later
+        // readiness pass must reacquire and revalidate on this SAME budget.
+        if let Some(history) = held.take() {
+            drop(history.into_resume()?);
+        }
         if unsupported {
             self.drop_session(env_id, &fp, Some(session));
-            return Ok(());
+            return Ok(TombstoneCompletion {
+                held,
+                settled: None,
+            });
         }
         if let Some(state) = state {
+            operation.check_unlocked()?;
             session.send(&state)?;
+            #[cfg(test)]
+            crate::import_barrier::opus_cost::control_gate(
+                self.ctx.state,
+                env_id,
+                "ordinary_state_sent",
+                json!({"session":Arc::as_ptr(session) as *const () as usize}),
+            );
             if let Some(gate) = self
                 .envs
                 .lock()
@@ -7166,10 +8696,34 @@ impl TeamSync {
             }
         }
         if let Some((digest, request)) = ack {
-            let lock = self.ctx.state.lock()?;
-            // Includes all newly stored facts from other processes; never ACK
-            // our cached document or a digest merely advertised by the peer.
-            self.refold(env_id)?;
+            let history = operation.resume()?;
+            #[cfg(test)]
+            let _ack_observation = history.observe_control("control_ack_refold");
+            // Reuse only this operation's sealed settled result after a full
+            // raw revision check. Unlocking never refreshes the budget. Any
+            // intervening change requires the same Runtime engine again.
+            if history.is_scoped() {
+                let reusable = match settled.as_ref().map(|value| value.checked(&history)) {
+                    Some(Ok(_)) => true,
+                    Some(Err(error)) if error.reason == "team_bootstrap_local_state_changed" => {
+                        false
+                    }
+                    Some(Err(error)) => return Err(error),
+                    None => false,
+                };
+                if !reusable {
+                    settled = Some(load_facts_core(&history, FactServices::Runtime(&self.ctx))?);
+                }
+                self.refold_with_settled(
+                    env_id,
+                    &history,
+                    settled
+                        .as_ref()
+                        .ok_or_else(|| Error::state("team_bootstrap_recovery_required"))?,
+                )?;
+            } else {
+                self.refold(env_id)?;
+            }
             let matching = {
                 let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
                 envs.get(env_id).is_some_and(|env| {
@@ -7181,10 +8735,26 @@ impl TeamSync {
                         })
                 })
             };
-            drop(lock);
+            history.check()?;
+            drop(history);
+            #[cfg(test)]
+            crate::import_barrier::opus_cost::control_gate(
+                self.ctx.state,
+                env_id,
+                "ack_decision",
+                json!({"session":Arc::as_ptr(session) as *const () as usize,"matching":matching,"current_active":self.current_fact_session(env_id,&fp,session)}),
+            );
             if matching && self.current_fact_session(env_id, &fp, session) {
+                operation.check_unlocked()?;
                 session
                     .send(&json!({"type":"TOMBSTONE_ACK","digest":digest,"request_id":request}))?;
+                #[cfg(test)]
+                crate::import_barrier::opus_cost::control_gate(
+                    self.ctx.state,
+                    env_id,
+                    "ordinary_ack_sent",
+                    json!({"session":Arc::as_ptr(session) as *const () as usize}),
+                );
                 if let Some(gate) = self
                     .envs
                     .lock()
@@ -7196,13 +8766,219 @@ impl TeamSync {
                 }
             }
         }
-        Ok(())
+        Ok(TombstoneCompletion {
+            held: None,
+            settled,
+        })
+    }
+    fn service_and_readiness(&self, env_id: &str, session: &Arc<dyn Session>) -> Result<()> {
+        self.service_and_readiness_from(env_id, session, false)
+    }
+    fn service_and_readiness_from(
+        &self,
+        env_id: &str,
+        session: &Arc<dyn Session>,
+        receiving_frame: bool,
+    ) -> Result<()> {
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        if !history.is_scoped() {
+            drop(history);
+            self.service_tombstones(env_id, session)?;
+            return self.update_readiness(env_id);
+        }
+        let _selected_reception = receiving_frame
+            .then(|| self.selected_control_started(env_id, session, &history))
+            .flatten();
+        let operation = history.into_resume()?;
+        let settled = self.service_tombstones_from(env_id, session, &operation, receiving_frame)?;
+        self.readiness_after_service(env_id, &operation, settled.as_ref())
+    }
+    fn readiness_after_service<'a>(
+        &self,
+        env_id: &str,
+        operation: &commit::HistoryResume<'a>,
+        settled: Option<&SettledFacts<'a>>,
+    ) -> Result<()> {
+        #[cfg(test)]
+        let _resume_observation = operation.observe_control("readiness_resume");
+        let history = operation.resume()?;
+        self.readiness_with_current_input(env_id, &history, settled)
+    }
+    fn readiness_with_current_input<'a>(
+        &self,
+        env_id: &str,
+        history: &commit::HistorySession<'a>,
+        settled: Option<&SettledFacts<'a>>,
+    ) -> Result<()> {
+        let provided = match settled.map(|value| value.checked(history)) {
+            Some(Ok(_)) => settled,
+            Some(Err(error)) if error.reason == "team_bootstrap_local_state_changed" => None,
+            Some(Err(error)) => return Err(error),
+            None => None,
+        };
+        let result = self.update_readiness_with_settled(env_id, history, provided);
+        if result.is_err()
+            && let Some(env) = self
+                .envs
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .get_mut(env_id)
+        {
+            env.synced_at = None;
+        }
+        result
     }
     fn update_readiness(&self, env_id: &str) -> Result<()> {
-        let _lock = self.ctx.state.lock()?;
-        let local = CommitStore::new(self.ctx.state, env_id).vector()?;
-        let (durable, _, _) = load_facts(&self.ctx, env_id)?;
-        let required = crate::tombstone::support_required(self.ctx.state, env_id)?;
+        #[cfg(test)]
+        let _stage = commit::history_testing::span(self.ctx.state, "update_readiness");
+        let history = match commit::HistorySession::open_runtime(self.ctx.state, env_id) {
+            Ok(history) => history,
+            Err(error) => {
+                if let Some(env) = self
+                    .envs
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get_mut(env_id)
+                {
+                    env.synced_at = None;
+                }
+                return Err(error);
+            }
+        };
+        let result = self.update_readiness_with_input(env_id, &history);
+        if result.is_err() {
+            if let Some(env) = self
+                .envs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_mut(env_id)
+            {
+                env.synced_at = None;
+            }
+        }
+        result
+    }
+    fn update_readiness_with_input(
+        &self,
+        env_id: &str,
+        parent: &commit::HistorySession<'_>,
+    ) -> Result<()> {
+        let result = self.update_readiness_with_settled(env_id, parent, None);
+        if result.is_err()
+            && let Some(env) = self
+                .envs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_mut(env_id)
+        {
+            env.synced_at = None;
+        }
+        result
+    }
+    fn update_readiness_with_settled<'a>(
+        &self,
+        env_id: &str,
+        parent: &commit::HistorySession<'a>,
+        provided: Option<&SettledFacts<'a>>,
+    ) -> Result<()> {
+        let history = parent.nested(self.ctx.state, env_id)?;
+        #[cfg(test)]
+        let _observation = history.observe_control("control_readiness");
+        if history.is_scoped() {
+            let access = (|| -> Result<bool> {
+                let io = history.import_io()?;
+                let view = crate::import_barrier::VisibilityEpoch::capture(&io)?;
+                view.require_env(env_id)?;
+                let denied = view.projection_denied(env_id)?;
+                view.finish()?;
+                Ok(denied)
+            })();
+            match access {
+                Ok(false) => {}
+                outcome => {
+                    if let Some(env) = self
+                        .envs
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .get_mut(env_id)
+                    {
+                        env.synced_at = None;
+                    }
+                    return outcome.map(|_| ());
+                }
+            }
+        } else {
+            if let Err(error) = crate::import_barrier::require_env(self.ctx.state, env_id) {
+                if let Ok(mut envs) = self.envs.lock()
+                    && let Some(env) = envs.get_mut(env_id)
+                {
+                    env.synced_at = None;
+                }
+                return Err(error);
+            }
+            if crate::import_barrier::credential_projection_denied(self.ctx.state, env_id)? {
+                if let Some(env) = self
+                    .envs
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get_mut(env_id)
+                {
+                    env.synced_at = None;
+                }
+                return Ok(());
+            }
+        }
+        let settled;
+        let ordinary;
+        let (local, durable) = if history.is_scoped() {
+            // The complete engine settles first. Its sealed raw epoch owns
+            // the actual validated vector; current_with_vector checks the
+            // full raw/path/type revision and shared mutation generation.
+            let current = match provided {
+                Some(value) => value,
+                None => {
+                    settled = load_facts_core(&history, FactServices::Runtime(&self.ctx))?;
+                    &settled
+                }
+            };
+            let (facts, vector) = current.current_with_vector(&history)?;
+            (vector, facts)
+        } else {
+            let local = history.acquire()?.vector()?;
+            ordinary = load_facts_with_input(&self.ctx, env_id, &history)?.0;
+            if history.acquire()?.vector()? != local {
+                return Err(Error::state("team_bootstrap_local_state_changed"));
+            }
+            (local, &ordinary)
+        };
+        let denied_after_settlement = if history.is_scoped() {
+            // The engine may have durably changed facts or denial. Capture
+            // again at this generation under the same lock and budget.
+            let io = history.import_io()?;
+            let view = crate::import_barrier::VisibilityEpoch::capture(&io)?;
+            let denied = view.projection_denied(env_id)?;
+            view.finish()?;
+            denied
+        } else {
+            false
+        };
+        if denied_after_settlement {
+            if let Some(env) = self
+                .envs
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .get_mut(env_id)
+            {
+                env.synced_at = None;
+            }
+            return Ok(());
+        }
+        let required = if history.is_scoped() {
+            crate::tombstone::support_required_with_input(&history)?
+        } else {
+            crate::tombstone::support_required(self.ctx.state, env_id)?
+        };
+        history.check()?;
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
         let Some(env) = envs.get_mut(env_id) else {
             return Ok(());
@@ -7227,14 +9003,47 @@ impl TeamSync {
                                 .is_some_and(|g| g.ready(&digest, required)))
                 })
             });
+        history.check_deadline()?;
         env.synced_at = ready.then(|| (self.ctx.clock)());
+        drop(envs);
+        history.check()?;
         Ok(())
     }
     fn send_vector(&self, env_id: &str, session: &Arc<dyn Session>) {
-        if self.service_tombstones(env_id, session).is_err()
-            || !self.replication_allowed(env_id, session)
-        {
+        #[cfg(test)]
+        let _stage = commit::history_testing::span(self.ctx.state, "send_vector");
+        if self.service_tombstones(env_id, session).is_err() {
             return;
+        }
+        let result = self.send_vector_after_service(env_id, session, None);
+        #[cfg(test)]
+        if let Err(error) = &result {
+            crate::import_barrier::opus_cost::protocol_error(self.ctx.state, env_id, &error.reason);
+        }
+        let _ = result;
+    }
+    fn send_vector_after_service(
+        &self,
+        env_id: &str,
+        session: &Arc<dyn Session>,
+        operation: Option<&commit::HistoryResume<'_>>,
+    ) -> Result<()> {
+        // Retain one actual lock through these adjacent reads and both gate
+        // checks. No I/O to the peer occurs until it is dropped below.
+        let selected_history = operation.map(|parent| parent.resume()).transpose()?;
+        let permitted = if let Some(history) = selected_history.as_ref() {
+            self.replication_allowed_with_input(env_id, session, history)?
+        } else {
+            self.replication_allowed(env_id, session)
+        };
+        if !permitted {
+            #[cfg(test)]
+            crate::import_barrier::opus_cost::protocol_event(
+                self.ctx.state,
+                env_id,
+                "vector_send_gate_closed",
+            );
+            return Ok(());
         }
         let fp = session.peer().fingerprint();
         {
@@ -7243,18 +9052,57 @@ impl TeamSync {
                 .get(env_id)
                 .is_none_or(|e| e.draining.contains_key(&fp))
             {
-                return;
+                return Ok(());
             }
         }
-        let Ok(vector) = CommitStore::new(self.ctx.state, env_id).vector() else {
-            return;
+        let vector = if let Some(history) = selected_history.as_ref() {
+            if !std::ptr::eq(history.state(), self.ctx.state) || history.env() != env_id {
+                return Err(Error::state("team_bootstrap_local_state_changed"));
+            }
+            #[cfg(test)]
+            let _observation = history.observe_control("control_vector");
+            let input = history.acquire()?;
+            let vector = input.vector()?;
+            history.check()?;
+            vector
+        } else {
+            let Ok(vector) = CommitStore::new(self.ctx.state, env_id).vector() else {
+                return Ok(());
+            };
+            vector
         };
-        if self
-            .send_replication(env_id, session, &json!({"type":"VECTOR","vector":vector}))
-            .is_err()
-        {
+        let message = json!({"type":"VECTOR","vector":vector});
+        let sent = if let Some(operation) = operation {
+            // Both reads use the same sealed parent, held lock and budget.
+            // Final session/gate checks remain; transport runs after unlock.
+            let history = selected_history
+                .as_ref()
+                .ok_or_else(|| Error::state("team_bootstrap_local_state_changed"))?;
+            let allowed = self.replication_allowed_with_input(env_id, session, history)?;
+            history.check()?;
+            drop(selected_history);
+            if allowed {
+                operation.check_unlocked()?;
+                session.send(&message)
+            } else {
+                Ok(())
+            }
+        } else {
+            self.send_replication(env_id, session, &message)
+        };
+        #[cfg(test)]
+        crate::import_barrier::opus_cost::protocol_event(
+            self.ctx.state,
+            env_id,
+            if sent.is_ok() {
+                "vector_send_ok"
+            } else {
+                "vector_send_error"
+            },
+        );
+        if sent.is_err() {
             self.drop_session(env_id, &fp, Some(session));
-            return;
+            return Ok(());
         }
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(env) = envs.get_mut(env_id) {
@@ -7262,6 +9110,7 @@ impl TeamSync {
             env.last_vector_sent.insert(fp, Instant::now());
             env.synced_at = None;
         }
+        Ok(())
     }
     /// The VECTORs early commits asked for (issue #28), once the peer was not
     /// asked within [`EARLY_VECTOR_INTERVAL`] and no commit was accepted
@@ -7307,6 +9156,16 @@ impl TeamSync {
             }
         }
         let peers_doc = read_dict_or_empty(self.ctx.state, &format!("team/{env_id}/peers.json"))?;
+        let payload = Self::peers_payload(peers_doc);
+        if self
+            .send_replication(env_id, session, &json!({"type":"PEERS","peers":payload}))
+            .is_err()
+        {
+            self.drop_session(env_id, &fp, Some(session));
+        }
+        Ok(())
+    }
+    fn peers_payload(peers_doc: Map<String, Value>) -> Map<String, Value> {
         let mut payload = Map::new();
         for (peer_fp, addrs) in peers_doc {
             let Value::Array(addrs) = addrs else {
@@ -7324,12 +9183,72 @@ impl TeamSync {
             strings.sort();
             payload.insert(peer_fp, json!(strings));
         }
-        if self
-            .send_replication(env_id, session, &json!({"type":"PEERS","peers":payload}))
-            .is_err()
-        {
-            self.drop_session(env_id, &fp, Some(session));
+        payload
+    }
+    fn send_peers_after_capabilities(
+        &self,
+        env_id: &str,
+        session: &Arc<dyn Session>,
+        operation: &commit::HistoryResume<'_>,
+    ) -> Result<()> {
+        let history = operation.resume()?;
+        if history.env() != env_id || !std::ptr::eq(history.state(), self.ctx.state) {
+            return Err(Error::state("team_bootstrap_local_state_changed"));
         }
+        history.charge_import(4096, 1024)?;
+        let fp = session.peer().fingerprint();
+        if self.draining(env_id, &fp) {
+            return Ok(());
+        }
+        let input = history.acquire()?;
+        let path = format!("team/{env_id}/peers.json");
+        let peers_doc = read_dict_value(input.read_json(&path, json!({}))?, &path)?;
+        let limit = || Error::state("team_bootstrap_limit_exceeded");
+        // Reserve the existing address filtering, UTF-8 sort, container
+        // construction and wire encoding before the common builder runs.
+        for (peer, addresses) in &peers_doc {
+            history.charge_import(1 + peer.len() as u64, 256 + 8 * peer.len() as u64)?;
+            if let Value::Array(addresses) = addresses {
+                let n = addresses.len() as u64;
+                history.charge_import(
+                    n.checked_mul(8).ok_or_else(limit)?,
+                    n.checked_mul(128).ok_or_else(limit)?,
+                )?;
+                let (mut total, mut longest) = (0u64, 0u64);
+                for address in addresses {
+                    history.charge_import(1, 64)?;
+                    if let Value::String(address) = address {
+                        let size = address.len() as u64;
+                        total = total.checked_add(size).ok_or_else(limit)?;
+                        longest = longest.max(size);
+                    }
+                }
+                let sort = n
+                    .checked_mul(u64::from(n.checked_ilog2().unwrap_or(0)) + 1)
+                    .and_then(|v| v.checked_mul(longest.checked_add(1)?))
+                    .ok_or_else(limit)?;
+                history.charge_import(
+                    sort.checked_add(total.checked_mul(8).ok_or_else(limit)?)
+                        .ok_or_else(limit)?,
+                    total.checked_mul(16).ok_or_else(limit)?,
+                )?;
+            }
+        }
+        let message = json!({"type":"PEERS","peers":Self::peers_payload(peers_doc)});
+        // Account for serialization using this same sealed operation. The
+        // encoded bytes are DATA, never a positive authorization witness.
+        let _encoded = history.encode_import_record(&message)?;
+        let permitted = !self.draining(env_id, &fp)
+            && self.replication_allowed_with_input(env_id, session, &history)?;
+        input.recheck()?;
+        history.check()?;
+        drop(input);
+        drop(history);
+        operation.check_unlocked()?;
+        if permitted && session.send(&message).is_err() {
+            self.drop_session(env_id, &session.peer().fingerprint(), Some(session));
+        }
+        operation.check_unlocked()?;
         Ok(())
     }
     fn handle_message(
@@ -7338,7 +9257,17 @@ impl TeamSync {
         session: &Arc<dyn Session>,
         message: &Value,
     ) -> Result<()> {
+        #[cfg(test)]
+        let _stage = commit::history_testing::span(self.ctx.state, "handle_message");
         let mtype = message["type"].as_str().unwrap_or("");
+        #[cfg(test)]
+        if mtype.starts_with("BOOTSTRAP_") {
+            crate::import_barrier::opus_cost::protocol_event(
+                self.ctx.state,
+                env_id,
+                "ordinary_received_bootstrap_control",
+            );
+        }
         let fp = session.peer().fingerprint();
         let draining = {
             let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
@@ -7380,13 +9309,57 @@ impl TeamSync {
         {
             return Ok(());
         }
+        let _reception = (super::tombstone_gate::is_control(mtype)
+            || matches!(mtype, "VECTOR" | "COMMIT" | "FACT"))
+        .then(|| self.personal_control_started(env_id, session))
+        .flatten();
         if super::tombstone_gate::is_control(mtype) {
-            self.handle_tombstone_control(env_id, session, message)?;
-            self.send_vector(env_id, session);
-            self.update_readiness(env_id)?;
+            let Some(operation) = self.prepare_tombstone_control(env_id, session, message)? else {
+                return Ok(());
+            };
+            let (scoped, _selected_reception) = {
+                let history = operation.resume()?;
+                (
+                    history.is_scoped(),
+                    self.selected_control_started(env_id, session, &history),
+                )
+            };
+            let settled = self.service_tombstones_from(env_id, session, &operation, true)?;
+            if scoped {
+                // CAPS opens this session's first fresh vector exchange.
+                // STATE/ACK settle deletion agreement; they do not request
+                // another vector. Echoing one for every repeated control
+                // crowds out ordinary commits on slower authenticated peers.
+                // Existing periodic/early vectors and broadcasts remain.
+                if mtype == "SYNC_CAPS" {
+                    self.send_vector_after_service(env_id, session, Some(&operation))?;
+                    self.send_peers_after_capabilities(env_id, session, &operation)?;
+                }
+                self.readiness_after_service(env_id, &operation, settled.as_ref())?;
+            } else {
+                self.send_vector(env_id, session);
+                self.update_readiness(env_id)?;
+            }
             return Ok(());
         }
-        if !self.replication_allowed(env_id, session) {
+        let vector_parent = if mtype == "VECTOR" {
+            commit::HistorySession::selected_runtime(self.ctx.state, env_id)?
+        } else {
+            None
+        };
+        let allowed = match vector_parent.as_ref() {
+            Some(parent) => self.replication_allowed_with_input(env_id, session, parent)?,
+            None => self.replication_allowed(env_id, session),
+        };
+        if !allowed {
+            #[cfg(test)]
+            if mtype == "VECTOR" {
+                crate::import_barrier::opus_cost::protocol_event(
+                    self.ctx.state,
+                    env_id,
+                    "vector_receive_gate_closed",
+                );
+            }
             return Ok(());
         }
         if let Some(gate) = self
@@ -7401,7 +9374,22 @@ impl TeamSync {
             }
         }
         match mtype {
-            "VECTOR" => self.handle_vector(env_id, session, message)?,
+            "VECTOR" => {
+                let VectorCompletion {
+                    operation,
+                    receiving: _receiving,
+                } = match vector_parent {
+                    Some(parent) => {
+                        self.handle_vector_from(env_id, session, message, Some(parent))?
+                    }
+                    None => self.handle_vector(env_id, session, message)?,
+                };
+                if let Some(operation) = operation {
+                    return self.service_tombstones_and_readiness_with_operation(
+                        env_id, session, &operation,
+                    );
+                }
+            }
             "COMMIT" => self.handle_commit(env_id, session, message)?,
             "FACT" => self.handle_fact(env_id, session, message)?,
             "PEERS" => self.handle_peers(env_id, message),
@@ -7409,19 +9397,46 @@ impl TeamSync {
             "INCIDENT_ACK" => self.handle_incident_ack(env_id, message)?,
             _ => {}
         }
-        self.service_tombstones(env_id, session)?;
-        self.update_readiness(env_id)?;
+        self.service_and_readiness_from(env_id, session, true)?;
         Ok(())
     }
-    fn handle_vector(
-        &self,
+    fn handle_vector<'a>(
+        &'a self,
         env_id: &str,
         session: &Arc<dyn Session>,
         message: &Value,
-    ) -> Result<()> {
+    ) -> Result<VectorCompletion<'a>> {
+        self.handle_vector_from(env_id, session, message, None)
+    }
+    fn handle_vector_from<'a>(
+        &'a self,
+        env_id: &str,
+        session: &Arc<dyn Session>,
+        message: &Value,
+        parent: Option<commit::HistorySession<'a>>,
+    ) -> Result<VectorCompletion<'a>> {
+        #[cfg(test)]
+        let _stage = commit::history_testing::span(self.ctx.state, "handle_vector");
         let Some(vector) = message["vector"].as_object() else {
-            return Ok(());
+            if let Some(history) = parent {
+                let receiving = self.selected_control_started(env_id, session, &history);
+                return Ok(VectorCompletion {
+                    operation: Some(history.into_resume()?),
+                    receiving,
+                });
+            }
+            return Ok(VectorCompletion {
+                operation: None,
+                receiving: None,
+            });
         };
+        let history = match parent {
+            Some(parent) => parent,
+            None => commit::HistorySession::open_runtime(self.ctx.state, env_id)?,
+        };
+        let receiving = self.selected_control_started(env_id, session, &history);
+        #[cfg(test)]
+        let _observation = history.observe_control("received_vector");
         let fp = session.peer().fingerprint();
         // `isinstance(v, int) and not isinstance(v, bool) and v >= 0`, exact.
         let clean: BTreeMap<String, PyInt> = vector
@@ -7435,35 +9450,65 @@ impl TeamSync {
         {
             let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(env) = envs.get_mut(env_id) {
-                env.peer_vectors.insert(fp.clone(), clean);
+                env.peer_vectors.insert(fp.clone(), clean.clone());
                 env.sync
                     .vector_received_at
                     .insert(fp.clone(), (self.ctx.clock)());
             }
         }
-        self.persist_peer_vectors(env_id)?;
-        let store = CommitStore::new(self.ctx.state, env_id);
-        let local = store.vector()?;
-        let mut missing = Vec::new();
-        for (author, last) in local {
-            // `their_seq = peer_vector.get(fp, 0)`, reset to 0 unless a
-            // non-negative non-bool int; `range(their_seq + 1, last_seq + 1)`
-            // is empty for any claim at or past `last_seq`, however large.
-            let their = vector
-                .get(&author)
-                .and_then(PyInt::from_json_integer)
-                .filter(|n| n.0.sign() != num_bigint::Sign::Minus);
-            let mut seq = match their {
-                None => PyInt::from(1),
-                Some(n) => &n + 1,
-            };
-            while seq <= last {
-                if let Some(commit) = store.get(&author, &seq)? {
-                    missing.push(commit);
+        if history.is_scoped() {
+            let vectors = self
+                .envs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(env_id)
+                .map(|env| json!(env.peer_vectors));
+            if let Some(vectors) = vectors {
+                self.write_personal_metadata_with_input(
+                    env_id,
+                    &history,
+                    &format!("team/{env_id}/peer_vectors.json"),
+                    &vectors,
+                )?;
+            }
+        } else {
+            self.persist_peer_vectors(env_id)?;
+        }
+        let mut missing = if history.is_scoped() {
+            history.acquire()?.replication_after(&clean)?
+        } else {
+            Vec::new()
+        };
+        if !history.is_scoped() {
+            let store = CommitStore::new(self.ctx.state, env_id);
+            let local = store.vector()?;
+            for (author, last) in local {
+                // `their_seq = peer_vector.get(fp, 0)`, reset to 0 unless a
+                // non-negative non-bool int; `range(their_seq + 1, last_seq + 1)`
+                // is empty for any claim at or past `last_seq`, however large.
+                let their = vector
+                    .get(&author)
+                    .and_then(PyInt::from_json_integer)
+                    .filter(|n| n.0.sign() != num_bigint::Sign::Minus);
+                let mut seq = match their {
+                    None => PyInt::from(1),
+                    Some(n) => &n + 1,
+                };
+                while seq <= last {
+                    if let Some(commit) = store.get(&author, &seq)? {
+                        missing.push(commit);
+                    }
+                    seq = &seq + 1;
                 }
-                seq = &seq + 1;
             }
         }
+        history.check()?;
+        let operation = if history.is_scoped() {
+            Some(history.into_resume()?)
+        } else {
+            drop(history);
+            None
+        };
         // In total order across authors, so the peer learns each member's
         // admission before that member's own commits (issue #28).
         let mut sent = 0;
@@ -7473,16 +9518,19 @@ impl TeamSync {
                 self.end_hold(env_id, &fp);
                 break;
             }
-            if self
-                .send_replication(
-                    env_id,
-                    session,
-                    &json!({"type":"COMMIT","commit":commit.to_dict()}),
-                )
-                .is_err()
-            {
+            let message = json!({"type":"COMMIT","commit":commit.to_dict()});
+            let delivery = match operation.as_ref() {
+                Some(parent) => {
+                    self.send_replication_with_operation(env_id, session, &message, parent)
+                }
+                None => self.send_replication(env_id, session, &message),
+            };
+            if delivery.is_err() {
                 self.drop_session(env_id, &fp, Some(session));
-                return Ok(());
+                return Ok(VectorCompletion {
+                    operation,
+                    receiving,
+                });
             }
             sent += 1;
         }
@@ -7491,12 +9539,18 @@ impl TeamSync {
         }
         if self.draining(env_id, &fp) {
             self.end_hold(env_id, &fp);
-            return Ok(());
+            return Ok(VectorCompletion {
+                operation,
+                receiving,
+            });
         }
         // Ordinary facts have no sequence in the commit vector. Replay a
         // bounded slice after missing commits on this authenticated session;
         // otherwise an offline disable/revoke can be lost permanently.
-        self.send_fact_catchup(env_id, session)?;
+        match operation.as_ref() {
+            Some(parent) => self.send_fact_catchup_from(env_id, session, Some(parent))?,
+            None => self.send_fact_catchup(env_id, session)?,
+        }
         if let Some(env) = self
             .envs
             .lock()
@@ -7512,7 +9566,10 @@ impl TeamSync {
             let frames = {
                 let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
                 let Some(env) = envs.get_mut(env_id) else {
-                    return Ok(());
+                    return Ok(VectorCompletion {
+                        operation,
+                        receiving,
+                    });
                 };
                 if !env.catching_up.contains(&fp)
                     || env
@@ -7520,13 +9577,19 @@ impl TeamSync {
                         .get(&fp)
                         .is_none_or(|current| !Arc::ptr_eq(current, session))
                 {
-                    return Ok(());
+                    return Ok(VectorCompletion {
+                        operation,
+                        receiving,
+                    });
                 }
                 // Removed meanwhile: none of what was held goes out.
                 if env.draining.contains_key(&fp) {
                     env.catching_up.remove(&fp);
                     env.held.remove(&fp);
-                    return Ok(());
+                    return Ok(VectorCompletion {
+                        operation,
+                        receiving,
+                    });
                 }
                 match env.held.remove(&fp) {
                     Some(frames) if !frames.is_empty() => frames,
@@ -7539,16 +9602,39 @@ impl TeamSync {
             for frame in frames {
                 if self.draining(env_id, &fp) {
                     self.end_hold(env_id, &fp);
-                    return Ok(());
+                    return Ok(VectorCompletion {
+                        operation,
+                        receiving,
+                    });
                 }
-                if self.send_replication(env_id, session, &frame).is_err() {
+                let sent = match operation.as_ref() {
+                    Some(parent) => {
+                        self.send_replication_with_operation(env_id, session, &frame, parent)
+                    }
+                    None => self.send_replication(env_id, session, &frame),
+                };
+                if sent.is_err() {
                     self.drop_session(env_id, &fp, Some(session));
-                    return Ok(());
+                    return Ok(VectorCompletion {
+                        operation,
+                        receiving,
+                    });
                 }
             }
         }
-        self.retry_pending_incidents_to(env_id, session);
-        Ok(())
+        if let Some(parent) = operation.as_ref() {
+            parent.check_unlocked()?;
+        }
+        match operation.as_ref() {
+            Some(parent) => {
+                self.retry_pending_incidents_to_from(env_id, session, Some(parent));
+            }
+            None => self.retry_pending_incidents_to(env_id, session),
+        }
+        Ok(VectorCompletion {
+            operation,
+            receiving,
+        })
     }
     /// Forget what was held for `fp`: a removed device gets none of it.
     fn end_hold(&self, env_id: &str, fp: &str) {
@@ -7581,14 +9667,32 @@ impl TeamSync {
         })
     }
     fn send_fact_catchup(&self, env_id: &str, session: &Arc<dyn Session>) -> Result<()> {
+        self.send_fact_catchup_from(env_id, session, None)
+    }
+    fn send_fact_catchup_from(
+        &self,
+        env_id: &str,
+        session: &Arc<dyn Session>,
+        operation: Option<&commit::HistoryResume<'_>>,
+    ) -> Result<()> {
         let fp = session.peer().fingerprint();
         if !self.current_fact_session(env_id, &fp, session) {
             return Ok(());
         }
-        let lines = self
-            .ctx
-            .state
-            .read_lines(&format!("team/{env_id}/facts.jsonl"), None)?;
+        let lines = match operation {
+            Some(parent) => {
+                let history = parent.resume()?;
+                let lines = history
+                    .acquire()?
+                    .read_lines(&format!("team/{env_id}/facts.jsonl"))?;
+                history.check()?;
+                lines
+            }
+            None => self
+                .ctx
+                .state
+                .read_lines(&format!("team/{env_id}/facts.jsonl"), None)?,
+        };
         let start = {
             let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             envs.get(env_id)
@@ -7602,7 +9706,30 @@ impl TeamSync {
             .min(lines.len());
         let mut relaxed: Option<Option<Arc<Value>>> = None;
         for line in lines.get(start..end).unwrap_or_default() {
-            let Ok(value) = pyjson::loads(line) else {
+            // Adjacent parse, author fold and signature checks share one
+            // actual lock. No publication or peer I/O occurs in this span.
+            // Reacquiring for each getter would discard the same raw epoch
+            // repeatedly and spend the parent's deadline before its reply.
+            let mut selected_history = operation.map(|parent| parent.resume()).transpose()?;
+            let mut replay_settled = None;
+            let parsed = match selected_history.as_ref() {
+                Some(history) => {
+                    let value = history.parse_line(line);
+                    history.check()?;
+                    if let Ok(value) = &value {
+                        let n = u64::try_from(line.len())
+                            .map_err(|_| Error::state("team_bootstrap_limit_exceeded"))?;
+                        history.charge_import(n, 0)?;
+                        let (work, bytes) = fact_replay_parse_reservation(n, value)?;
+                        history.charge_import(work, bytes)?;
+                        history.reserve_import_signature(value)?;
+                        history.check()?;
+                    }
+                    value
+                }
+                None => pyjson::loads(line).map_err(|_| Error::state("state_corrupt")),
+            };
+            let Ok(value) = parsed else {
                 continue;
             };
             let Ok(fact) = Fact::from_dict(&value) else {
@@ -7613,30 +9740,60 @@ impl TeamSync {
             }
             // One relaxed-document lookup per replay pass (not per line):
             // resolved lazily, so a pass with nothing to verify folds nothing.
-            let relaxed = relaxed.get_or_insert_with(|| self.relaxed_document(env_id).ok());
+            if let Some(history) = selected_history.as_ref() {
+                // One actual engine result serves this adjacent author fold
+                // and send service while this SAME lock/generation is held.
+                // It is never retained across a send or the next line.
+                let settled = load_facts_core(history, FactServices::Runtime(&self.ctx))?;
+                relaxed = Some(Some(
+                    self.relaxed_document_from_settled(env_id, history, &settled)?,
+                ));
+                replay_settled = Some(settled);
+                history.check()?;
+            } else if relaxed.is_none() {
+                relaxed = Some(self.relaxed_document(env_id).ok());
+            }
+            let relaxed = relaxed.as_ref().unwrap();
+            if let Some(history) = selected_history.as_ref() {
+                if let Some(record) = relaxed
+                    .as_deref()
+                    .map(|doc| &doc["members"][&fact.author]["device"])
+                {
+                    history.reserve_import_signature(record)?;
+                }
+                history.check()?;
+            }
             let Some(author) = relaxed
                 .as_deref()
                 .and_then(|doc| member_device_record(doc, &fact.author))
             else {
                 continue;
             };
-            if !verify_fact(&fact, &author) {
+            let verified = verify_fact(&fact, &author);
+            if let Some(history) = selected_history.as_ref() {
+                history.check()?;
+            }
+            if !verified {
                 continue;
             }
             if !self.current_fact_session(env_id, &fp, session) {
                 return Ok(());
             }
-            if self
-                .send_replication(
-                    env_id,
-                    session,
-                    &json!({"type":"FACT","fact":fact.to_dict()}),
-                )
-                .is_err()
-            {
+            let message = json!({"type":"FACT","fact":fact.to_dict()});
+            let sent = match (selected_history.take(), replay_settled) {
+                (Some(history), Some(settled)) => {
+                    self.send_replication_from_settled(env_id, session, &message, history, settled)
+                }
+                (None, None) => self.send_replication(env_id, session, &message),
+                _ => return Err(Error::state("team_bootstrap_local_state_changed")),
+            };
+            if sent.is_err() {
                 self.drop_session(env_id, &fp, Some(session));
                 return Ok(());
             }
+        }
+        if let Some(parent) = operation {
+            parent.check_unlocked()?;
         }
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(env) = envs.get_mut(env_id)
@@ -7651,14 +9808,16 @@ impl TeamSync {
         Ok(())
     }
     fn persist_peer_vectors(&self, env_id: &str) -> Result<()> {
-        let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
-        let Some(env) = envs.get(env_id) else {
-            return Ok(());
+        let vectors = {
+            let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(env) = envs.get(env_id) else {
+                return Ok(());
+            };
+            json!(env.peer_vectors)
         };
-        self.ctx.state.write_json(
-            &format!("team/{env_id}/peer_vectors.json"),
-            &json!(env.peer_vectors),
-        )
+        self.ctx
+            .state
+            .write_json(&format!("team/{env_id}/peer_vectors.json"), &vectors)
     }
     fn handle_commit(
         &self,
@@ -7688,14 +9847,19 @@ impl TeamSync {
         if commit.env_id != env_id {
             return Ok(());
         }
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        let _selected_reception = self.selected_control_started(env_id, session, &history);
         let receive = |live: bool| -> Result<&'static str> {
-            let _lock = self.ctx.state.lock()?;
             let store = CommitStore::new(self.ctx.state, env_id);
-            if live {
-                commit::receive_live_commit(&store, &commit, commit::now_ms(), Some(self.ctx.audit))
-            } else {
-                commit::receive_commit(&store, &commit, commit::now_ms(), Some(self.ctx.audit))
-            }
+            commit::receive_runtime_with_input(
+                &store,
+                &commit,
+                commit::now_ms(),
+                Some(self.ctx.audit),
+                !live,
+                &history,
+                &self.ctx,
+            )
         };
         let mut outcome = receive(true)?;
         if outcome == "early" {
@@ -7708,7 +9872,13 @@ impl TeamSync {
         if outcome == "accepted" {
             // As in `submit_commit`: the pickup baseline is left alone and the
             // seen-set gates the (single) rebroadcast.
-            self.refold(env_id)?;
+            if history.is_scoped() {
+                self.refold_with_input(env_id, &history)?;
+            } else {
+                self.refold(env_id)?;
+            }
+            history.check()?;
+            drop(history);
             if self.commit_first_seen(&commit) {
                 self.broadcast(
                     env_id,
@@ -7790,39 +9960,99 @@ impl TeamSync {
     /// previous fold is reused instead of re-folding the whole commit log
     /// (one lookup per replayed/received fact and per incident).
     fn relaxed_document(&self, env_id: &str) -> Result<Arc<Value>> {
-        let vector_key = CommitStore::new(self.ctx.state, env_id).vector()?;
+        #[cfg(test)]
+        let _stage = commit::history_testing::span(self.ctx.state, "relaxed_document");
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        self.relaxed_document_with_input(env_id, &history)
+    }
+    fn relaxed_document_with_input(
+        &self,
+        env_id: &str,
+        parent: &commit::HistorySession<'_>,
+    ) -> Result<Arc<Value>> {
+        let history = parent.nested(self.ctx.state, env_id)?;
+        // Only the ordinary branch consumes the legacy vector-keyed cache.
+        // Selected callers always settle and fold the current complete raw
+        // epoch, so acquiring an unused cache key adds no authority.
+        let vector_key = if history.is_scoped() {
+            None
+        } else {
+            Some(history.acquire()?.vector()?)
+        };
         let (mut facts, generation) = {
             let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             let env = envs
                 .get(env_id)
                 .ok_or_else(|| Error::invalid_input("team_env_unknown"))?;
-            if let Some((cached_key, cached)) = &env.relaxed_cache
-                && *cached_key == vector_key
+            if !history.is_scoped()
+                && let Some((cached_key, cached)) = &env.relaxed_cache
+                && Some(cached_key) == vector_key.as_ref()
             {
                 return Ok(cached.clone());
             }
             (env.facts.clone(), env.relaxed_generation)
         };
+        if history.is_scoped() {
+            facts = load_facts_with_input(&self.ctx, env_id, &history)?.0;
+        }
+        let input = history.acquire()?;
         facts.removed_members.clear();
         #[cfg(test)]
         self.relaxed_folds.fetch_add(1, Ordering::SeqCst);
-        let document = Arc::new(
-            fold::fold(
-                env_id,
-                CommitStore::new(self.ctx.state, env_id).all_commits()?,
-                Some(&facts),
-                None,
-                None,
-                None,
-            )?
-            .document,
-        );
+        let fold_originals = |live| -> Result<Arc<Value>> {
+            Ok(Arc::new(
+                fold::fold(env_id, live, Some(&facts), None, None, None)?.document,
+            ))
+        };
+        let document = if history.is_scoped() {
+            // One full raw boundary surrounds adjacent original copies and
+            // the unchanged pure fold; no callback or mutation intervenes.
+            input.with_retained_io(self.ctx.state, env_id, |reads| {
+                let live = reads.commits()?;
+                reads.reserve_fold(&live, Some(&facts), 0)?;
+                fold_originals(live)
+            })?
+        } else {
+            let live = input.commits()?;
+            input.reserve_fold(&live, Some(&facts), 0)?;
+            fold_originals(live)?
+        };
+        history.check()?;
         let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(env) = envs.get_mut(env_id)
+        if let Some(vector_key) = vector_key
+            && let Some(env) = envs.get_mut(env_id)
             && env.relaxed_generation == generation
         {
             env.relaxed_cache = Some((vector_key, document.clone()));
         }
+        Ok(document)
+    }
+    fn relaxed_document_from_settled<'a>(
+        &self,
+        env_id: &str,
+        history: &commit::HistorySession<'a>,
+        settled: &SettledFacts<'a>,
+    ) -> Result<Arc<Value>> {
+        if !std::ptr::eq(history.state(), self.ctx.state) || history.env() != env_id {
+            return Err(Error::state("team_bootstrap_local_state_changed"));
+        }
+        history.check()?;
+        let document = history.with_fact_originals(&settled.seal, |reads| {
+            let facts = &settled.facts;
+            let live = reads.commits()?;
+            // Reserve the additional Facts copy separately, then the
+            // unchanged complete fold, before copying. Clearing the removed
+            // set cannot increase either reservation's original envelope.
+            reads.reserve_fact_copy()?;
+            reads.reserve_fold(&live, Some(facts), 0)?;
+            let mut facts = facts.clone();
+            facts.removed_members.clear();
+            #[cfg(test)]
+            self.relaxed_folds.fetch_add(1, Ordering::SeqCst);
+            Ok(Arc::new(
+                fold::fold(env_id, live, Some(&facts), None, None, None)?.document,
+            ))
+        })?;
         Ok(document)
     }
     /// `_known_device_record`.
@@ -7830,7 +10060,18 @@ impl TeamSync {
         member_device_record(self.relaxed_document(env_id).ok()?.as_ref(), fp)
     }
     fn role_document_for_removal(&self, env_id: &str, author: &str, target: &str) -> Result<Value> {
-        let (mut facts, _, authors) = load_facts(&self.ctx, env_id)?;
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        self.role_document_for_removal_with_input(env_id, author, target, &history)
+    }
+    fn role_document_for_removal_with_input(
+        &self,
+        env_id: &str,
+        author: &str,
+        target: &str,
+        parent: &commit::HistorySession<'_>,
+    ) -> Result<Value> {
+        let history = parent.nested(self.ctx.state, env_id)?;
+        let (mut facts, _, authors) = load_facts_with_input(&self.ctx, env_id, &history)?;
         if facts.removed_members.contains(author)
             && authors
                 .get(author)
@@ -7838,17 +10079,25 @@ impl TeamSync {
         {
             facts.removed_members.remove(author);
         }
-        Ok(fold::fold(
-            env_id,
-            CommitStore::new(self.ctx.state, env_id).all_commits()?,
-            Some(&facts),
-            None,
-            None,
-            None,
-        )?
-        .document)
+        let input = history.acquire()?;
+        let commits = input.commits()?;
+        input.reserve_fold(&commits, Some(&facts), 0)?;
+        let document = fold::fold(env_id, commits, Some(&facts), None, None, None)?.document;
+        history.check()?;
+        Ok(document)
     }
     fn validate_incoming_fact(&self, env_id: &str, fact: &Fact) -> Result<bool> {
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        self.validate_incoming_fact_with_input(env_id, fact, &history)
+    }
+    fn validate_incoming_fact_with_input(
+        &self,
+        env_id: &str,
+        fact: &Fact,
+        parent: &commit::HistorySession<'_>,
+    ) -> Result<bool> {
+        let history = parent.nested(self.ctx.state, env_id)?;
+        history.charge(4096, 65_536)?;
         let hash = fact.hash()?;
         {
             let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
@@ -7863,7 +10112,15 @@ impl TeamSync {
             self.audit_fact_rejected(env_id, fact, "team_fact_target_invalid");
             return Ok(false);
         }
-        let Some(record) = self.known_record(env_id, &fact.author) else {
+        let record = if history.is_scoped() {
+            member_device_record(
+                self.relaxed_document_with_input(env_id, &history)?.as_ref(),
+                &fact.author,
+            )
+        } else {
+            self.known_record(env_id, &fact.author)
+        };
+        let Some(record) = record else {
             self.audit_fact_rejected(env_id, fact, "team_fact_signature_invalid");
             return Ok(false);
         };
@@ -7872,18 +10129,29 @@ impl TeamSync {
             return Ok(false);
         }
         let doc = if fact.kind == "member_removed" {
-            self.role_document_for_removal(
-                env_id,
-                &fact.author,
-                fact.target["fingerprint"].as_str().unwrap_or(""),
-            )?
+            if history.is_scoped() {
+                self.role_document_for_removal_with_input(
+                    env_id,
+                    &fact.author,
+                    fact.target["fingerprint"].as_str().unwrap_or(""),
+                    &history,
+                )?
+            } else {
+                self.role_document_for_removal(
+                    env_id,
+                    &fact.author,
+                    fact.target["fingerprint"].as_str().unwrap_or(""),
+                )?
+            }
         } else {
-            crate::team::membership::load_environment(&self.ctx, env_id)?.document
+            crate::team::membership::load_environment_with_input(&self.ctx, env_id, &history)?
+                .document
         };
         if !fact_role_ok(&doc, &fact.kind, &fact.author, &fact.target) {
             self.audit_fact_rejected(env_id, fact, "team_fact_not_authorized");
             return Ok(false);
         }
+        history.check()?;
         Ok(true)
     }
     fn repair_member_removals(&self, env_id: &str) -> Result<()> {
@@ -7940,7 +10208,18 @@ impl TeamSync {
         Ok(())
     }
     fn handle_fact(&self, env_id: &str, session: &Arc<dyn Session>, message: &Value) -> Result<()> {
-        let _lock = self.ctx.state.lock()?;
+        #[cfg(test)]
+        let _stage = commit::history_testing::span(self.ctx.state, "handle_fact");
+        #[cfg(test)]
+        crate::import_barrier::opus_cost::protocol_event(
+            self.ctx.state,
+            env_id,
+            "fact_handler_entered",
+        );
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        let _selected_reception = self.selected_control_started(env_id, session, &history);
+        #[cfg(test)]
+        let _fact_observation = history.observe_control("incoming_fact_operation");
         let Ok(fact) = Fact::from_dict(&message["fact"]) else {
             return Ok(());
         };
@@ -7950,14 +10229,42 @@ impl TeamSync {
         {
             return Ok(());
         }
-        if self.validate_incoming_fact(env_id, &fact)? && self.store_fact(env_id, &fact)? {
+        let valid = if history.is_scoped() {
+            self.validate_incoming_fact_with_input(env_id, &fact, &history)?
+        } else {
+            self.validate_incoming_fact(env_id, &fact)?
+        };
+        #[cfg(test)]
+        crate::import_barrier::opus_cost::protocol_event(
+            self.ctx.state,
+            env_id,
+            if valid {
+                "incoming_fact_valid"
+            } else {
+                "incoming_fact_invalid"
+            },
+        );
+        if valid
+            && if history.is_scoped() {
+                self.store_fact_with_input(env_id, &fact, &history)?
+            } else {
+                self.store_fact(env_id, &fact)?
+            }
+        {
             if fact.kind == "member_removed"
                 && let Some(fp) = fact.target["fingerprint"].as_str()
             {
                 self.drain_removed(env_id, fp);
             }
-            let folded = self.refold(env_id);
-            drop(_lock);
+            let folded = if history.is_scoped() {
+                self.refold_with_input(env_id, &history)
+            } else {
+                self.refold(env_id)
+            };
+            let defer_notice = history.is_scoped(); // Routing only.
+            #[cfg(test)]
+            drop(_fact_observation);
+            drop(history);
             // Even when that refold failed: the fact is stored, and the
             // poll's retry folds it in (issue #51).
             self.audit_fact_apply(env_id, &fact);
@@ -7968,7 +10275,21 @@ impl TeamSync {
             );
             if fact.kind == "member_removed" {
                 if fact.target["fingerprint"].as_str().is_some() {
-                    self.send_removal_notice(env_id, &fact, Some(&session.peer().fingerprint()));
+                    if defer_notice {
+                        self.defer_send(
+                            env_id,
+                            fact.to_dict(),
+                            Some(&session.peer().fingerprint()),
+                            true,
+                        );
+                        self.flush_deferred_sends();
+                    } else {
+                        self.send_removal_notice(
+                            env_id,
+                            &fact,
+                            Some(&session.peer().fingerprint()),
+                        );
+                    }
                 }
             }
             folded?;
@@ -8331,6 +10652,14 @@ impl TeamSync {
         self.send_incident_for_all_envs(summaries)
     }
     fn retry_pending_incidents_to(&self, env_id: &str, session: &Arc<dyn Session>) {
+        self.retry_pending_incidents_to_from(env_id, session, None);
+    }
+    fn retry_pending_incidents_to_from(
+        &self,
+        env_id: &str,
+        session: &Arc<dyn Session>,
+        operation: Option<&commit::HistoryResume<'_>>,
+    ) {
         let fp = session.peer().fingerprint();
         let pending = {
             let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
@@ -8347,14 +10676,14 @@ impl TeamSync {
             if self.draining(env_id, &fp) {
                 break;
             }
-            if self
-                .send_replication(
-                    env_id,
-                    session,
-                    &json!({"type":"INCIDENT","fact":fact.to_dict()}),
-                )
-                .is_err()
-            {
+            let message = json!({"type":"INCIDENT","fact":fact.to_dict()});
+            let sent = match operation {
+                Some(parent) => {
+                    self.send_replication_with_operation(env_id, session, &message, parent)
+                }
+                None => self.send_replication(env_id, session, &message),
+            };
+            if sent.is_err() {
                 self.drop_session(env_id, &fp, Some(session));
                 break;
             }
@@ -8397,6 +10726,18 @@ impl TeamSync {
     /// One poll tick. An environment that fails holds up no other (section
     /// 6.4): each is polled, and the first error is returned.
     pub fn poll(&self) -> Result<()> {
+        #[cfg(test)]
+        let _stage = commit::history_testing::span(self.ctx.state, "poll");
+        // A current authenticated handler must get the filesystem between
+        // its bounded unlock/reacquire stages. Global discovery is background
+        // work too; running it before the per-env check defeats that priority.
+        let control_busy = self
+            .known_envs()
+            .iter()
+            .any(|id| self.bootstrap_runtime.has_job(id) || self.personal_control_busy(id));
+        if !control_busy && let Some(this) = self.this.upgrade() {
+            self.bootstrap_runtime.poll(this)?;
+        }
         self.flush_deferred_sends();
         let now = Instant::now();
         let mut failed = None;
@@ -8405,27 +10746,48 @@ impl TeamSync {
                 .last_discovery
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
-            if now.duration_since(*last) > Duration::from_secs(1) {
+            if !control_busy && now.duration_since(*last) > Duration::from_secs(1) {
                 *last = now;
                 drop(last);
                 failed = self.discover().err();
             }
         }
         for id in self.known_envs() {
+            // Coalesce background work while the actual handed-off current
+            // session owns control processing. It retains the same bounded
+            // operation; this observation grants no membership or READY.
             let polled = self.poll_env(&id, now);
             self.note_poll_failure(&id, polled.as_ref().err());
             if let Err(error) = polled {
                 failed.get_or_insert(error);
             }
-            self.write_sync_state(&id, false);
+            if !self.bootstrap_runtime.has_job(&id) && !self.personal_control_busy(&id) {
+                self.write_sync_state_after_poll(&id);
+            }
         }
         self.flush_deferred_sends();
         failed.map_or(Ok(()), Err)
     }
     fn poll_env(&self, env_id: &str, now: Instant) -> Result<()> {
-        let feature_required =
-            crate::tombstone::support_required(self.ctx.state, env_id).unwrap_or(true);
-        let advanced = self.advance_env(env_id, now);
+        let defer_background =
+            self.bootstrap_runtime.has_job(env_id) || self.personal_control_busy(env_id);
+        // Required-feature DATA cannot affect the close predicate when every
+        // current gate already supports it. Avoid an independent disk scan in
+        // that case while an authenticated handler owns the operation.
+        let inspect_feature = !defer_background
+            || self
+                .envs
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .get(env_id)
+                .is_some_and(|env| env.gates.values().any(|gate| gate.caps != Some(true)));
+        let feature_required = inspect_feature
+            && crate::tombstone::support_required(self.ctx.state, env_id).unwrap_or(true);
+        let advanced = if defer_background {
+            Ok(None)
+        } else {
+            self.advance_env(env_id, now)
+        };
         let (close, had_session) = {
             let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             let Some(env) = envs.get(env_id) else {
@@ -8469,6 +10831,22 @@ impl TeamSync {
             }
             self.drop_session(env_id, &fp, None);
         }
+        if defer_background {
+            return Ok(());
+        }
+        // Durable advance may have waited for this selected receiver. Its
+        // actual control guard can have started since the first observation;
+        // do not use that old idle observation to queue work in front of it.
+        // Due closes above and an already observed advance error still apply.
+        if self.bootstrap_runtime.has_job(env_id) || self.personal_control_busy(env_id) {
+            #[cfg(test)]
+            crate::import_barrier::opus_cost::protocol_event(
+                self.ctx.state,
+                env_id,
+                "poll_defers_started_control",
+            );
+            return advanced.and_then(|owed| owed.map_or(Ok(()), Err));
+        }
         // Until a failed step succeeds, this poll dials no one and sends no
         // VECTOR (section 6.4), but its due sessions are closed above all the
         // same, so a drained device's window stays bounded (section 4.4).
@@ -8480,10 +10858,19 @@ impl TeamSync {
             .get(env_id)
             .map(|e| e.sessions.values().cloned().collect::<Vec<_>>())
             .unwrap_or_default();
-        for session in sessions {
-            self.service_tombstones(env_id, &session)?;
+        if sessions.len() == 1 {
+            self.service_and_readiness(env_id, &sessions[0])?;
+        } else {
+            for session in sessions {
+                self.service_tombstones(env_id, &session)?;
+            }
+            self.update_readiness(env_id)?;
         }
-        self.update_readiness(env_id)?;
+        // Service/readiness also release and reacquire the real state lock.
+        // Reobserve the current guard before the background vector phase.
+        if self.bootstrap_runtime.has_job(env_id) || self.personal_control_busy(env_id) {
+            return owed.map_or(Ok(()), Err);
+        }
         // Before the periodic VECTORs are picked, so a peer due both ways
         // gets one.
         self.send_due_vectors(env_id, now);
@@ -8536,9 +10923,23 @@ impl TeamSync {
             (dial, send)
         };
         for fp in dial {
+            // The same environment's receipt/activation worker owns its
+            // outbound connection until the ordinary handoff is complete.
+            if self.bootstrap_runtime.has_job(env_id) {
+                #[cfg(test)]
+                crate::import_barrier::opus_cost::protocol_event(
+                    self.ctx.state,
+                    env_id,
+                    "bootstrap_owns_outbound_dial",
+                );
+                continue;
+            }
             self.dial_attempt(env_id, &fp);
         }
         for session in send {
+            if self.bootstrap_runtime.has_job(env_id) || self.personal_control_busy(env_id) {
+                break;
+            }
             self.send_vector(env_id, &session);
         }
         // A refold still owed held up none of the above; the poll reports it
@@ -8552,16 +10953,31 @@ impl TeamSync {
     /// refold produced, and a refold still owed after them is returned
     /// (section 6.4, issue #51).
     fn advance_env(&self, env_id: &str, now: Instant) -> Result<Option<Error>> {
+        #[cfg(test)]
+        let _stage = commit::history_testing::span(self.ctx.state, "advance_env");
         let owed = self.retry_failed_refold(env_id, now).is_err();
         self.pick_up_local_commits(env_id, owed)?;
         self.pick_up_local_facts(env_id, owed)?;
         self.repair_member_removals(env_id)?;
         self.poll_incident_outbox(env_id, now);
         let store = CommitStore::new(self.ctx.state, env_id);
-        let released = store.release_deferred(commit::now_ms(), Some(self.ctx.audit))?;
+        // Deferred servicing is a distinct poll operation. Its one lease
+        // spans preflight, the unlocked prefilter and every fresh-lock append.
+        let (released, deferred_operation) =
+            store.release_deferred_runtime(&self.ctx, commit::now_ms(), Some(self.ctx.audit))?;
         // While a refold is owed, or when this one fails, these are left to
         // the pickup, which broadcasts them once a refold succeeds.
-        if !released.is_empty() && !owed && self.refold(env_id).is_ok() {
+        let refolded = if !released.is_empty() && !owed {
+            if let Some(operation) = deferred_operation {
+                let history = operation.resume()?;
+                self.refold_with_input(env_id, &history).is_ok()
+            } else {
+                self.refold(env_id).is_ok()
+            }
+        } else {
+            false
+        };
+        if !released.is_empty() && !owed && refolded {
             for commit in released {
                 // The next pickup tick sees these as new store commits too;
                 // the seen-set keeps that from broadcasting them again.
@@ -8585,8 +11001,10 @@ impl TeamSync {
     /// `owed`: a failed refold is still owed, so new commits are left for
     /// the pickup after a refold succeeds.
     fn pick_up_local_commits(&self, env_id: &str, owed: bool) -> Result<()> {
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        let input = history.acquire()?;
         let store = CommitStore::new(self.ctx.state, env_id);
-        let current = store.vector()?;
+        let current = input.vector()?;
         let baseline = {
             self.envs
                 .lock()
@@ -8596,24 +11014,64 @@ impl TeamSync {
                 .unwrap_or_default()
         };
         let mut added = Vec::new();
-        for (fp, hi) in &current {
-            // `seq_lo = baseline.get(fp, 0)`; `range(seq_lo + 1, seq_hi + 1)`.
-            let mut seq = match baseline.get(fp) {
-                Some(lo) => lo + 1,
-                None => PyInt::from(1),
-            };
-            while seq <= *hi {
-                if let Some(commit) = store.get(fp, &seq)? {
-                    added.push(commit);
+        if history.is_scoped() {
+            added = input
+                .commits()?
+                .into_iter()
+                .filter(|c| {
+                    c.author_seq > baseline.get(&c.author).cloned().unwrap_or_else(PyInt::zero)
+                        && c.author_seq
+                            <= current.get(&c.author).cloned().unwrap_or_else(PyInt::zero)
+                })
+                .collect();
+            history.charge(
+                (added.len() as u64)
+                    .checked_mul(added.len() as u64)
+                    .ok_or_else(|| Error::state("team_bootstrap_limit_exceeded"))?,
+                0,
+            )?;
+            added.sort_by(|a, b| {
+                a.author
+                    .cmp(&b.author)
+                    .then(a.author_seq.cmp(&b.author_seq))
+            });
+        } else {
+            for (fp, hi) in &current {
+                // `seq_lo = baseline.get(fp, 0)`; `range(seq_lo + 1, seq_hi + 1)`.
+                let mut seq = match baseline.get(fp) {
+                    Some(lo) => lo + 1,
+                    None => PyInt::from(1),
+                };
+                while seq <= *hi {
+                    if let Some(commit) = store.get(fp, &seq)? {
+                        added.push(commit);
+                    }
+                    seq = &seq + 1;
                 }
-                seq = &seq + 1;
             }
         }
         // The baseline moves only once a refold succeeds: while one is owed,
         // or when this one fails (noted and retried by the poll), the pickup
         // after a refold succeeds folds and broadcasts these (issue #51).
-        if !added.is_empty() && (owed || self.refold(env_id).is_err()) {
+        if !added.is_empty() && (owed || self.refold_with_input(env_id, &history).is_err()) {
             return Ok(());
+        }
+        if history.is_scoped() {
+            let fresh = history.acquire()?;
+            let observed = fresh.vector()?;
+            if current
+                .iter()
+                .any(|(author, seq)| observed.get(author).is_none_or(|now| now < seq))
+            {
+                return Err(Error::state("team_bootstrap_local_state_changed"));
+            }
+            let originals = fresh.commits()?;
+            if added
+                .iter()
+                .any(|entry| !originals.iter().any(|now| now == entry))
+            {
+                return Err(Error::state("team_bootstrap_local_state_changed"));
+            }
         }
         if let Some(env) = self
             .envs
@@ -8623,6 +11081,9 @@ impl TeamSync {
         {
             env.last_known_vector = current;
         }
+        history.check()?;
+        drop(input);
+        drop(history);
         if !added.is_empty() {
             for commit in added {
                 if self.commit_first_seen(&commit) {
@@ -8693,7 +11154,7 @@ impl TeamSync {
     /// `owed`: a failed refold is still owed, so the poll's retry rather than
     /// a refold here folds the facts picked up.
     fn pick_up_local_facts(&self, env_id: &str, owed: bool) -> Result<()> {
-        let _lock = self.ctx.state.lock()?;
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
         let stamp = self.fact_file_stamp(env_id)?;
         if self
             .envs
@@ -8707,16 +11168,17 @@ impl TeamSync {
         #[cfg(test)]
         self.fact_pickup_loads.fetch_add(1, Ordering::SeqCst);
 
-        let (_, admitted, _) = load_facts(&self.ctx, env_id)?;
-        let lines = self
-            .ctx
-            .state
-            .read_lines(&format!("team/{env_id}/facts.jsonl"), None)?;
+        let (_, admitted, _) = load_facts_with_input(&self.ctx, env_id, &history)?;
+        let lines = history
+            .acquire()?
+            .read_lines(&format!("team/{env_id}/facts.jsonl"))?;
         let mut refolding = !owed;
         // Scan by accepted fact hash, not a prefix count: another process may
         // append an unvalidated line before an already accepted remote fact.
         for line in &lines {
-            let Ok(value) = pyjson::loads(line) else {
+            history.check()?;
+            let Ok(value) = history.parse_line(line) else {
+                history.check()?;
                 self.quarantine_local_fact(env_id, line, "team_fact_malformed")?;
                 continue;
             };
@@ -8744,7 +11206,11 @@ impl TeamSync {
                 self.quarantine_local_fact(env_id, line, "team_fact_rejected")?;
                 continue;
             }
-            receipt_fact(&self.ctx, &fact)?;
+            if history.is_scoped() {
+                receipt_fact_with_input(&self.ctx, &fact, &history)?;
+            } else {
+                receipt_fact(&self.ctx, &fact)?;
+            }
             let inserted = {
                 let mut envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(env) = envs.get_mut(env_id) {
@@ -8786,9 +11252,17 @@ impl TeamSync {
             }
             // A refold that fails is noted, and the poll's retry folds in this
             // fact and the rest; they are announced all the same (issue #51).
-            if refolding && self.refold(env_id).is_err() {
+            if refolding
+                && (if history.is_scoped() {
+                    self.refold_with_input(env_id, &history)
+                } else {
+                    self.refold(env_id)
+                })
+                .is_err()
+            {
                 refolding = false;
             }
+            history.check()?;
             self.audit_fact_apply(env_id, &fact);
             self.broadcast(env_id, &json!({"type":"FACT","fact":fact.to_dict()}), None);
             if fact.kind == "member_removed" {
@@ -8797,6 +11271,7 @@ impl TeamSync {
                 }
             }
         }
+        history.check()?;
         let stamp = self.fact_file_stamp(env_id)?;
         if let Some(env) = self
             .envs
@@ -8953,6 +11428,16 @@ impl TeamSync {
         address: &str,
         session: Arc<dyn Session>,
     ) -> Result<bool> {
+        self.wire_dialed_session_for_handoff(env_id, fp, address, session, false)
+    }
+    fn wire_dialed_session_for_handoff(
+        &self,
+        env_id: &str,
+        fp: &str,
+        address: &str,
+        session: Arc<dyn Session>,
+        preserve_current: bool,
+    ) -> Result<bool> {
         // A successful dial also becomes a redial candidate (as through
         // `set_peer_address`); only the persisted address is Python's step.
         if valid_fp(fp) && !address.is_empty() {
@@ -8972,14 +11457,23 @@ impl TeamSync {
         // record, before CAPS may block or any observer reads that record.
         let transport_hint =
             super::link::valid_link_address(address).then_some(LINK_TRANSPORT_KIND);
-        if !self.accept_session_with_transport(env_id, session.clone(), false, transport_hint) {
+        let accepted = if preserve_current {
+            self.accept_session_for_handoff(env_id, session.clone(), false, transport_hint, true)
+        } else {
+            self.accept_session_with_transport(env_id, session.clone(), false, transport_hint)
+        };
+        if !accepted {
             return Ok(false);
+        }
+        if preserve_current {
+            self.personal_handoff_complete(env_id, &session)?;
         }
         self.audit_event("team_session_open", env_id, Some(fp), None, None);
         self.start_receiver(env_id.into(), session.clone());
-        self.send_vector(env_id, &session);
-        self.send_peers(env_id, &session)?;
-        self.retry_pending_incidents_to(env_id, &session);
+        if !self.send_initial_vector_after_acceptance(env_id, &session) {
+            self.send_peers(env_id, &session)?;
+            self.retry_pending_incidents_to(env_id, &session);
+        }
         // CAPS or an initial send can already have closed this accepted
         // session. Report that failure to a synchronous join instead of
         // returning success and waiting for a pending mark that cannot arrive.
@@ -9013,6 +11507,74 @@ impl TeamSync {
         let fp = session.peer().fingerprint();
         self.wire_dialed_session(env_id, &fp, address, session)
             .map(|_| ())
+    }
+    /// A committed Personal receiver can reconnect to an inviter whose ACK
+    /// was already durable. Replay only the bounded CAPS/first M1 control
+    /// consumed while selecting protocols into a newly reset ordinary gate.
+    /// No receipt, previous vector or cached agreement marks this gate ready.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn personal_adopt_ordinary(
+        &self,
+        env_id: &str,
+        session: Arc<dyn Session>,
+        address: &str,
+        capabilities: &Value,
+        first: &Value,
+        registration: &super::bootstrap::BootstrapRegistration<'_>,
+        sent_capabilities: &super::bootstrap::SentCapabilities,
+    ) -> Result<()> {
+        if capabilities["type"] != "SYNC_CAPS"
+            || !(super::tombstone_gate::is_control(first["type"].as_str().unwrap_or(""))
+                || first["type"] == "VECTOR")
+        {
+            return Err(Error::invalid_input("team_sync_control_malformed"));
+        }
+        super::tombstone_gate::validate(capabilities)?;
+        if first["type"] == "VECTOR" {
+            if first.as_object().is_none_or(|v| v.len() != 2)
+                || first["vector"].as_object().is_none_or(|v| {
+                    v.len() > 256
+                        || v.iter().any(|(fp, seq)| {
+                            !valid_fp(fp) || PyInt::from_json_integer(seq).is_none_or(|n| n < 0)
+                        })
+                })
+            {
+                return Err(Error::invalid_input("team_sync_control_malformed"));
+            }
+        } else {
+            super::tombstone_gate::validate(first)?;
+        }
+        {
+            let history = commit::HistorySession::open_recovery_entry(&self.ctx, env_id)?;
+            self.register_env_with_bootstrap_slot(env_id, registration, &history)?;
+        }
+        let fp = session.peer().fingerprint();
+        self.set_peer_address(env_id, &fp, address)?;
+        if !self.accept_session_after_capabilities(
+            env_id,
+            session.clone(),
+            false,
+            None,
+            true,
+            Some(sent_capabilities),
+        ) {
+            // No control consumed on losing S0 may populate S1's gate.
+            return self.personal_handoff_complete(env_id, &session);
+        }
+        self.personal_handoff_complete(env_id, &session)?;
+        self.audit_event("team_session_open", env_id, Some(&fp), None, None);
+        self.handle_message(env_id, &session, capabilities)?;
+        self.handle_message(env_id, &session, first)?;
+        self.start_receiver(env_id.into(), session.clone());
+        // The replayed fresh CAPS handler already sent this gate's vector.
+        // Do not enqueue a second stale snapshot behind the first exchange.
+        // The replayed selected CAPS already sent the initial routing
+        // metadata under its own unchanged parent operation and budget.
+        self.retry_pending_incidents_to(env_id, &session);
+        if session.is_closed() {
+            return Err(Error::state("team_session_closed"));
+        }
+        Ok(())
     }
     /// Write `team/ENV_ID/sync_state.json` from now on (`serve`; docs/remote-sync.md §3.3).
     pub fn enable_sync_state(&self) {
@@ -9089,6 +11651,77 @@ impl TeamSync {
     /// and what it says changed, at most every
     /// [`super::sync_status::WRITE_INTERVAL`] unless `force`d (on stop).
     fn write_sync_state(&self, env_id: &str, force: bool) {
+        self.write_sync_state_using(env_id, force, |path, document| {
+            self.ctx.state.write_json(path, document)
+        });
+    }
+    fn write_personal_metadata_with_input(
+        &self,
+        env_id: &str,
+        parent: &commit::HistorySession<'_>,
+        path: &str,
+        document: &Value,
+    ) -> Result<()> {
+        let history = parent.nested(self.ctx.state, env_id)?;
+        if path != format!("team/{env_id}/sync_state.json")
+            && path != format!("team/{env_id}/peer_vectors.json")
+        {
+            return Err(Error::state("team_bootstrap_local_state_changed"));
+        }
+        let io = history.import_io()?;
+        let view = crate::import_barrier::VisibilityEpoch::capture(&io)?;
+        view.require_path(path)?;
+        view.finish()?;
+        let raw = history.encode_import_record(document)?;
+        history.preflight_inventory()?;
+        crate::import_barrier::write_cache_metadata_with_history(&history, path, &raw)
+    }
+    fn write_sync_state_with_input(
+        &self,
+        env_id: &str,
+        force: bool,
+        history: &commit::HistorySession<'_>,
+    ) {
+        self.write_sync_state_using(env_id, force, |path, document| {
+            self.write_personal_metadata_with_input(env_id, history, path, document)
+        });
+    }
+    fn write_sync_state_after_poll(&self, env_id: &str) {
+        // poll_env and its retained operation have ended. A Runtime handoff
+        // is only a routing hint; this independent metadata operation still
+        // authenticates the actual current root, identity and visibility.
+        if !self.sync_state.load(Ordering::SeqCst)
+            || !self.personal_ordinary_owns_session(env_id).unwrap_or(false)
+        {
+            self.write_sync_state(env_id, false);
+            return;
+        }
+        if self
+            .envs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(env_id)
+            .is_none_or(|env| {
+                env.sync
+                    .checked
+                    .is_some_and(|at| at.elapsed() < super::sync_status::WRITE_INTERVAL)
+            })
+        {
+            return;
+        }
+        match commit::HistorySession::open_runtime(self.ctx.state, env_id) {
+            Ok(history) => self.write_sync_state_with_input(env_id, false, &history),
+            Err(error) => self.write_sync_state_using(env_id, false, |_, _| Err(error)),
+        }
+    }
+    fn write_sync_state_using(
+        &self,
+        env_id: &str,
+        force: bool,
+        write: impl FnOnce(&str, &Value) -> Result<()>,
+    ) {
+        #[cfg(test)]
+        let _stage = commit::history_testing::span(self.ctx.state, "write_sync_state");
         if !self.sync_state.load(Ordering::SeqCst) {
             return;
         }
@@ -9120,7 +11753,7 @@ impl TeamSync {
         };
         let document = super::sync_status::file_value((self.ctx.clock)(), &mine, &peers);
         let path = super::sync_status::path(env_id);
-        if self.ctx.state.write_json(&path, &document).is_err() {
+        if write(&path, &document).is_err() {
             let _ = std::fs::remove_file(self.ctx.state.path.join(path));
             return;
         }
@@ -9138,17 +11771,29 @@ impl TeamSync {
         }
     }
     pub fn status(&self, env_id: &str) -> Result<Value> {
-        self.update_readiness(env_id)?;
-        let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
-        let env = envs
-            .get(env_id)
-            .ok_or_else(|| Error::not_found("team_env_unknown"))?;
-        let mut sessions: Vec<_> = env.sessions.keys().cloned().collect();
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        self.update_readiness_with_input(env_id, &history)?;
+        let (mut sessions, synced_at, removed_members) = {
+            let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
+            let env = envs
+                .get(env_id)
+                .ok_or_else(|| Error::not_found("team_env_unknown"))?;
+            history.charge(
+                env.sessions.len() as u64 + env.facts.removed_members.len() as u64,
+                ((env.sessions.len() + env.facts.removed_members.len()) as u64)
+                    .checked_mul(128)
+                    .ok_or_else(|| Error::state("team_bootstrap_limit_exceeded"))?,
+            )?;
+            (
+                env.sessions.keys().cloned().collect::<Vec<_>>(),
+                env.synced_at,
+                env.facts.removed_members.clone(),
+            )
+        };
         sessions.sort();
-        let conflicts = self
-            .ctx
-            .state
-            .read_json(&format!("team/{env_id}/removal_conflicts.json"), json!({}))?;
+        let input = history.acquire()?;
+        let conflicts =
+            input.read_json(&format!("team/{env_id}/removal_conflicts.json"), json!({}))?;
         if conflicts.as_object().is_none_or(|values| {
             values.values().any(|value| {
                 !value["target"].as_str().is_some_and(valid_fp)
@@ -9165,24 +11810,29 @@ impl TeamSync {
             .ok_or_else(|| Error::state("state_corrupt"))?
             .values()
             .filter(|value| {
-                value["target"].as_str().is_some_and(|target| {
-                    valid_fp(target) && !env.facts.removed_members.contains(target)
-                })
+                value["target"]
+                    .as_str()
+                    .is_some_and(|target| valid_fp(target) && !removed_members.contains(target))
             })
             .map(|value| {
                 json!({"target":value["target"],"author":value["author"],"hash":value["hash"],
                 "reason":"team_fact_not_authorized"})
             })
             .collect();
+        let vector = input.vector()?;
+        let pending_deferred = input.pending_deferred_count()?;
+        history.check()?;
         Ok(
-            json!({"env_id":env_id,"vector":CommitStore::new(self.ctx.state,env_id).vector()?,"sessions":sessions,"synced_at":env.synced_at.map(|ts|iso(Some(ts))),"pending_deferred":CommitStore::new(self.ctx.state,env_id).deferred_commits()?.len(),"rejected_removals":rejected_removals}),
+            json!({"env_id":env_id,"vector":vector,"sessions":sessions,"synced_at":synced_at.map(|ts|iso(Some(ts))),"pending_deferred":pending_deferred,"rejected_removals":rejected_removals}),
         )
     }
 
     pub fn compact(&self, env_id: &str) -> Result<Value> {
         // As in refold: StateDir first, then only short in-memory envs access.
         // Keep writers serialized from fresh input collection through pruning.
-        let state_lock = self.ctx.state.lock()?;
+        let history = commit::HistorySession::open_runtime(self.ctx.state, env_id)?;
+        #[cfg(test)]
+        crate::import_barrier::testing::hit(self.ctx.state, env_id, "compact-opened")?;
         let peer_vectors = {
             let envs = self.envs.lock().unwrap_or_else(|e| e.into_inner());
             let env = envs
@@ -9190,17 +11840,31 @@ impl TeamSync {
                 .ok_or_else(|| Error::not_found("team_env_unknown"))?;
             env.peer_vectors.clone()
         };
-        let (facts, _, _) = load_facts(&self.ctx, env_id)?;
-        let store = CommitStore::new(self.ctx.state, env_id);
-        let commits = store.all_commits()?;
+        let (facts, _, _) = load_facts_with_input(&self.ctx, env_id, &history)?;
+        #[cfg(test)]
+        crate::import_barrier::testing::hit(self.ctx.state, env_id, "compact-facts-settled")?;
+        let input = history.acquire()?;
+        #[cfg(test)]
+        crate::import_barrier::testing::hit(self.ctx.state, env_id, "compact-input-acquired")?;
+        let commits = input.commits()?;
+        input.reserve_fold(&commits, Some(&facts), 1)?;
         if commits.is_empty() {
             return Ok(json!({"env_id":env_id,"removed":0,"blocked_by":[]}));
         }
-        let members =
-            fold::fold_with_snapshot(env_id, commits.clone(), self.ctx.state, Some(&facts), None)?
-                .document["members"]
-                .clone();
+        let members = input
+            .fold_with_snapshot(commits.clone(), &facts, None)?
+            .document["members"]
+            .clone();
+        #[cfg(test)]
+        crate::import_barrier::testing::hit(self.ctx.state, env_id, "compact-members-folded")?;
+        #[cfg(not(test))]
         let now = PyInt::from(commit::now_ms());
+        #[cfg(test)]
+        let now = PyInt::from(personal_bootstrap_compaction_age::observe(
+            self.ctx.state,
+            env_id,
+            commit::now_ms(),
+        )?);
         let mut cutoff = None;
         for (i, entry) in commits.iter().enumerate() {
             let (wall, _) = Hlc::parse(&entry.hlc)?;
@@ -9246,6 +11910,9 @@ impl TeamSync {
         if !blocked.is_empty() {
             return Ok(json!({"env_id":env_id,"removed":0,"blocked_by":blocked}));
         }
+        history
+            .acquire()?
+            .reserve_fold(&commits[..=cutoff], Some(&facts), 1)?;
         let snapshot = fold::snapshot_of_prefix(
             env_id,
             commits[..=cutoff].to_vec(),
@@ -9254,6 +11921,8 @@ impl TeamSync {
             &commits,
             Some(self.ctx.audit),
         )?;
+        #[cfg(test)]
+        crate::import_barrier::testing::hit(self.ctx.state, env_id, "compact-prefix-folded")?;
         // Numbered by what it covers, an earlier compaction's commits
         // included (issue #50).
         let total = snapshot
@@ -9269,14 +11938,23 @@ impl TeamSync {
         let prepared =
             compaction_heads::prepare(self.ctx.state, env_id, &snapshot, &commits, &records)?;
         #[cfg(test)]
+        crate::import_barrier::testing::hit(self.ctx.state, env_id, "compact-heads-prepared")?;
+        #[cfg(test)]
         compaction_heads::testing::hit(compaction_heads::testing::Boundary::BeforeSnapshot)?;
+        history.check()?;
+        history.invalidate()?;
         fold::save_snapshot(self.ctx.state, env_id, &total, &snapshot)?;
         #[cfg(test)]
         compaction_heads::testing::hit(compaction_heads::testing::Boundary::AfterSnapshot)?;
+        #[cfg(test)]
+        crate::import_barrier::testing::hit(self.ctx.state, env_id, "compact-snapshot-written")?;
         let record = fold::snapshot_record(Some(&facts), &commits);
         #[cfg(test)]
         compaction_heads::testing::hit(compaction_heads::testing::Boundary::BeforeRecord)?;
+        history.check()?;
+        history.invalidate()?;
         fold::save_snapshot_record(self.ctx.state, env_id, &total, &record)?;
+        history.check()?;
         #[cfg(test)]
         compaction_heads::testing::hit(compaction_heads::testing::Boundary::AfterRecord)?;
         let persisted_record = self
@@ -9293,7 +11971,11 @@ impl TeamSync {
         {
             return Err(Error::state("team_compaction_head_persist_failed"));
         }
+        history.check()?;
+        history.invalidate()?;
         compaction_heads::persist_before_prune(self.ctx.state, env_id, &total, prepared)?;
+        #[cfg(test)]
+        crate::import_barrier::testing::hit(self.ctx.state, env_id, "compact-heads-persisted")?;
         let mut removed = 0;
         {
             for entry in &commits[..=cutoff] {
@@ -9316,6 +11998,8 @@ impl TeamSync {
                 ));
                 #[cfg(test)]
                 compaction_heads::testing::hit(compaction_heads::testing::Boundary::BeforeUnlink)?;
+                history.check()?;
+                history.invalidate()?;
                 if std::fs::remove_file(path).is_ok() {
                     removed += 1;
                     #[cfg(test)]
@@ -9335,8 +12019,19 @@ impl TeamSync {
         {
             env.last_snapshot_total = PyNumber::Int(total.0);
         }
-        drop(state_lock);
-        self.refold(env_id)?;
+        #[cfg(test)]
+        crate::import_barrier::testing::hit(self.ctx.state, env_id, "compact-prune-complete")?;
+        drop(input);
+        if history.is_scoped() {
+            self.refold_with_input(env_id, &history)?;
+            history.check()?;
+            drop(history);
+        } else {
+            drop(history);
+            self.refold(env_id)?;
+        }
+        #[cfg(test)]
+        crate::import_barrier::testing::hit(self.ctx.state, env_id, "compact-refold-complete")?;
         let _ = self.ctx.audit.record(
             "team_compact",
             RecordArgs {
@@ -12394,5 +15089,2663 @@ mod compaction_heads_tests {
                 assert!(f.store().get(&f.fp, f.n + 1).unwrap().is_none());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod personal_bootstrap_restart_age_tests {
+    use crate as zeropw;
+    use crate::{
+        clock,
+        context::{Config, Context},
+        pyjson,
+        team::{
+            commit::{self, CommitStore},
+            envelope,
+            identity::DeviceKey,
+            membership,
+        },
+    };
+    use serde_json::{Value, json};
+    mod runtime {
+        use crate as zeropw;
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/team_personal_bootstrap_runtime.rs"
+        ));
+    }
+    #[test]
+    fn personal_bootstrap_retained_hlc_matches_legacy_and_closes_full_revision() {
+        use crate::team::compaction_heads;
+        let f = runtime::installed(false);
+        for team in f.teams.iter().rev() {
+            team.stop();
+        }
+        let key = DeviceKey::load_or_create(f.a.state, f.a.kms).unwrap();
+        let author = key.fingerprint().unwrap();
+        let owner_cache = std::fs::read(
+            f.a.state
+                .path
+                .join(format!("team/{}/compaction_heads.json", f.env)),
+        )
+        .unwrap();
+        let mut adversarial = pyjson::loads(std::str::from_utf8(&owner_cache).unwrap()).unwrap();
+        adversarial["heads"][0]["commit"]["seen"] =
+            Value::Array((0..1800).map(|i| json!([format!("{i:026}"), 1])).collect());
+        let adversarial = pyjson::dumps(&adversarial, crate::pyjson::DumpOptions::pretty_sorted())
+            .unwrap()
+            .into_bytes();
+        let mut cache_cases = (false, false);
+        for (role, ctx) in [("a", &f.a), ("b", &f.b)] {
+            let cache_name = format!("team/{}/compaction_heads.json", f.env);
+            let cache_raw = match std::fs::read(ctx.state.path.join(&cache_name)) {
+                Ok(raw) => Some(raw),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+                Err(error) => panic!("cache fixture read failed: {error}"),
+            };
+            if let Some(raw) = &cache_raw {
+                let cache = pyjson::loads(std::str::from_utf8(raw).unwrap()).unwrap();
+                assert!(!cache["heads"].as_array().unwrap().is_empty());
+                cache_cases.0 = true;
+            } else {
+                cache_cases.1 = true;
+            }
+            let store = CommitStore::new(ctx.state, &f.env);
+            // The independent unchanged oracle runs before the selected parent.
+            let (live, expected, candidates, comparisons) = {
+                let _lock = ctx.state.lock().unwrap();
+                let live = store.all_commits().unwrap();
+                let mut expected = commit::Hlc::new(7, 9);
+                compaction_heads::observe_cached_hlcs(&store, &live, &mut expected).unwrap();
+                let sequence = store.last_seq(&author).unwrap() + 1;
+                let seen = store.vector().unwrap();
+                let candidates = ["1-0000", "999999999999999-0000"].map(|hlc| {
+                    commit::sign_commit(
+                        &key,
+                        &f.env,
+                        sequence.clone(),
+                        hlc,
+                        &seen,
+                        vec![json!({"op":"settings.update","sync_interval_seconds":12})],
+                    )
+                    .unwrap()
+                });
+                let comparisons = candidates
+                    .iter()
+                    .map(|candidate| {
+                        [Some(live.as_slice()), None].map(|records| {
+                            compaction_heads::cached_hlc_not_above_previous(
+                                &store, candidate, records,
+                            )
+                            .unwrap()
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(comparisons, vec![[true, true], [false, false]]);
+                (live, expected, candidates, comparisons)
+            };
+            let replacement_name = if cache_raw.is_some() {
+                cache_name.clone()
+            } else {
+                format!(
+                    "team/{}/commits/{}/{}.json",
+                    f.env,
+                    author,
+                    candidates[0].author_seq.clone() - 1
+                )
+            };
+            let original = std::fs::read(ctx.state.path.join(&replacement_name)).unwrap();
+            let work = commit::history_testing::Scope::owned(ctx.state);
+            let history = commit::HistorySession::open_runtime(ctx.state, &f.env).unwrap();
+            let input = history.acquire().unwrap();
+            let before = work.snapshot()["charged_work_total"].as_u64().unwrap();
+            let expected_registry = commit::device_registry(&live);
+            let expected_matches = commit::matching_device_records(&live, &expected_registry);
+            assert!(
+                expected_registry[&author] == key.record().unwrap(),
+                "FULL owner record differs"
+            );
+            let (registry, matching) = input
+                .with_retained_io(ctx.state, &f.env, |io| {
+                    Ok((
+                        io.retained_registry()?,
+                        io.retained_matches(&expected_registry)?,
+                    ))
+                })
+                .unwrap();
+            assert!(
+                registry == expected_registry,
+                "FULL registry differs from unchanged oracle"
+            );
+            assert!(
+                matching == expected_matches,
+                "FULL raw matches differ from unchanged oracle"
+            );
+            let mut clock = commit::Hlc::new(7, 9);
+            compaction_heads::observe_cached_hlcs_with_input(&store, &live, &mut clock, &input)
+                .unwrap();
+            assert_eq!(clock, expected);
+            for (candidate, expected) in candidates.iter().zip(&comparisons) {
+                for (records, expected) in [Some(live.as_slice()), None].into_iter().zip(expected) {
+                    assert_eq!(
+                        compaction_heads::cached_hlc_not_above_previous_with_input(
+                            &store, candidate, records, &input
+                        )
+                        .unwrap(),
+                        *expected
+                    );
+                }
+            }
+            assert!(work.snapshot()["charged_work_total"].as_u64().unwrap() > before);
+            let sentinel = commit::Hlc::new(17, 19);
+            history.invalidate().unwrap();
+            let mut unchanged = sentinel.clone();
+            assert_eq!(
+                compaction_heads::observe_cached_hlcs_with_input(
+                    &store,
+                    &live,
+                    &mut unchanged,
+                    &input
+                )
+                .unwrap_err()
+                .reason,
+                "team_bootstrap_local_state_changed"
+            );
+            assert_eq!(unchanged, sentinel);
+            let fresh = history.acquire().unwrap();
+            // Exact bytes with a replaced physical leaf still revoke the input.
+            ctx.state.write_bytes(&replacement_name, &original).unwrap();
+            assert_eq!(
+                compaction_heads::observe_cached_hlcs_with_input(
+                    &store,
+                    &live,
+                    &mut unchanged,
+                    &fresh
+                )
+                .unwrap_err()
+                .reason,
+                "team_bootstrap_local_state_changed"
+            );
+            assert_eq!(unchanged, sentinel);
+            let fresh = history.acquire().unwrap();
+            let other = CommitStore::new(ctx.state, commit::new_env_id(&author).unwrap());
+            assert_eq!(
+                compaction_heads::observe_cached_hlcs_with_input(
+                    &other,
+                    &live,
+                    &mut unchanged,
+                    &fresh
+                )
+                .unwrap_err()
+                .reason,
+                "team_bootstrap_local_state_changed"
+            );
+            assert_eq!(unchanged, sentinel);
+            let refusal: crate::errors::Result<()> =
+                fresh.with_retained_io(ctx.state, &f.env, |io| {
+                    io.pure_cache(&adversarial, || {
+                        panic!("unreserved quadratic coercion reached codec")
+                    })
+                });
+            assert_eq!(refusal.unwrap_err().reason, "team_bootstrap_limit_exceeded");
+            assert!(history.charge(67_108_864, 0).is_err());
+            assert_eq!(
+                compaction_heads::observe_cached_hlcs_with_input(
+                    &store,
+                    &live,
+                    &mut unchanged,
+                    &fresh
+                )
+                .unwrap_err()
+                .reason,
+                "team_bootstrap_limit_exceeded"
+            );
+            assert_eq!(unchanged, sentinel);
+            assert!(
+                std::fs::read(ctx.state.path.join(&replacement_name)).unwrap() == original,
+                "retained original bytes changed"
+            );
+            println!(
+                "PVBOOT_RETAINED_HLC_PARITY {}",
+                json!({"role":role,
+                "signed_compacted_originals":true,"cache_present":cache_raw.is_some(),"legacy_comparisons":4,
+                "generation_and_same_bytes_replacement_refuse":true,
+                "wrong_target_and_shared_budget_refuse":true,"failed_clock_unchanged":true,
+                "work":work.snapshot()})
+            );
+        }
+        assert_eq!(cache_cases, (true, true));
+    }
+
+    #[test]
+    fn personal_bootstrap_cold_tombstone_recovery_closed_stages() {
+        use std::{
+            sync::Arc,
+            time::{Duration, Instant},
+        };
+        use zeropw::team::{sync::TeamSync, transport::TcpTransport};
+        struct Stop(Vec<Arc<TeamSync>>);
+        impl Drop for Stop {
+            fn drop(&mut self) {
+                for team in self.0.iter().rev() {
+                    team.stop();
+                }
+            }
+        }
+        let f = runtime::installed(false);
+        for team in f.teams.iter().rev() {
+            team.stop();
+        }
+        let a_trace = crate::import_barrier::opus_cost::Scope::protocol_trace(f.a.state, &f.env);
+        let b_trace = crate::import_barrier::opus_cost::Scope::protocol_trace(f.b.state, &f.env);
+        let a_work = commit::history_testing::Scope::owned(f.a.state);
+        let b_work = commit::history_testing::Scope::owned(f.b.state);
+        let ak = DeviceKey::load_or_create(f.a.state, f.a.kms).unwrap();
+        let bk = DeviceKey::load_or_create(f.b.state, f.b.kms).unwrap();
+        let afp = ak.fingerprint().unwrap();
+        let bfp = bk.fingerprint().unwrap();
+        let auth =
+            f.a.state
+                .read_json(
+                    &format!("team/{}/bootstrap/authorizations/{bfp}.json", f.env),
+                    Value::Null,
+                )
+                .unwrap();
+        assert_eq!(auth["activated"], true);
+        let receipt_path =
+            f.b.state
+                .path
+                .join(format!("team/{}/bootstrap/receipt.json", f.env));
+        let receipt = std::fs::read(&receipt_path).unwrap();
+        let journal_path =
+            f.b.state
+                .path
+                .join(format!("team/{}/bootstrap/journal.json", f.env));
+        let journal = std::fs::read(&journal_path).unwrap();
+        let trace = Arc::new(RestartTrace::default());
+        let at = TcpTransport::new(ak.clone(), Arc::new(|_, _| None), 64);
+        let bt = TcpTransport::new(bk.clone(), Arc::new(|_, _| None), 64);
+        // Keep A inbound-only and B's background ordinary fallback disabled so
+        // success must use the real committed-receiver reconnect path itself.
+        let ta = TeamSync::new(
+            f.a.clone(),
+            Arc::new(RestartTransport {
+                inner: at.clone(),
+                side: "a",
+                trace: trace.clone(),
+                dial: RestartDial::InboundOnly,
+            }),
+            ak,
+        );
+        let tb = TeamSync::new(
+            f.b.clone(),
+            Arc::new(RestartTransport {
+                inner: bt,
+                side: "b",
+                trace: trace.clone(),
+                dial: RestartDial::PersonalOnly,
+            }),
+            bk,
+        );
+        let _stop = Stop(vec![ta.clone(), tb.clone()]);
+        ta.enable_sync_state();
+        tb.enable_sync_state();
+        ta.start(Some("127.0.0.1:0")).unwrap();
+        tb.register_env(&f.env).unwrap();
+        tb.set_peer_address(&f.env, &afp, &at.bound_address().unwrap())
+            .unwrap();
+        assert!(ta.synced_at(&f.env).is_none());
+        assert!(tb.synced_at(&f.env).is_none());
+        tb.start(None).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(35);
+        loop {
+            let a_ready = ta.synced_at(&f.env).is_some();
+            let b_ready = tb.synced_at(&f.env).is_some();
+            if a_ready && b_ready {
+                break;
+            }
+            if Instant::now() >= deadline {
+                println!(
+                    "PVBOOT_CURRENT_ENDPOINT_METADATA {}",
+                    json!({"predicates":{"a_ready":a_ready,"b_ready":b_ready},"a":restart_metadata(&f.a,&f.env,&bfp),"b":restart_metadata(&f.b,&f.env,&afp),"wire":trace.snapshot()})
+                );
+                println!(
+                    "PVBOOT_COLD_TOMBSTONE_CLOSED_STAGES {}",
+                    json!({"a":a_trace.metrics(),"b":b_trace.metrics(),"a_work":a_work.snapshot(),"b_work":b_work.snapshot()})
+                );
+                panic!(
+                    "activated owner and committed receiver did not reach fresh ordinary agreement"
+                );
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        // A selected ordinary control observation is only a scheduling guard.
+        // This cold owner never performed bootstrap handoff in this Runtime.
+        assert!(!ta.personal_ordinary_owns_session(&f.env).unwrap());
+        assert_eq!(a_trace.metrics().get("initial_vector_waits_caps"), Some(&1));
+        let current = ta.envs.lock().unwrap()[&f.env].sessions[&bfp].clone();
+        let observer = crate::team::bootstrap::Runtime::default();
+        let first = observer.selected_control_started(&f.env, &current).unwrap();
+        let second = observer.selected_control_started(&f.env, &current).unwrap();
+        assert!(observer.ordinary_control_busy(&f.env, &current));
+        assert!(!observer.ordinary_owns_session(&f.env, &current).unwrap());
+        drop(first);
+        assert!(observer.ordinary_control_busy(&f.env, &current));
+        drop(second);
+        assert!(!observer.ordinary_control_busy(&f.env, &current));
+        assert!(!observer.ordinary_owns_session(&f.env, &current).unwrap());
+        assert!(!ta.personal_ordinary_owns_session(&f.env).unwrap());
+        let wire = trace.snapshot();
+        let sent_caps: u64 = wire
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter(|(name, _)| name.starts_with("b:") && name.ends_with(":send:SYNC_CAPS"))
+            .map(|(_, value)| value["count"].as_u64().unwrap())
+            .sum();
+        assert_eq!(
+            sent_caps, 1,
+            "the exact cold socket already completed CAPS before handoff"
+        );
+        assert!(
+            wire.as_object()
+                .unwrap()
+                .keys()
+                .all(|key| !key.contains("BOOTSTRAP_")),
+            "activated-owner restart must not replay bootstrap controls"
+        );
+        assert!(
+            wire.as_object()
+                .unwrap()
+                .keys()
+                .any(|key| key.starts_with("b:") && key.ends_with(":recv:VECTOR"))
+        );
+        assert_eq!(std::fs::read(receipt_path).unwrap(), receipt);
+        assert_eq!(std::fs::read(journal_path).unwrap(), journal);
+        let commits = CommitStore::new(f.a.state, &f.env).all_commits().unwrap();
+        assert_eq!(
+            commits
+                .iter()
+                .flat_map(|c| &c.ops)
+                .filter(|op| op["op"] == "member.add")
+                .count(),
+            1
+        );
+        println!(
+            "PVBOOT_CURRENT_ENDPOINT_FRESH_AGREEMENT {}",
+            json!({"receipt_unchanged":true,"journal_unchanged":true,"member_add_count":1,"wire":wire})
+        );
+        println!(
+            "PVBOOT_COLD_TOMBSTONE_CLOSED_STAGES {}",
+            json!({"a":a_trace.metrics(),"b":b_trace.metrics(),"a_work":a_work.snapshot(),"b_work":b_work.snapshot()})
+        );
+    }
+
+    #[test]
+    fn personal_bootstrap_nonempty_offline_author_closed_stages() {
+        let f = runtime::installed(false);
+        for team in f.teams.iter().rev() {
+            team.stop();
+        }
+        assert!(matches!(
+            commit::receive_commit(
+                &CommitStore::new(f.a.state, &f.env),
+                f.history.last().unwrap(),
+                commit::now_ms(),
+                Some(f.a.audit),
+            )
+            .unwrap(),
+            "accepted" | "duplicate"
+        ));
+        for (role, ctx, version, value, seq) in [
+            (
+                "a",
+                &f.a,
+                "7777777777777777",
+                b"synthetic-offline-a".as_slice(),
+                5,
+            ),
+            (
+                "b",
+                &f.b,
+                "8888888888888888",
+                b"synthetic-offline-b".as_slice(),
+                2,
+            ),
+        ] {
+            let trace = crate::import_barrier::opus_cost::Scope::protocol_trace(ctx.state, &f.env);
+            let work = commit::history_testing::Scope::owned(ctx.state);
+            let cipher =
+                envelope::encrypt_secret(&[7; 32], &f.env, "alpha", version, value).unwrap();
+            let began = std::time::Instant::now();
+            let result = membership::author_commit(
+                ctx,
+                None,
+                &f.env,
+                vec![
+                    json!({"op":"secret.put_version","secret_id":"alpha","version_id":version,"generation_id":runtime::GENERATION,"kind":"api_key","ciphertext":cipher,"public":{}}),
+                    json!({"op":"secret.activate","secret_id":"alpha","version_id":version}),
+                ],
+            );
+            println!(
+                "PVBOOT_OFFLINE_AUTHOR_CLOSED_STAGES {}",
+                json!({"role":role,"elapsed_us":began.elapsed().as_micros(),"ok":result.is_ok(),"reason":result.as_ref().err().map(|e|e.reason.as_ref()),"metrics":trace.metrics(),"work":work.snapshot()})
+            );
+            assert_eq!(result.unwrap().author_seq, seq);
+        }
+        // The public removal path also signs/adopts a real FACT and closes
+        // the already-open imported Context. Keep it within the SAME original
+        // per-operation limits after ordinary encrypted authoring.
+        let trace = crate::import_barrier::opus_cost::Scope::protocol_trace(f.b.state, &f.env);
+        let work = commit::history_testing::Scope::owned(f.b.state);
+        let before = std::fs::read(
+            f.b.state
+                .path
+                .join(format!("team/{}/bootstrap/receipt.json", f.env,)),
+        )
+        .unwrap();
+        let key = DeviceKey::load_or_create(f.b.state, f.b.kms).unwrap();
+        let began = std::time::Instant::now();
+        let result = membership::remove_member(&f.b, None, &f.env, &key.fingerprint().unwrap());
+        println!(
+            "PVBOOT_OFFLINE_SELF_REMOVAL_CLOSED_STAGES {}",
+            json!({"elapsed_us":began.elapsed().as_micros(),"ok":result.is_ok(),"reason":result.as_ref().err().map(|e|e.reason.as_ref()),"metrics":trace.metrics(),"work":work.snapshot()})
+        );
+        assert_eq!(result.unwrap()["fact"]["kind"], "member_removed");
+        assert!(
+            f.b.state
+                .path
+                .join(format!(
+                    "team/{}/bootstrap/local-removal-denial.json",
+                    f.env,
+                ))
+                .is_file()
+        );
+        assert!(f.b.vault.secret_for_trusted_use("alpha", None).is_err());
+        assert_eq!(
+            std::fs::read(
+                f.b.state
+                    .path
+                    .join(format!("team/{}/bootstrap/receipt.json", f.env,))
+            )
+            .unwrap(),
+            before
+        );
+    }
+
+    #[test]
+    fn personal_bootstrap_offline_admin_removal_closed_stages() {
+        let f = runtime::installed(false);
+        for team in f.teams.iter().rev() {
+            team.stop();
+        }
+        assert!(matches!(
+            commit::receive_commit(
+                &CommitStore::new(f.a.state, &f.env),
+                f.history.last().unwrap(),
+                commit::now_ms(),
+                Some(f.a.audit),
+            )
+            .unwrap(),
+            "accepted" | "duplicate"
+        ));
+        let key = DeviceKey::load_or_create(f.b.state, f.b.kms).unwrap();
+        let trace = crate::import_barrier::opus_cost::Scope::protocol_trace(f.a.state, &f.env);
+        let work = commit::history_testing::Scope::owned(f.a.state);
+        let began = std::time::Instant::now();
+        let result = membership::remove_member(&f.a, None, &f.env, &key.fingerprint().unwrap());
+        println!(
+            "PVBOOT_OFFLINE_ADMIN_REMOVAL_CLOSED_STAGES {}",
+            json!({"elapsed_us":began.elapsed().as_micros(),"ok":result.is_ok(),"reason":result.as_ref().err().map(|e|e.reason.as_ref()),"metrics":trace.metrics(),"work":work.snapshot()})
+        );
+        let removal = result.unwrap();
+        assert_eq!(removal["fact"]["kind"], "member_removed");
+        assert_eq!(removal["dek_rotated"], true);
+        assert!(f.a.vault.secret_for_trusted_use("alpha", None).is_ok());
+    }
+
+    #[test]
+    fn personal_history_current_reader_work_timing_metadata() {
+        fn timed<T>(name: &str, f: impl FnOnce() -> crate::errors::Result<T>) -> T {
+            let began = std::time::Instant::now();
+            let result = f();
+            println!(
+                "PVBOOT_BOUNDED_LOCAL_STAGE {}",
+                json!({"stage":name,"elapsed_us":began.elapsed().as_micros(),"ok":result.is_ok()})
+            );
+            result.unwrap()
+        }
+        let f = runtime::installed(false);
+        for team in f.teams.iter().rev() {
+            team.stop();
+        }
+        for (role, ctx) in [("a", &f.a), ("b", &f.b)] {
+            let scope = commit::history_testing::Scope::owned(ctx.state);
+            println!("PVBOOT_BOUNDED_LOCAL_ROLE {role}");
+            timed("index", || crate::import_barrier::index(ctx.state));
+            let history = timed("open", || {
+                commit::HistorySession::open_runtime(ctx.state, &f.env)
+            });
+            let input = timed("acquire", || history.acquire());
+            timed("commits", || input.commits());
+            let (facts, _, _) = timed("facts", || {
+                super::load_facts_with_input(ctx, &f.env, &history)
+            });
+            let input = timed("post_fact_acquire", || history.acquire());
+            let commits = input.commits().unwrap();
+            timed("snapshot_fold", || {
+                input.fold_with_snapshot(commits, &facts, None)
+            });
+            timed("refold_and_derive", || {
+                membership::refold_and_derive_with_input(ctx, &f.env, &history)
+            });
+            drop(history);
+            println!("PVBOOT_BOUNDED_LOCAL_COUNTS {}", scope.snapshot());
+        }
+    }
+    #[test]
+    fn personal_bootstrap_postcut_restart_closed_stages() {
+        use std::{
+            sync::Arc,
+            time::{Duration, Instant},
+        };
+        use zeropw::team::{sync::TeamSync, transport::TcpTransport};
+        struct Stop(Vec<Arc<TeamSync>>);
+        impl Drop for Stop {
+            fn drop(&mut self) {
+                for team in self.0.iter().rev() {
+                    team.stop();
+                }
+            }
+        }
+        let f = runtime::installed(false);
+        for team in f.teams.iter().rev() {
+            team.stop();
+        }
+        let cipher = envelope::encrypt_secret(
+            &[7; 32],
+            &f.env,
+            "alpha",
+            "7777777777777777",
+            b"synthetic-post-cut-compaction",
+        )
+        .unwrap();
+        let c=membership::author_commit(&f.b,None,&f.env,vec![json!({"op":"secret.put_version","secret_id":"alpha","version_id":"7777777777777777","generation_id":runtime::GENERATION,"kind":"api_key","ciphertext":cipher,"public":{}}),json!({"op":"secret.activate","secret_id":"alpha","version_id":"7777777777777777"})]).unwrap();
+        let a_work = commit::history_testing::Scope::owned(f.a.state);
+        let b_work = commit::history_testing::Scope::owned(f.b.state);
+        let a_trace = crate::import_barrier::opus_cost::Scope::protocol_trace(f.a.state, &f.env);
+        let b_trace = crate::import_barrier::opus_cost::Scope::protocol_trace(f.b.state, &f.env);
+        let trace = Arc::new(RestartTrace::default());
+        let ak = DeviceKey::load_or_create(f.a.state, f.a.kms).unwrap();
+        let bk = DeviceKey::load_or_create(f.b.state, f.b.kms).unwrap();
+        let at = TcpTransport::new(ak.clone(), Arc::new(|_, _| None), 64);
+        let bt = TcpTransport::new(bk.clone(), Arc::new(|_, _| None), 64);
+        let ta = TeamSync::new(
+            f.a.clone(),
+            Arc::new(RestartTransport {
+                inner: at.clone(),
+                side: "a",
+                trace: trace.clone(),
+                dial: RestartDial::All,
+            }),
+            ak.clone(),
+        );
+        let tb = TeamSync::new(
+            f.b.clone(),
+            Arc::new(RestartTransport {
+                inner: bt.clone(),
+                side: "b",
+                trace: trace.clone(),
+                dial: RestartDial::All,
+            }),
+            bk.clone(),
+        );
+        let _stop = Stop(vec![ta.clone(), tb.clone()]);
+        ta.enable_sync_state();
+        tb.enable_sync_state();
+        ta.start(Some("127.0.0.1:0")).unwrap();
+        tb.start(Some("127.0.0.1:0")).unwrap();
+        ta.set_peer_address(
+            &f.env,
+            &bk.fingerprint().unwrap(),
+            &bt.bound_address().unwrap(),
+        )
+        .unwrap();
+        tb.set_peer_address(
+            &f.env,
+            &ak.fingerprint().unwrap(),
+            &at.bound_address().unwrap(),
+        )
+        .unwrap();
+        let start = Instant::now();
+        let deadline = start + Duration::from_secs(35);
+        let mut next_metadata = start;
+        loop {
+            let a_ready = ta.synced_at(&f.env).is_some();
+            let b_ready = tb.synced_at(&f.env).is_some();
+            let a_has_b2 = CommitStore::new(f.a.state, &f.env)
+                .get(&c.author, c.author_seq.clone())
+                .unwrap()
+                .is_some();
+            if Instant::now() >= next_metadata
+                || Instant::now() >= deadline
+                || a_ready && b_ready && a_has_b2
+            {
+                println!(
+                    "PVBOOT_RESTART_METADATA {}",
+                    json!({"elapsed_ms":start.elapsed().as_millis(),"predicates":{"a_ready":a_ready,"b_ready":b_ready,"a_has_b2":a_has_b2},"a":restart_metadata(&f.a,&f.env,&bk.fingerprint().unwrap()),"b":restart_metadata(&f.b,&f.env,&ak.fingerprint().unwrap()),"wire":trace.snapshot(),"work_a":a_work.snapshot(),"work_b":b_work.snapshot(),"closed_a":a_trace.metrics(),"closed_b":b_trace.metrics()})
+                );
+                next_metadata = Instant::now() + Duration::from_secs(3);
+            }
+            if a_ready && b_ready && a_has_b2 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "fresh ordinary vector/fact agreement did not complete: a_ready={a_ready} b_ready={b_ready} a_has_b2={a_has_b2}"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        println!(
+            "PVBOOT_POSTCUT_RESTART_CLOSED_STAGES {}",
+            json!({"a":a_trace.metrics(),"b":b_trace.metrics(),"a_work":a_work.snapshot(),"b_work":b_work.snapshot()})
+        );
+    }
+
+    #[test]
+    fn personal_bootstrap_crash_fresh_normal_agreement_compaction_and_reopen_keep_provenance() {
+        use std::{
+            sync::Arc,
+            time::{Duration, Instant},
+        };
+        use zeropw::team::{sync::TeamSync, transport::TcpTransport};
+        struct Stop(Vec<Arc<TeamSync>>);
+        impl Drop for Stop {
+            fn drop(&mut self) {
+                for team in self.0.iter().rev() {
+                    team.stop();
+                }
+            }
+        }
+        let f = runtime::installed(false);
+        for team in f.teams.iter().rev() {
+            team.stop();
+        }
+        let cipher = envelope::encrypt_secret(
+            &[7; 32],
+            &f.env,
+            "alpha",
+            "7777777777777777",
+            b"synthetic-post-cut-compaction",
+        )
+        .unwrap();
+        let c=membership::author_commit(&f.b,None,&f.env,vec![json!({"op":"secret.put_version","secret_id":"alpha","version_id":"7777777777777777","generation_id":runtime::GENERATION,"kind":"api_key","ciphertext":cipher,"public":{}}),json!({"op":"secret.activate","secret_id":"alpha","version_id":"7777777777777777"})]).unwrap();
+        let a_work = commit::history_testing::Scope::owned(f.a.state);
+        let b_work = commit::history_testing::Scope::owned(f.b.state);
+        let trace = Arc::new(RestartTrace::default());
+        let ak = DeviceKey::load_or_create(f.a.state, f.a.kms).unwrap();
+        let bk = DeviceKey::load_or_create(f.b.state, f.b.kms).unwrap();
+        let at = TcpTransport::new(ak.clone(), Arc::new(|_, _| None), 64);
+        let bt = TcpTransport::new(bk.clone(), Arc::new(|_, _| None), 64);
+        let ta = TeamSync::new(
+            f.a.clone(),
+            Arc::new(RestartTransport {
+                inner: at.clone(),
+                side: "a",
+                trace: trace.clone(),
+                dial: RestartDial::All,
+            }),
+            ak.clone(),
+        );
+        let tb = TeamSync::new(
+            f.b.clone(),
+            Arc::new(RestartTransport {
+                inner: bt.clone(),
+                side: "b",
+                trace: trace.clone(),
+                dial: RestartDial::All,
+            }),
+            bk.clone(),
+        );
+        let _stop = Stop(vec![ta.clone(), tb.clone()]);
+        ta.enable_sync_state();
+        tb.enable_sync_state();
+        ta.start(Some("127.0.0.1:0")).unwrap();
+        tb.start(Some("127.0.0.1:0")).unwrap();
+        ta.set_peer_address(
+            &f.env,
+            &bk.fingerprint().unwrap(),
+            &bt.bound_address().unwrap(),
+        )
+        .unwrap();
+        tb.set_peer_address(
+            &f.env,
+            &ak.fingerprint().unwrap(),
+            &at.bound_address().unwrap(),
+        )
+        .unwrap();
+        let start = Instant::now();
+        let deadline = start + Duration::from_secs(35);
+        let mut next_metadata = start;
+        loop {
+            let a_ready = ta.synced_at(&f.env).is_some();
+            let b_ready = tb.synced_at(&f.env).is_some();
+            let a_has_b2 = CommitStore::new(f.a.state, &f.env)
+                .get(&c.author, c.author_seq.clone())
+                .unwrap()
+                .is_some();
+            if Instant::now() >= next_metadata
+                || Instant::now() >= deadline
+                || a_ready && b_ready && a_has_b2
+            {
+                println!(
+                    "PVBOOT_RESTART_METADATA {}",
+                    json!({"elapsed_ms":start.elapsed().as_millis(),"predicates":{"a_ready":a_ready,"b_ready":b_ready,"a_has_b2":a_has_b2},"a":restart_metadata(&f.a,&f.env,&bk.fingerprint().unwrap()),"b":restart_metadata(&f.b,&f.env,&ak.fingerprint().unwrap()),"wire":trace.snapshot(),"work_a":a_work.snapshot(),"work_b":b_work.snapshot()})
+                );
+                next_metadata = Instant::now() + Duration::from_secs(3);
+            }
+            if a_ready && b_ready && a_has_b2 {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "fresh ordinary vector/fact agreement did not complete: a_ready={a_ready} b_ready={b_ready} a_has_b2={a_has_b2}"
+            );
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        assert_eq!(
+            crate::team::bootstrap::status(&f.b, &f.env).unwrap()["state"],
+            "ready"
+        );
+        let before = membership::load_environment(&f.b, &f.env).unwrap();
+        let receipt_path =
+            f.b.state
+                .path
+                .join(format!("team/{}/bootstrap/receipt.json", f.env));
+        let receipt = std::fs::read(&receipt_path).unwrap();
+        let compact_inputs=CommitStore::new(f.b.state,&f.env).all_commits().unwrap().iter().take(8).map(|c|{let wall=commit::Hlc::parse(&c.hlc).unwrap().0;json!({"author":c.author,"seq":c.author_seq,"old_enough":wall<=commit::now_ms()-zeropw::team::sync::COMPACT_MIN_AGE_MS,"authority":c.ops.iter().any(|o|matches!(o["op"].as_str(),Some("env.init"|"member.add"|"member.set_role"|"member.remove"|"owner.transfer"|"dek.rotate")))})}).collect::<Vec<_>>();
+        let floor =
+            f.b.state
+                .read_json(
+                    &format!("team/{}/bootstrap/provenance/manifest.json", f.env),
+                    Value::Null,
+                )
+                .unwrap()["vector"]
+                .clone();
+        let compact_trace = crate::import_barrier::testing::Scope::track(f.b.state, None);
+        let _age =
+            super::personal_bootstrap_compaction_age::Guard::once(f.b.state, &f.env).unwrap();
+        let compacted = tb.compact(&f.env);
+        if let Err(error) = &compacted {
+            println!(
+                "PVBOOT_RESTART_COMPACTION_REFUSAL {}",
+                json!({"reason":error.reason,"minimum_age_ms":zeropw::team::sync::COMPACT_MIN_AGE_MS,"retained_slots":compact_inputs,"installed_floor":floor,"stages":compact_trace.hits().iter().rev().take(8).map(|(_,point)|point).collect::<Vec<_>>()})
+            );
+        }
+        let compacted = compacted.unwrap();
+        drop(compact_trace);
+        drop(_age);
+        assert!(
+            compacted["removed"].as_i64().unwrap() > 0,
+            "real post-cut data must compact"
+        );
+        assert!(
+            CommitStore::new(f.b.state, &f.env)
+                .get(&c.author, &c.author_seq)
+                .unwrap()
+                .is_none(),
+            "post-cut B2 original must actually prune"
+        );
+        assert_eq!(
+            CommitStore::new(f.a.state, &f.env)
+                .all_commits()
+                .unwrap()
+                .iter()
+                .flat_map(|c| &c.ops)
+                .filter(|o| o["op"] == "member.add")
+                .count(),
+            1
+        );
+        ta.stop();
+        tb.stop();
+        let reopened = Context::open(&f.b.state.path, Config::default(), clock::system()).unwrap();
+        let after = membership::load_environment(&reopened, &f.env).unwrap();
+        assert_eq!(before.document, after.document);
+        assert_eq!(before.version_order, after.version_order);
+        assert_eq!(std::fs::read(receipt_path).unwrap(), receipt);
+        assert!(
+            reopened
+                .vault
+                .secret_for_trusted_use("alpha", None)
+                .unwrap()
+                .ct_eq(b"synthetic-post-cut-compaction")
+        );
+        let next = membership::author_commit(
+            &reopened,
+            None,
+            &f.env,
+            vec![json!({"op":"settings.update","sync_interval_seconds":23})],
+        )
+        .unwrap();
+        assert_eq!(next.author_seq, 3);
+        assert!(commit::Hlc::parse(&next.hlc).unwrap() > commit::Hlc::parse(&c.hlc).unwrap());
+    }
+
+    #[derive(Default)]
+    struct RestartTrace {
+        events: std::sync::Mutex<std::collections::BTreeMap<String, Value>>,
+    }
+    impl RestartTrace {
+        fn frame(&self, side: &str, session: usize, direction: &str, message: &Value) {
+            let kind = message["type"].as_str().unwrap_or("");
+            if !matches!(
+                kind,
+                "VECTOR" | "FACT" | "COMMIT" | "SYNC_CAPS" | "TOMBSTONE_STATE" | "TOMBSTONE_ACK"
+            ) && !kind.starts_with("BOOTSTRAP_")
+            {
+                return;
+            }
+            let key = format!("{side}:{session}:{direction}:{kind}");
+            let mut events = self.events.lock().unwrap();
+            if events.len() >= 64 && !events.contains_key(&key) {
+                return;
+            }
+            let value = events.entry(key).or_insert_with(|| json!({"count":0}));
+            value["count"] = json!(value["count"].as_u64().unwrap() + 1);
+            if kind == "VECTOR" {
+                assert!(message["vector"].as_object().unwrap().len() <= 2);
+                value["vector"] = message["vector"].clone();
+            }
+        }
+        fn snapshot(&self) -> Value {
+            json!(*self.events.lock().unwrap())
+        }
+        fn processed(&self, side: &str, session: usize, kind: &str, elapsed: std::time::Duration) {
+            let key = format!("{side}:{session}:processing:{kind}");
+            let mut events = self.events.lock().unwrap();
+            if events.len() >= 64 && !events.contains_key(&key) {
+                return;
+            }
+            let value = events
+                .entry(key)
+                .or_insert_with(|| json!({"count":0,"total_us":0,"max_us":0}));
+            let micros = u64::try_from(elapsed.as_micros()).unwrap_or(u64::MAX);
+            value["count"] = json!(value["count"].as_u64().unwrap() + 1);
+            value["total_us"] = json!(value["total_us"].as_u64().unwrap().saturating_add(micros));
+            value["max_us"] = json!(value["max_us"].as_u64().unwrap().max(micros));
+        }
+    }
+    #[allow(dead_code)]
+    enum RestartDial {
+        All,
+        InboundOnly,
+        PersonalOnly,
+    }
+    struct RestartTransport {
+        inner: std::sync::Arc<zeropw::team::transport::TcpTransport>,
+        side: &'static str,
+        trace: std::sync::Arc<RestartTrace>,
+        dial: RestartDial,
+    }
+    struct RestartSession {
+        inner: std::sync::Arc<dyn zeropw::team::transport::Session>,
+        side: &'static str,
+        id: usize,
+        trace: std::sync::Arc<RestartTrace>,
+        processing: std::sync::Mutex<Option<(std::time::Instant, String)>>,
+    }
+    impl RestartSession {
+        fn wrap(
+            inner: std::sync::Arc<dyn zeropw::team::transport::Session>,
+            side: &'static str,
+            trace: std::sync::Arc<RestartTrace>,
+        ) -> std::sync::Arc<dyn zeropw::team::transport::Session> {
+            static IDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+            std::sync::Arc::new(Self {
+                inner,
+                side,
+                trace,
+                id: IDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+                processing: std::sync::Mutex::new(None),
+            })
+        }
+    }
+    impl zeropw::team::transport::Session for RestartSession {
+        fn peer(&self) -> zeropw::team::identity::DeviceRecord {
+            self.inner.peer()
+        }
+        fn env_id(&self) -> &str {
+            self.inner.env_id()
+        }
+        fn send(&self, v: &Value) -> zeropw::errors::Result<()> {
+            self.trace.frame(self.side, self.id, "send", v);
+            self.inner.send(v)
+        }
+        fn recv(
+            &self,
+            t: std::time::Duration,
+        ) -> Result<Option<Value>, zeropw::team::transport::SessionClosed> {
+            if let Some((start, kind)) = self.processing.lock().unwrap().take() {
+                self.trace
+                    .processed(self.side, self.id, &kind, start.elapsed());
+            }
+            let v = self.inner.recv(t)?;
+            if let Some(v) = &v {
+                self.trace.frame(self.side, self.id, "recv", v);
+                let kind = v["type"].as_str().unwrap_or("");
+                if matches!(
+                    kind,
+                    "VECTOR"
+                        | "FACT"
+                        | "COMMIT"
+                        | "SYNC_CAPS"
+                        | "TOMBSTONE_STATE"
+                        | "TOMBSTONE_ACK"
+                ) {
+                    *self.processing.lock().unwrap() =
+                        Some((std::time::Instant::now(), kind.into()));
+                }
+            }
+            Ok(v)
+        }
+        fn recv_original(
+            &self,
+            t: std::time::Duration,
+        ) -> Result<Option<Vec<u8>>, zeropw::team::transport::SessionClosed> {
+            let raw = self.inner.recv_original(t)?;
+            if let Some(raw) = &raw
+                && let Ok(v) = pyjson::loads(std::str::from_utf8(raw).unwrap_or(""))
+            {
+                self.trace.frame(self.side, self.id, "raw_recv", &v);
+            }
+            Ok(raw)
+        }
+        fn close(&self) {
+            self.inner.close()
+        }
+        fn is_closed(&self) -> bool {
+            self.inner.is_closed()
+        }
+        fn created_at(&self) -> std::time::Instant {
+            self.inner.created_at()
+        }
+        fn transport_kind(&self) -> Option<&'static str> {
+            self.inner.transport_kind()
+        }
+    }
+    impl zeropw::team::transport::Transport for RestartTransport {
+        fn set_membership(&self, cb: zeropw::team::transport::MembershipCheck) {
+            self.inner.set_membership(cb)
+        }
+        fn set_invite_check(&self, cb: Option<zeropw::team::transport::InviteCheck>) {
+            self.inner.set_invite_check(cb)
+        }
+        fn set_handshake_failed(&self, cb: Option<zeropw::team::transport::HandshakeFailedHook>) {
+            self.inner.set_handshake_failed(cb)
+        }
+        fn listen(
+            &self,
+            address: &str,
+            cb: zeropw::team::transport::OnSession,
+        ) -> zeropw::errors::Result<()> {
+            let side = self.side;
+            let trace = self.trace.clone();
+            self.inner.listen_arc(
+                address,
+                std::sync::Arc::new(move |s| cb(RestartSession::wrap(s, side, trace.clone()))),
+            )
+        }
+        fn dial(
+            &self,
+            address: &str,
+            env: &str,
+            proof: Option<zeropw::team::transport::InviteProof>,
+        ) -> Result<
+            std::sync::Arc<dyn zeropw::team::transport::Session>,
+            zeropw::team::transport::SessionClosed,
+        > {
+            if matches!(self.dial, RestartDial::InboundOnly)
+                || matches!(self.dial, RestartDial::PersonalOnly) && proof.is_none()
+            {
+                return Err(zeropw::team::transport::SessionClosed(
+                    "synthetic_dial_disabled",
+                ));
+            }
+            self.inner
+                .dial_session(address, env, proof)
+                .map(|s| RestartSession::wrap(s, self.side, self.trace.clone()))
+        }
+        fn close(&self) {
+            self.inner.shutdown()
+        }
+    }
+    fn restart_metadata(ctx: &Context, env: &str, peer: &str) -> Value {
+        let state = ctx
+            .state
+            .read_json(&format!("team/{env}/sync_state.json"), Value::Null)
+            .unwrap();
+        let attempt = ctx
+            .state
+            .read_json(&format!("team/{env}/bootstrap/attempt.json"), Value::Null)
+            .unwrap();
+        let auth = ctx
+            .state
+            .read_json(
+                &format!("team/{env}/bootstrap/authorizations/{peer}.json"),
+                Value::Null,
+            )
+            .unwrap();
+        let closed = |value: &Value| {
+            value
+                .as_str()
+                .filter(|s| {
+                    s.len() <= 64
+                        && s.bytes()
+                            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_')
+                })
+                .map(|s| json!(s))
+                .unwrap_or(Value::Null)
+        };
+        let reasons = ctx
+            .state
+            .read_lines("audit/audit.jsonl", Some(24))
+            .unwrap()
+            .iter()
+            .filter_map(|line| pyjson::loads(line).ok())
+            .filter(|row| {
+                matches!(
+                    row["event"].as_str(),
+                    Some("team_sync_poll" | "team_handshake_failed")
+                )
+            })
+            .map(|row| json!({"event":closed(&row["event"]),"reason":closed(&row["reason"])}))
+            .take(8)
+            .collect::<Vec<_>>();
+        let p = &state["peers"][peer];
+        json!({"vector":CommitStore::new(ctx.state,env).vector().unwrap(),"peer":{"session":p["session"],"peer_vector":p["peer_vector"],"vector_received_at":p["vector_received_at"],"transport":p["transport"],"dial_failures":p["dial_failures"],"last_error":closed(&p["last_error"]),"tombstone_agreement":p["tombstone_agreement"]},"closed_reasons":reasons,"authorization_activated":auth["activated"],"attempt_state":closed(&attempt["state"]),"attempt_reason":closed(&attempt["reason"])})
+    }
+
+    fn sparse_measured(literal: &str) {
+        use crate::team::commit::history_testing::Scope;
+        let command = crate::admin_cli::personal_history_test_cli::command;
+        let (f, (a_counts, b_counts)) = runtime::sparse_installed_with_command(
+            literal,
+            |a, b| (Scope::owned(a.state), Scope::owned(b.state)),
+            command,
+        );
+        runtime::sparse_continue_with_command(&f, literal, command);
+        let afp = DeviceKey::load_or_create(f.a.state, f.a.kms)
+            .unwrap()
+            .fingerprint()
+            .unwrap();
+        let bfp = DeviceKey::load_or_create(f.b.state, f.b.kms)
+            .unwrap()
+            .fingerprint()
+            .unwrap();
+        for (ctx, team) in [(&f.a, &f.teams[0]), (&f.b, &f.teams[1])] {
+            assert_eq!(
+                crate::admin_cli::personal_history_test_cli::shared(ctx, &f.env).unwrap()["owner"],
+                afp
+            );
+            membership::author_fact(
+                ctx,
+                None,
+                &f.env,
+                "connection_disabled",
+                json!({"connection_id":"sparse-disabled"}),
+            )
+            .unwrap();
+            team.publish_fact(
+                &f.env,
+                "connection_disabled",
+                json!({"connection_id":"sparse-disabled"}),
+            )
+            .unwrap();
+            let role = team.role_document_for_removal(&f.env, &afp, &bfp).unwrap();
+            assert_eq!(role["members"][&bfp]["status"], "active");
+            let signed = team
+                .sign_authorized_fact(&f.env, "member_removed", json!({"fingerprint":bfp}))
+                .unwrap();
+            assert_eq!(signed.kind, "member_removed");
+            membership::ensure_removal_rotations(ctx, Some(team.as_ref()), &f.env).unwrap();
+            team.register_env(&f.env).unwrap();
+            assert_eq!(team.status(&f.env).unwrap()["env_id"], f.env);
+            assert_eq!(
+                crate::team::sync_status::status(ctx, &f.env).unwrap()["env_id"],
+                f.env
+            );
+            team.poll().unwrap();
+            // These synthetic originals were authored now. The normal age
+            // clock must leave both large-vector environments unpruned.
+            assert_eq!(team.compact(&f.env).unwrap()["removed"], 0);
+        }
+        for (role, scope) in [("owner", a_counts), ("recipient", b_counts)] {
+            let counts = scope.snapshot();
+            assert!(counts["acquisitions"].as_u64().unwrap() > 10);
+            assert!(counts["canonical_slots_visited"].as_u64().unwrap() > 20);
+            assert!(counts["physical_entries_visited"].as_u64().unwrap() < 1_000_000);
+            assert!(counts["max_operation_work"].as_u64().unwrap() <= 67_108_864);
+            assert!(counts["max_operation_bytes"].as_u64().unwrap() <= 1_073_741_824);
+            println!(
+                "PVBOOT_SPARSE_MEASURED {}",
+                json!({"role":role,"literal_digits":literal.len(),"counts":counts})
+            );
+        }
+    }
+    #[test]
+    fn personal_history_literal_10_40_real_paths_measured() {
+        sparse_measured("10000000000000000000000000000000000000000");
+    }
+    #[test]
+    fn personal_history_literal_10_80_real_paths_measured() {
+        sparse_measured(
+            "100000000000000000000000000000000000000000000000000000000000000000000000000000000",
+        );
+    }
+}
+
+// PVBOOT-TEST-COMPACT-CLOCK-01: every name and call in this module is elided
+// from the non-test library. This changes only one compact age observation.
+#[cfg(test)]
+mod personal_bootstrap_compaction_age {
+    use crate::{
+        errors::{Error, Result},
+        store::StateDir,
+    };
+    use std::{
+        marker::PhantomData,
+        rc::Rc,
+        sync::{
+            Mutex,
+            atomic::{AtomicU64, Ordering},
+        },
+        thread::ThreadId,
+    };
+    const ADVANCE: i64 = 31 * 24 * 3600 * 1000;
+    struct Entry {
+        state: usize,
+        env: String,
+        token: u64,
+        owner: ThreadId,
+        used: bool,
+    }
+    static ENTRIES: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
+    static TOKENS: AtomicU64 = AtomicU64::new(1);
+    pub(super) struct Guard<'a> {
+        _state: &'a StateDir,
+        state: usize,
+        token: u64,
+        _thread: PhantomData<Rc<()>>,
+    }
+    impl<'a> Guard<'a> {
+        pub(super) fn once(state: &'a StateDir, env: &str) -> Result<Self> {
+            let _registration_lock = state.lock()?;
+            if !super::commit::valid_env_id(env) {
+                return Err(Error::state("personal_compaction_age_test_target"));
+            }
+            let state_id = state as *const StateDir as usize;
+            let mut entries = ENTRIES.lock().unwrap_or_else(|e| e.into_inner());
+            if entries.iter().any(|e| e.state == state_id && e.env == env) {
+                return Err(Error::state("personal_compaction_age_test_target"));
+            }
+            let token = TOKENS
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |v| v.checked_add(1))
+                .map_err(|_| Error::state("personal_compaction_age_test_overflow"))?;
+            entries.push(Entry {
+                state: state_id,
+                env: env.into(),
+                token,
+                owner: std::thread::current().id(),
+                used: false,
+            });
+            Ok(Self {
+                _state: state,
+                state: state_id,
+                token,
+                _thread: PhantomData,
+            })
+        }
+    }
+    impl Drop for Guard<'_> {
+        fn drop(&mut self) {
+            ENTRIES
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .retain(|e| !(e.state == self.state && e.token == self.token));
+        }
+    }
+    pub(super) fn observe(state: &StateDir, env: &str, real: i64) -> Result<i64> {
+        let mut entries = ENTRIES.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(entry) = entries.iter_mut().find(|e| {
+            e.state == state as *const StateDir as usize
+                && e.env == env
+                && e.owner == std::thread::current().id()
+                && !e.used
+        }) {
+            entry.used = true;
+            return real
+                .checked_add(ADVANCE)
+                .ok_or_else(|| Error::state("personal_compaction_age_test_overflow"));
+        }
+        Ok(real)
+    }
+    #[test]
+    fn normal_clock_negative_target_isolation_single_use_and_raii_cleanup() {
+        let root = tempfile::TempDir::new().unwrap();
+        let a = StateDir::new(root.path().join("a"));
+        a.create().unwrap();
+        let b = StateDir::new(root.path().join("b"));
+        b.create().unwrap();
+        let env = "aaaaaaaaaaaaaaaaaaaaaaaaaa-0123456789abcdef0123456789abcdef";
+        let other = "bbbbbbbbbbbbbbbbbbbbbbbbbb-0123456789abcdef0123456789abcdef";
+        let now = super::commit::now_ms();
+        assert_eq!(observe(&a, env, now).unwrap(), now);
+        assert!(observe(&a, env, now).unwrap() - now < super::COMPACT_MIN_AGE_MS);
+        {
+            let _guard = Guard::once(&a, env).unwrap();
+            assert!(
+                !a.locked_by_current_thread(),
+                "the age fixture must not create an ambient runtime lock"
+            );
+            assert_eq!(observe(&a, other, now).unwrap(), now);
+            assert_eq!(observe(&b, env, now).unwrap(), now);
+            assert_eq!(
+                observe(&a, env, now).unwrap(),
+                now.checked_add(ADVANCE).unwrap()
+            );
+            assert_eq!(observe(&a, env, now).unwrap(), now);
+        }
+        assert_eq!(observe(&a, env, now).unwrap(), now);
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = Guard::once(&a, env).unwrap();
+            panic!("synthetic scoped guard unwind");
+        }));
+        assert!(panic.is_err());
+        assert_eq!(observe(&a, env, now).unwrap(), now);
+        {
+            let _guard = Guard::once(&a, env).unwrap();
+            assert!(observe(&a, env, i64::MAX).is_err());
+        }
+        assert_eq!(observe(&a, env, now).unwrap(), now);
+    }
+}
+
+#[cfg(test)]
+mod personal_removal_notice_tests {
+    use super::*;
+    use crate::team::{bootstrap::install, membership, transport::TcpTransport};
+    use std::sync::mpsc;
+
+    struct WireFixture {
+        installed: install::tests::Pending,
+        team: Arc<TeamSync>,
+        at: Arc<TcpTransport>,
+        bt: Arc<TcpTransport>,
+        a_sessions: Vec<Arc<dyn Session>>,
+        b_sessions: Vec<Arc<dyn Session>>,
+        recipient: String,
+        fact: Fact,
+    }
+    impl WireFixture {
+        fn new() -> Self {
+            let installed = install::tests::installed();
+            let ak = DeviceKey::load_or_create(installed.a.state, installed.a.kms).unwrap();
+            let bk = DeviceKey::load_or_create(installed.b.state, installed.b.kms).unwrap();
+            let owner = ak.record().unwrap();
+            let recipient = bk.fingerprint().unwrap();
+            let at = TcpTransport::new(ak.clone(), Arc::new(|_, _| None), 8);
+            let team = TeamSync::new(installed.a.clone(), Arc::new(at.clone()), ak);
+            team.register_env(&installed.env).unwrap();
+            let env = installed.env.clone();
+            let bt = TcpTransport::new(
+                bk,
+                Arc::new(move |e, fp| {
+                    (e == env && fp == owner.fingerprint()).then(|| owner.clone())
+                }),
+                8,
+            );
+            let (tx, rx) = mpsc::channel();
+            at.listen_arc(
+                "127.0.0.1:0",
+                Arc::new(move |session| {
+                    tx.send(session).unwrap();
+                }),
+            )
+            .unwrap();
+            let mut a_sessions = Vec::new();
+            let mut b_sessions = Vec::new();
+            for _ in 0..2 {
+                b_sessions.push(
+                    bt.dial_session(&at.bound_address().unwrap(), &installed.env, None)
+                        .unwrap(),
+                );
+                a_sessions.push(rx.recv_timeout(Duration::from_secs(5)).unwrap());
+            }
+            assert!(team.accept_session(&installed.env, a_sessions[0].clone(), true));
+            assert_eq!(
+                b_sessions[0].recv(Duration::from_secs(2)).unwrap().unwrap()["type"],
+                "SYNC_CAPS"
+            );
+            b_sessions[0].send(&json!({"type":"SYNC_CAPS","v":1,"features":[super::super::tombstone_gate::FEATURE,super::super::bootstrap::FEATURE]})).unwrap();
+            let caps = a_sessions[0].recv(Duration::from_secs(2)).unwrap().unwrap();
+            team.handle_message(&installed.env, &a_sessions[0], &caps)
+                .unwrap();
+            for _ in 0..8 {
+                let Some(frame) = b_sessions[0].recv(Duration::from_millis(1)).unwrap() else {
+                    break;
+                };
+                assert_ne!(frame["type"], "FACT");
+            }
+            // The real standalone author writes the rotation, signed FACT and
+            // admission receipt. The existing pickup drains/refolds/queues it.
+            let removed =
+                membership::remove_member(&installed.a, None, &installed.env, &recipient).unwrap();
+            let fact = Fact::from_dict(&removed["fact"]).unwrap();
+            team.pick_up_local_facts(&installed.env, false).unwrap();
+            assert!(!team.replication_allowed(&installed.env, &a_sessions[0]));
+            assert!(team.draining(&installed.env, &recipient));
+            Self {
+                installed,
+                team,
+                at,
+                bt,
+                a_sessions,
+                b_sessions,
+                recipient,
+                fact,
+            }
+        }
+        fn dispatch(
+            &self,
+            fact: &Fact,
+            exclude: Option<&str>,
+            session: &Arc<dyn Session>,
+        ) -> Result<Option<()>> {
+            self.team.send_personal_removal_notice(
+                &self.installed.env,
+                fact,
+                exclude,
+                session,
+                None,
+            )
+        }
+        fn no_frame(&self) {
+            for session in &self.b_sessions {
+                assert!(
+                    session.recv(Duration::from_millis(1)).unwrap().is_none(),
+                    "refused negative dispatch emitted a frame"
+                );
+            }
+        }
+    }
+    impl Drop for WireFixture {
+        fn drop(&mut self) {
+            for session in self.a_sessions.iter().chain(&self.b_sessions) {
+                session.close();
+            }
+            self.team.stop();
+            self.at.shutdown();
+            self.bt.shutdown();
+        }
+    }
+    // An explicitly untrusted/stale session report on top of a REAL encrypted
+    // channel. It is used only for refusal; never for positive authentication.
+    struct ChangedBinding {
+        inner: Arc<dyn Session>,
+        peer: DeviceRecord,
+        env: String,
+    }
+    impl Session for ChangedBinding {
+        fn peer(&self) -> DeviceRecord {
+            self.peer.clone()
+        }
+        fn env_id(&self) -> &str {
+            &self.env
+        }
+        fn send(&self, value: &Value) -> Result<()> {
+            self.inner.send(value)
+        }
+        fn recv(
+            &self,
+            timeout: Duration,
+        ) -> std::result::Result<Option<Value>, super::super::transport::SessionClosed> {
+            self.inner.recv(timeout)
+        }
+        fn close(&self) {
+            self.inner.close();
+        }
+        fn is_closed(&self) -> bool {
+            self.inner.is_closed()
+        }
+        fn created_at(&self) -> Instant {
+            self.inner.created_at()
+        }
+    }
+
+    #[test]
+    fn personal_negative_notice_only_admitted_exact_target_and_shared_parent() {
+        let f = WireFixture::new();
+        let env = &f.installed.env;
+        let session = &f.a_sessions[0];
+        let admissions = std::fs::read(
+            f.installed
+                .a
+                .state
+                .path
+                .join(format!("team/{env}/fact_admissions.jsonl")),
+        )
+        .unwrap();
+        let mut forged = f.fact.clone();
+        forged.sig = "invalid-signature".into();
+        assert!(f.dispatch(&forged, None, session).is_err());
+        let mut other_env = f.fact.clone();
+        other_env.env_id = commit::new_env_id(&f.fact.author).unwrap();
+        assert!(f.dispatch(&other_env, None, session).is_err());
+        let key = DeviceKey::load_or_create(f.installed.a.state, f.installed.a.kms).unwrap();
+        let unadmitted = sign_fact(
+            &key,
+            env,
+            "member_removed",
+            json!({"fingerprint":f.recipient}),
+            "2000000-0000",
+        )
+        .unwrap();
+        assert!(f.dispatch(&unadmitted, None, session).is_err());
+        let other = DeviceKey::generate().fingerprint().unwrap();
+        let wrong_target = sign_fact(
+            &key,
+            env,
+            "member_removed",
+            json!({"fingerprint":other}),
+            "2000001-0000",
+        )
+        .unwrap();
+        assert!(f.dispatch(&wrong_target, None, session).is_err());
+        assert!(f.dispatch(&f.fact, Some(&f.recipient), session).is_err());
+        assert!(
+            f.dispatch(&f.fact, None, &f.a_sessions[1]).is_err(),
+            "unregistered genuine encrypted session must refuse"
+        );
+
+        let mut changed = session.peer();
+        changed.agree_pub[0] ^= 1;
+        let wrong_full: Arc<dyn Session> = Arc::new(ChangedBinding {
+            inner: session.clone(),
+            peer: changed,
+            env: env.clone(),
+        });
+        f.team
+            .envs
+            .lock()
+            .unwrap()
+            .get_mut(env)
+            .unwrap()
+            .sessions
+            .insert(f.recipient.clone(), wrong_full.clone());
+        assert!(
+            f.dispatch(&f.fact, None, &wrong_full).is_err(),
+            "same fingerprint with changed agreement key must refuse"
+        );
+        f.team
+            .envs
+            .lock()
+            .unwrap()
+            .get_mut(env)
+            .unwrap()
+            .sessions
+            .insert(f.recipient.clone(), session.clone());
+        let wrong_session_env: Arc<dyn Session> = Arc::new(ChangedBinding {
+            inner: session.clone(),
+            peer: session.peer(),
+            env: commit::new_env_id(&f.fact.author).unwrap(),
+        });
+        assert!(f.dispatch(&f.fact, None, &wrong_session_env).is_err());
+
+        let foreign = commit::HistorySession::open_runtime(f.installed.b.state, env)
+            .unwrap()
+            .into_resume()
+            .unwrap();
+        assert!(
+            f.team
+                .send_personal_removal_notice(env, &f.fact, None, session, Some(&foreign))
+                .is_err()
+        );
+        drop(foreign);
+        let parent = commit::HistorySession::open_runtime(f.installed.a.state, env).unwrap();
+        let lease = parent.lease().unwrap();
+        assert!(parent.charge(67_108_864, 0).is_err());
+        drop(parent);
+        let exhausted = f
+            .team
+            .send_personal_removal_notice(env, &f.fact, None, session, Some(&lease))
+            .unwrap_err();
+        assert_eq!(exhausted.reason, "team_bootstrap_limit_exceeded");
+        drop(lease);
+        assert_eq!(
+            std::fs::read(
+                f.installed
+                    .a
+                    .state
+                    .path
+                    .join(format!("team/{env}/fact_admissions.jsonl"))
+            )
+            .unwrap(),
+            admissions,
+            "negative notification may not mint admission receipts"
+        );
+        f.team
+            .send_replication(env, session, &json!({"type":"COMMIT","commit":{}}))
+            .unwrap();
+        f.no_frame();
+        assert!(f.dispatch(&f.fact, None, session).unwrap().is_some());
+        let delivered = f.b_sessions[0]
+            .recv(Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        assert_eq!(delivered, json!({"type":"FACT","fact":f.fact.to_dict()}));
+        assert!(
+            !f.team.replication_allowed(env, session),
+            "negative delivery never reopens DATA"
+        );
+    }
+
+    #[test]
+    fn personal_negative_notice_rechecks_session_after_unlock() {
+        let f = WireFixture::new();
+        let (_scope, pause) = crate::import_barrier::testing::Scope::pause(
+            f.installed.a.state,
+            "negative-notice",
+            "personal-negative-notice-before-send",
+        );
+        struct Release(Arc<crate::import_barrier::testing::Pause>);
+        impl Drop for Release {
+            fn drop(&mut self) {
+                self.0.release();
+            }
+        }
+        std::thread::scope(|scope| {
+            let _release = Release(pause.clone());
+            let worker = scope.spawn(|| f.dispatch(&f.fact, None, &f.a_sessions[0]));
+            pause.wait();
+            f.team
+                .envs
+                .lock()
+                .unwrap()
+                .get_mut(&f.installed.env)
+                .unwrap()
+                .sessions
+                .insert(f.recipient.clone(), f.a_sessions[1].clone());
+            pause.release();
+            assert!(
+                worker.join().unwrap().is_err(),
+                "replacement must not acquire prepared dispatch"
+            );
+        });
+        f.no_frame();
+    }
+}
+
+#[cfg(test)]
+mod personal_current_session_tests {
+    use super::*;
+    use crate::{
+        clock,
+        context::Config,
+        team::{bootstrap, envelope, membership, transport::TcpTransport},
+    };
+    use std::sync::mpsc;
+    const PASS: &str = "synthetic-current-session-admin";
+    const VALUE: &[u8] = b"synthetic-current-session-secret";
+
+    #[test]
+    fn cold_runtime_recovers_after_a_preferred_ordinary_session_in_both_key_orders() {
+        struct Stop(Vec<Arc<TeamSync>>);
+        impl Drop for Stop {
+            fn drop(&mut self) {
+                for team in self.0.iter().rev() {
+                    team.stop();
+                }
+            }
+        }
+        for owner_lower in [true, false] {
+            let mut old = Pair::new(owner_lower);
+            old.tb.stop();
+            old.ta.stop();
+            old._traces.clear();
+            let a = Arc::new(
+                Context::open(&old.a.state.path, Config::default(), clock::system()).unwrap(),
+            );
+            let b = Arc::new(
+                Context::open(&old.b.state.path, Config::default(), clock::system()).unwrap(),
+            );
+            let af = old.ak.fingerprint().unwrap();
+            let bf = old.bk.fingerprint().unwrap();
+            let env = &old.env;
+            let receipt_path = b
+                .state
+                .path
+                .join(format!("team/{env}/bootstrap/receipt.json"));
+            let receipt = std::fs::read(&receipt_path).unwrap();
+            let delta = membership::author_commit(&b, None, env, vec![
+                json!({"op":"secret.put_version","secret_id":"alpha","version_id":"7777777777777777","generation_id":"0123456789abcdef","kind":"api_key","ciphertext":envelope::encrypt_secret(&[7;32],env,"alpha","7777777777777777",b"synthetic-cold-preferred-delta").unwrap(),"public":{}}),
+                json!({"op":"secret.activate","secret_id":"alpha","version_id":"7777777777777777"}),
+            ]).unwrap();
+            let aw = Arc::new(Mutex::new(Weak::<TeamSync>::new()));
+            let bw = Arc::new(Mutex::new(Weak::<TeamSync>::new()));
+            let lookup = aw.clone();
+            let at = TcpTransport::new(
+                old.ak.clone(),
+                Arc::new(move |e, fp| lookup.lock().unwrap().upgrade()?.membership(e, fp)),
+                16,
+            );
+            let lookup = bw.clone();
+            let bt = TcpTransport::new(
+                old.bk.clone(),
+                Arc::new(move |e, fp| lookup.lock().unwrap().upgrade()?.membership(e, fp)),
+                16,
+            );
+            let ta = TeamSync::new(a.clone(), Arc::new(at.clone()), old.ak.clone());
+            let tb = TeamSync::new(b.clone(), Arc::new(bt.clone()), old.bk.clone());
+            *aw.lock().unwrap() = Arc::downgrade(&ta);
+            *bw.lock().unwrap() = Arc::downgrade(&tb);
+            let _stop = Stop(vec![ta.clone(), tb.clone()]);
+            ta.enable_sync_state();
+            tb.enable_sync_state();
+            ta.register_env(env).unwrap();
+            tb.register_env(env).unwrap();
+            assert!(!ta.personal_ordinary_owns_session(env).unwrap());
+            assert!(!tb.personal_ordinary_owns_session(env).unwrap());
+            assert!(ta.synced_at(env).is_none() && tb.synced_at(env).is_none());
+            let scopes = [
+                crate::import_barrier::opus_cost::Scope::protocol_trace(a.state, env),
+                crate::import_barrier::opus_cost::Scope::protocol_trace(b.state, env),
+            ];
+            let forward = Arc::new(AtomicBool::new(false));
+            let (ax, ar) = mpsc::channel();
+            let flag = forward.clone();
+            at.listen_arc(
+                "127.0.0.1:0",
+                Arc::new(move |s| {
+                    if flag.load(Ordering::SeqCst) {
+                        if let Some(team) = aw.lock().unwrap().upgrade() {
+                            team.on_inbound_session(s);
+                        }
+                    } else {
+                        ax.send(s).unwrap();
+                    }
+                }),
+            )
+            .unwrap();
+            let (bx, br) = mpsc::channel();
+            let flag = forward.clone();
+            bt.listen_arc(
+                "127.0.0.1:0",
+                Arc::new(move |s| {
+                    if flag.load(Ordering::SeqCst) {
+                        if let Some(team) = bw.lock().unwrap().upgrade() {
+                            team.on_inbound_session(s);
+                        }
+                    } else {
+                        bx.send(s).unwrap();
+                    }
+                }),
+            )
+            .unwrap();
+            let aa = at.bound_address().unwrap();
+            let ba = bt.bound_address().unwrap();
+            ta.set_peer_address(env, &bf, &ba).unwrap();
+            tb.set_peer_address(env, &af, &aa).unwrap();
+            // A real FULL-authenticated preferred ordinary session is already
+            // accepted before either cold Runtime starts receipt recovery.
+            let (a_winner, b_winner) = if owner_lower {
+                let outgoing: Arc<dyn Session> = at.dial_session(&ba, env, None).unwrap();
+                let incoming = br.recv_timeout(Duration::from_secs(5)).unwrap();
+                assert!(
+                    ta.wire_dialed_session(env, &bf, &ba, outgoing.clone())
+                        .unwrap()
+                );
+                assert!(tb.accept_ordinary_inbound(incoming.clone()));
+                (outgoing, incoming)
+            } else {
+                let outgoing: Arc<dyn Session> = bt.dial_session(&aa, env, None).unwrap();
+                let incoming = ar.recv_timeout(Duration::from_secs(5)).unwrap();
+                assert!(
+                    tb.wire_dialed_session(env, &af, &aa, outgoing.clone())
+                        .unwrap()
+                );
+                assert!(ta.accept_ordinary_inbound(incoming.clone()));
+                (incoming, outgoing)
+            };
+            forward.store(true, Ordering::SeqCst);
+            let wait = |label: &str, done: &dyn Fn() -> bool| {
+                let deadline = Instant::now() + Duration::from_secs(35);
+                while !done() {
+                    if Instant::now() >= deadline {
+                        for (side, team) in [("a", &ta), ("b", &tb)] {
+                            let job = team.bootstrap_runtime.has_job(env);
+                            let owned = team.personal_ordinary_owns_session(env).unwrap();
+                            let state = team.envs.lock().unwrap();
+                            let state = &state[env];
+                            eprintln!(
+                                "PVBOOT_COLD_PREFERRED_FAILURE {}",
+                                json!({"phase":label,"owner_lower":owner_lower,"side":side,"job":job,"owned":owned,"ready":state.synced_at.is_some(),"peer_vectors":state.peer_vectors,"sessions":state.sessions.values().map(|s|json!({"closed":s.is_closed(),"full":state.document["members"][s.peer().fingerprint()]["device"]==s.peer().to_dict()})).collect::<Vec<_>>()})
+                            );
+                        }
+                    }
+                    assert!(
+                        Instant::now() < deadline,
+                        "unchanged35s cold preferred phase={label}"
+                    );
+                    let _ = ta.poll();
+                    let _ = tb.poll();
+                    thread::sleep(Duration::from_millis(10));
+                }
+            };
+            wait("recovery", &|| {
+                tb.personal_ordinary_owns_session(env).unwrap()
+                    && !tb.bootstrap_runtime.has_job(env)
+                    && ta.synced_at(env).is_some()
+                    && tb.synced_at(env).is_some()
+                    && CommitStore::new(a.state, env)
+                        .get(&delta.author, &delta.author_seq)
+                        .unwrap()
+                        .is_some()
+            });
+            assert!(Arc::ptr_eq(
+                &ta.envs.lock().unwrap()[env].sessions[&bf],
+                &a_winner
+            ));
+            assert!(Arc::ptr_eq(
+                &tb.envs.lock().unwrap()[env].sessions[&af],
+                &b_winner
+            ));
+            assert!(!a_winner.is_closed() && !b_winner.is_closed());
+            // Real fresh agreement remains queryable during a later selected
+            // control observation. The query must validate again, not inherit
+            // cached READY from this guard or from the prior receipt.
+            let receiving = tb.personal_control_started(env, &b_winner).unwrap();
+            assert!(tb.synced_at(env).is_some());
+            drop(receiving);
+            assert!(
+                scopes[0]
+                    .metrics()
+                    .get("receipt_queries_sent")
+                    .copied()
+                    .unwrap_or(0)
+                    > 0
+            );
+            assert_eq!(std::fs::read(&receipt_path).unwrap(), receipt);
+            assert_eq!(
+                CommitStore::new(a.state, env)
+                    .all_commits()
+                    .unwrap()
+                    .iter()
+                    .flat_map(|c| &c.ops)
+                    .filter(|o| o["op"] == "member.add")
+                    .count(),
+                1
+            );
+            assert!(
+                a.vault
+                    .secret_for_trusted_use("alpha", None)
+                    .unwrap()
+                    .ct_eq(b"synthetic-cold-preferred-delta")
+            );
+            let changed = membership::author_commit(&a, Some(&ta), env, vec![
+                json!({"op":"secret.put_version","secret_id":"alpha","version_id":"9999999999999999","generation_id":"0123456789abcdef","kind":"api_key","ciphertext":envelope::encrypt_secret(&[7;32],env,"alpha","9999999999999999",b"synthetic-cold-preferred-next").unwrap(),"public":{}}),
+                json!({"op":"secret.activate","secret_id":"alpha","version_id":"9999999999999999"}),
+            ]).unwrap();
+            wait("postcut_delta", &|| {
+                CommitStore::new(b.state, env)
+                    .get(&changed.author, &changed.author_seq)
+                    .unwrap()
+                    .is_some()
+                    && b.vault
+                        .secret_for_trusted_use("alpha", None)
+                        .is_ok_and(|v| v.ct_eq(b"synthetic-cold-preferred-next"))
+            });
+            let cached = &b.vault;
+            membership::remove_member(&a, Some(&ta), env, &bf).unwrap();
+            wait("removal", &|| {
+                cached.secret_for_trusted_use("alpha", None).is_err()
+            });
+            let reopened =
+                Context::open(&b.state.path, Config::default(), clock::system()).unwrap();
+            assert!(cached.secret_for_trusted_use("alpha", None).is_err());
+            assert!(
+                reopened
+                    .vault
+                    .secret_for_trusted_use("alpha", None)
+                    .is_err()
+            );
+            eprintln!(
+                "PVBOOT_COLD_PREFERRED_REAL_FLOW owner_lower={owner_lower} receipt_query=true original_winner=true one_admission=true delta=true cached_and_reopened_denial=true"
+            );
+        }
+    }
+
+    struct Pair {
+        _root: tempfile::TempDir,
+        a: Arc<Context>,
+        b: Arc<Context>,
+        ak: DeviceKey,
+        bk: DeviceKey,
+        ta: Arc<TeamSync>,
+        tb: Arc<TeamSync>,
+        env: String,
+        _traces: Vec<crate::import_barrier::opus_cost::Scope>,
+    }
+    impl Drop for Pair {
+        fn drop(&mut self) {
+            self.tb.stop();
+            self.ta.stop();
+        }
+    }
+    impl Pair {
+        fn new(owner_is_lower: bool) -> Self {
+            let root = tempfile::tempdir().unwrap();
+            let mut contexts = (0..2)
+                .map(|i| {
+                    let ctx = Arc::new(
+                        Context::initialize(
+                            root.path().join(i.to_string()),
+                            PASS,
+                            "synthetic-current-session-recovery",
+                            Config::default(),
+                            clock::system(),
+                        )
+                        .unwrap(),
+                    );
+                    let key = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+                    (key.fingerprint().unwrap(), ctx, key)
+                })
+                .collect::<Vec<_>>();
+            contexts.sort_by(|left, right| left.0.cmp(&right.0));
+            if !owner_is_lower {
+                contexts.reverse();
+            }
+            let (_, b, bk) = contexts.pop().unwrap();
+            let (af, a, ak) = contexts.pop().unwrap();
+            assert_eq!(af < bk.fingerprint().unwrap(), owner_is_lower);
+            a.projects.create("personal", &["vault"]).unwrap();
+            let env = format!("{af}-0123456789abcdef0123456789abcdef");
+            write_env_mapping(a.state, &env, "personal", "vault").unwrap();
+            let generation = "0123456789abcdef";
+            let wrap =
+                envelope::wrap_dek(&[7; 32], &env, generation, &ak.record().unwrap()).unwrap();
+            let append = |seq, ops| {
+                let _lock = a.state.lock().unwrap();
+                let store = CommitStore::new(a.state, &env);
+                let c = commit::sign_commit(
+                    &ak,
+                    &env,
+                    seq,
+                    &format!("{}-0000", 1_000_000 + seq),
+                    &store.vector().unwrap(),
+                    ops,
+                )
+                .unwrap();
+                store.append(&c).unwrap();
+            };
+            append(
+                1,
+                vec![
+                    json!({"op":"env.init","owner_device":ak.record().unwrap().to_dict(),"owner_name":"owner","generation_id":generation,"wraps":{af.clone():wrap}}),
+                ],
+            );
+            let at = TcpTransport::new(ak.clone(), Arc::new(|_, _| None), 16);
+            let ta = TeamSync::new(a.clone(), Arc::new(at.clone()), ak.clone());
+            ta.enable_sync_state();
+            ta.register_env(&env).unwrap();
+            ta.compact(&env).unwrap();
+            append(
+                2,
+                vec![
+                    json!({"op":"secret.put_version","secret_id":"alpha","version_id":"1111111111111111","generation_id":generation,"kind":"api_key","ciphertext":envelope::encrypt_secret(&[7;32],&env,"alpha","1111111111111111",VALUE).unwrap(),"public":{}}),
+                    json!({"op":"secret.activate","secret_id":"alpha","version_id":"1111111111111111"}),
+                ],
+            );
+            ta.compact(&env).unwrap();
+            let weak = Arc::downgrade(&ta);
+            at.listen_arc(
+                "127.0.0.1:0",
+                Arc::new(move |s| {
+                    if let Some(t) = weak.upgrade() {
+                        t.on_inbound_session(s)
+                    }
+                }),
+            )
+            .unwrap();
+            let invitation = membership::create_invite_opts(
+                &a,
+                &env,
+                "admin",
+                "recipient",
+                600,
+                &[at.bound_address().unwrap()],
+                false,
+                true,
+            )
+            .unwrap();
+            bootstrap::approval::enable(&a, &env, &invitation.invite_id, None).unwrap();
+            let bt = TcpTransport::new(bk.clone(), Arc::new(|_, _| None), 16);
+            let tb = TeamSync::new(b.clone(), Arc::new(bt.clone()), bk.clone());
+            tb.enable_sync_state();
+            let pending = membership::join(
+                &b,
+                &invitation.invite,
+                &bt,
+                &tb,
+                Some("personal"),
+                Some("vault"),
+                10.0,
+            )
+            .unwrap();
+            let request = bootstrap::approval::list(&a, &env).unwrap().remove(0);
+            bootstrap::approval::approve(
+                &a,
+                &env,
+                request["request_id"].as_str().unwrap(),
+                request["record_binding"].as_str().unwrap(),
+                PASS,
+            )
+            .unwrap();
+            bootstrap::approval::approve_receiver(
+                &b,
+                &env,
+                pending["inviter_record_binding"].as_str().unwrap(),
+                pending["self_record_binding"].as_str().unwrap(),
+                PASS,
+            )
+            .unwrap();
+            let traces = vec![
+                crate::import_barrier::opus_cost::Scope::protocol_trace(a.state, &env),
+                crate::import_barrier::opus_cost::Scope::protocol_trace(b.state, &env),
+            ];
+            let pair = Self {
+                _root: root,
+                a,
+                b,
+                ak,
+                bk,
+                ta,
+                tb,
+                env,
+                _traces: traces,
+            };
+            pair.wait("bootstrap", || {
+                pair.tb.personal_ordinary_owns_session(&pair.env).unwrap()
+                    && pair.ta.synced_at(&pair.env).is_some()
+                    && pair.tb.synced_at(&pair.env).is_some()
+            });
+            assert!(pair.tb.personal_ordinary_owns_session(&pair.env).unwrap());
+            assert!(
+                pair.b
+                    .vault
+                    .secret_for_trusted_use("alpha", None)
+                    .unwrap()
+                    .ct_eq(VALUE)
+            );
+            pair
+        }
+        fn wait(&self, label: &'static str, done: impl Fn() -> bool) {
+            let deadline = Instant::now() + Duration::from_secs(35);
+            while !done() {
+                if Instant::now() >= deadline {
+                    for (side, team) in [("owner", &self.ta), ("recipient", &self.tb)] {
+                        let job = team.bootstrap_runtime.has_job(&self.env);
+                        let handed = team.personal_ordinary_owns_session(&self.env).ok();
+                        let envs = team.envs.lock().unwrap();
+                        let env = &envs[&self.env];
+                        let sessions = env.sessions.values().map(|session| {
+                            let fp = session.peer().fingerprint();
+                            let gate = env.gates.get(&fp);
+                            json!({"closed":session.is_closed(),"full_record":env.document["members"][&fp]["device"]==session.peer().to_dict(),"active":env.document["members"][&fp]["status"]=="active","caps":gate.and_then(|g|g.caps),"caps_sent":gate.is_some_and(|g|g.caps_sent),"announced":gate.is_some_and(|g|g.announced),"acked":gate.is_some_and(|g|g.acked),"peer_state":gate.is_some_and(|g|g.peer_state.is_some()),"vector_seen":env.sync.vector_received_at.contains_key(&fp),"peer_vector":env.peer_vectors.get(&fp)})
+                        }).collect::<Vec<_>>();
+                        eprintln!(
+                            "PVBOOT_ORDERED_FAILURE {}",
+                            json!({"phase":label,"side":side,"owner_lower":self.ak.fingerprint().unwrap()<self.bk.fingerprint().unwrap(),"job":job,"handed":handed,"synced":env.synced_at.is_some(),"control_busy":env.sessions.values().any(|session|team.bootstrap_runtime.ordinary_control_busy(&self.env,session)),"refold_reason":env.refold_failure.as_ref().map(|f|f.error.reason.as_ref()),"sessions":sessions})
+                        );
+                    }
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "unchanged35s agreement deadline phase={label}"
+                );
+                let _ = self.ta.poll();
+                let _ = self.tb.poll();
+                thread::sleep(Duration::from_millis(10));
+            }
+        }
+        fn replace(&self, delayed: bool) {
+            let af = self.ak.fingerprint().unwrap();
+            let bf = self.bk.fingerprint().unwrap();
+            let (lower, higher, lk, hk) = if af < bf {
+                (&self.ta, &self.tb, &self.ak, &self.bk)
+            } else {
+                (&self.tb, &self.ta, &self.bk, &self.ak)
+            };
+            for (team, fp) in [(&self.ta, &bf), (&self.tb, &af)] {
+                team.drop_session(&self.env, fp, None);
+            }
+            let make = |key: &DeviceKey, team: &Arc<TeamSync>| {
+                let weak = Arc::downgrade(team);
+                let t = TcpTransport::new(
+                    key.clone(),
+                    Arc::new(move |e, fp| weak.upgrade().and_then(|t| t.membership(e, fp))),
+                    8,
+                );
+                let (tx, rx) = mpsc::channel();
+                t.listen_arc(
+                    "127.0.0.1:0",
+                    Arc::new(move |s| {
+                        tx.send(s).unwrap();
+                    }),
+                )
+                .unwrap();
+                (t, rx)
+            };
+            let (lt, lr) = make(lk, lower);
+            let (ht, hr) = make(hk, higher);
+            let (at, ar, bt) = if af < bf {
+                (&lt, &lr, &ht)
+            } else {
+                (&ht, &hr, &lt)
+            };
+            let b0: Arc<dyn Session> = bt
+                .dial_session(&at.bound_address().unwrap(), &self.env, None)
+                .unwrap();
+            let a0 = ar.recv_timeout(Duration::from_secs(5)).unwrap();
+            let (l0, h0) = if af < bf {
+                (a0.clone(), b0.clone())
+            } else {
+                (b0.clone(), a0.clone())
+            };
+            if !delayed {
+                assert!(self.ta.accept_session_for_handoff(
+                    &self.env,
+                    a0.clone(),
+                    true,
+                    None,
+                    true
+                ));
+                assert!(
+                    self.tb
+                        .personal_adopt_outbound(
+                            &self.env,
+                            b0.clone(),
+                            &at.bound_address().unwrap()
+                        )
+                        .unwrap()
+                );
+                self.ta.personal_handoff_complete(&self.env, &a0).unwrap();
+                self.tb.personal_handoff_complete(&self.env, &b0).unwrap();
+            }
+            let stale_a = (!delayed)
+                .then(|| self.ta.personal_control_started(&self.env, &a0))
+                .flatten();
+            let stale_b = (!delayed)
+                .then(|| self.tb.personal_control_started(&self.env, &b0))
+                .flatten();
+            let l1: Arc<dyn Session> = lt
+                .dial_session(&ht.bound_address().unwrap(), &self.env, None)
+                .unwrap();
+            let h1 = hr.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(higher.accept_session(&self.env, h1.clone(), true));
+            assert!(
+                lower
+                    .wire_dialed_session(
+                        &self.env,
+                        &hk.fingerprint().unwrap(),
+                        &ht.bound_address().unwrap(),
+                        l1.clone()
+                    )
+                    .unwrap()
+            );
+            if delayed {
+                assert!(!self.ta.accept_session_for_handoff(
+                    &self.env,
+                    a0.clone(),
+                    true,
+                    None,
+                    true
+                ));
+                assert!(
+                    !self
+                        .tb
+                        .personal_adopt_outbound(
+                            &self.env,
+                            b0.clone(),
+                            &at.bound_address().unwrap()
+                        )
+                        .unwrap()
+                );
+                self.ta.personal_handoff_complete(&self.env, &a0).unwrap();
+                self.tb.personal_handoff_complete(&self.env, &b0).unwrap();
+            }
+            assert!(l0.is_closed() && h0.is_closed());
+            // Lower S1 already has a real receiver. Wait for its CAPS work
+            // to finish before observing isolated guard cleanup; do not
+            // assume an asynchronously started handler is already idle.
+            let control_deadline = Instant::now() + Duration::from_secs(35);
+            while self.ta.personal_control_busy(&self.env)
+                || self.tb.personal_control_busy(&self.env)
+            {
+                assert!(
+                    Instant::now() < control_deadline,
+                    "unchanged35s replacement control completion"
+                );
+                thread::sleep(Duration::from_millis(10));
+            }
+            assert!(!self.ta.personal_control_busy(&self.env));
+            assert!(!self.tb.personal_control_busy(&self.env));
+            let current_a = self.ta.envs.lock().unwrap()[&self.env].sessions[&bf].clone();
+            let current_b = self.tb.envs.lock().unwrap()[&self.env].sessions[&af].clone();
+            let busy_a = self
+                .ta
+                .personal_control_started(&self.env, &current_a)
+                .unwrap();
+            let busy_b = self
+                .tb
+                .personal_control_started(&self.env, &current_b)
+                .unwrap();
+            assert!(self.ta.synced_at(&self.env).is_none());
+            assert!(self.tb.synced_at(&self.env).is_none());
+            self.ta.personal_handoff_complete(&self.env, &a0).unwrap();
+            self.tb.personal_handoff_complete(&self.env, &b0).unwrap();
+            drop(stale_a);
+            drop(stale_b);
+            assert!(self.ta.personal_control_busy(&self.env));
+            assert!(self.tb.personal_control_busy(&self.env));
+            drop(busy_a);
+            drop(busy_b);
+            assert!(!self.ta.personal_control_busy(&self.env));
+            assert!(!self.tb.personal_control_busy(&self.env));
+            for (team, winner) in [(lower, &l1), (higher, &h1)] {
+                assert!(team.personal_ordinary_owns_session(&self.env).unwrap());
+                assert!(
+                    team.bootstrap_runtime
+                        .ordinary_owns_session(&self.env, winner)
+                        .unwrap()
+                );
+                assert!(
+                    !bootstrap::Runtime::default()
+                        .ordinary_owns_session(&self.env, winner)
+                        .unwrap(),
+                    "cold socket is not a handoff"
+                );
+                let envs = team.envs.lock().unwrap();
+                let e = &envs[&self.env];
+                assert!(e.synced_at.is_none());
+                assert!(!e.gates[&winner.peer().fingerprint()].acked);
+                assert!(
+                    !e.gates[&winner.peer().fingerprint()]
+                        .ready(&super::super::tombstone_gate::empty_digest(), true)
+                );
+            }
+            let losing: Arc<dyn Session> = ht
+                .dial_session(&lt.bound_address().unwrap(), &self.env, None)
+                .unwrap();
+            let rejected = lr.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert!(!lower.accept_session(&self.env, rejected, true));
+            assert!(
+                !higher
+                    .personal_adopt_outbound(
+                        &self.env,
+                        losing.clone(),
+                        &lt.bound_address().unwrap()
+                    )
+                    .unwrap()
+            );
+            assert!(losing.is_closed());
+            higher
+                .personal_handoff_complete(&self.env, &losing)
+                .unwrap();
+            assert!(
+                !higher
+                    .bootstrap_runtime
+                    .ordinary_owns_session(&self.env, &losing)
+                    .unwrap()
+            );
+            assert!(
+                higher
+                    .bootstrap_runtime
+                    .ordinary_owns_session(&self.env, &h1)
+                    .unwrap()
+            );
+            // The delayed side now starts its real receive loop; neither gate
+            // inherited its predecessor's ACK, vector or READY.
+            higher.start_receiver(self.env.clone(), h1.clone());
+            higher.send_vector(&self.env, &h1);
+            self.wait("replacement_agreement", || {
+                self.ta.synced_at(&self.env).is_some() && self.tb.synced_at(&self.env).is_some()
+            });
+            thread::sleep(Duration::from_millis(3010));
+            for team in [lower, higher] {
+                team.bootstrap_runtime.poll(team.clone()).unwrap();
+                assert!(!team.bootstrap_runtime.has_job(&self.env));
+            }
+            assert!(
+                lower
+                    .bootstrap_runtime
+                    .ordinary_owns_session(&self.env, &l1)
+                    .unwrap()
+            );
+            assert!(
+                higher
+                    .bootstrap_runtime
+                    .ordinary_owns_session(&self.env, &h1)
+                    .unwrap()
+            );
+            let delta = membership::author_commit(&self.a, Some(&self.ta), &self.env,
+                vec![json!({"op":"secret.put_version","secret_id":"alpha","version_id":"2222222222222222","generation_id":"0123456789abcdef","kind":"api_key","ciphertext":envelope::encrypt_secret(&[7;32],&self.env,"alpha","2222222222222222",b"synthetic-current-session-delta").unwrap(),"public":{}}),
+                    json!({"op":"secret.activate","secret_id":"alpha","version_id":"2222222222222222"})]).unwrap();
+            self.wait("delta", || {
+                CommitStore::new(self.b.state, &self.env)
+                    .get(&delta.author, &delta.author_seq)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|c| c.hash().unwrap() == delta.hash().unwrap())
+                    && self
+                        .b
+                        .vault
+                        .secret_for_trusted_use("alpha", None)
+                        .is_ok_and(|v| v.ct_eq(b"synthetic-current-session-delta"))
+            });
+            membership::remove_member(&self.a, None, &self.env, &bf).unwrap();
+            self.wait("removal", || {
+                self.b.vault.secret_for_trusted_use("alpha", None).is_err()
+            });
+            assert!(
+                self.b
+                    .state
+                    .exists(&format!("team/{}/bootstrap/member-removed.json", self.env))
+            );
+            let reopened =
+                Context::open(&self.b.state.path, Config::default(), clock::system()).unwrap();
+            assert!(
+                reopened
+                    .vault
+                    .secret_for_trusted_use("alpha", None)
+                    .is_err()
+            );
+            for s in [l1, h1] {
+                s.close();
+            }
+            lt.shutdown();
+            ht.shutdown();
+        }
+    }
+    #[test]
+    fn handed_session_tracks_preferred_replacement_in_both_key_orders() {
+        for order in [true, false] {
+            Pair::new(order).replace(false);
+        }
+    }
+    #[test]
+    fn delayed_handoff_cannot_replace_winner_in_both_key_orders() {
+        for order in [true, false] {
+            Pair::new(order).replace(true);
+        }
+    }
+
+    #[test]
+    fn cold_ordinary_handoff_send_failure_never_reenters_bootstrap_protocol() {
+        use crate::team::transport::{
+            HandshakeFailedHook, InviteCheck, InviteProof, MembershipCheck, OnSession,
+            SessionClosed, Transport,
+        };
+        use std::sync::atomic::AtomicUsize;
+
+        #[derive(Default)]
+        struct Trace {
+            failed: AtomicBool,
+            bootstrap_sends: AtomicUsize,
+            delay_caps: bool,
+            fail_send: bool,
+            caps_delayed: AtomicBool,
+            inbound_finished: Mutex<bool>,
+            inbound_done: std::sync::Condvar,
+            types: Mutex<Vec<(&'static str, &'static str)>>,
+        }
+        struct FailedControlSession {
+            inner: Arc<dyn Session>,
+            trace: Arc<Trace>,
+            receiver: bool,
+        }
+        impl Session for FailedControlSession {
+            fn peer(&self) -> DeviceRecord {
+                self.inner.peer()
+            }
+            fn env_id(&self) -> &str {
+                self.inner.env_id()
+            }
+            fn send(&self, message: &Value) -> Result<()> {
+                let kind = match message["type"].as_str() {
+                    Some("SYNC_CAPS") => "SYNC_CAPS",
+                    Some("PEERS") => "PEERS",
+                    Some("TOMBSTONE_STATE") => "TOMBSTONE_STATE",
+                    Some("TOMBSTONE_ACK") => "TOMBSTONE_ACK",
+                    Some("VECTOR") => "VECTOR",
+                    Some("BOOTSTRAP_REFUSAL") => "BOOTSTRAP_REFUSAL",
+                    _ => "other",
+                };
+                let mut types = self.trace.types.lock().unwrap();
+                if types.len() < 32 {
+                    types.push((if self.receiver { "recipient" } else { "owner" }, kind));
+                }
+                drop(types);
+                if self.receiver
+                    && message["type"]
+                        .as_str()
+                        .is_some_and(|kind| kind.starts_with("BOOTSTRAP_"))
+                {
+                    self.trace.bootstrap_sends.fetch_add(1, Ordering::SeqCst);
+                }
+                if self.receiver
+                    && self.trace.fail_send
+                    && message["type"] == "TOMBSTONE_STATE"
+                    && !self.trace.failed.swap(true, Ordering::SeqCst)
+                {
+                    return Err(Error::state("synthetic_ordinary_control_send_failed"));
+                }
+                self.inner.send(message)
+            }
+            fn recv(&self, timeout: Duration) -> std::result::Result<Option<Value>, SessionClosed> {
+                let message = self.inner.recv(timeout)?;
+                if !self.receiver
+                    && self.trace.delay_caps
+                    && message.as_ref().is_some_and(|v| v["type"] == "SYNC_CAPS")
+                {
+                    self.trace.caps_delayed.store(true, Ordering::SeqCst);
+                    let completed = self.trace.inbound_finished.lock().unwrap();
+                    let (completed, _) = self
+                        .trace
+                        .inbound_done
+                        .wait_timeout_while(completed, Duration::from_secs(5), |done| !*done)
+                        .unwrap();
+                    assert!(
+                        *completed,
+                        "initial inbound scheduling must finish within5s"
+                    );
+                }
+                Ok(message)
+            }
+            fn recv_original(
+                &self,
+                timeout: Duration,
+            ) -> std::result::Result<Option<Vec<u8>>, SessionClosed> {
+                self.inner.recv_original(timeout)
+            }
+            fn close(&self) {
+                self.inner.close();
+            }
+            fn is_closed(&self) -> bool {
+                self.inner.is_closed()
+            }
+            fn created_at(&self) -> Instant {
+                self.inner.created_at()
+            }
+            fn transport_kind(&self) -> Option<&'static str> {
+                self.inner.transport_kind()
+            }
+        }
+        struct RestrictedTransport {
+            inner: Arc<TcpTransport>,
+            trace: Arc<Trace>,
+            receiver: bool,
+        }
+        impl Transport for RestrictedTransport {
+            fn set_membership(&self, callback: MembershipCheck) {
+                self.inner.set_membership(callback);
+            }
+            fn set_invite_check(&self, callback: Option<InviteCheck>) {
+                self.inner.set_invite_check(callback);
+            }
+            fn set_handshake_failed(&self, callback: Option<HandshakeFailedHook>) {
+                self.inner.set_handshake_failed(callback);
+            }
+            fn listen(&self, address: &str, callback: OnSession) -> Result<()> {
+                let trace = self.trace.clone();
+                let receiver = self.receiver;
+                self.inner.listen_arc(
+                    address,
+                    Arc::new(move |inner| {
+                        struct Finished(Arc<Trace>);
+                        impl Drop for Finished {
+                            fn drop(&mut self) {
+                                *self.0.inbound_finished.lock().unwrap() = true;
+                                self.0.inbound_done.notify_all();
+                            }
+                        }
+                        let _finished = Finished(trace.clone());
+                        callback(Arc::new(FailedControlSession {
+                            inner,
+                            trace: trace.clone(),
+                            receiver,
+                        }));
+                    }),
+                )
+            }
+            fn dial(
+                &self,
+                address: &str,
+                env: &str,
+                proof: Option<InviteProof>,
+            ) -> std::result::Result<Arc<dyn Session>, SessionClosed> {
+                if !self.receiver || proof.is_none() {
+                    return Err(SessionClosed("synthetic_dial_disabled"));
+                }
+                self.inner.dial_session(address, env, proof).map(|inner| {
+                    Arc::new(FailedControlSession {
+                        inner,
+                        trace: self.trace.clone(),
+                        receiver: true,
+                    }) as Arc<dyn Session>
+                })
+            }
+            fn close(&self) {
+                self.inner.shutdown();
+            }
+        }
+        struct Stop(Vec<Arc<TeamSync>>);
+        impl Drop for Stop {
+            fn drop(&mut self) {
+                for team in self.0.iter().rev() {
+                    team.stop();
+                }
+            }
+        }
+
+        for (owner_lower, delay_caps, fail_send) in [
+            (true, true, false),
+            (false, true, false),
+            (true, false, true),
+            (false, false, true),
+        ] {
+            let pair = Pair::new(owner_lower);
+            pair.tb.stop();
+            pair.ta.stop();
+            let af = pair.ak.fingerprint().unwrap();
+            let bf = pair.bk.fingerprint().unwrap();
+            let authorization = pair
+                .a
+                .state
+                .read_json(
+                    &format!("team/{}/bootstrap/authorizations/{bf}.json", pair.env),
+                    Value::Null,
+                )
+                .unwrap();
+            assert_eq!(authorization["activated"], true);
+            let receipt = pair
+                .b
+                .state
+                .path
+                .join(format!("team/{}/bootstrap/receipt.json", pair.env));
+            let journal = pair
+                .b
+                .state
+                .path
+                .join(format!("team/{}/bootstrap/journal.json", pair.env));
+            let original_receipt = std::fs::read(&receipt).unwrap();
+            let original_journal = std::fs::read(&journal).unwrap();
+            let trace = Arc::new(Trace {
+                delay_caps,
+                fail_send,
+                ..Trace::default()
+            });
+            let at = TcpTransport::new(pair.ak.clone(), Arc::new(|_, _| None), 16);
+            let bt = TcpTransport::new(pair.bk.clone(), Arc::new(|_, _| None), 16);
+            let ta = TeamSync::new(
+                pair.a.clone(),
+                Arc::new(RestrictedTransport {
+                    inner: at.clone(),
+                    trace: trace.clone(),
+                    receiver: false,
+                }),
+                pair.ak.clone(),
+            );
+            let tb = TeamSync::new(
+                pair.b.clone(),
+                Arc::new(RestrictedTransport {
+                    inner: bt,
+                    trace: trace.clone(),
+                    receiver: true,
+                }),
+                pair.bk.clone(),
+            );
+            let _stop = Stop(vec![ta.clone(), tb.clone()]);
+            ta.enable_sync_state();
+            tb.enable_sync_state();
+            ta.start(Some("127.0.0.1:0")).unwrap();
+            tb.register_env(&pair.env).unwrap();
+            tb.set_peer_address(&pair.env, &af, &at.bound_address().unwrap())
+                .unwrap();
+            assert!(ta.synced_at(&pair.env).is_none());
+            assert!(tb.synced_at(&pair.env).is_none());
+            tb.start(None).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(35);
+            while ta.synced_at(&pair.env).is_none() || tb.synced_at(&pair.env).is_none() {
+                assert!(Instant::now() < deadline, "unchanged35s recovery deadline");
+                thread::sleep(Duration::from_millis(20));
+            }
+            assert_eq!(trace.failed.load(Ordering::SeqCst), fail_send);
+            assert_eq!(trace.caps_delayed.load(Ordering::SeqCst), delay_caps);
+            println!(
+                "PVBOOT_COLD_ORDINARY_ROUTE_TYPES {}",
+                json!({"owner_lower":owner_lower,"caps_delayed":delay_caps,"send_failed":fail_send,"types":*trace.types.lock().unwrap()})
+            );
+            assert_eq!(
+                trace.bootstrap_sends.load(Ordering::SeqCst),
+                0,
+                "an ordinary handoff failure must not send bootstrap controls"
+            );
+            assert_eq!(std::fs::read(receipt).unwrap(), original_receipt);
+            assert_eq!(std::fs::read(journal).unwrap(), original_journal);
+            assert!(
+                pair.b
+                    .vault
+                    .secret_for_trusted_use("alpha", None)
+                    .unwrap()
+                    .ct_eq(VALUE)
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod personal_fact_replay_reservation_tests {
+    use super::*;
+    #[test]
+    fn actual_fact_conversion_and_shared_charges_cover_standard_and_legacy_shapes() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = Context::initialize(
+            dir.path().join("state"),
+            "synthetic-reservation-admin",
+            "synthetic-reservation-recovery",
+            crate::context::Config::default(),
+            crate::clock::system(),
+        )
+        .unwrap();
+        let key = DeviceKey::load_or_create(ctx.state, ctx.kms).unwrap();
+        let env = format!(
+            "{}-0123456789abcdef0123456789abcdef",
+            key.fingerprint().unwrap()
+        );
+        let real = sign_fact(
+            &key,
+            &env,
+            "secret_deleted",
+            json!({"secret_id":"synthetic"}),
+            "1000-0000",
+        )
+        .unwrap();
+        assert!(verify_fact(&real, &key.record().unwrap()));
+        let base = real.to_dict();
+        let mut cases = vec![(base.clone(), true)];
+        let mut wide = base.clone();
+        wide["target"] = Value::Object(
+            (0..16)
+                .map(|i| {
+                    (
+                        format!("{}{:02}", "공통".repeat(8), i),
+                        json!([i, "synthetic"]),
+                    )
+                })
+                .collect(),
+        );
+        cases.push((wide, true));
+        let mut extra = base.clone();
+        extra["extra"] = json!(true);
+        cases.push((extra, false));
+        let mut pairs = base.clone();
+        pairs["target"] = json!([[true, "synthetic"], [1, "later"]]);
+        cases.push((pairs, false));
+        let mut number = base.clone();
+        number["hlc"] = crate::pyjson::loads("10000000000000000000000000000000000000000").unwrap();
+        cases.push((number, false));
+        for (value, standard) in cases {
+            let scope = commit::history_testing::Scope::owned(ctx.state);
+            let history =
+                commit::HistorySession::open_probe(&ctx, &env, commit::ProbePurpose::Invite)
+                    .unwrap();
+            let raw = pyjson::dumps(&value, DumpOptions::compact_sorted()).unwrap();
+            let parsed = history.parse_line(&raw).unwrap();
+            let n = raw.len() as u64;
+            history.charge_import(n, 0).unwrap();
+            let (work, bytes) = fact_replay_parse_reservation(n, &parsed).unwrap();
+            if !standard {
+                assert_eq!(work, 8 * n * n);
+            }
+            assert_eq!(bytes, 64 * n);
+            let before = scope.snapshot();
+            history.charge_import(work, bytes).unwrap();
+            let after = scope.snapshot();
+            assert_eq!(
+                after["charged_work_total"].as_u64().unwrap()
+                    - before["charged_work_total"].as_u64().unwrap(),
+                work
+            );
+            assert_eq!(
+                after["charged_bytes_total"].as_u64().unwrap()
+                    - before["charged_bytes_total"].as_u64().unwrap(),
+                bytes
+            );
+            assert_eq!(
+                Fact::from_dict(&parsed).unwrap(),
+                Fact::from_dict(&value).unwrap()
+            );
+            history.check().unwrap();
+            println!(
+                "PVBOOT_FACT_REPLAY_RESERVATION {}",
+                json!({"bytes":n,"standard_shape":standard,"work":work,"charged_bytes":bytes})
+            );
+        }
+        assert_eq!(
+            fact_replay_parse_reservation(u64::MAX, &base)
+                .unwrap_err()
+                .reason,
+            "team_bootstrap_limit_exceeded"
+        );
     }
 }

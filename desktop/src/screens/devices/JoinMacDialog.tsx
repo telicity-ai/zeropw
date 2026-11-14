@@ -1,3 +1,4 @@
+import { personalApprovalNeeded, personalFailureKey } from '../../lib/pairing';
 // Join another Mac's vault with its one-time code: paste, compare the other Mac's confirmation
 // code, ask, then wait while that Mac approves. Names and places come from the other Mac and
 // are rendered as text only.
@@ -63,6 +64,15 @@ export function JoinMacDialog({ open, pj, onClose }: { open: boolean; pj: PairJo
         </>
       )}
       {(p.kind === 'waiting' || p.kind === 'done') && <JoinProgress phase={p} />}
+      {p.kind==='waiting'&&p.result?.environments.some((e)=>personalApprovalNeeded(e)&&e.inviter_record_binding)&&<>
+        <Banner tone="warn">{t('mac.bootstrap.attestation')}</Banner>
+        <KeyValues dense items={[
+          {k:t('mac.wait.self'),v:p.result.environments.find((e)=>e.self_record_binding)?.self_record_binding,mono:true},
+          {k:t('mac.wait.other'),v:p.result.environments.find((e)=>e.inviter_record_binding)?.inviter_record_binding,mono:true},
+        ]}/>
+        <PassField value={pj.approvalPass} onChange={pj.setApprovalPass} error={pj.approvalError?t(pj.approvalError):null} allowShow={false}/>
+        <Button tone="primary" busy={pj.approving} onClick={()=>void pj.approve()}>{t('mac.bootstrap.accept')}</Button>
+      </>}
     </Dialog>
   );
 }
@@ -92,12 +102,13 @@ function JoinProgress({ phase: p }: { phase: Extract<PairJoin['phase'], { kind: 
             <li key={e.env}>
               <span className="wrap-anywhere">{placeOf(e.env)}</span>
               <Status tone={st === 'joined' ? 'ok' : st === 'failed' ? 'danger' : 'neutral'} pulse={st === 'pending' && p.kind === 'waiting'}>
-                {t(st === 'joined' ? 'mac.env.joined' : st === 'failed' ? 'mac.env.failed' : 'mac.env.pending')}
+                {r?.bootstrap_state&&st!=='joined'?t(bootstrapCopy[r.bootstrap_state]):t(st === 'joined' ? 'mac.env.joined' : st === 'failed' ? 'mac.env.failed' : 'mac.env.pending')}
               </Status>
             </li>
           );
         })}
       </ul>
+      {p.result?.environments.map((e)=>{const key=personalFailureKey(e.reason);return key?<Banner key={e.env} tone="warn" compact>{t(key)}</Banner>:null;})}
       {p.kind === 'waiting' && p.hint && <Banner tone="warn" compact>{t(p.hint)}</Banner>}
       {failed.length > 0 && (
         <Banner tone="warn">{t(failed.some((e) => e.reason === 'pairing_env_exists') ? 'pair.failed.exists' : 'mac.partial')}</Banner>
@@ -105,3 +116,5 @@ function JoinProgress({ phase: p }: { phase: Extract<PairJoin['phase'], { kind: 
     </>
   );
 }
+
+const bootstrapCopy={approval_pending:'mac.bootstrap.pending',transferring:'mac.bootstrap.transferring',verifying:'mac.bootstrap.verifying',installing:'mac.bootstrap.installing',installed_syncing:'mac.bootstrap.syncing',ready:'mac.env.joined',unsupported:'mac.bootstrap.unsupported',recovery_required:'mac.bootstrap.recovery'} as const;

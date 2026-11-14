@@ -26,6 +26,7 @@ import json
 import os
 import pathlib
 import re
+import stat
 import subprocess
 import tempfile
 
@@ -112,7 +113,101 @@ def notice_entries(markup):
     return entries
 
 
-def rust_std_notice(target):
+def std_supplement_bytes(path):
+    """Read a bounded regular file without following a link in any path component."""
+    path = pathlib.Path(path).absolute()
+    if '..' in path.parts:
+        raise ValueError('parent traversal')
+    directory = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in path.parts[1:-1]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            os.close(directory)
+            directory = child
+        descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        with os.fdopen(descriptor, 'rb') as source:
+            if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                raise ValueError('not regular')
+            data = source.read(2 * 1024 * 1024 + 1)
+            if not data or len(data) > 2 * 1024 * 1024:
+                raise ValueError('notice size')
+            return data
+    finally:
+        os.close(directory)
+
+
+def std_supplement(path, release, commit, target, missing):
+    """Exact, independently admitted upstream notices; never vendor-catalog replacements."""
+    def unique(pairs):
+        value = dict(pairs)
+        if len(value) != len(pairs):
+            raise ValueError('duplicate field')
+        return value
+
+    def provenance(value, url_key, hash_key):
+        if (not isinstance(value.get(url_key), str)
+                or not re.fullmatch(r'https://[^\s<>]+', value[url_key])
+                or not isinstance(value.get(hash_key), str)
+                or not re.fullmatch(r'[0-9a-f]{64}', value[hash_key])):
+            raise ValueError('provenance')
+
+    try:
+        path = pathlib.Path(path).absolute()
+        raw = std_supplement_bytes(path)
+        document = json.loads(raw.decode('utf-8'), object_pairs_hook=unique)
+        if set(document) != {'toolchains'} or not isinstance(document['toolchains'], list):
+            raise ValueError('schema')
+        records = document['toolchains']
+        if any(not isinstance(item, dict) or set(item) != {
+                'release', 'commit', 'target', 'source_lock', 'packages'} for item in records):
+            raise ValueError('toolchain schema')
+        matches = [item for item in records if (item['release'], item['commit'], item['target'])
+                   == (release, commit, target)]
+        if len(matches) != 1:
+            raise ValueError('exact toolchain')
+        record = matches[0]
+        lock, packages = record['source_lock'], record['packages']
+        if not isinstance(lock, dict) or set(lock) != {'url', 'sha256'} or not isinstance(packages, dict):
+            raise ValueError('source schema')
+        provenance(lock, 'url', 'sha256')
+        sections = []
+        for crate, versions in sorted(missing.items()):
+            if not versions:
+                raise ValueError('unrecorded version')
+            for version in sorted(versions):
+                key = f'{crate} {version}'
+                entry = packages[key]
+                if not isinstance(entry, dict) or set(entry) != {'archive_url', 'archive_sha256', 'notices'}:
+                    raise ValueError('package schema')
+                provenance(entry, 'archive_url', 'archive_sha256')
+                if not isinstance(entry['notices'], list) or not entry['notices']:
+                    raise ValueError('no notices')
+                parts, seen = [], set()
+                for notice in entry['notices']:
+                    if not isinstance(notice, dict) or set(notice) != {'path', 'sha256'}:
+                        raise ValueError('notice schema')
+                    name, digest = notice['path'], notice['sha256']
+                    if (not isinstance(name, str) or not name or name in seen
+                            or pathlib.PurePosixPath(name).is_absolute() or '..' in name.split('/')
+                            or '\\' in name or not isinstance(digest, str)
+                            or not re.fullmatch(r'[0-9a-f]{64}', digest)):
+                        raise ValueError('notice path/hash')
+                    seen.add(name)
+                    data = std_supplement_bytes(path.parent / name)
+                    if hashlib.sha256(data).hexdigest() != digest:
+                        raise ValueError('notice digest')
+                    parts.append(f'\n#### {name} (SHA-256 {digest})\n\n' + indented(data.decode('utf-8')))
+                sections.append(f'\n### Verified upstream supplementary notice: {key}\n\n'
+                                'Supplied separately; not part of the vendor COPYRIGHT catalogs.\n'
+                                f'Source lock: {lock["url"]} (SHA-256 {lock["sha256"]}).\n'
+                                f'Archive: {entry["archive_url"]} (SHA-256 {entry["archive_sha256"]}).\n'
+                                f'Supplement SHA-256: {hashlib.sha256(raw).hexdigest()}.\n' + ''.join(parts))
+        return sections
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        raise SystemExit('Rust standard library notice: invalid exact-version upstream supplement') from None
+
+
+def rust_std_notice(target, supplement_path=None):
     """The toolchain's notice section for the standard library linked into executables for target."""
     rustc = os.environ.get('RUSTC') or 'rustc'
     try:
@@ -153,20 +248,27 @@ def rust_std_notice(target):
         for name, found in DEPS_PATH.findall(rlib.read_bytes()):
             linked.setdefault(crate_key(name.decode()), set()).add(found.decode())
     catalogs = [('COPYRIGHT-library.html', notice_entries(library)), ('COPYRIGHT.html', None)]
-    selected, unlisted = [], []
+    selected, missing = [], {}
     for crate, versions in sorted(linked.items()):
-        for index, (title, entries) in enumerate(catalogs):
-            if entries is None:  # the whole-toolchain file is large; read it only when needed
-                entries = notice_entries(read(title))
-                catalogs[index] = (title, entries)
-            keys = [key for key in sorted(entries) if key[0] == crate and (not versions or key[1] in versions)]
-            if keys and (not versions or {key[1] for key in keys} == versions):
-                selected += [(title, entries[key]) for key in keys]
-                break
-        else:
-            unlisted.append(crate + (' ' + ', '.join(sorted(versions)) if versions else ''))
-    if unlisted:
-        raise SystemExit('Rust standard library notice: no toolchain notice entry for ' + ', '.join(unlisted))
+        for wanted in sorted(versions) or [None]:
+            for title, entries in catalogs:
+                if entries is None:
+                    entries = notice_entries(read(title))
+                    catalogs[1] = (title, entries)
+                keys = [key for key in sorted(entries) if key[0] == crate and (wanted is None or key[1] == wanted)]
+                if keys:
+                    selected += [(title, entries[key]) for key in keys]
+                    break
+            else:
+                missing.setdefault(crate, set()).update([wanted] if wanted is not None else [])
+    supplementary = []
+    if missing:
+        if not all(missing.values()):
+            unlisted = [crate + (' ' + ', '.join(sorted(versions)) if versions else '')
+                        for crate, versions in sorted(missing.items())]
+            raise SystemExit('Rust standard library notice: no toolchain notice entry for ' + ', '.join(unlisted))
+        supplement_path = supplement_path or pathlib.Path(__file__).resolve().parents[1] / 'desktop/licenses/rust-std/supplement.json'
+        supplementary = std_supplement(supplement_path, release, commit, target, missing)
     parts = [TextFromHtml.convert(intree.group(0))]
     sections = [('COPYRIGHT-library.html: in-tree files', parts[0])]
     for title, (label, markup) in selected:
@@ -184,7 +286,7 @@ def rust_std_notice(target):
     unrecorded = sorted(crate for crate, versions in linked.items() if not versions)
     body = [f'{STD_HEADING} (rustc {release}, {commit})\n',
             f'Statically linked into every executable built for {target} with this toolchain. The notices '
-            'below are the toolchain\'s own, from share/doc/rust: the in-tree terms of COPYRIGHT-library.html, '
+            'from the vendor catalogs are the toolchain\'s own, from share/doc/rust: the in-tree terms of COPYRIGHT-library.html, '
             'the entries for the out-of-tree crates compiled into the standard library for this target '
             '(from COPYRIGHT-library.html, or COPYRIGHT.html where the library file leaves one out; they are '
             'found in the compiled library itself, whatever its "In libstd" field says), and the license '
@@ -192,7 +294,7 @@ def rust_std_notice(target):
             (f' The compiled library does not record the version of {", ".join(unrecorded)}; every version '
              'the toolchain notice lists is included.' if unrecorded else '') + '\n']
     body += [f'\n### {title}\n\n' + indented(text) for title, text in sections]
-    return '\n'.join(body)
+    return '\n'.join(body + supplementary)
 
 
 def supplemental(package, supplement, packages, directory):
@@ -269,6 +371,9 @@ def main():
     p.add_argument('--openssl-source', type=pathlib.Path, help='verified static SDK source tree')
     p.add_argument('--supplement', type=pathlib.Path,
                    help='reviewed JSON of notices for exact package versions that publish no notice file')
+    p.add_argument('--std-supplement', type=pathlib.Path,
+                   default=pathlib.Path(__file__).resolve().parents[1] / 'desktop/licenses/rust-std/supplement.json',
+                   help='exact-toolchain upstream notices used only for missing recorded std versions')
     args = p.parse_args()
     # A file from an earlier or failed run must not pass for this run's output.
     if args.output.is_file() or args.output.is_symlink():
@@ -342,7 +447,7 @@ def main():
     if missing:
         print('Missing root notices (manual review required); nothing written: ' + ', '.join(missing))
         return 1
-    sections.append(rust_std_notice(args.target))
+    sections.append(rust_std_notice(args.target, args.std_supplement))
     if args.openssl_source is not None:
         sections.append('## OpenSSL 3.5.9 (statically linked release SDK)\n')
         for relative in ('LICENSE.txt', 'external/perl/Text-Template-1.56/LICENSE'):

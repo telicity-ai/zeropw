@@ -1,5 +1,11 @@
 # Proposed remote-sync milestones: snapshots and whole-secret deletion
 
+Current release scope: the user's 2026-11-13 instruction prioritizes a usable
+personal MLP and defers noncritical bugs and expansion. See the
+[minimal release scope](decisions/2026-11-13-personal-mlp-release-scope.md).
+This dated proposal remains historical design input, not an additional list of
+features that must all ship before the personal beta.
+
 Prepared 2026-11-07 by `gpt-6-astra` from read-only inspection of ZeroPW Rust
 source `41d217f26a030042c9f0b1caac9417715470c0e1` (Rust tree
 `f2c67647fcba83ae78dd6fd10418b6f42a58a6f8`, unchanged in compared revision
@@ -656,3 +662,28 @@ and old Go custody holds remain unchanged.
 
 
 Actual compaction Opus review at04c7d22/Rustafc is [REVISE](reviews/2026-11-08-compaction-heads-opus-04c7d22/README.md), with01/02medium and03low OPEN. The findings concern missing folded identity evidence, receipt HLC after predecessor pruning, and prospective path validation. Protected receipt changes require a bounded Astra decision; no silent scope expansion or finding resolution is claimed.
+
+### Bounded Personal Vault runtime implementation, 2026-11-09
+
+The companion runtime now implements the first sole-owner A → fresh-admin B
+snapshot path, rather than only a parser or inert candidate. Its supported
+profile, administrator-attested assurance, full-record two-sided reauthentication,
+transfer bounds, durable admission/install/receipt, reader guards, post-cut
+continuation and Desktop states are described in
+[remote-sync.md §6](remote-sync.md#6-first-personal-vault-snapshot-onboarding).
+The original Astra decision/task, R1 acceptance evidence and historical review
+reports remain unchanged. The exact AddMacDialog caller integration is authorized
+by PVBOOT-SCOPE-01. Subsequent actual Astra decisions authorize the selected
+bounded-history facility and durable imported-member denial hunks; their frozen
+inputs and all failed WIP runs remain evidence.
+
+Implementation and Linux validation are work in progress until the locally
+committed source freeze and its source-bound logs are exported. Historical WIP
+failures and all coordinator dependency reports remain evidence. Root resolved
+the missing Desktop public cache without changing Cargo, lockfiles, features or
+execution authority. Execution remains confined to the assigned secret-free
+UID2101 Linux lane; no product code executes on the credential-bearing host.
+New native macOS validation is NOTREADY/NOTRUN, combined validation INCOMPLETE,
+and actual final-head Opus review/Astra acceptance remain separate. No old Go,
+native custody, physical-Mac, forced-TURN, GUI/packaging, Oracle, capacity or
+release hold is closed by this implementation.

@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use serde_json::{Map, Value, json};
 
-use super::commit::CommitStore;
+use super::commit::{CommitStore, HistorySession};
 use super::identity::DeviceKey;
 use crate::context::Context;
 use crate::errors::{Error, Result};
@@ -262,14 +262,111 @@ fn conflicts(ctx: &Context, env_id: &str) -> Result<usize> {
 /// `sync_state.json` every one is `never_connected` and `serve_updated_at`
 /// is null.
 pub fn status(ctx: &Context, env_id: &str) -> Result<Value> {
+    let history = HistorySession::open_runtime(ctx.state, env_id)?;
+    if history.is_scoped() {
+        return status_with_input(ctx, env_id, Some(&history));
+    }
+    drop(history);
     let _lock = ctx.state.lock()?;
-    let mine = DeviceKey::load(ctx.state, ctx.kms)?.fingerprint()?;
-    let document = super::membership::load_environment(ctx, env_id)?.document;
-    let local = CommitStore::new(ctx.state, env_id).vector()?;
-    let (facts, _, _) = super::sync::load_facts(ctx, env_id)?;
-    let digest = super::tombstone_gate::digest(&facts.tombstone_facts)?;
-    let required = crate::tombstone::support_required(ctx.state, env_id)?;
-    let file = ctx.state.read_json(&path(env_id), Value::Null)?;
+    status_with_input(ctx, env_id, None)
+}
+
+// The ordinary acquisition statements retain their original order. Selected
+// status shares its first-lock budget and authenticated post-settlement epoch;
+// the output/parser/gate policy below is common to both paths.
+fn status_with_input(
+    ctx: &Context,
+    env_id: &str,
+    parent: Option<&HistorySession<'_>>,
+) -> Result<Value> {
+    let nested = parent
+        .map(|history| history.nested(ctx.state, env_id))
+        .transpose()?;
+    let parent = nested.as_ref();
+    let mut selected_input = None;
+    let (mine, document, local, digest, required, file, selected_conflicts) =
+        if let Some(history) = parent {
+            history.check()?;
+            crate::import_barrier::require_env(ctx.state, env_id)?;
+            let device = DeviceKey::load(ctx.state, ctx.kms)?;
+            history.match_local_identity(&device.record()?)?;
+            let mine = device.fingerprint()?;
+            let settled =
+                super::sync::load_facts_core(history, super::sync::FactServices::Runtime(ctx))?;
+            // Settlement can mutate receipts/ledger. Acquire every output input
+            // afterwards, then bind the whole result to this complete revision.
+            let input = history.acquire()?;
+            let facts = settled.checked(history)?;
+            let commits = input.commits()?;
+            let document = input
+                .fold_with_snapshot(commits, facts, Some(ctx.audit))?
+                .document;
+            let local = input.vector()?;
+            let digest = super::tombstone_gate::digest(&facts.tombstone_facts)?;
+            let ledger = input.read_json(crate::tombstone::PATH, json!({}))?;
+            let file = input.read_json(&path(env_id), Value::Null)?;
+            let alerted_path = format!("team/{env_id}/overridden_alerted.json");
+            let alerted = input.read_json(&alerted_path, json!([]))?;
+            // Reserve the existing opaque ledger validator and metadata output
+            // copies before running them. Structural traversal/copies are charged
+            // before materialization by the captured-input parser and preflight.
+            for value in [&ledger, &file, &alerted] {
+                history.preflight_operations(std::slice::from_ref(value))?;
+                let bytes = crate::import_barrier::encoded_len(value)? as u64;
+                let charge = bytes
+                    .checked_mul(16)
+                    .ok_or_else(|| Error::state("team_bootstrap_limit_exceeded"))?;
+                history.charge(charge, charge)?;
+            }
+            // FilePeer retains its unchanged precise PyInt parser. Reserve its
+            // decimal conversion work before that parser, including sparse huge
+            // values; their magnitude never drives iteration.
+            let mut integer_work = 0u64;
+            for peer in file["peers"]
+                .as_object()
+                .into_iter()
+                .flatten()
+                .map(|(_, v)| v)
+            {
+                for seq in peer["peer_vector"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .map(|(_, v)| v)
+                {
+                    if let Value::Number(number) = seq {
+                        let length = number.as_str().len() as u64;
+                        integer_work = length
+                            .checked_mul(length)
+                            .and_then(|n| integer_work.checked_add(n))
+                            .ok_or_else(|| Error::state("team_bootstrap_limit_exceeded"))?;
+                    }
+                }
+            }
+            history.charge(integer_work, 0)?;
+            let required = crate::tombstone::support_required(ctx.state, env_id)?;
+            let count = if super::json_falsy(&alerted) {
+                0
+            } else {
+                let list = super::sync::python_list(&alerted)
+                    .ok_or_else(|| Error::state("state_corrupt").with_detail(alerted_path))?;
+                let signatures: std::collections::HashSet<&str> =
+                    list.iter().filter_map(Value::as_str).collect();
+                signatures.len()
+            };
+            input.recheck()?;
+            selected_input = Some(input);
+            (mine, document, local, digest, required, file, Some(count))
+        } else {
+            let mine = DeviceKey::load(ctx.state, ctx.kms)?.fingerprint()?;
+            let document = super::membership::load_environment(ctx, env_id)?.document;
+            let local = CommitStore::new(ctx.state, env_id).vector()?;
+            let (facts, _, _) = super::sync::load_facts(ctx, env_id)?;
+            let digest = super::tombstone_gate::digest(&facts.tombstone_facts)?;
+            let required = crate::tombstone::support_required(ctx.state, env_id)?;
+            let file = ctx.state.read_json(&path(env_id), Value::Null)?;
+            (mine, document, local, digest, required, file, None)
+        };
     let corrupt = || corrupt(env_id);
     let (serve_updated_at, file_peers) = if file.is_null() {
         (Value::Null, HashMap::new())
@@ -332,13 +429,17 @@ pub fn status(ctx: &Context, env_id: &str) -> Result<Value> {
             })
         })
         .collect();
-    Ok(json!({
+    let output = json!({
         "env_id": env_id,
         "self": mine,
         "serve_updated_at": serve_updated_at,
-        "conflicts": conflicts(ctx, env_id)?,
+        "conflicts": match selected_conflicts { Some(count) => count, None => conflicts(ctx, env_id)? },
         "peers": peers,
-    }))
+    });
+    if let Some(input) = selected_input {
+        input.recheck()?;
+    }
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -440,5 +541,188 @@ mod tests {
         assert_eq!(peer["dial_failures"], 0);
         // What serve writes, the reader accepts.
         assert!(file_peer(peer, ENV).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod personal_status_tests {
+    use super::*;
+    use crate::{clock, context::Config, team::membership};
+    use std::time::Duration;
+    mod runtime {
+        use crate as zeropw;
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/team_personal_bootstrap_runtime.rs"
+        ));
+    }
+
+    #[test]
+    fn personal_status_reopened_current_stale_conflicts_and_real_denial() {
+        let f = runtime::installed(false);
+        for team in f.teams.iter().rev() {
+            team.stop();
+        }
+        let reopened = Context::open(&f.b.state.path, Config::default(), clock::system()).unwrap();
+        let owner = DeviceKey::load(f.a.state, f.a.kms)
+            .unwrap()
+            .fingerprint()
+            .unwrap();
+        let mine = DeviceKey::load(reopened.state, reopened.kms)
+            .unwrap()
+            .fingerprint()
+            .unwrap();
+        let vector = CommitStore::new(reopened.state, &f.env).vector().unwrap();
+        let (facts, _, _) = super::super::sync::load_facts(&reopened, &f.env).unwrap();
+        let digest = super::super::tombstone_gate::digest(&facts.tombstone_facts).unwrap();
+        let now = (reopened.clock)();
+        let peers = peers_value(&BTreeMap::from([(
+            owner.clone(),
+            PeerState {
+                session: true,
+                peer_vector: Some(vector),
+                vector_received_at: Some(now),
+                transport: Some("tcp"),
+                tombstone_agreement: Some(json!({"ready":true,"digest":digest})),
+                ..PeerState::default()
+            },
+        )]));
+        let file = file_value(now, &mine, &peers);
+        let save = |file: &Value| {
+            let _lock = reopened.state.lock().unwrap();
+            reopened.state.write_json(&path(&f.env), file).unwrap();
+            reopened
+                .state
+                .write_json(
+                    &format!("team/{}/overridden_alerted.json", f.env),
+                    &json!(["one", "one", 3]),
+                )
+                .unwrap();
+        };
+        save(&file);
+        let current = status(&reopened, &f.env).unwrap();
+        assert_eq!(current["self"], mine);
+        assert_eq!(current["peers"][0]["fingerprint"], owner);
+        assert_eq!(current["peers"][0]["state"], "up_to_date");
+        assert_eq!(current["conflicts"], 1);
+        for age in [-7.0, 7.0] {
+            let stale = file_value((reopened.clock)() + age, &mine, &peers);
+            save(&stale);
+            assert_eq!(
+                status(&reopened, &f.env).unwrap()["peers"][0]["state"],
+                "syncing"
+            );
+        }
+        let mut wrong_digest = file.clone();
+        wrong_digest["updated_at"] = json!(iso(Some((reopened.clock)())));
+        wrong_digest["peers"][&owner]["tombstone_agreement"]["digest"] = json!("00".repeat(32));
+        save(&wrong_digest);
+        assert_eq!(
+            status(&reopened, &f.env).unwrap()["peers"][0]["state"],
+            "syncing"
+        );
+        let mut corrupt = file.clone();
+        corrupt["updated_at"] = json!("invalid");
+        save(&corrupt);
+        assert_eq!(
+            status(&reopened, &f.env).unwrap_err().reason,
+            "state_corrupt"
+        );
+        let mut fresh = file.clone();
+        fresh["updated_at"] = json!(iso(Some((reopened.clock)())));
+        save(&fresh);
+        assert_eq!(
+            status(&reopened, &f.env).unwrap()["peers"][0]["state"],
+            "up_to_date"
+        );
+        let receipt = reopened
+            .state
+            .read_bytes(&format!("team/{}/bootstrap/receipt.json", f.env))
+            .unwrap();
+        let removal = membership::remove_member(&reopened, None, &f.env, &mine).unwrap();
+        assert_eq!(removal["fact"]["kind"], "member_removed");
+        // Removed credentials stay denied while authenticated metadata remains
+        // readable. The unchanged live gate cannot accept the pre-removal vector.
+        assert!(
+            reopened
+                .vault
+                .secret_for_trusted_use("alpha", None)
+                .is_err()
+        );
+        let removed = status(&reopened, &f.env).unwrap();
+        assert_eq!(removed["peers"][0]["state"], "syncing");
+        assert_eq!(
+            super::super::bootstrap::status(&reopened, &f.env).unwrap()["state"],
+            "recovery_required"
+        );
+        assert_eq!(
+            reopened
+                .state
+                .read_bytes(&format!("team/{}/bootstrap/receipt.json", f.env))
+                .unwrap(),
+            receipt
+        );
+        println!(
+            "PVBOOT_SELECTED_STATUS {{\"reopened\":true,\"fresh_stale_future_digest\":true,\"conflicts\":1,\"real_removal_denied\":true}}"
+        );
+    }
+
+    #[test]
+    fn personal_status_parent_binding_limits_deadline_and_pending() {
+        let pending = super::super::bootstrap::install::tests::pending();
+        assert!(status(&pending.b, &pending.env).is_err());
+        drop(pending);
+        let f = runtime::installed(true);
+        for team in f.teams.iter().rev() {
+            team.stop();
+        }
+        let history = HistorySession::open_runtime(f.b.state, &f.env).unwrap();
+        assert_eq!(
+            status_with_input(&f.a, &f.env, Some(&history))
+                .unwrap_err()
+                .reason,
+            "team_bootstrap_local_state_changed"
+        );
+        assert_eq!(
+            status_with_input(&f.b, &format!("{}0", f.env), Some(&history))
+                .unwrap_err()
+                .reason,
+            "team_bootstrap_local_state_changed"
+        );
+        assert!(history.charge(67_108_864, 0).is_err());
+        assert_eq!(
+            status_with_input(&f.b, &f.env, Some(&history))
+                .unwrap_err()
+                .reason,
+            "team_bootstrap_limit_exceeded"
+        );
+        drop(history);
+        let history = HistorySession::open_runtime(f.b.state, &f.env).unwrap();
+        std::thread::sleep(Duration::from_millis(5_010));
+        assert_eq!(
+            status_with_input(&f.b, &f.env, Some(&history))
+                .unwrap_err()
+                .reason,
+            "team_bootstrap_timeout"
+        );
+        drop(history);
+        let history = HistorySession::open_runtime(f.b.state, &f.env).unwrap();
+        std::fs::rename(
+            f.b.state.path.join(".lock"),
+            f.b.state.path.join(".held-lock"),
+        )
+        .unwrap();
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(f.b.state.path.join(".lock"))
+            .unwrap();
+        assert!(status_with_input(&f.b, &f.env, Some(&history)).is_err());
+        drop(history);
+        println!(
+            "PVBOOT_SELECTED_STATUS_PARENT {{\"pending_closed\":true,\"actual_context_env\":true,\"same_limits_deadline\":true,\"held_descriptor\":true}}"
+        );
     }
 }

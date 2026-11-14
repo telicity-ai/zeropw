@@ -10,6 +10,7 @@
 //! share/invite/join/remove flows (`membership`). Python behaviour is the
 //! specification; recorded differences live in `rust/DEVIATIONS.md`.
 
+pub(crate) mod bootstrap;
 pub mod checkpoint;
 pub mod commit;
 mod compaction_heads;

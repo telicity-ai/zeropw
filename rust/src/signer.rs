@@ -1100,6 +1100,14 @@ impl BindingServer {
         )? {
             return Ok(sshwire::build_failure().to_vec());
         }
+        let import_ctx = self.ctx.clone();
+        #[cfg(test)]
+        crate::import_barrier::testing::reader_hit(
+            import_ctx.state,
+            &self.binding.connection_id,
+            "signer-consume-before",
+        )?;
+        let _import_view = import_ctx.state.lock()?;
         match self
             .ctx
             .policy
@@ -1119,6 +1127,12 @@ impl BindingServer {
             }
             Err(e) => return Err(e),
         }
+        #[cfg(test)]
+        crate::import_barrier::testing::reader_hit(
+            import_ctx.state,
+            &self.binding.connection_id,
+            "signer-consume-before-decrypt",
+        )?;
         let pem = match self
             .ctx
             .vault

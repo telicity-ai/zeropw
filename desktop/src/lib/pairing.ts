@@ -5,6 +5,7 @@
 // mock backend and the tests; the screens never decode a code.
 
 import type { CopyKey } from '../copy';
+import type { PairingJoinEnv } from '../ipc/contract';
 
 export const PAIR_PREFIX = 'zeropw://pair#';
 export const PAIR_CODE_MAX = 96 * 1024;
@@ -147,5 +148,23 @@ export function enrollErrorKey(reason: string): CopyKey {
     case 'link_rate_limited': return 'devices.enroll.err.busy';
     case 'link_service_unavailable': case 'link_timeout': case 'link_connect_failed': case 'link_unavailable': return 'devices.enroll.err.offline';
     default: return 'error.generic';
+  }
+}
+
+/** A failed transfer gets another attempt only after a visible, reauthenticated action. */
+export function personalApprovalNeeded(e:PairingJoinEnv):boolean {
+  return (e.bootstrap_state==='approval_pending'&&!e.local_approval_complete)
+    || (e.bootstrap_state==='unsupported'&&['team_bootstrap_cut_changed','team_bootstrap_timeout','team_bootstrap_peer_offline','team_bootstrap_busy'].includes(e.reason??''));
+}
+export function personalFailureKey(reason:string|undefined):CopyKey|null {
+  switch(reason){
+    case 'team_checkpoint_history_required':return 'mac.bootstrap.history';
+    case 'team_checkpoint_generation_unavailable':return 'mac.bootstrap.keys';
+    case 'team_bootstrap_existing_state_unsupported':case 'team_bootstrap_install_conflict':return 'mac.bootstrap.collision';
+    case 'team_bootstrap_authorization_expired':return 'mac.bootstrap.renew';
+    case 'team_bootstrap_timeout':return 'mac.bootstrap.timeout';
+    case 'team_bootstrap_storage_failed':return 'mac.bootstrap.disk';
+    case 'team_bootstrap_cut_changed':return 'mac.bootstrap.retry';
+    default:return null;
   }
 }

@@ -243,5 +243,87 @@ class DependencyLicenseTests(unittest.TestCase):
         self.assertIn('devonly 1.0.0', result.stdout)
         self.assertIn('Supplement entries outside this closure: devonly 0.9.0', result.stdout)
 
+    def std_supplement(self):
+        folder = pathlib.Path(tempfile.mkdtemp(dir=self.root)).resolve()
+        (folder / 'notices').mkdir()
+        text = b'Copyright Synthetic Original Holder\nOriginal upstream license body.\n'
+        (folder / 'notices/LICENSE').write_bytes(text)
+        record = {'release': '1.90.0', 'commit': COMMIT, 'target': 'aarch64-unknown-linux-gnu',
+                  'source_lock': {'url': 'https://example.invalid/library/Cargo.lock', 'sha256': 'a' * 64},
+                  'packages': {'new_dep 1.2.3': {
+                      'archive_url': 'https://example.invalid/new_dep-1.2.3.crate', 'archive_sha256': 'b' * 64,
+                      'notices': [{'path': 'notices/LICENSE', 'sha256': hashlib.sha256(text).hexdigest()}]}}}
+        path = folder / 'supplement.json'
+        path.write_text(json.dumps({'toolchains': [record]}))
+        library = self.root / 'toolchain-1.90.0/lib/rustlib/aarch64-unknown-linux-gnu/lib'
+        (library / 'libnew_dep-0123abcd.rlib').write_bytes(b'/rust/deps/new_dep-1.2.3/src/lib.rs')
+        return path, record
+
+    def write_std_supplement(self, path, record):
+        path.write_text(json.dumps({'toolchains': [record]}))
+        return ('--std-supplement', str(path))
+
+    def test_exact_std_supplement_retains_vendor_and_original_upstream_notices(self):
+        path, record = self.std_supplement()
+        notices = self.run_ok('--std-supplement', str(path))
+        for text in ('### COPYRIGHT-library.html: hashbrown-0.15.0', 'Synthetic miniz_oxide notice',
+                     '### Verified upstream supplementary notice: new_dep 1.2.3',
+                     'not part of the vendor COPYRIGHT catalogs', 'Copyright Synthetic Original Holder',
+                     'Original upstream license body.', 'https://example.invalid/library/Cargo.lock',
+                     'SHA-256 ' + 'a' * 64, 'SHA-256 ' + 'b' * 64):
+            self.assertIn(text, notices)
+        self.assertNotIn(str(self.root), notices)
+        record['packages']['hashbrown 0.15.0'] = {'notices': 'invalid replacement must not be read'}
+        notices = self.run_ok(*self.write_std_supplement(path, record))
+        self.assertIn('Copyright (c) Synthetic hashbrown authors', notices)
+        self.assertNotIn('invalid replacement', notices)
+
+    def test_std_supplement_requires_exact_toolchain_and_observed_version(self):
+        for field, bad in [('release', '1.99.0'), ('commit', 'f' * 40), ('target', 'aarch64-apple-darwin'),
+                           ('version', 'new_dep 1.2.4')]:
+            with self.subTest(field=field):
+                path, record = self.std_supplement()
+                if field == 'version':
+                    record['packages'][bad] = record['packages'].pop('new_dep 1.2.3')
+                else:
+                    record[field] = bad
+                self.run_refused(*self.write_std_supplement(path, record))
+
+    def test_std_supplement_rejects_bad_hash_paths_links_and_missing_or_empty_notices(self):
+        for case in ('hash', 'escape', 'absolute', 'parent-link', 'file-link', 'missing', 'empty'):
+            with self.subTest(case=case):
+                path, record = self.std_supplement()
+                notice = record['packages']['new_dep 1.2.3']['notices'][0]
+                original = path.parent / 'notices/LICENSE'
+                outside = path.parent / 'outside'
+                outside.write_text('outside content must not be emitted')
+                if case == 'hash':
+                    notice['sha256'] = '0' * 64
+                elif case == 'escape':
+                    notice['path'] = '../outside'
+                elif case == 'absolute':
+                    notice['path'] = str(outside)
+                elif case == 'parent-link':
+                    (path.parent / 'alias').symlink_to(path.parent / 'notices', target_is_directory=True)
+                    notice['path'] = 'alias/LICENSE'
+                elif case == 'file-link':
+                    original.unlink()
+                    original.symlink_to(outside)
+                elif case == 'missing':
+                    original.unlink()
+                else:
+                    original.write_bytes(b'')
+                result = self.run_refused(*self.write_std_supplement(path, record))
+                self.assertNotIn('outside content', result.stdout + result.stderr)
+
+    def test_std_supplement_cannot_cover_an_unrecorded_unknown_version(self):
+        path, record = self.std_supplement()
+        record['packages']['unknown_dep 1.0.0'] = record['packages']['new_dep 1.2.3']
+        library = self.root / 'toolchain-1.90.0/lib/rustlib/aarch64-unknown-linux-gnu/lib'
+        (library / 'libunknown_dep-0123abcd.rlib').write_bytes(b'no version path')
+        result = self.run_refused(*self.write_std_supplement(path, record))
+        self.assertIn('no toolchain notice entry for', result.stderr)
+        self.assertIn('unknown_dep', result.stderr)
+
 if __name__ == '__main__':
     unittest.main()

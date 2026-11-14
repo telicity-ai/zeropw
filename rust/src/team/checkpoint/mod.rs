@@ -58,6 +58,7 @@
 mod admission;
 mod document;
 mod originals;
+pub(crate) mod personal;
 mod removal;
 mod semantics;
 pub use semantics::{
@@ -144,3 +145,9 @@ macro_rules! redacted_debug {
     )+};
 }
 use redacted_debug;
+
+/// Syntax-only bridge for the sealed retained-original input facility.
+/// No attestation, signature, schema, membership or history assurance.
+pub(super) fn retained_original(bytes: &[u8]) -> Result<serde_json::Value> {
+    strict_json::retained_original(bytes).map_err(Into::into)
+}

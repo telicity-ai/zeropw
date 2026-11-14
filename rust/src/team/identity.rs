@@ -189,6 +189,34 @@ pub struct DeviceKey {
     pub agree_private: SecretBytes,
 }
 
+/// Constructed only after the actual KMS unwrap and FULL key derivation under
+/// the borrowed operation. Wrapped-file bytes are DATA, never a setter for identity.
+pub(crate) struct ImportIdentitySource<'g, 'a> {
+    io: &'g crate::import_barrier::ImportIo<'g, 'a>,
+    record: DeviceRecord,
+    raw: Vec<u8>,
+    hash: [u8; 32],
+    generation: u64,
+}
+impl ImportIdentitySource<'_, '_> {
+    pub(crate) fn check(&self, state: &StateDir) -> Result<()> {
+        if !std::ptr::eq(state, self.io.state())
+            || self.generation != self.io.generation()?
+            || self.io.read(DEVICE_KEY_FILE, 65_536)?.as_ref() != Some(&self.raw)
+        {
+            return Err(Error::state("team_bootstrap_local_state_changed"));
+        }
+        self.io.charge(4096 + 256, 1024)?;
+        self.io.boundary()
+    }
+    pub(crate) fn record(&self) -> &DeviceRecord {
+        &self.record
+    }
+    pub(crate) fn raw_hash(&self) -> [u8; 32] {
+        self.hash
+    }
+}
+
 impl DeviceKey {
     /// `DeviceKey.generate`.
     pub fn generate() -> DeviceKey {
@@ -255,7 +283,11 @@ impl DeviceKey {
     /// `DeviceKey.load`.
     pub fn load(state: &StateDir, kms: &(dyn Kms + Send + Sync)) -> Result<DeviceKey> {
         let doc = state.read_json(DEVICE_KEY_FILE, Value::Null)?;
-        if json_falsy(&doc) {
+        Self::load_document(&doc, kms)
+    }
+
+    fn load_document(doc: &Value, kms: &(dyn Kms + Send + Sync)) -> Result<DeviceKey> {
+        if json_falsy(doc) {
             return Err(Error::state("device_key_missing"));
         }
         let corrupt = || Error::state("device_key_corrupt");
@@ -273,6 +305,51 @@ impl DeviceKey {
             sign_seed,
             agree_private,
         })
+    }
+
+    pub(crate) fn load_in<'g, 'a>(
+        io: &'g crate::import_barrier::ImportIo<'g, 'a>,
+        kms: &(dyn Kms + Send + Sync),
+    ) -> Result<(DeviceKey, ImportIdentitySource<'g, 'a>)> {
+        use sha2::{Digest, Sha256};
+        let raw = io
+            .read(DEVICE_KEY_FILE, 65_536)?
+            .ok_or_else(|| Error::state("device_key_missing"))?;
+        let doc = io.parse(&raw, 65_536)?;
+        // Both KMS unwraps, public-key derivations and the unchanged binding
+        // signature are within this parent, before any import proof is minted.
+        io.charge(
+            16_384 + raw.len() as u64 * 8,
+            65_536 + raw.len() as u64 * 16,
+        )?;
+        let device = Self::load_document(&doc, kms)?;
+        let record = device.record()?;
+        io.charge(raw.len() as u64, raw.len() as u64)?;
+        let hash = Sha256::digest(&raw).into();
+        io.check()?;
+        let source = ImportIdentitySource {
+            io,
+            record,
+            raw,
+            hash,
+            generation: io.generation()?,
+        };
+        Ok((device, source))
+    }
+    pub(crate) fn load_or_create_in<'g, 'a>(
+        io: &'g crate::import_barrier::ImportIo<'g, 'a>,
+        kms: &(dyn Kms + Send + Sync),
+    ) -> Result<(DeviceKey, ImportIdentitySource<'g, 'a>)> {
+        if io.read(DEVICE_KEY_FILE, 65_536)?.is_none() {
+            io.charge(
+                16 * (4096 + DEVICE_KEY_FILE.len() as u64 + 1) + 16_384,
+                131_072,
+            )?;
+            io.invalidate()?;
+            Self::create(io.state(), kms)?;
+            io.check()?;
+        }
+        Self::load_in(io, kms)
     }
 
     /// `DeviceKey.load_or_create`.

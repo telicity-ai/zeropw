@@ -8,7 +8,7 @@ import { t, type CopyKey } from '../../copy';
 import { call, toIpcError } from '../../ipc/client';
 import type { JoinRequest, LinkStatus, PairingCreated } from '../../ipc/contract';
 import { envPairs, msLeft } from '../../lib/dash';
-import { pairingEnvs, requestsByDevice } from '../../lib/devices';
+import { pairingEnvs } from '../../lib/devices';
 import { poll } from '../../lib/poll';
 import { formatCountdown } from '../../lib/validators';
 import { placeLabel } from '../../lib/places';
@@ -17,7 +17,7 @@ import { useApp } from '../../ui/app';
 import { Button, Chip, PassField, TextField } from '../../ui/controls';
 import { Dialog, isAuthError, passErrorKey } from '../../ui/Dialog';
 import { More } from '../../ui/disclosure';
-import { Banner, Fingerprint, Section } from '../../ui/feedback';
+import { Banner, Fingerprint, KeyValues, Section } from '../../ui/feedback';
 import { useNow } from '../../ui/hooks';
 import { Icon } from '../../ui/icons';
 import { OneTimeValue, type Handed } from '../../ui/OneTime';
@@ -26,7 +26,26 @@ import { isDisplayName } from './states';
 export const REQUESTS_POLL_MS = 3000;
 export const REQUESTS_WAIT_MS = 30 * 60_000;
 
-type Decision = { fingerprint: string; envs: string[]; approved: boolean };
+type Decision = { fingerprint: string; envs: string[]; approved: boolean; binding?: string; request_ids?:string[] };
+
+// A signing fingerprint does not bind the agreement key. Personal requests
+// retain the exact observed full-record and request identities across polling.
+export function personalRequestGroups(requests: readonly JoinRequest[]) {
+  const groups = new Map<string, { key:string; fingerprint:string; envs:string[]; attempts:number; requests:JoinRequest[]; binding?:string }>();
+  const observed=new Set<string>();
+  for (const request of requests) {
+    const binding=request.record_binding;
+    if (binding && (!/^[0-9a-f]{64}$/.test(binding)||!request.device_record)) continue;
+    const identity=`${request.env}/${request.request_id}/${binding??'legacy'}`;
+    if(observed.has(identity))continue;observed.add(identity);
+    let key=binding ? `${request.fingerprint}|${binding}` : request.fingerprint;
+    if(binding&&groups.get(key)?.envs.includes(request.env))key+=`|${request.env}/${request.request_id}`;
+    const group=groups.get(key)??{key,fingerprint:request.fingerprint,envs:[],attempts:0,requests:[],binding};
+    if (!group.envs.includes(request.env)) group.envs.push(request.env);
+    group.attempts+=request.attempts;group.requests.push(request);groups.set(key,group);
+  }
+  return [...groups.values()].map((g)=>({...g,key:g.binding ? `${g.key}|${g.requests.map((r)=>`${r.env}/${r.request_id}`).sort().join('|')}` : g.key}));
+}
 
 export function AddMacDialog({ open, link, onClose, onChanged }: { open: boolean; link: LinkStatus | null; onClose(): void; onChanged(): void }) {
   const { toast, announce } = useApp();
@@ -99,8 +118,8 @@ export function AddMacDialog({ open, link, onClose, onChanged }: { open: boolean
   };
 
   // decided per Mac and place: a later request for another place of the same code still shows
-  const decidedKeys = new Set(decided.flatMap((d) => d.envs.map((env) => `${d.fingerprint}|${env}`)));
-  const groups = requestsByDevice(requests.filter((r) => !decidedKeys.has(`${r.fingerprint}|${r.env}`)));
+  const decidedKeys = new Set(decided.flatMap((d) => d.envs.map((env) => `${d.fingerprint}|${d.binding??''}|${env}`)));
+  const groups = personalRequestGroups(requests.filter((r) => r.record_binding ? !decided.some((d)=>d.request_ids?.includes(`${r.env}/${r.request_id}`)) : !decidedKeys.has(`${r.fingerprint}||${r.env}`)));
   const left = made ? msLeft(made.expires_at, now) : 0;
   const expired = !!made && left <= 0;
 
@@ -153,14 +172,15 @@ export function AddMacDialog({ open, link, onClose, onChanged }: { open: boolean
               ? <OneTimeValue valueRef={made.ref} masked={t('mac.code.masked')} label={t('mac.code.label')} onHanded={setHanded} multiline />
               : <div className="onetime-value mono">{t('mac.code.expired')}</div>}
             <div className="mac-code-self"><span>{t('mac.self')}</span><Fingerprint value={made.fingerprint} /></div>
+            {made.record_binding&&<KeyValues dense items={[{k:t('mac.bootstrap.record'),v:made.record_binding,mono:true}]}/>}
           </div>
           <Banner tone="warn" compact>{t('mac.code.warn')}</Banner>
           <Section title={t('mac.req.title')}>
             {groups.length === 0 && !expired && <p className="muted text-sm" role="status">{t('mac.req.wait')}</p>}
             {groups.map((g) => (
-              <RequestCard key={g.fingerprint} fingerprint={g.fingerprint} envs={g.envs} attempts={g.attempts}
+              <RequestCard key={g.key} fingerprint={g.fingerprint} envs={g.envs} attempts={g.attempts} personalRequests={g.binding ? g.requests : undefined}
                 onDecided={(approved) => {
-                  setDecided((xs) => [...xs, { fingerprint: g.fingerprint, envs: g.envs, approved }]);
+                  setDecided((xs) => [...xs, { fingerprint: g.fingerprint, envs: g.envs, approved, binding:g.binding,request_ids:g.binding?g.requests.map((r)=>`${r.env}/${r.request_id}`):undefined }]);
                   const msg = t(approved ? 'mac.req.approved' : 'mac.req.denied');
                   toast(msg, approved ? 'ok' : 'warn'); announce(msg);
                   onChanged();
@@ -182,7 +202,7 @@ export function AddMacDialog({ open, link, onClose, onChanged }: { open: boolean
 
 /** One requesting Mac: its confirmation code to compare with its own screen, and approve or
  *  refuse with the administrator passphrase. */
-export function RequestCard({ fingerprint, envs, attempts, onDecided }: { fingerprint: string; envs: string[]; attempts: number; onDecided(approved: boolean): void }) {
+export function RequestCard({ fingerprint, envs, attempts, personalRequests, onDecided }: { fingerprint: string; envs: string[]; attempts: number; personalRequests?:JoinRequest[]; onDecided(approved: boolean): void }) {
   const [pass, setPass] = useState('');
   const [err, setErr] = useState<CopyKey | null>(null);
   const [busy, setBusy] = useState(false);
@@ -193,7 +213,9 @@ export function RequestCard({ fingerprint, envs, attempts, onDecided }: { finger
     if (!pass) { setErr('pass.err.empty'); passRef.current?.focus(); return; }
     running.current = true; setBusy(true); setErr(null);
     try {
-      const out = await call(approve ? 'approve_join' : 'deny_join', { envs, fingerprint, admin_passphrase: pass });
+      const out = personalRequests
+        ? await call(approve ? 'approve_join' : 'deny_join', { envs, fingerprint, requests:personalRequests.map((r)=>({env:r.env,request_id:r.request_id,record_binding:r.record_binding!})), admin_passphrase:pass })
+        : await call(approve ? 'approve_join' : 'deny_join', { envs, fingerprint, admin_passphrase: pass });
       if (out.envs.some((e) => !e.ok)) { setErr('mac.req.failed'); return; }
       onDecided(approve);
     } catch (e) {
@@ -210,6 +232,13 @@ export function RequestCard({ fingerprint, envs, attempts, onDecided }: { finger
         <span className="muted text-xs">{t('mac.req.meta', { n: envs.length, count: attempts })}</span>
       </div>
       <p className="field-note">{t('mac.req.check')}</p>
+      {personalRequests?.[0] && <>
+        <Banner tone="warn" compact>{t('mac.bootstrap.approval')}</Banner>
+        <KeyValues dense items={[
+          {k:t('mac.bootstrap.record'),v:personalRequests[0].record_binding,mono:true},
+          {k:t('mac.bootstrap.agreement'),v:personalRequests[0].device_record?.agree_pub,mono:true},
+        ]}/>
+      </>}
       <PassField value={pass} inputRef={passRef} error={err ? t(err) : null} onChange={(v) => { setPass(v); setErr(null); }} />
       <div className="row mac-request-actions">
         <Button tone="ghost" blocked={busy} onClick={() => void decide(false)}>{t('mac.req.deny')}</Button>

@@ -219,6 +219,38 @@ fn decode(bytes: &[u8], env_id: &str) -> Result<Image> {
 }
 
 fn load(state: &StateDir, env_id: &str) -> Result<Option<(Vec<u8>, Image)>> {
+    load_with_io(state, env_id, None)
+}
+fn load_with_io(
+    state: &StateDir,
+    env_id: &str,
+    io: Option<&commit::RetainedIo<'_, '_, '_>>,
+) -> Result<Option<(Vec<u8>, Image)>> {
+    let bytes = if let Some(io) = io {
+        io.require_target(state, env_id)?;
+        let name = cache_path(env_id);
+        if io.original_length(&name, MAX_BYTES as u64)?.is_none() {
+            return Ok(None);
+        }
+        #[cfg(test)]
+        testing::hit_scoped(testing::Boundary::CacheOpenedBeforeRead, state, env_id)?;
+        io.recheck()?;
+        io.original_bytes(&name, MAX_BYTES as u64)?
+            .ok_or_else(invalid)?
+    } else {
+        let Some(bytes) = read_cache_original(state, env_id)? else {
+            return Ok(None);
+        };
+        bytes
+    };
+    let image = if let Some(io) = io {
+        io.pure_cache(&bytes, || decode(&bytes, env_id))?
+    } else {
+        decode(&bytes, env_id)?
+    };
+    Ok(Some((bytes, image)))
+}
+fn read_cache_original(state: &StateDir, env_id: &str) -> Result<Option<Vec<u8>>> {
     let path = state.path.join(cache_path(env_id));
     match fs::symlink_metadata(&path) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -237,8 +269,7 @@ fn load(state: &StateDir, env_id: &str) -> Result<Option<(Vec<u8>, Image)>> {
     file.take(MAX_BYTES as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| invalid())?;
-    let image = decode(&bytes, env_id)?;
-    Ok(Some((bytes, image)))
+    Ok(Some(bytes))
 }
 
 /// An I/O plan, constructed only from checked originals under the real lock.
@@ -367,24 +398,112 @@ pub(super) fn prepare(
     })
 }
 
+// Private acquisition adapters only. The common policy below retains the
+// ordinary order, FULL-record matching and live-AND-cached clock predicates.
+fn current_vector(
+    store: &CommitStore<'_>,
+    io: Option<&commit::RetainedIo<'_, '_, '_>>,
+) -> Result<BTreeMap<String, PyInt>> {
+    match io {
+        Some(io) => {
+            io.require_target(store.state, &store.env_id)?;
+            io.vector()
+        }
+        None => store.vector(),
+    }
+}
+fn snapshot_floor(
+    store: &CommitStore<'_>,
+    io: Option<&commit::RetainedIo<'_, '_, '_>>,
+) -> Result<BTreeMap<String, PyInt>> {
+    match io {
+        Some(io) => {
+            io.require_target(store.state, &store.env_id)?;
+            io.snapshot_floor()
+        }
+        None => store.snapshot_floor(),
+    }
+}
+fn last_seq(
+    store: &CommitStore<'_>,
+    io: Option<&commit::RetainedIo<'_, '_, '_>>,
+    author: &str,
+) -> Result<PyInt> {
+    match io {
+        Some(io) => {
+            io.require_target(store.state, &store.env_id)?;
+            io.last_seq(author)
+        }
+        None => store.last_seq(author),
+    }
+}
+fn retained_get(
+    store: &CommitStore<'_>,
+    io: Option<&commit::RetainedIo<'_, '_, '_>>,
+    author: &str,
+    sequence: &PyInt,
+) -> Result<Option<Commit>> {
+    match io {
+        Some(io) => {
+            io.require_target(store.state, &store.env_id)?;
+            io.get(author, sequence)
+        }
+        None => store.get(author, sequence),
+    }
+}
+fn retained_registry(
+    store: &CommitStore<'_>,
+    io: Option<&commit::RetainedIo<'_, '_, '_>>,
+) -> Result<HashMap<String, DeviceRecord>> {
+    match io {
+        Some(io) => {
+            io.require_target(store.state, &store.env_id)?;
+            io.retained_registry()
+        }
+        None => store.retained_device_registry(),
+    }
+}
+fn retained_matches(
+    store: &CommitStore<'_>,
+    io: Option<&commit::RetainedIo<'_, '_, '_>>,
+    expected: &HashMap<String, DeviceRecord>,
+) -> Result<std::collections::HashSet<String>> {
+    match io {
+        Some(io) => {
+            io.require_target(store.state, &store.env_id)?;
+            io.retained_matches(expected)
+        }
+        None => store.retained_matching_device_records(expected),
+    }
+}
+
 // Receipt/signing require equal retained public signature evidence, including
 // nonfirst, fold-skipped and removed announcements; prepare remains current-first.
 // Neither comparison conveys membership or wrap authority.
 // This private image never crosses a helper's lock epoch.
-fn checked_cache(store: &CommitStore<'_>, live: Option<&[Commit]>) -> Result<Option<Image>> {
+fn checked_cache(
+    store: &CommitStore<'_>,
+    live: Option<&[Commit]>,
+    io: Option<&commit::RetainedIo<'_, '_, '_>>,
+) -> Result<Option<Image>> {
     require_lock(store.state)?;
-    let Some((_, image)) = load(store.state, &store.env_id)? else {
+    let Some((_, image)) = load_with_io(store.state, &store.env_id, io)? else {
         return Ok(None);
     };
     if !commit::valid_env_id(&store.env_id) || store.root != format!("team/{}", store.env_id) {
         return Err(invalid());
     }
     let records = match live {
-        Some(live) => commit::device_registry(live),
-        None => store.retained_device_registry().map_err(|_| invalid())?,
+        Some(live) => {
+            if let Some(io) = io {
+                io.reserve_registry(live)?;
+            }
+            commit::device_registry(live)
+        }
+        None => retained_registry(store, io).map_err(|_| invalid())?,
     };
-    let floor = store.snapshot_floor().map_err(|_| invalid())?;
-    let vector = store.vector().map_err(|_| invalid())?;
+    let floor = snapshot_floor(store, io).map_err(|_| invalid())?;
+    let vector = current_vector(store, io).map_err(|_| invalid())?;
     let mut expected = HashMap::new();
     for (author, head) in &image.heads {
         if records
@@ -399,9 +518,7 @@ fn checked_cache(store: &CommitStore<'_>, live: Option<&[Commit]>) -> Result<Opt
     } else {
         match live {
             Some(live) => commit::matching_device_records(live, &expected),
-            None => store
-                .retained_matching_device_records(&expected)
-                .map_err(|_| invalid())?,
+            None => retained_matches(store, io, &expected).map_err(|_| invalid())?,
         }
     };
     for (author, seq) in &image.vector {
@@ -417,7 +534,7 @@ fn checked_cache(store: &CommitStore<'_>, live: Option<&[Commit]>) -> Result<Opt
         }
         Hlc::parse(&head.commit.hlc).map_err(|_| invalid())?;
         // One exact lookup per cached author, never a cache-derived range.
-        if let Some(original) = store.get(author, seq).map_err(|_| invalid())? {
+        if let Some(original) = retained_get(store, io, author, seq).map_err(|_| invalid())? {
             let original = Head::checked(original, head.device.clone(), &store.env_id)?;
             if !head.same_original(&original)? {
                 return Err(invalid());
@@ -444,26 +561,47 @@ pub(super) fn cached_hlc_not_above_previous(
     candidate: &Commit,
     live: Option<&[Commit]>,
 ) -> Result<bool> {
+    cached_hlc_not_above_previous_in(store, candidate, live, None)
+}
+pub(super) fn cached_hlc_not_above_previous_with_input(
+    store: &CommitStore<'_>,
+    candidate: &Commit,
+    live: Option<&[Commit]>,
+    input: &commit::RetainedInput<'_, '_>,
+) -> Result<bool> {
+    input.with_retained_io(store.state, &store.env_id, |io| {
+        io.reserve_hlc(&candidate.hlc)?;
+        cached_hlc_not_above_previous_in(store, candidate, live, Some(io))
+    })
+}
+fn cached_hlc_not_above_previous_in(
+    store: &CommitStore<'_>,
+    candidate: &Commit,
+    live: Option<&[Commit]>,
+    io: Option<&commit::RetainedIo<'_, '_, '_>>,
+) -> Result<bool> {
     require_lock(store.state)?;
-    if candidate.author_seq <= 1 || candidate.author_seq != &store.last_seq(&candidate.author)? + 1
+    if candidate.author_seq <= 1
+        || candidate.author_seq != &last_seq(store, io, &candidate.author)? + 1
     {
         return Ok(false);
     }
-    let image = checked_cache(store, live)?;
+    let image = checked_cache(store, live, io)?;
     let previous_seq = &candidate.author_seq - 1;
     // Absent cache preserves the legacy live-predecessor-only behavior.
     let Some(image) = image else {
-        return Ok(match store.get(&candidate.author, previous_seq)? {
-            Some(previous) => Hlc::parse(&candidate.hlc)? <= Hlc::parse(&previous.hlc)?,
-            None => false,
-        });
+        return Ok(
+            match retained_get(store, io, &candidate.author, &previous_seq)? {
+                Some(previous) => Hlc::parse(&candidate.hlc)? <= Hlc::parse(&previous.hlc)?,
+                None => false,
+            },
+        );
     };
     if candidate.env_id != store.env_id {
         return Err(invalid());
     }
-    let previous = store
-        .get(&candidate.author, &previous_seq)
-        .map_err(|_| invalid())?;
+    let previous =
+        retained_get(store, io, &candidate.author, &previous_seq).map_err(|_| invalid())?;
     let cached = image.heads.get(&candidate.author);
     if previous.is_none() && cached.is_none_or(|head| head.commit.author_seq != previous_seq) {
         return Err(unavailable());
@@ -485,10 +623,33 @@ pub(super) fn observe_cached_hlcs(
     live: &[Commit],
     clock: &mut Hlc,
 ) -> Result<()> {
-    let Some(image) = checked_cache(store, Some(live))? else {
+    observe_cached_hlcs_in(store, live, clock, None)
+}
+pub(super) fn observe_cached_hlcs_with_input(
+    store: &CommitStore<'_>,
+    live: &[Commit],
+    clock: &mut Hlc,
+    input: &commit::RetainedInput<'_, '_>,
+) -> Result<()> {
+    // A failed complete-revision return check cannot alter the caller's clock.
+    let next = input.with_retained_io(store.state, &store.env_id, |io| {
+        let mut next = io.clone_clock(clock)?;
+        observe_cached_hlcs_in(store, live, &mut next, Some(io))?;
+        Ok(next)
+    })?;
+    *clock = next;
+    Ok(())
+}
+fn observe_cached_hlcs_in(
+    store: &CommitStore<'_>,
+    live: &[Commit],
+    clock: &mut Hlc,
+    io: Option<&commit::RetainedIo<'_, '_, '_>>,
+) -> Result<()> {
+    let Some(image) = checked_cache(store, Some(live), io)? else {
         return Ok(());
     };
-    let vector = store.vector().map_err(|_| invalid())?;
+    let vector = current_vector(store, io).map_err(|_| invalid())?;
     let live_slots: std::collections::BTreeSet<_> = live
         .iter()
         .map(|entry| (&entry.author, &entry.author_seq))

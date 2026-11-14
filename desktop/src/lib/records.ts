@@ -57,6 +57,7 @@ const RESULT: Record<string, CopyKey | null> = {
 
 const REASON: Record<string, CopyKey | null> = {
   secret_deleted: 'log.why.secret_deleted',
+  team_bootstrap_recovery_required: 'log.why.credential_unavailable',
   // the relay's policy (rust/src/policy.rs, rust/src/gateway.rs, rust/src/tools.rs)
   no_grant: 'log.why.no_grant', grant_expired: 'log.why.grant_expired', grant_exhausted: 'log.why.grant_exhausted',
   grant_revoked: 'log.why.grant_revoked', grant_stale: 'log.why.grant_stale', grant_inactive: 'log.why.grant_inactive',

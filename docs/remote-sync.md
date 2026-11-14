@@ -141,8 +141,9 @@ allocations and similar terms appear only in the diagnostics view.
 
 ## 5. Limits
 
-- Initial snapshot transfer is not implemented. Onboarding uses signed history;
-  a new device cannot recover the required deleted history after compaction.
+- Initial snapshot transfer has a bounded Personal Vault implementation described
+  below. Other histories still require their signed originals and refuse missing
+  prefixes. Platform validation and external acceptance are separate gates.
 - M1 implements permanent whole-secret tombstones, administrator deletion and
   deletion-aware session agreement. [Its contract](whole-secret-deletion.md)
   separates implementation from platform verification and external acceptance.
@@ -158,3 +159,119 @@ allocations and similar terms appear only in the diagnostics view.
   [dated validation report](remote-sync-validation-2026-11-07.md) for what was and
   was not run, and the [proposed next milestones](remote-sync-next-milestones.md)
   for the snapshot and deletion gaps.
+
+## 6. First Personal Vault snapshot onboarding
+
+The private runtime in `rust/src/team/bootstrap/`,
+`rust/src/team/checkpoint/personal.rs` and `rust/src/import_barrier.rs` supports a
+sole genesis owner A adding a fresh administrator B after data compaction. A has
+the only positive cut vector. Previous memberships, removals, demotions, ownership
+transfers, restore history, ambiguous/deferred/rejected evidence, suffix gaps and
+local collisions refuse this profile. Retained A rotations and A-authored
+non-removal restrictions remain supported. Ordinary uncompacted joining retains
+its existing protocol and authority checks.
+
+Both people reauthenticate. A approves the displayed full B DeviceRecord binding,
+including the agreement key; B explicitly accepts the full A record as the
+checkpoint attestor for this environment, role, invitation and local mapping.
+The existing signing-key fingerprint algorithm is unchanged. A changed full key
+or request requires fresh confirmation. The missing DATA prefix and historical
+fact completeness are explicitly `administrator_attested`; signatures cannot
+detect an approved owner omitting an otherwise unknowable historical deletion.
+
+The exporter freezes the complete admitted cut under the state lock, preserves
+original encrypted versions/order, retained authority and data originals, all
+admitted facts, current head and current editing generation. B validates original
+authenticated JSON bytes, signatures, retained replay, fact overlays and required
+ciphertexts in trusted memory. This private runtime plan does not confer the
+older complete-history proof guarantees. Keys remain zeroizing trusted memory
+and are wrapped locally for installation.
+
+Each encrypted session uses fresh session/onboarding nonces and a fresh challenged,
+signed READY after A rechecks its immutable cut. No network wait holds the state
+or environment-cache lock. One durable admission intent precedes invitation
+consumption; retries recover the same original `member.add`. Renewal requires
+both new human approvals and retains that admission. Lost READY before intent
+requires a fresh transfer. Cancellation before intent closes that attempt and
+discards staging; an accepted install intent must recover or remain blocked.
+
+The private install journal advances PREPARED → INSTALLING → COMMITTED. It reserves
+IDs/mapping before ordinary writes, patches shared documents by identity, fsyncs
+and reads back writes and parents, and requires the metadata audit before a signed
+visibility epoch commits. Receipt and journal bind the cut, approval, challenged
+READY, original provenance and target patch digest. All credential starts recheck
+the same guarded view through authorization and decrypt/sign start. Lists hide
+pending or corrupt imported entries; unrelated state remains usable where surviving
+evidence scopes the denial. A lost ACK uses a fresh authenticated challenged
+query for the original durable receipt, without reinstalling or claiming convergence.
+
+Desktop requests the private invite probe when existing public member metadata
+names one active administrator owner, independent of the local place name. This
+routing observation conveys no authority: the CLI validates the complete retained
+history and owner profile under its lock before enabling snapshot onboarding.
+Other member layouts retain the ordinary invitation command.
+
+Desktop polls the durable attempt every three seconds. It shows approval_pending,
+transferring, verifying, installing, installed_syncing, ready, unsupported or
+recovery_required. Membership admission alone never reports joined or discards
+the pairing code. `ready` still requires fresh ordinary vector/fact/M1 agreement.
+Explicit failures distinguish history, key/approval, collision, expiry/renewal,
+cut change, timeout, storage and offline peer outcomes.
+A receiver retains its transfer lease through terminal status publication and
+staging cleanup, so an old failed worker cannot overwrite a renewed attempt.
+A closed connection during approval remains an offline retry; both human
+approvals and all normal transfer/validation gates still apply.
+
+Post-cut A/B commits retain ordinary signature, next-sequence, HLC, role and
+generation checks. Conflicts, monotone deletion, B removal/rotation, restart and
+compaction retain the attested floor and originals. Unknown authenticated pre-cut
+work, or a removal requiring an unavailable prefix, is preserved privately and
+blocks affected derivation/use with `team_checkpoint_history_required`. Known
+restrictions deny even when derivation fails. Backups preserve original provenance
+and receipts; copied receipts confer no replacement-device authority, and restore
+retains the existing restore-pending and current-restriction gates.
+
+Selected history operations share one private lock-bound work budget across
+nested acquisition, settlement, append and deferred release: 67,108,864 work,
+1,073,741,824 charged bytes and five monotonic seconds after the first lock.
+Actual retained canonical slots, original JSON bytes, full record bindings and
+complete raw revisions determine the view; a large sequence number never drives
+a numeric history walk. Supported sparse histories remain explicitly attested.
+Unsupported layouts or limits refuse without dropping originals or restrictions.
+
+Fresh external CLI/Desktop sync-status readers carry the same selected operation
+through Runtime fact settlement and the current snapshot-seeded fold, vector and
+bounded metadata. Reopened status retains the existing six-second freshness and
+M1 digest/ACK gates; persisted receipt or attempt labels alone never prove live
+agreement. Authenticated metadata stays readable after removal while credentials
+remain denied.
+
+An authenticated effective local removal durably publishes a private monotone
+denial before publishing its removing commit. Whole-document before/after folds,
+including mixed or ignored operations, determine the effect. The denial and the
+ordinary admitted member-removal FACT witness form a monotone union. Any later
+failure leaves the denial; retry validates the original again. Committed journal
+recovery preserves immutable evidence without reinstalling or reactivating the
+recipient. Backup restore cannot replace a current denial with an older allow
+view. Metadata remains available while credential projection and new use deny.
+All-evidence rollback and external provider revocation remain outside this claim.
+
+Hard transfer ceilings are 64 KiB manifest/ACK, 16 MiB payload, 64 KiB decoded
+chunks, 128 KiB chunk frames, 256 chunks, 4 KiB other controls, 1 KiB capabilities,
+depth 64 and 65,536 combined commit/fact/version records. This profile has two
+devices. The sender keeps one chunk outstanding (below the four/512 KiB maximum).
+Private staging and prospective journal/target images are conservatively bounded
+to 64 MiB per transfer, with one transfer per environment and two per process
+(128 MiB total staging ceiling). Local inventory/environment preflights may refuse
+earlier. Total monotonic lifetime is ten minutes with a thirty-second idle limit;
+authorization expires with the invitation. Restart discards partial receives and
+uses fresh nonces and a full transfer. No compression, archive peer paths or
+plaintext fallback is available.
+
+The new runtime/crash/visibility tests and scoped fault/reader tests are synthetic
+loopback evidence. Linux results must be bound to the exported final source; WIP
+passes do not validate later edits. New native macOS validation is NOTREADY/NOTRUN
+and combined validation remains INCOMPLETE until Root validates the same frozen
+candidate. Actual new Opus review and Astra acceptance remain separate. Direct and
+forced TURN-TLS E2E, physical two-Mac/sleep-wake/GUI/packaging/Oracle/capacity/release
+and all historical global resource holds remain OPEN or NOTRUN as previously recorded.

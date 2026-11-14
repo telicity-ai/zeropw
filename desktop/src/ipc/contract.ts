@@ -99,7 +99,7 @@ export interface LinkStatus {
 export interface PairingEnv { env: string; invite_id: string; shared_now: boolean }
 /** A pairing code made on this Mac. The code itself stays in the core behind `ref` (kind
  *  pairing_code, 10 minutes) until it is copied or shown once. */
-export interface PairingCreated { ref: string; expires_at: string; peer: string; fingerprint: string; environments: PairingEnv[] }
+export interface PairingCreated { record_binding?:string; ref: string; expires_at: string; peer: string; fingerprint: string; environments: PairingEnv[] }
 /** What a pasted code says, read offline. `name` and `env` come from the other Mac (untrusted
  *  text); `fingerprint` is the inviting Mac's, read from the invitations themselves. */
 export interface PairingPreview {
@@ -111,13 +111,17 @@ export type PairingJoinState = 'joined' | 'pending' | 'failed';
  *  (`link_peer_offline`, …) when it gave one. */
 export interface PairingJoinEnv {
   env: string; state: PairingJoinState; reason?: string; detail?: string; self_fingerprint?: string; inviter_fingerprint?: string; project?: string; environment?: string;
+  local_approval_complete?:boolean;
+  bootstrap_state?: 'approval_pending'|'transferring'|'verifying'|'installing'|'installed_syncing'|'ready'|'unsupported'|'recovery_required'; self_record_binding?:string; inviter_record_binding?:string;
 }
 /** `done`: every environment joined and the core forgot the code. */
 export interface PairingJoinResult { done: boolean; peer: string; environments: PairingJoinEnv[] }
 export interface JoinRequest {
   env: string; request_id: string; invite_id: string; fingerprint: string;
   first_seen_at: string | number | null; last_seen_at: string | number | null; attempts: number;
+  record_binding?: string; device_record?: { sign_pub: string; agree_pub: string; sig: string };
 }
+export interface PersonalJoinApproval { envs:string[]; fingerprint:string; requests:{env:string;request_id:string;record_binding:string}[]; admin_passphrase:string }
 export interface EnvError { env: string; reason: string }
 export interface JoinDecision { fingerprint: string; envs: { env: string; ok: boolean; reason?: string; invites: string[] }[] }
 export type SyncState = 'up_to_date' | 'syncing' | 'retrying' | 'offline' | 'never_connected';
@@ -248,12 +252,12 @@ export interface Commands {
   pairing_preview: [{ text: string }, { ref: string; preview: PairingPreview }];
   /** Enrols with the code's link token, then joins each environment not joined yet. Call again
    *  every few seconds while some environment is `pending` (the other Mac has to approve). */
-  pairing_join: [{ ref: string }, PairingJoinResult];
+  pairing_join: [{ ref: string } | {ref:string;action:'approve'|'cancel';bindings:{env:string;record_binding:string;self_record_binding:string}[];admin_passphrase:string}, PairingJoinResult];
   join_requests: [{ envs: string[] }, { requests: JoinRequest[]; errors: EnvError[] }];
   /** Approves exactly `fingerprint` for these environments (re-authenticated). */
-  approve_join: [{ envs: string[]; fingerprint: string; admin_passphrase: string }, JoinDecision];
+  approve_join: [{ envs: string[]; fingerprint: string; admin_passphrase: string } | PersonalJoinApproval, JoinDecision];
   /** Refuses `fingerprint`: the matching invitations are revoked (re-authenticated). */
-  deny_join: [{ envs: string[]; fingerprint: string; admin_passphrase: string }, JoinDecision];
+  deny_join: [{ envs: string[]; fingerprint: string; admin_passphrase: string } | PersonalJoinApproval, JoinDecision];
   team_sync_status: [{ env: string }, SyncStatus];
   devices_overview: [void, DevicesOverview];
   /** Leaves every paired environment (`team remove`, re-authenticated), then revokes the link

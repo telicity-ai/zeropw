@@ -56,4 +56,5 @@ pub mod team;
 
 pub use errors::{Error, ErrorClass, Result};
 
+mod import_barrier;
 pub mod tombstone;

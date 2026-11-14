@@ -1,7 +1,7 @@
 {
   "module": "github.com/telicity-ai/zeropw-link",
-  "commit": "f544478a48cea66be816efbed50967bafcacc8ac",
+  "commit": "d55d6a491c2ae829eb586da112abba665046a1a2",
   "go": "go1.27.3",
   "macos_minimum": "13.0",
-  "note": "The zeropw-link daemon the app bundles (desktop/scripts/build-link-sidecar.py). This pins the 2026-11-07 enrollment, transport-boundary and macOS state ACL fixes. Native verification and post-fix Opus review remain pending. Go 1.27 builds for macOS 13 or later."
+  "note": "Pins the Go source conditionally accepted on 2026-11-15 for one person's two-device Personal beta. Original DOS-1 HIGH remains NOT CLOSED; bounded Oracle synthetic validation passed. Public endpoint activation, normal macOS app packaging and physical two-Mac validation remain separate gates. The packaging helper builds this exact commit and records new artifact hashes/notices; it does not reuse the separately versioned coordinator build. Go 1.27 requires macOS 13 or later."
 }

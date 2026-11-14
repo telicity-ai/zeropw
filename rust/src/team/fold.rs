@@ -1625,11 +1625,24 @@ pub fn snapshot_of_prefix(
     history: &[Commit],
     audit: Option<&Audit>,
 ) -> Result<FoldResult> {
-    let fold = fold_from_snapshots_in(env_id, commits, Some(history), state, facts, audit, true)?;
+    let fold = fold_from_snapshots_in(
+        env_id,
+        commits,
+        Some(history),
+        state,
+        facts,
+        audit,
+        true,
+        None,
+    )?;
     Ok(FoldResult {
         document: fold.unflushed.ok_or_else(doc_corrupt)?,
         ..fold.result
     })
+}
+
+pub(crate) fn personal_version_order(value: &Value) -> Result<BTreeMap<String, Vec<Value>>> {
+    parse_snapshot_version_order(Some(value))?.ok_or_else(doc_corrupt)
 }
 
 /// Fixed, private observations of the ordinary complete fold. No callback can
@@ -2248,8 +2261,32 @@ pub fn fold_for_refold(
     facts: Option<&Facts>,
     audit: Option<&Audit>,
 ) -> Result<Refold> {
+    fold_for_refold_using(env_id, all_commits, state, facts, audit, None)
+}
+
+pub(crate) fn fold_for_refold_retained(
+    env_id: &str,
+    all_commits: Vec<Commit>,
+    state: &StateDir,
+    facts: Option<&Facts>,
+    audit: Option<&Audit>,
+    input: &commit::RetainedInput<'_, '_>,
+) -> Result<Refold> {
+    input.with_retained_io(state, env_id, |reads| {
+        fold_for_refold_using(env_id, all_commits, state, facts, audit, Some(reads))
+    })
+}
+
+fn fold_for_refold_using(
+    env_id: &str,
+    all_commits: Vec<Commit>,
+    state: &StateDir,
+    facts: Option<&Facts>,
+    audit: Option<&Audit>,
+    input: Option<&commit::RetainedIo<'_, '_, '_>>,
+) -> Result<Refold> {
     let record = snapshot_record(facts, &all_commits);
-    let fold = fold_from_snapshots(env_id, all_commits, state, facts, audit, true)?;
+    let fold = fold_from_snapshots_in(env_id, all_commits, None, state, facts, audit, true, input)?;
     let snapshot = FoldResult {
         document: fold.unflushed.ok_or_else(doc_corrupt)?,
         ..fold.result.clone()
@@ -2305,13 +2342,36 @@ fn fold_from_snapshots(
         facts,
         audit,
         keep_unflushed,
+        None,
     )
+}
+
+pub(crate) fn fold_with_snapshot_retained(
+    env_id: &str,
+    all_commits: Vec<Commit>,
+    state: &StateDir,
+    facts: Option<&Facts>,
+    audit: Option<&Audit>,
+    input: &commit::RetainedIo<'_, '_, '_>,
+) -> Result<FoldResult> {
+    Ok(fold_from_snapshots_in(
+        env_id,
+        all_commits,
+        None,
+        state,
+        facts,
+        audit,
+        false,
+        Some(input),
+    )?
+    .result)
 }
 
 /// [`fold_from_snapshots`] of `all_commits`, or, with `history`, of that
 /// prefix of every stored commit: removals are then placed from all of
 /// `history`, and a snapshot covering any commit past the prefix is no
 /// base for it.
+#[allow(clippy::too_many_arguments)]
 fn fold_from_snapshots_in(
     env_id: &str,
     all_commits: Vec<Commit>,
@@ -2320,8 +2380,47 @@ fn fold_from_snapshots_in(
     facts: Option<&Facts>,
     audit: Option<&Audit>,
     keep_unflushed: bool,
+    input: Option<&commit::RetainedIo<'_, '_, '_>>,
 ) -> Result<SnapshotFold> {
+    let personal = match input {
+        Some(input) => {
+            input.require_target(state, env_id)?;
+            input.personal_manifest()?
+        }
+        None => crate::import_barrier::personal_manifest(state, env_id)?,
+    };
     let schedule = history.unwrap_or(&all_commits);
+    if let Some(manifest) = &personal {
+        let floor = &manifest["vector"];
+        let removal = RemovalSchedule::new(facts.unwrap_or(&Facts::default()), schedule);
+        let cut = manifest["heads"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|h| {
+                Some((
+                    PyInt::from_json_integer(&h["hlc"]["wall_ms"])?,
+                    PyInt::from_json_integer(&h["hlc"]["counter"])?,
+                ))
+            })
+            .max();
+        let invalid = removal.bounds.iter().any(|(author, bound)| {
+            PyInt::from_json_integer(&floor[author]).is_some_and(|n| bound < &n)
+        }) || removal.pending.iter().any(|(when, author)| {
+            PyInt::from_json_integer(&floor[author]).is_some_and(|n| n > 0)
+                && cut.as_ref().is_some_and(|cut| when <= cut)
+        }) || removal
+            .self_placed
+            .iter()
+            .any(|author| PyInt::from_json_integer(&floor[author]).is_some_and(|n| n > 0));
+        if invalid {
+            return Err(crate::import_barrier::history_required(
+                state,
+                env_id,
+                &json!({"kind":"removal_prefix","bounds":removal.bounds}),
+            )?);
+        }
+    }
     let folded: BTreeSet<(&str, &PyInt)> = all_commits
         .iter()
         .map(|c| (c.author.as_str(), &c.author_seq))
@@ -2333,7 +2432,9 @@ fn fold_from_snapshots_in(
             .collect()
     });
     let directory = state.path.join(snapshot_dir(env_id));
-    let mut numbers = if directory.is_dir() {
+    let mut numbers = if let Some(input) = input {
+        input.snapshot_numbers()?
+    } else if directory.is_dir() {
         commit::digit_stems(&directory)?
     } else {
         Vec::new()
@@ -2363,9 +2464,23 @@ fn fold_from_snapshots_in(
             keep_unflushed || !passed_over.is_empty(),
             audited_up_to.as_ref(),
             &mut may_check_unrecorded,
+            input,
         );
         match attempt {
             Ok(Some((result, unflushed, unrecorded))) => {
+                if let Some(manifest) = &personal
+                    && manifest["vector"]
+                        .as_object()
+                        .into_iter()
+                        .flatten()
+                        .any(|(author, n)| {
+                            PyInt::from_json_integer(n).is_none_or(|floor| {
+                                result.vector.get(author).is_none_or(|n| n < &floor)
+                            })
+                        })
+                {
+                    continue;
+                }
                 return Ok(SnapshotFold {
                     result,
                     unflushed,
@@ -2387,6 +2502,13 @@ fn fold_from_snapshots_in(
             Err(SnapshotUnusable::Failed(_)) if !passed_over.is_empty() => break,
             Err(SnapshotUnusable::Failed(error)) => return Err(error),
         }
+    }
+    if personal.is_some() {
+        return Err(crate::import_barrier::history_required(
+            state,
+            env_id,
+            &json!({"kind":"snapshot_prefix_unavailable"}),
+        )?);
     }
     // A fold from scratch needs every commit since the first, whether it
     // stands in for passed-over snapshots or no snapshot is there to build
@@ -2449,12 +2571,14 @@ fn fold_on_snapshot(
     keep_unflushed: bool,
     audited_up_to: Option<&Value>,
     may_check_unrecorded: &mut bool,
+    input: Option<&commit::RetainedIo<'_, '_, '_>>,
 ) -> std::result::Result<Option<(FoldResult, Option<Value>, bool)>, SnapshotUnusable> {
     {
-        let snapshot = state.read_json(
-            &format!("{}/{}.json", snapshot_dir(env_id), number),
-            Value::Null,
-        )?;
+        let name = format!("{}/{}.json", snapshot_dir(env_id), number);
+        let snapshot = match input {
+            Some(input) => input.read_json(&name, Value::Null)?,
+            None => state.read_json(&name, Value::Null)?,
+        };
         if snapshot.is_null() {
             return Ok(None);
         }
@@ -2514,6 +2638,7 @@ fn fold_on_snapshot(
                 facts,
                 schedule,
                 may_check_unrecorded,
+                input,
             )? {
                 Check::Matches => {}
                 Check::MatchesUnrecorded => unrecorded = true,
@@ -2647,6 +2772,7 @@ fn check_snapshot(
     facts: Option<&Facts>,
     all_commits: &[Commit],
     may_fold: &mut bool,
+    input: Option<&commit::RetainedIo<'_, '_, '_>>,
 ) -> Result<Check> {
     let mut last = None;
     for commit in covered {
@@ -2663,9 +2789,12 @@ fn check_snapshot(
             return Ok(Check::Stale);
         }
     }
-    let recorded = state
-        .read_json(&snapshot_record_path(env_id, number), Value::Null)
-        .unwrap_or(Value::Null);
+    let name = snapshot_record_path(env_id, number);
+    let recorded = match input {
+        Some(input) => input.read_json(&name, Value::Null),
+        None => state.read_json(&name, Value::Null),
+    }
+    .unwrap_or(Value::Null);
     if !recorded.is_null() {
         return Ok(if recorded == snapshot_record(facts, all_commits) {
             Check::Matches
@@ -3416,46 +3545,48 @@ pub fn derive_local(
     let mut rebound = Vec::new();
     {
         let _lock = state.lock()?;
-        // F1: derive this node's local copies of every DEK generation it
-        // can unwrap BEFORE deriving vault entries, so `derive_vault` can
-        // tell (by the presence of that file) which shared secret versions
-        // it is actually able to decrypt.
-        if let (Some(device), Some(kms)) = (device, kms) {
-            derive_dek_generations(document, state, kms, device, &env_id)?;
-        }
-        let before = shared_active_version_ids(state, &env_id)?;
-        let previous_ids = shared_version_ids(state, &env_id)?;
-        let existed = shared_connection_ids(state, &env_id)?;
-        derive_vault(
-            document,
-            state,
-            &env_id,
-            &version_index,
-            audit,
-            kms,
-            project,
-            environment,
-        )?;
-        derive_connections(
-            document,
-            state,
-            &env_id,
-            &version_index,
-            &previous_ids,
-            policy,
-            audit,
-        )?;
-        // Issue #33: as a local activation does (`Vault::rebind_connections`),
-        // a new active credential re-binds the connections that follow it.
-        // Compared by version id: local version numbers can be renumbered by
-        // a late commit while naming a different credential.
-        let changed: Vec<String> = shared_active_version_ids(state, &env_id)?
-            .into_iter()
-            .filter(|(secret_id, version_id)| before.get(secret_id) != Some(version_id))
-            .map(|(secret_id, _)| secret_id)
-            .collect();
-        if !changed.is_empty() {
-            rebound = rebind_following(state, policy, &env_id, &changed, &existed)?;
+        if !crate::import_barrier::credential_projection_denied(state, &env_id)? {
+            // F1: derive this node's local copies of every DEK generation it
+            // can unwrap BEFORE deriving vault entries, so `derive_vault` can
+            // tell (by the presence of that file) which shared secret versions
+            // it is actually able to decrypt.
+            if let (Some(device), Some(kms)) = (device, kms) {
+                derive_dek_generations(document, state, kms, device, &env_id)?;
+            }
+            let before = shared_active_version_ids(state, &env_id)?;
+            let previous_ids = shared_version_ids(state, &env_id)?;
+            let existed = shared_connection_ids(state, &env_id)?;
+            derive_vault(
+                document,
+                state,
+                &env_id,
+                &version_index,
+                audit,
+                kms,
+                project,
+                environment,
+            )?;
+            derive_connections(
+                document,
+                state,
+                &env_id,
+                &version_index,
+                &previous_ids,
+                policy,
+                audit,
+            )?;
+            // Issue #33: as a local activation does (`Vault::rebind_connections`),
+            // a new active credential re-binds the connections that follow it.
+            // Compared by version id: local version numbers can be renumbered by
+            // a late commit while naming a different credential.
+            let changed: Vec<String> = shared_active_version_ids(state, &env_id)?
+                .into_iter()
+                .filter(|(secret_id, version_id)| before.get(secret_id) != Some(version_id))
+                .map(|(secret_id, _)| secret_id)
+                .collect();
+            if !changed.is_empty() {
+                rebound = rebind_following(state, policy, &env_id, &changed, &existed)?;
+            }
         }
     }
     if let Some(audit) = audit {
