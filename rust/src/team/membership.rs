@@ -208,9 +208,17 @@ pub(crate) fn load_environment_with_input(
     crate::import_barrier::require_env(ctx.state, env_id)?;
     let (facts, _, _) = sync::load_facts_with_input(ctx, env_id, history)?;
     let input = history.acquire()?;
-    let commits = input.commits()?;
-    history.check()?;
-    let result = input.fold_with_snapshot(commits, &facts, Some(ctx.audit))?;
+    let result = if history.is_scoped() {
+        input.with_retained_io(ctx.state, env_id, |reads| {
+            let commits = reads.commits()?;
+            history.check()?;
+            reads.fold_with_snapshot(commits, &facts, Some(ctx.audit))
+        })?
+    } else {
+        let commits = input.commits()?;
+        history.check()?;
+        input.fold_with_snapshot(commits, &facts, Some(ctx.audit))?
+    };
     history.check()?;
     Ok(result)
 }
@@ -401,14 +409,32 @@ pub(crate) fn author_commit_with_input(
     }
     let store = CommitStore::new(ctx.state, env_id);
     let mut hlc = Hlc::new(0, 0);
-    let live = history.acquire()?.commits()?;
+    let input = history.acquire()?;
+    let live = input.commits()?;
     for observed in &live {
         hlc.observe(&observed.hlc)?;
     }
-    compaction_heads::observe_cached_hlcs(&store, &live, &mut hlc)?;
-    let seq = &store.last_seq(&device.fingerprint()?)? + 1;
+    if history.is_scoped() {
+        compaction_heads::observe_cached_hlcs_with_input(&store, &live, &mut hlc, &input)?;
+    } else {
+        compaction_heads::observe_cached_hlcs(&store, &live, &mut hlc)?;
+    }
+    let seq = if history.is_scoped() {
+        input
+            .vector()?
+            .get(&device.fingerprint()?)
+            .cloned()
+            .unwrap_or_else(PyInt::zero)
+            + 1
+    } else {
+        &store.last_seq(&device.fingerprint()?)? + 1
+    };
     if seq > 1
-        && let Some(previous) = store.get(&device.fingerprint()?, &seq - 1)?
+        && let Some(previous) = if history.is_scoped() {
+            input.stored_commit(&device.fingerprint()?, &(&seq - 1))?
+        } else {
+            store.get(&device.fingerprint()?, &seq - 1)?
+        }
     {
         hlc.observe(&previous.hlc)?;
     }
@@ -418,7 +444,13 @@ pub(crate) fn author_commit_with_input(
     let wall = compaction_heads::testing::author_wall();
     history.check()?;
     history.preflight_operations(&ops)?;
-    let commit = commit::sign_commit(&device, env_id, seq, &hlc.tick(wall), &store.vector()?, ops)?;
+    let timestamp = hlc.tick(wall);
+    let vector = if history.is_scoped() {
+        input.vector()?
+    } else {
+        store.vector()?
+    };
+    let commit = commit::sign_commit(&device, env_id, seq, &timestamp, &vector, ops)?;
     if let Some(facts) = standing {
         // Read again: a rekey repair above may have stored rotations.
         refuse_unauthorized_ops(
@@ -528,11 +560,16 @@ fn sign_authorized_fact_with_input(
     // node has seen, so a removal never cuts off work it already accepted.
     let mut hlc = Hlc::new(0, 0);
     let store = CommitStore::new(ctx.state, env_id);
-    let live = history.acquire()?.commits()?;
+    let input = history.acquire()?;
+    let live = input.commits()?;
     for observed in &live {
         hlc.observe(&observed.hlc)?;
     }
-    compaction_heads::observe_cached_hlcs(&store, &live, &mut hlc)?;
+    if history.is_scoped() {
+        compaction_heads::observe_cached_hlcs_with_input(&store, &live, &mut hlc, &input)?;
+    } else {
+        compaction_heads::observe_cached_hlcs(&store, &live, &mut hlc)?;
+    }
     #[cfg(not(test))]
     let wall = None;
     #[cfg(test)]

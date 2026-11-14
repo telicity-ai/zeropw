@@ -4389,7 +4389,7 @@ mod retained_history {
     use sha2::{Digest, Sha256};
     use std::{
         cell::{Cell, RefCell},
-        collections::BTreeSet,
+        collections::{BTreeSet, HashMap, HashSet},
         fs::{self},
         io::Read,
         marker::PhantomData,
@@ -4566,6 +4566,16 @@ mod retained_history {
         }
     }
     impl<'a> HistoryResume<'a> {
+        #[cfg(test)]
+        pub(crate) fn observe_control(&self, label: &'static str) -> ControlObservation<'a> {
+            ControlObservation {
+                state: self.operation.state,
+                env: self.operation.env.clone(),
+                label,
+                began: Instant::now(),
+                budget: self.operation.budget.clone(),
+            }
+        }
         pub(crate) fn resume(&self) -> Result<HistorySession<'a>> {
             self.operation.resume(self.selection)
         }
@@ -4613,7 +4623,47 @@ mod retained_history {
         floor: Rc<BTreeMap<String, PyInt>>,
         _thread: PhantomData<Rc<()>>,
     }
+    // Borrowed DATA reads for one common fold or retained-fact read engine. The constructor and
+    // return boundary recompare the complete raw revision on the same parent;
+    // getters retain root/generation/deadline checks without rescanning the
+    // identical inventory between adjacent copies. This conveys no authority.
+    pub(crate) struct RetainedIo<'i, 's, 'a> {
+        input: &'i RetainedInput<'s, 'a>,
+    }
+    #[cfg(test)]
+    pub(crate) struct ControlObservation<'a> {
+        state: &'a StateDir,
+        env: String,
+        label: &'static str,
+        began: Instant,
+        budget: Rc<HistoryBudget>,
+    }
+    #[cfg(test)]
+    impl Drop for ControlObservation<'_> {
+        fn drop(&mut self) {
+            let counters = self.budget.counters.borrow();
+            crate::import_barrier::opus_cost::control_stage(
+                self.state,
+                &self.env,
+                self.label,
+                self.began.elapsed().as_micros(),
+                self.budget.began.elapsed().as_micros(),
+                counters.work,
+                counters.bytes,
+            );
+        }
+    }
     impl<'a> HistorySession<'a> {
+        #[cfg(test)]
+        pub(crate) fn observe_control(&self, label: &'static str) -> ControlObservation<'a> {
+            ControlObservation {
+                state: self.state,
+                env: self.env.clone(),
+                label,
+                began: Instant::now(),
+                budget: self.budget.clone(),
+            }
+        }
         fn from_operation(operation: Rc<HistoryOperation<'a>>, lock: StateLock<'a>) -> Self {
             Self {
                 state: operation.state,
@@ -4675,6 +4725,11 @@ mod retained_history {
             let session = Self::from_operation(operation, lock);
             session.check()?;
             Ok(session)
+        }
+        pub(crate) fn selected_runtime(state: &'a StateDir, env: &str) -> Result<Option<Self>> {
+            // The existing canonical/physical route probe owns selection;
+            // its charged witnesses never become a caller-supplied proof.
+            selected_store(&CommitStore::new(state, env))
         }
         pub(crate) fn open_runtime(state: &'a StateDir, env: &str) -> Result<Self> {
             Self::open_runtime_routed(state, env, 0, 0)
@@ -4865,6 +4920,49 @@ mod retained_history {
                 selection: self.selection,
                 _thread: PhantomData,
             })
+        }
+        pub(crate) fn with_fact_originals<T>(
+            &self,
+            seal: &FactSeal<'a>,
+            read: impl FnOnce(&RetainedIo<'_, '_, 'a>) -> Result<T>,
+        ) -> Result<T> {
+            if !self.is_scoped() {
+                return Err(invalid());
+            }
+            // Only the actual engine's still-current sealed generation may
+            // reuse these already authenticated originals. This never
+            // refreshes a seal or survives an unlock, mutation or new parent.
+            seal.check(self)?;
+            self.charge(4, 256)?;
+            let input = self
+                .operation
+                .retained
+                .borrow()
+                .as_ref()
+                .filter(|captured| {
+                    captured.generation == self.generation.get()
+                        && hex::encode(captured.inventory.revision) == seal.revision
+                })
+                .map(|captured| RetainedInput {
+                    session: self,
+                    generation: captured.generation,
+                    inventory: Some(captured.inventory.clone()),
+                    originals: captured.originals.clone(),
+                    vector: captured.vector.clone(),
+                    floor: captured.floor.clone(),
+                    _thread: PhantomData,
+                })
+                .ok_or_else(stale)?;
+            let result = read(&RetainedIo { input: &input });
+            if result.is_ok() {
+                // External writers do not participate in StateLock. Compare
+                // the complete raw/path/type revision again before returning
+                // any DATA, not just timestamps or a vector.
+                seal.check(self)?;
+            } else {
+                self.check()?;
+            }
+            result
         }
         pub(crate) fn effect_boundary(&self, name: &str, point: &str) -> Result<()> {
             self.check()?;
@@ -5336,7 +5434,20 @@ mod retained_history {
             Ok(())
         }
         pub(crate) fn charge_import(&self, work: u64, bytes: u64) -> Result<()> {
-            self.budget.charge(work, bytes)?;
+            let result = self.budget.charge(work, bytes);
+            #[cfg(test)]
+            if result.is_err() {
+                let counters = self.budget.counters.borrow();
+                crate::import_barrier::opus_cost::budget_refusal(
+                    self.state,
+                    &self.env,
+                    work,
+                    bytes,
+                    counters.work,
+                    counters.bytes,
+                );
+            }
+            result?;
             #[cfg(test)]
             {
                 let counters = self.budget.counters.borrow();
@@ -5416,7 +5527,20 @@ mod retained_history {
         }
         pub(crate) fn charge(&self, work: u64, bytes: u64) -> Result<()> {
             if self.is_scoped() {
-                self.budget.charge(work, bytes)?;
+                let result = self.budget.charge(work, bytes);
+                #[cfg(test)]
+                if result.is_err() {
+                    let counters = self.budget.counters.borrow();
+                    crate::import_barrier::opus_cost::budget_refusal(
+                        self.state,
+                        &self.env,
+                        work,
+                        bytes,
+                        counters.work,
+                        counters.bytes,
+                    );
+                }
+                result?;
                 #[cfg(test)]
                 {
                     let counters = self.budget.counters.borrow();
@@ -6313,6 +6437,9 @@ mod retained_history {
         }
         pub(crate) fn vector(&self) -> Result<BTreeMap<String, PyInt>> {
             self.current()?;
+            self.observed_vector()
+        }
+        fn observed_vector(&self) -> Result<BTreeMap<String, PyInt>> {
             if self.inventory.is_none() {
                 CommitStore::new(self.session.state, &self.session.env).vector()
             } else {
@@ -6326,6 +6453,55 @@ mod retained_history {
                     .charge(size, size.checked_mul(8).ok_or_else(limit)?)?;
                 Ok(self.vector.as_ref().clone())
             }
+        }
+        pub(crate) fn stored_commit(
+            &self,
+            fingerprint: &str,
+            sequence: &PyInt,
+        ) -> Result<Option<Commit>> {
+            self.current()?;
+            self.observed_stored_commit(fingerprint, sequence)
+        }
+        fn observed_stored_commit(
+            &self,
+            fingerprint: &str,
+            sequence: &PyInt,
+        ) -> Result<Option<Commit>> {
+            if self.inventory.is_none() {
+                return CommitStore::new(self.session.state, &self.session.env)
+                    .get(fingerprint, sequence.clone());
+            }
+            let path_bound = (self.session.env.len() as u64)
+                .checked_add(fingerprint.len() as u64)
+                .and_then(|n| n.checked_add(sequence.0.bits()))
+                .and_then(|n| n.checked_add(128))
+                .ok_or_else(limit)?;
+            self.session.charge(
+                (self.originals.len() as u64)
+                    .checked_add(path_bound)
+                    .ok_or_else(limit)?,
+                path_bound.checked_mul(2).ok_or_else(limit)?,
+            )?;
+            let store = CommitStore::new(self.session.state, &self.session.env);
+            let path = store.commit_path(fingerprint, sequence);
+            if let Some(original) = self.originals.iter().find(|o| o.path == path) {
+                let size = original.raw.len() as u64;
+                self.session.charge(
+                    size.checked_mul(2).ok_or_else(limit)?,
+                    size.checked_mul(64).ok_or_else(limit)?,
+                )?;
+                return Ok(Some(original.parsed.clone()));
+            }
+            // A getter reads physical retained originals, never an archived
+            // witness in place of a missing canonical commit file.
+            if self
+                .inventory
+                .as_ref()
+                .is_some_and(|inventory| inventory.files.contains_key(&path))
+            {
+                return Err(invalid());
+            }
+            Ok(None)
         }
         pub(crate) fn replication_after(
             &self,
@@ -6416,16 +6592,25 @@ mod retained_history {
         }
         fn observed_shared_facts(&self) -> Result<Vec<Value>> {
             self.session.check()?;
-            if let Some(inventory) = &self.inventory
-                && let Some(file) = inventory.files.get(crate::tombstone::PATH)
-            {
-                self.session.parse(&file.raw)?;
-                self.session.charge(
-                    file.raw.len() as u64,
-                    (file.raw.len() as u64).checked_mul(4).ok_or_else(limit)?,
-                )?;
+            if self.generation != self.session.generation.get() {
+                return Err(stale());
             }
-            let values = crate::tombstone::shared_facts(self.session.state, &self.session.env)?;
+            let values = if let Some(inventory) = &self.inventory {
+                self.session.charge(1, 128)?;
+                let value = match inventory.files.get(crate::tombstone::PATH) {
+                    Some(file) => self.session.parse(&file.raw)?,
+                    None => serde_json::json!({}),
+                };
+                // The captured original is DATA under this same held parent.
+                // Charge the unchanged ledger validator/hash/clone walks;
+                // the common fact engine still authenticates every fact and
+                // closes its seal with the complete raw revision.
+                self.session.reserve_import_signature(&value)?;
+                self.session.reserve_import_signature(&value)?;
+                crate::tombstone::shared_facts_original(value, &self.session.env)?
+            } else {
+                crate::tombstone::shared_facts(self.session.state, &self.session.env)?
+            };
             self.session.check()?;
             Ok(values)
         }
@@ -6580,14 +6765,43 @@ mod retained_history {
                 Ok(String::new())
             }
         }
+        pub(crate) fn require_target(&self, state: &StateDir, env: &str) -> Result<()> {
+            self.current()?;
+            if !std::ptr::eq(state, self.session.state) || env != self.session.env {
+                return Err(stale());
+            }
+            Ok(())
+        }
+        pub(crate) fn with_retained_io<T>(
+            &self,
+            state: &StateDir,
+            env: &str,
+            read: impl FnOnce(&RetainedIo<'_, '_, 'a>) -> Result<T>,
+        ) -> Result<T> {
+            self.require_target(state, env)?;
+            if !self.session.is_scoped() {
+                return Err(invalid());
+            }
+            let result = read(&RetainedIo { input: self });
+            if result.is_ok() {
+                self.recheck()?;
+            } else {
+                // Existing refusal paths may durably retain deny-only history
+                // evidence. Do not replace that error with its own mutation;
+                // no successful DATA/result is returned, and the same sticky
+                // resource, root and held-lock checks still close the failure.
+                self.session.check()?;
+            }
+            result
+        }
         pub(crate) fn fold_with_snapshot(
             &self,
             commits: Vec<Commit>,
             facts: &fold::Facts,
             audit: Option<&Audit>,
         ) -> Result<fold::FoldResult> {
-            self.reserve_fold(&commits, Some(facts), 1)?;
             if !self.session.is_scoped() {
+                self.reserve_fold(&commits, Some(facts), 1)?;
                 return fold::fold_with_snapshot(
                     &self.session.env,
                     commits,
@@ -6596,15 +6810,9 @@ mod retained_history {
                     audit,
                 );
             }
-            let result = fold::fold_with_snapshot(
-                &self.session.env,
-                commits.clone(),
-                self.session.state,
-                Some(facts),
-                audit,
-            )?;
-            self.verify_folded_authority(&commits, facts, &result)?;
-            Ok(result)
+            self.with_retained_io(self.session.state, &self.session.env, |reads| {
+                reads.fold_with_snapshot(commits, facts, audit)
+            })
         }
         pub(crate) fn verify_folded_authority(
             &self,
@@ -6615,7 +6823,8 @@ mod retained_history {
             if !self.session.is_scoped() {
                 return Ok(());
             }
-            verify_authority_projection(self.session, self, commits, facts, result)
+            verify_authority_projection(self.session, self, commits, facts, result)?;
+            self.recheck()
         }
         pub(crate) fn pending_deferred_count(&self) -> Result<usize> {
             self.recheck()?;
@@ -6653,6 +6862,18 @@ mod retained_history {
             snapshots: u64,
         ) -> Result<()> {
             self.current()?;
+            self.reserve_fold_observed(commits, facts, snapshots)
+        }
+        fn reserve_fold_observed(
+            &self,
+            commits: &[Commit],
+            facts: Option<&fold::Facts>,
+            snapshots: u64,
+        ) -> Result<()> {
+            self.session.check()?;
+            if self.generation != self.session.generation.get() {
+                return Err(stale());
+            }
             if self.inventory.is_none() {
                 return Ok(());
             }
@@ -7244,16 +7465,24 @@ mod retained_history {
             {
                 return Err(input_error("team_signature_invalid"));
             }
-            let last = store.last_seq(&candidate.author).map_err(local)?;
+            let last = original_input
+                .with_retained_io(store.state, &store.env_id, |io| {
+                    io.last_seq(&candidate.author)
+                })
+                .map_err(local)?;
             if candidate.author_seq <= last {
                 return Err(input_error("team_seq_duplicate"));
             }
             if candidate.author_seq > &last + 1 {
                 return Err(input_error("team_seq_gap"));
             }
-            if store
-                .hlc_not_above_previous(candidate, Some(&original_commits))
-                .map_err(local)?
+            if crate::team::compaction_heads::cached_hlc_not_above_previous_with_input(
+                store,
+                candidate,
+                Some(&original_commits),
+                &original_input,
+            )
+            .map_err(local)?
             {
                 return Err(input_error("team_hlc_not_monotone"));
             }
@@ -7457,12 +7686,20 @@ mod retained_history {
             let fresh = history.acquire().map_err(local)?;
             let commits = fresh.commits().map_err(local)?;
             if self.candidate.hash().map_err(local)? != self.hash
-                || self.store.last_seq(&self.candidate.author).map_err(local)? + 1
-                    != self.candidate.author_seq
-                || self
-                    .store
-                    .hlc_not_above_previous(&self.candidate, Some(&commits))
+                || fresh
+                    .with_retained_io(self.store.state, &self.store.env_id, |io| {
+                        io.last_seq(&self.candidate.author)
+                    })
                     .map_err(local)?
+                    + 1
+                    != self.candidate.author_seq
+                || crate::team::compaction_heads::cached_hlc_not_above_previous_with_input(
+                    self.store,
+                    &self.candidate,
+                    Some(&commits),
+                    &fresh,
+                )
+                .map_err(local)?
             {
                 return Err(local(stale()));
             }
@@ -7531,7 +7768,21 @@ mod retained_history {
                     &fs::symlink_metadata(history.state.path.join(path)).map_err(|_| stale())?,
                 );
                 if std::path::Path::new(path) == parent {
-                    if before[..6] != now[..6] {
+                    // Linux keeps a directory's link count stable for this
+                    // regular leaf; APFS increases it by exactly one. The
+                    // complete raw/layout checks above already proved the
+                    // sole expected new file. Keep the directory's actual
+                    // device/inode/type/mode/owner anchor and reject every
+                    // other link-count change.
+                    let links = now[5] == before[5] || before[5].checked_add(1) == Some(now[5]);
+                    if before[..5] != now[..5] || !links {
+                        #[cfg(test)]
+                        crate::import_barrier::opus_cost::control_gate(
+                            history.state(),
+                            history.env(),
+                            "owned_denial_parent_changed",
+                            json!({"stable_anchor":before[..5]==now[..5],"before_nlink":before[5],"after_nlink":now[5],"only_expected_raw_and_layout":true}),
+                        );
                         return Ok(false);
                     }
                 } else if before != &now {
@@ -7567,6 +7818,517 @@ mod retained_history {
         }
         Ok(names)
     }
+    impl RetainedIo<'_, '_, '_> {
+        fn check(&self) -> Result<()> {
+            self.input.session.check()?;
+            if self.input.generation != self.input.session.generation.get() {
+                return Err(stale());
+            }
+            Ok(())
+        }
+        pub(crate) fn require_target(&self, state: &StateDir, env: &str) -> Result<()> {
+            self.check()?;
+            if !std::ptr::eq(state, self.input.session.state) || env != self.input.session.env {
+                return Err(stale());
+            }
+            Ok(())
+        }
+        pub(crate) fn read_json(&self, name: &str, default: Value) -> Result<Value> {
+            self.check()?;
+            let value = self.input.observed_json(name, default)?;
+            self.check()?;
+            Ok(value)
+        }
+        pub(crate) fn recheck(&self) -> Result<()> {
+            self.input.recheck()
+        }
+        pub(crate) fn clone_clock(&self, clock: &Hlc) -> Result<Hlc> {
+            self.check()?;
+            let bits = clock
+                .wall_ms
+                .0
+                .bits()
+                .checked_add(clock.counter.0.bits())
+                .and_then(|n| n.checked_add(64))
+                .ok_or_else(limit)?;
+            self.input.session.charge(
+                bits.checked_mul(2).ok_or_else(limit)?,
+                bits.checked_mul(8).ok_or_else(limit)?,
+            )?;
+            Ok(clock.clone())
+        }
+        pub(crate) fn vector(&self) -> Result<BTreeMap<String, PyInt>> {
+            self.check()?;
+            let value = self.input.observed_vector()?;
+            self.check()?;
+            Ok(value)
+        }
+        pub(crate) fn snapshot_floor(&self) -> Result<BTreeMap<String, PyInt>> {
+            self.check()?;
+            let map = &self.input.floor;
+            self.input.session.charge(
+                map.len() as u64,
+                (map.len() as u64).checked_mul(64).ok_or_else(limit)?,
+            )?;
+            let size = map.iter().try_fold(0u64, |total, (author, sequence)| {
+                total
+                    .checked_add(author.len() as u64)
+                    .and_then(|v| v.checked_add(sequence.0.bits()))
+                    .and_then(|v| v.checked_add(32))
+                    .ok_or_else(limit)
+            })?;
+            self.input
+                .session
+                .charge(size, size.checked_mul(8).ok_or_else(limit)?)?;
+            Ok(map.as_ref().clone())
+        }
+        pub(crate) fn last_seq(&self, author: &str) -> Result<PyInt> {
+            Ok(self
+                .vector()?
+                .get(author)
+                .cloned()
+                .unwrap_or_else(PyInt::zero))
+        }
+        pub(crate) fn get(&self, author: &str, sequence: &PyInt) -> Result<Option<Commit>> {
+            self.check()?;
+            let value = self.input.observed_stored_commit(author, sequence)?;
+            if let Some(value) = &value {
+                // Reserve canonical/raw comparison and signature validation
+                // performed by the common cached-head engine after this read.
+                self.reserve_original(std::slice::from_ref(value))?;
+            }
+            self.check()?;
+            Ok(value)
+        }
+        fn reserve_original(&self, commits: &[Commit]) -> Result<()> {
+            self.check()?;
+            self.input.session.charge(
+                commits.len() as u64,
+                (commits.len() as u64).checked_mul(64).ok_or_else(limit)?,
+            )?;
+            for commit in commits {
+                self.reserve_hlc(&commit.hlc)?;
+                let header = [
+                    &commit.format,
+                    &commit.env_id,
+                    &commit.author,
+                    &commit.hlc,
+                    &commit.sig,
+                ]
+                .iter()
+                .try_fold(0u64, |sum, text| {
+                    sum.checked_add(text.len() as u64).ok_or_else(limit)
+                })?;
+                self.input.session.charge(
+                    header
+                        .checked_mul(16)
+                        .and_then(|v| v.checked_add(4096))
+                        .ok_or_else(limit)?,
+                    header
+                        .checked_mul(64)
+                        .and_then(|v| v.checked_add(4096))
+                        .ok_or_else(limit)?,
+                )?;
+                let author_bits = commit.author_seq.0.bits();
+                self.input.session.charge(
+                    author_bits
+                        .checked_mul(author_bits)
+                        .and_then(|v| v.checked_mul(8))
+                        .ok_or_else(limit)?,
+                    author_bits.checked_mul(16).ok_or_else(limit)?,
+                )?;
+                self.input.session.charge(
+                    commit.seen.len() as u64,
+                    (commit.seen.len() as u64)
+                        .checked_mul(64)
+                        .ok_or_else(limit)?,
+                )?;
+                for (author, sequence) in &commit.seen {
+                    let bits = sequence.0.bits();
+                    self.input.session.charge(
+                        bits.checked_mul(bits)
+                            .and_then(|v| v.checked_mul(8))
+                            .and_then(|v| v.checked_add(author.len() as u64))
+                            .ok_or_else(limit)?,
+                        bits.checked_mul(16)
+                            .and_then(|v| v.checked_add(author.len() as u64))
+                            .ok_or_else(limit)?,
+                    )?;
+                }
+                self.input.session.charge(
+                    (commit.ops.len() as u64)
+                        .checked_mul(8192)
+                        .ok_or_else(limit)?,
+                    (commit.ops.len() as u64)
+                        .checked_mul(256)
+                        .ok_or_else(limit)?,
+                )?;
+                for op in &commit.ops {
+                    let (size, nodes, _) = self.input.session.measure_import_record(op)?;
+                    self.input.session.charge(
+                        size.checked_mul(16)
+                            .and_then(|v| v.checked_add(nodes.checked_mul(4)?))
+                            .ok_or_else(limit)?,
+                        size.checked_mul(64)
+                            .and_then(|v| v.checked_add(nodes.checked_mul(128)?))
+                            .ok_or_else(limit)?,
+                    )?;
+                }
+                let value = commit.to_dict();
+                // The materialization above is reserved before to_dict.
+                // This same-parent reservation covers the full original's
+                // canonical/signature and cached-original comparisons.
+                self.input.session.reserve_import_signature(&value)?;
+            }
+            self.check()
+        }
+        pub(crate) fn reserve_hlc(&self, hlc: &str) -> Result<()> {
+            self.check()?;
+            let digits = hlc.len() as u64;
+            // Covers both exact-integer components and repeated live/cached
+            // comparisons before the unchanged pure HLC parser runs.
+            self.input.session.charge(
+                digits
+                    .checked_mul(digits)
+                    .and_then(|n| n.checked_mul(8))
+                    .ok_or_else(limit)?,
+                digits.checked_mul(32).ok_or_else(limit)?,
+            )
+        }
+        pub(crate) fn reserve_registry(&self, commits: &[Commit]) -> Result<()> {
+            self.check()?;
+            self.input.session.charge(
+                (commits.len() as u64).checked_mul(2).ok_or_else(limit)?,
+                (commits.len() as u64).checked_mul(64).ok_or_else(limit)?,
+            )?;
+            for commit in commits {
+                self.input.session.charge(
+                    (commit.ops.len() as u64)
+                        .checked_mul(128)
+                        .ok_or_else(limit)?,
+                    (commit.ops.len() as u64)
+                        .checked_mul(64)
+                        .ok_or_else(limit)?,
+                )?;
+                for op in &commit.ops {
+                    let Some(object) = op.as_object() else {
+                        continue;
+                    };
+                    self.input.session.charge(
+                        (object.len() as u64).checked_mul(32).ok_or_else(limit)?,
+                        128,
+                    )?;
+                    // Cost DATA only: conservatively reserve both possible
+                    // record fields even on ignored operations. The unchanged
+                    // registry/matcher still make every selection and verify
+                    // every actual FULL record. They never canonicalize a
+                    // whole commit, inspect HLC/seen, or process ciphertext.
+                    for field in ["owner_device", "device"] {
+                        let Some(record) = object.get(field) else {
+                            continue;
+                        };
+                        let (size, nodes, sort) =
+                            self.input.session.measure_import_record(record)?;
+                        // Two passes: from_dict/coercion/base64, two fixed
+                        // signature checks, hashing/FULL equality and outputs.
+                        self.input.session.charge(
+                            size.checked_mul(16)
+                                .and_then(|n| n.checked_add(sort.checked_mul(2)?))
+                                .and_then(|n| n.checked_add(nodes.checked_mul(16)?))
+                                .and_then(|n| n.checked_add(8192))
+                                .ok_or_else(limit)?,
+                            size.checked_mul(32)
+                                .and_then(|n| n.checked_add(nodes.checked_mul(256)?))
+                                .and_then(|n| n.checked_add(2048))
+                                .ok_or_else(limit)?,
+                        )?;
+                    }
+                }
+            }
+            self.check()
+        }
+        pub(crate) fn retained_registry(&self) -> Result<HashMap<String, DeviceRecord>> {
+            let commits = self.commits()?;
+            self.reserve_registry(&commits)?;
+            Ok(device_registry(&commits))
+        }
+        pub(crate) fn retained_matches(
+            &self,
+            expected: &HashMap<String, DeviceRecord>,
+        ) -> Result<HashSet<String>> {
+            let commits = self.commits()?;
+            self.reserve_registry(&commits)?;
+            Ok(matching_device_records(&commits, expected))
+        }
+        pub(crate) fn original_length(&self, name: &str, cap: u64) -> Result<Option<u64>> {
+            self.check()?;
+            self.input
+                .session
+                .charge(1 + name.len() as u64, 256 + name.len() as u64)?;
+            let inventory = self.input.inventory.as_ref().ok_or_else(invalid)?;
+            let length = inventory.files.get(name).map(|file| file.raw.len() as u64);
+            if length.is_some_and(|n| n > cap) {
+                return Err(limit());
+            }
+            Ok(length)
+        }
+        pub(crate) fn original_bytes(&self, name: &str, cap: u64) -> Result<Option<Vec<u8>>> {
+            self.check()?;
+            self.input
+                .session
+                .charge(1 + name.len() as u64, 256 + name.len() as u64)?;
+            let inventory = self.input.inventory.as_ref().ok_or_else(invalid)?;
+            let Some(file) = inventory.files.get(name) else {
+                return Ok(None);
+            };
+            self.input.session.screen(&file.raw, cap)?;
+            let n = file.raw.len() as u64;
+            self.input.session.charge(
+                n.checked_mul(2).ok_or_else(limit)?,
+                n.checked_mul(4).ok_or_else(limit)?,
+            )?;
+            let raw = file.raw.clone();
+            self.check()?;
+            Ok(Some(raw))
+        }
+        pub(crate) fn pure_cache<T>(
+            &self,
+            raw: &[u8],
+            read: impl FnOnce() -> Result<T>,
+        ) -> Result<T> {
+            self.check()?;
+            self.input.session.screen(raw, BULK)?;
+            let size = raw.len() as u64;
+            self.input.session.charge(
+                size.checked_mul(8).ok_or_else(limit)?,
+                size.checked_mul(64).ok_or_else(limit)?,
+            )?;
+            // The same legacy syntax parser only measures this DATA. The
+            // unchanged cache decoder below still makes every codec, canonical
+            // and signature decision. No parsed value is authority.
+            let value = pyjson::loads(std::str::from_utf8(raw).map_err(|_| invalid())?)
+                .map_err(|_| invalid())?;
+            let mut pending = vec![(&value, false)];
+            while let Some((value, hlc)) = pending.pop() {
+                self.input.session.charge(1, 64)?;
+                let digits = match value {
+                    Value::Number(number) => number.as_str().len() as u64,
+                    Value::String(text) if hlc => text.len() as u64,
+                    _ => 0,
+                };
+                self.input.session.charge(
+                    digits
+                        .checked_mul(digits)
+                        .and_then(|v| v.checked_mul(8))
+                        .ok_or_else(limit)?,
+                    0,
+                )?;
+                match value {
+                    Value::Object(map) => {
+                        self.input.session.charge(
+                            map.len() as u64,
+                            (map.len() as u64).checked_mul(64).ok_or_else(limit)?,
+                        )?;
+                        pending.extend(map.iter().map(|(key, value)| (value, key == "hlc")));
+                    }
+                    Value::Array(array) => {
+                        self.input.session.charge(
+                            array.len() as u64,
+                            (array.len() as u64).checked_mul(64).ok_or_else(limit)?,
+                        )?;
+                        pending.extend(array.iter().map(|value| (value, false)));
+                    }
+                    _ => {}
+                }
+            }
+            let (encoded, nodes, sort) = self.input.session.measure_import_record(&value)?;
+            // One complete sorted pretty spelling is compared with the raw
+            // original before the unchanged decoder examines its schema.
+            self.input.session.charge(
+                encoded
+                    .checked_mul(4)
+                    .and_then(|n| n.checked_add(sort))
+                    .ok_or_else(limit)?,
+                encoded
+                    .checked_mul(8)
+                    .and_then(|n| n.checked_add(nodes.checked_mul(128)?))
+                    .ok_or_else(limit)?,
+            )?;
+            if let Some(entries) = value.get("heads").and_then(Value::as_array)
+                && entries.len() <= 256
+            {
+                // The decoder rejects >256 entries before entering its loop.
+                // This DATA cost walk cannot admit or truncate any history.
+                for entry in entries {
+                    let record = &entry["device"];
+                    let (size, nodes, sort) = self.input.session.measure_import_record(record)?;
+                    self.input.session.charge(
+                        size.checked_mul(16)
+                            .and_then(|n| n.checked_add(sort.checked_mul(2)?))
+                            .and_then(|n| n.checked_add(nodes.checked_mul(16)?))
+                            .ok_or_else(limit)?,
+                        size.checked_mul(32)
+                            .and_then(|n| n.checked_add(nodes.checked_mul(256)?))
+                            .ok_or_else(limit)?,
+                    )?;
+                    let commit = &entry["commit"];
+                    let operations = match commit.get("ops") {
+                        Some(Value::Array(values)) => values.len(),
+                        Some(Value::Object(values)) => values.len(),
+                        Some(Value::String(text)) => text.len(),
+                        _ => 0,
+                    } as u64;
+                    self.input.session.charge(
+                        operations.checked_mul(8192).ok_or_else(limit)?,
+                        operations.checked_mul(256).ok_or_else(limit)?,
+                    )?;
+                    // Legacy from_dict also accepts seen as pairs and merges
+                    // their Python-equal keys with a quadratic scan. Reserve
+                    // that coercion BEFORE the pure codec can enter it. Map
+                    // keys already have the full repeated sort reservations.
+                    if let Some(pairs) = commit.get("seen").and_then(Value::as_array) {
+                        let mut width = 128u64;
+                        for pair in pairs {
+                            let key = pair
+                                .as_array()
+                                .and_then(|pair| pair.first())
+                                .unwrap_or(&Value::Null);
+                            let (size, _, _) = self.input.session.measure_import_record(key)?;
+                            let key_work = if key.is_string() {
+                                size.checked_mul(16)
+                            } else {
+                                size.checked_mul(size)
+                                    .and_then(|n| n.checked_mul(8))
+                                    .and_then(|n| n.checked_add(size.checked_mul(16)?))
+                            }
+                            .and_then(|n| n.checked_add(128))
+                            .ok_or_else(limit)?;
+                            width = width.max(key_work);
+                        }
+                        let count = pairs.len() as u64;
+                        self.input.session.charge(
+                            count
+                                .checked_mul(count)
+                                .and_then(|n| n.checked_mul(width))
+                                .ok_or_else(limit)?,
+                            count.checked_mul(128).ok_or_else(limit)?,
+                        )?;
+                    }
+                    // Four complete commit canonical/crypto reservations:
+                    // hash(unsigned), canonical(raw), canonical(signed),
+                    // verify(unsigned). Their fixed signature allowance also
+                    // covers both FULL-device verification calls, from_dict
+                    // coercion/cloning, fingerprinting and head outputs.
+                    for _ in 0..4 {
+                        self.input
+                            .session
+                            .reserve_import_signature(&entry["commit"])?;
+                    }
+                }
+            }
+            let value = read()?;
+            self.check()?;
+            Ok(value)
+        }
+        pub(crate) fn fact_sources(&self) -> Result<(Vec<String>, Vec<Value>)> {
+            self.check()?;
+            let lines = self
+                .input
+                .observed_lines(&format!("team/{}/facts.jsonl", self.input.session.env))?;
+            let shared = self.input.observed_shared_facts()?;
+            self.check()?;
+            Ok((lines, shared))
+        }
+        pub(crate) fn fact_admissions(&self) -> Result<(Value, Vec<String>)> {
+            self.check()?;
+            let receipts = self.input.observed_json(
+                &format!("team/{}/fact_admissions.json", self.input.session.env),
+                json!({}),
+            )?;
+            let lines = self.input.observed_lines(&format!(
+                "team/{}/fact_admissions.jsonl",
+                self.input.session.env
+            ))?;
+            self.check()?;
+            Ok((receipts, lines))
+        }
+        pub(crate) fn commits(&self) -> Result<Vec<Commit>> {
+            self.check()?;
+            let commits = self.input.observed_commits()?;
+            self.check()?;
+            Ok(commits)
+        }
+        pub(crate) fn reserve_fact_copy(&self) -> Result<()> {
+            self.check()?;
+            let bytes = self.input.inventory.as_ref().ok_or_else(invalid)?.bytes;
+            // All settled fact DATA comes from this bounded original
+            // inventory. Reserve eight traversals and sixty-four owned bytes
+            // per original byte before the additional Facts clone.
+            self.input.session.charge(
+                bytes.checked_mul(8).ok_or_else(limit)?,
+                bytes.checked_mul(64).ok_or_else(limit)?,
+            )
+        }
+        pub(crate) fn reserve_fold(
+            &self,
+            commits: &[Commit],
+            facts: Option<&fold::Facts>,
+            snapshots: u64,
+        ) -> Result<()> {
+            self.check()?;
+            self.input.reserve_fold_observed(commits, facts, snapshots)
+        }
+        pub(crate) fn fold_with_snapshot(
+            &self,
+            commits: Vec<Commit>,
+            facts: &fold::Facts,
+            audit: Option<&Audit>,
+        ) -> Result<fold::FoldResult> {
+            self.reserve_fold(&commits, Some(facts), 1)?;
+            let result = fold::fold_with_snapshot_retained(
+                &self.input.session.env,
+                commits.clone(),
+                self.input.session.state,
+                Some(facts),
+                audit,
+                self,
+            )?;
+            // Both folds remain precharged. The common snapshot fold and
+            // full retained authority comparison share only original DATA,
+            // with complete raw checks around their combined return.
+            self.reserve_fold(&commits, Some(facts), 0)?;
+            verify_authority_projection_reserved(self.input.session, &commits, facts, &result)?;
+            Ok(result)
+        }
+        pub(crate) fn personal_manifest(&self) -> Result<Option<Value>> {
+            self.check()?;
+            let io = self.input.session.import_io()?;
+            let view = crate::import_barrier::VisibilityEpoch::capture(&io)?;
+            let manifest = view.personal_manifest(&self.input.session.env)?;
+            view.finish()?;
+            self.check()?;
+            Ok(manifest)
+        }
+        pub(crate) fn snapshot_numbers(&self) -> Result<Vec<PyInt>> {
+            self.check()?;
+            let inventory = self.input.inventory.as_ref().ok_or_else(invalid)?;
+            self.input.session.charge(
+                inventory.entries as u64,
+                (inventory.entries as u64)
+                    .checked_mul(128)
+                    .ok_or_else(limit)?,
+            )?;
+            let prefix = format!("team/{}/snapshots/", self.input.session.env);
+            let mut numbers = Vec::new();
+            for path in inventory.files.keys() {
+                if let Some(name) = path.strip_prefix(&prefix) {
+                    numbers.push(canonical_number(self.input.session, name, false)?);
+                }
+            }
+            self.input.session.check()?;
+            Ok(numbers)
+        }
+    }
     fn verify_authority_projection(
         history: &HistorySession<'_>,
         input: &RetainedInput<'_, '_>,
@@ -7579,6 +8341,14 @@ mod retained_history {
         // full fact/removal semantics. Missing DATA is still attested, not
         // promoted into a complete-history proof.
         input.reserve_fold(commits, Some(facts), 0)?;
+        verify_authority_projection_reserved(history, commits, facts, folded)
+    }
+    fn verify_authority_projection_reserved(
+        history: &HistorySession<'_>,
+        commits: &[Commit],
+        facts: &fold::Facts,
+        folded: &fold::FoldResult,
+    ) -> Result<()> {
         let retained = fold::fold(
             &history.env,
             commits.to_vec(),
@@ -7867,6 +8637,7 @@ mod retained_history {
 pub(crate) use retained_history::testing as history_testing;
 pub(crate) use retained_history::{
     FactSeal, HistoryBudget as ImportHistoryBudget, HistoryResume, HistorySession, ProbePurpose,
+    RetainedInput, RetainedIo,
 };
 
 // Syntax only. ImportIo reserves the raw walk and materialization before this
@@ -7964,6 +8735,63 @@ mod retained_history_test_bodies {
                 .unwrap(),
                 "accepted"
             );
+        }
+        #[test]
+        fn personal_removal_expected_directory_change_still_refuses_an_extra_sibling() {
+            use crate::import_barrier::testing::{Pause, Scope};
+            struct Resume(Option<Arc<Pause>>);
+            impl Drop for Resume {
+                fn drop(&mut self) {
+                    if let Some(pause) = &self.0 { pause.release(); }
+                }
+            }
+            let fixture = install::tests::installed();
+            let bk = DeviceKey::load_or_create(fixture.b.state, fixture.b.kms).unwrap();
+            let b = bk.fingerprint().unwrap();
+            for extra_sibling in [false, true] {
+                let (_root, ctx) = cloned(fixture.b.state);
+                assert!(ctx.vault.secret_for_trusted_use("alpha", None).is_ok());
+                let candidate = signed(&ctx, &fixture.env, &bk,
+                    vec![json!({"op":"member.remove","fingerprint":b})]);
+                let name = denial(&fixture.env);
+                let scope = extra_sibling.then(|| Scope::pause(ctx.state, &name, "final-readback-after"));
+                let publisher = ctx.clone();
+                let env = fixture.env.clone();
+                let commit = candidate.clone();
+                let result = std::thread::scope(|threads| {
+                    let resume = Resume(scope.as_ref().map(|(_, pause)| pause.clone()));
+                    let writer = threads.spawn(move || {
+                        let history = HistorySession::open_runtime(publisher.state, &env)?;
+                        let store = CommitStore::new(publisher.state, &env);
+                        PreparedAppend::prepare(&store, &commit, now_ms(), &history, None)
+                            .map_err(|failure| failure.into_error())?
+                            .publish().map_err(|failure| failure.into_error())
+                    });
+                    if let Some((_, pause)) = &scope {
+                        pause.wait();
+                        let sibling = ctx.state.path.join(&name).parent().unwrap().join("unexpected-during-denial.json");
+                        fs::write(&sibling, b"{}").unwrap();
+                        fs::set_permissions(&sibling, fs::Permissions::from_mode(0o600)).unwrap();
+                    }
+                    drop(resume);
+                    writer.join().unwrap()
+                });
+                if let Some((scope, _)) = &scope { assert!(scope.fired()); }
+                drop(scope);
+                let path = ctx.state.path.join(format!("team/{}/commits/{}/{}.json", fixture.env, b, candidate.author_seq));
+                if extra_sibling {
+                    assert_eq!(result.unwrap_err().reason, "team_bootstrap_local_state_changed");
+                    assert_eq!(fs::symlink_metadata(path).unwrap_err().kind(), std::io::ErrorKind::NotFound);
+                } else {
+                    result.unwrap();
+                    assert!(fs::symlink_metadata(path).unwrap().is_file());
+                    assert_eq!(CommitStore::new(ctx.state, &fixture.env).get(&b, &candidate.author_seq).unwrap(), Some(candidate));
+                }
+                assert!(ctx.state.exists(&name));
+                denied(&ctx);
+                let (_reopened_root, reopened) = cloned(ctx.state);
+                denied(&reopened);
+            }
         }
         #[test]
         fn personal_removal_whole_effect_ignored_mixed_owner_transfer_and_self_user() {
@@ -9746,6 +10574,64 @@ mod retained_history_test_bodies {
         }
 
         #[test]
+        fn personal_history_fact_originals_require_held_current_raw_generation_and_budget() {
+            for boundary in ["raw-before", "raw-after", "generation", "parent", "unlock", "budget"] {
+                let f = fixture();
+                let other = fixture();
+                let h = probe(&f);
+                let seal = h.acquire().unwrap().fact_seal().unwrap();
+                let before = h.budget.counters.borrow().work;
+                let originals = h.with_fact_originals(&seal, |reads| reads.commits()).unwrap();
+                assert_eq!(originals.len(), 1);
+                assert_eq!(originals[0].to_dict(), f.genesis.to_dict());
+                assert!(h.budget.counters.borrow().work > before);
+                let called = Cell::new(false);
+                let changed = || {
+                    f.ctx.state.write_json(
+                        &format!("team/{}/fact_admissions.json", f.env),
+                        &json!({"changed":"original-data"}),
+                    ).unwrap();
+                };
+                if boundary == "unlock" {
+                    let parent = h.into_resume().unwrap();
+                    let fresh = parent.resume().unwrap();
+                    assert_eq!(reason(fresh.with_fact_originals(&seal, |_| {
+                        called.set(true);
+                        Ok(())
+                    })), "team_bootstrap_local_state_changed");
+                } else {
+                    let wrong;
+                    let current = if boundary == "parent" {
+                        wrong = probe(&other);
+                        &wrong
+                    } else {
+                        &h
+                    };
+                    match boundary {
+                        "raw-before" => changed(),
+                        "generation" => h.invalidate().unwrap(),
+                        "budget" => assert!(h.charge(WORK, 0).is_err()),
+                        _ => {}
+                    }
+                    let result = current.with_fact_originals(&seal, |reads| {
+                        called.set(true);
+                        let originals = reads.commits()?;
+                        if boundary == "raw-after" {
+                            changed();
+                        }
+                        Ok(originals)
+                    });
+                    assert_eq!(reason(result), if boundary == "budget" {
+                        "team_bootstrap_limit_exceeded"
+                    } else {
+                        "team_bootstrap_local_state_changed"
+                    });
+                }
+                assert_eq!(called.get(), boundary == "raw-after");
+            }
+        }
+
+        #[test]
         fn personal_history_sealed_vector_rejects_raw_receipt_generation_and_wrong_parent() {
             let f = fixture();
             let other = fixture();
@@ -9784,6 +10670,43 @@ mod retained_history_test_bodies {
                 reason(fresh.current_vector(&h)),
                 "team_bootstrap_limit_exceeded"
             );
+        }
+        #[test]
+        fn personal_history_retained_data_batch_closes_raw_generation_and_budget_boundaries() {
+            for boundary in ["raw", "generation", "budget", "target"] {
+                let f = fixture();
+                let h = probe(&f);
+                let input = h.acquire().unwrap();
+                let before = h.budget.counters.borrow().work;
+                let originals = input.with_retained_io(f.ctx.state, &f.env, |reads| {
+                    let (lines, shared) = reads.fact_sources()?;
+                    let (receipts, admissions) = reads.fact_admissions()?;
+                    let commits = reads.commits()?;
+                    Ok((lines, shared, receipts, admissions, commits))
+                }).unwrap();
+                assert_eq!(originals.4.len(), 1);
+                assert!(h.budget.counters.borrow().work > before);
+                let result = if boundary == "target" {
+                    let other = new_env_id(&f.genesis.author).unwrap();
+                    input.with_retained_io(f.ctx.state, &other, |_| panic!("wrong target entered"))
+                } else {
+                    input.with_retained_io(f.ctx.state, &f.env, |reads| {
+                        assert_eq!(reads.commits()?.len(), 1);
+                        match boundary {
+                            "raw" => put(&f, &next(&f, 2, "1000001-0000")),
+                            "generation" => h.invalidate()?,
+                            "budget" => { let _ = h.charge(WORK, 0); },
+                            _ => unreachable!(),
+                        }
+                        Ok(())
+                    })
+                };
+                assert_eq!(
+                    reason(result),
+                    if boundary == "budget" { "team_bootstrap_limit_exceeded" }
+                    else { "team_bootstrap_local_state_changed" }
+                );
+            }
         }
         #[test]
         fn personal_history_same_thread_full_revision_and_wrong_bindings() {

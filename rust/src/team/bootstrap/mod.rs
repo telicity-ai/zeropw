@@ -333,6 +333,15 @@ fn update(ctx: &Context, env: &str, state: &str, reason: Option<&str>) -> Result
     if attempt["state"] == "cancelled" && state != "installed_syncing" {
         return Err(bad("team_bootstrap_cancelled"));
     }
+    // An already-durable identical status is not a new transition. Avoid
+    // replacing its inode while the current ordinary handler authenticates
+    // its complete raw epoch. All real state/error changes still publish.
+    if reason.is_none() && attempt["state"] == state && attempt.get("reason") == Some(&Value::Null)
+    {
+        #[cfg(test)]
+        import_barrier::opus_cost::protocol_event(ctx.state, env, "attempt_update_noop");
+        return Ok(());
+    }
     if reason.is_some() {
         attempt["failed_from"] = attempt["state"].clone();
     }
@@ -359,6 +368,15 @@ fn update_with_input(
     }
     if attempt["state"] == "cancelled" && state != "installed_syncing" {
         return Err(bad("team_bootstrap_cancelled"));
+    }
+    // An already-durable identical status is not a new transition. Avoid
+    // replacing its inode while the current ordinary handler authenticates
+    // its complete raw epoch. All real state/error changes still publish.
+    if reason.is_none() && attempt["state"] == state && attempt.get("reason") == Some(&Value::Null)
+    {
+        #[cfg(test)]
+        import_barrier::opus_cost::protocol_event(ctx.state, env, "attempt_update_noop");
+        return io.check();
     }
     if reason.is_some() {
         attempt["failed_from"] = attempt["state"].clone();
@@ -741,6 +759,43 @@ fn caps(ctx: &Context, session: &dyn Session, deadline: &mut protocol::Deadline)
         return Err(bad("team_peer_feature_unsupported"));
     }
     Ok(value)
+}
+
+// Actual completed local capability send on this exact authenticated socket.
+// This private transient side-effect witness grants no membership or readiness.
+pub(crate) struct SentCapabilities {
+    session: std::sync::Weak<dyn Session>,
+    peer: super::identity::DeviceRecord,
+    env: String,
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+impl SentCapabilities {
+    pub(super) fn matches(&self, env: &str, session: &Arc<dyn Session>) -> bool {
+        self.env == env
+            && session.env_id() == env
+            && self.peer == session.peer()
+            && !session.is_closed()
+            && self
+                .session
+                .upgrade()
+                .is_some_and(|sent| Arc::ptr_eq(&sent, session))
+    }
+}
+fn receiver_caps(
+    ctx: &Context,
+    session: &Arc<dyn Session>,
+    deadline: &mut protocol::Deadline,
+) -> Result<(Value, SentCapabilities)> {
+    let peer_caps = caps(ctx, session.as_ref(), deadline)?;
+    Ok((
+        peer_caps,
+        SentCapabilities {
+            session: Arc::downgrade(session),
+            peer: session.peer(),
+            env: session.env_id().into(),
+            _thread: std::marker::PhantomData,
+        },
+    ))
 }
 
 pub(crate) fn needs_serve(ctx: &Context, session: &dyn Session) -> Result<bool> {
@@ -1188,7 +1243,7 @@ fn receive(
     } else {
         None
     };
-    let peer_caps = caps(ctx, session.as_ref(), &mut deadline)?;
+    let (peer_caps, sent_capabilities) = receiver_caps(ctx, &session, &mut deadline)?;
     let (_, hello) = recv_protocol(ctx, session.as_ref(), &mut deadline, receipt.is_some())?;
     if receipt.is_some()
         && (crate::team::tombstone_gate::is_control(hello["type"].as_str().unwrap_or(""))
@@ -1198,18 +1253,32 @@ fn receive(
         // protocol is authoritative for routing, never for import visibility
         // or readiness. Re-enter fresh ordinary vector/M1 agreement with both
         // already-received controls, before another reader owns the session.
-        team.personal_adopt_ordinary(
-            env,
-            session.clone(),
-            &address,
-            &peer_caps,
-            &hello,
-            &slot.registration(ctx, env)?,
-        )?;
-        team.personal_handoff_complete(env, &session)?;
-        *session_slot
+        let handoff = (|| {
+            team.personal_adopt_ordinary(
+                env,
+                session.clone(),
+                &address,
+                &peer_caps,
+                &hello,
+                &slot.registration(ctx, env)?,
+                &sent_capabilities,
+            )?;
+            team.personal_handoff_complete(env, &session)
+        })();
+        // This verified committed receiver has selected the peer's ordinary
+        // protocol. An adoption error must close only this attempt's socket;
+        // receive_job must never inject a bootstrap refusal into that route.
+        // Keep cancellation ownership until adoption returns, including on
+        // error, and retain the original error and every ordinary guard.
+        let released = session_slot
             .lock()
-            .map_err(|_| bad("team_bootstrap_busy"))? = None;
+            .map(|mut current| *current = None)
+            .map_err(|_| bad("team_bootstrap_busy"));
+        if handoff.is_err() || released.is_err() {
+            session.close();
+        }
+        handoff?;
+        released?;
         return update(ctx, env, "installed_syncing", None);
     }
     protocol::fields(&hello, &["type", "env_id", "session_nonce"])?;
@@ -1389,7 +1458,7 @@ fn receive(
         env,
         "receiver_registered_before_ordinary_handoff",
     );
-    let adopted = team.adopt_outbound_session_checked(env, session.clone(), &address);
+    let adopted = team.personal_adopt_outbound(env, session.clone(), &address);
     #[cfg(test)]
     if let Err(error) = &adopted {
         eprintln!(
@@ -1397,9 +1466,20 @@ fn receive(
             closed_reason(&error.reason)
         );
     }
-    adopted?;
+    let kept = adopted?;
     #[cfg(test)]
     import_barrier::opus_cost::protocol_event(ctx.state, env, "receiver_ordinary_handoff_returned");
+    if !kept {
+        #[cfg(test)]
+        import_barrier::opus_cost::protocol_event(
+            ctx.state,
+            env,
+            "losing_handoff_checks_current_winner",
+        );
+    }
+    // The authenticated bootstrap exchange is complete. If the ordinary
+    // tie-break rejected S0, only its actual live FULL-matching S1 may own
+    // this handoff; personal_handoff_complete never records closed S0.
     team.personal_handoff_complete(env, &session)?;
     *session_slot
         .lock()
@@ -1411,12 +1491,43 @@ struct Job {
     handle: thread::JoinHandle<()>,
     session: Arc<Mutex<Option<Arc<dyn Session>>>>,
 }
+struct OrdinaryOwnership {
+    peer: super::identity::DeviceRecord,
+    current: std::sync::Weak<dyn Session>,
+}
+// Scheduling only, borrowed for one current session's control handler. A
+// replacement revokes this observation; dropping stale S0 cannot clear S1.
+pub(super) struct OrdinaryReception<'a> {
+    runtime: &'a Runtime,
+    env: String,
+    session: std::sync::Weak<dyn Session>,
+}
+struct ActiveControl {
+    current: std::sync::Weak<dyn Session>,
+    guards: usize,
+}
+impl Drop for OrdinaryReception<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut controls) = self.runtime.active_controls.lock()
+            && let Some(control) = controls.get_mut(&self.env)
+            && std::sync::Weak::ptr_eq(&control.current, &self.session)
+        {
+            control.guards -= 1;
+            if control.guards == 0 {
+                controls.remove(&self.env);
+            }
+        }
+    }
+}
 pub(crate) struct Runtime {
     jobs: Mutex<BTreeMap<String, Job>>,
     stop: Arc<AtomicBool>,
     last: Mutex<Instant>,
     // Protocol ownership only. Never used for membership, visibility or READY.
-    ordinary_sessions: Mutex<BTreeMap<String, std::sync::Weak<dyn Session>>>,
+    ordinary_sessions: Mutex<BTreeMap<String, OrdinaryOwnership>>,
+    // Ephemeral negative scheduling observation only. This separate map
+    // cannot establish handoff lineage, membership, activation or readiness.
+    active_controls: Mutex<BTreeMap<String, ActiveControl>>,
 }
 impl Default for Runtime {
     fn default() -> Self {
@@ -1425,6 +1536,7 @@ impl Default for Runtime {
             stop: Arc::new(AtomicBool::new(false)),
             last: Mutex::new(Instant::now() - Duration::from_secs(3)),
             ordinary_sessions: Mutex::new(BTreeMap::new()),
+            active_controls: Mutex::new(BTreeMap::new()),
         }
     }
 }
@@ -1503,28 +1615,119 @@ impl Runtime {
             .ordinary_sessions
             .lock()
             .map_err(|_| bad("team_bootstrap_busy"))?;
-        sessions.retain(|_, session| {
-            session
-                .upgrade()
-                .is_some_and(|session| !session.is_closed())
-        });
+        sessions.retain(|_, owner| owner.current.upgrade().is_some_and(|s| !s.is_closed()));
+        if sessions.get(env).is_some_and(|owner| {
+            owner.peer == session.peer()
+                && owner
+                    .current
+                    .upgrade()
+                    .is_some_and(|current| Arc::ptr_eq(&current, session))
+        }) {
+            return Ok(());
+        }
         if !sessions.contains_key(env) && sessions.len() >= 256 {
             return Err(bad("team_bootstrap_limit_exceeded"));
         }
-        sessions.insert(env.into(), Arc::downgrade(session));
+        sessions.insert(
+            env.into(),
+            OrdinaryOwnership {
+                peer: session.peer(),
+                current: Arc::downgrade(session),
+            },
+        );
         Ok(())
     }
-    fn ordinary_owns_session(&self, env: &str) -> Result<bool> {
-        let mut sessions = self
+    // Called under the actual TeamSync environment mutex, after acceptance.
+    // An ordinary socket cannot establish this Runtime's handoff lineage.
+    pub(super) fn observe_ordinary_replacement(&self, env: &str, session: &Arc<dyn Session>) {
+        if let Ok(mut sessions) = self.ordinary_sessions.lock()
+            && let Some(owner) = sessions.get_mut(env)
+            && owner.peer == session.peer()
+        {
+            owner.current = Arc::downgrade(session);
+        }
+    }
+    pub(super) fn ordinary_control_started<'a>(
+        &'a self,
+        env: &str,
+        session: &Arc<dyn Session>,
+    ) -> Option<OrdinaryReception<'a>> {
+        {
+            let owners = self.ordinary_sessions.lock().ok()?;
+            let owner = owners.get(env)?;
+            if owner.peer != session.peer()
+                || session.is_closed()
+                || !owner
+                    .current
+                    .upgrade()
+                    .is_some_and(|current| Arc::ptr_eq(&current, session))
+            {
+                return None;
+            }
+        }
+        self.selected_control_started(env, session)
+    }
+    // TeamSync calls this only for a selected parent and its actual current
+    // FULL recipient. Cold ordinary handlers can defer duplicate background
+    // work without ever becoming authenticated bootstrap handoff owners.
+    pub(super) fn selected_control_started<'a>(
+        &'a self,
+        env: &str,
+        session: &Arc<dyn Session>,
+    ) -> Option<OrdinaryReception<'a>> {
+        let mut controls = self.active_controls.lock().ok()?;
+        if session.is_closed() || (!controls.contains_key(env) && controls.len() >= 256) {
+            return None;
+        }
+        let current = Arc::downgrade(session);
+        let guards = controls
+            .get(env)
+            .filter(|control| std::sync::Weak::ptr_eq(&control.current, &current))
+            .map_or(Some(1), |control| control.guards.checked_add(1))?;
+        if guards > 64 {
+            return None;
+        }
+        controls.insert(
+            env.into(),
+            ActiveControl {
+                current: current.clone(),
+                guards,
+            },
+        );
+        Some(OrdinaryReception {
+            runtime: self,
+            env: env.into(),
+            session: current,
+        })
+    }
+    pub(super) fn ordinary_control_busy(&self, env: &str, current: &Arc<dyn Session>) -> bool {
+        self.active_controls.lock().is_ok_and(|controls| {
+            controls.get(env).is_some_and(|control| {
+                control.guards != 0
+                    && !current.is_closed()
+                    && control.current.upgrade().is_some_and(|session| {
+                        Arc::ptr_eq(&session, current) && session.peer() == current.peer()
+                    })
+            })
+        })
+    }
+    pub(super) fn ordinary_owns_session(
+        &self,
+        env: &str,
+        current: &Arc<dyn Session>,
+    ) -> Result<bool> {
+        let sessions = self
             .ordinary_sessions
             .lock()
             .map_err(|_| bad("team_bootstrap_busy"))?;
-        sessions.retain(|_, session| {
-            session
-                .upgrade()
-                .is_some_and(|session| !session.is_closed())
-        });
-        Ok(sessions.contains_key(env))
+        Ok(sessions.get(env).is_some_and(|owner| {
+            owner.peer == current.peer()
+                && !current.is_closed()
+                && owner
+                    .current
+                    .upgrade()
+                    .is_some_and(|s| Arc::ptr_eq(&s, current))
+        }))
     }
     pub(crate) fn poll(&self, team: Arc<TeamSync>) -> Result<()> {
         let mut last = self.last.lock().map_err(|_| bad("team_bootstrap_busy"))?;
@@ -1614,7 +1817,7 @@ impl Runtime {
             // Temporary vector/M1 disagreement after a handoff belongs to
             // ordinary sync, which must retain the session to deliver changes
             // and removal notices. This is scheduling, never READY authority.
-            if self.has_job(&env) || self.ordinary_owns_session(&env)? {
+            if self.has_job(&env) || team.personal_ordinary_owns_session(&env)? {
                 continue;
             }
             let mut jobs = self.jobs.lock().map_err(|_| bad("team_bootstrap_busy"))?;
@@ -1693,6 +1896,14 @@ fn receive_job(
             json!({"same_attempt":started_attempt==attempt["attempt_id"],"reason":closed_reason(&error.reason),"state":attempt["state"].as_str().filter(|s|matches!(*s,"approval_pending"|"transferring"|"verifying"|"installing"|"installed_syncing"|"unsupported"|"recovery_required"|"cancelled")).unwrap_or("invalid")})
         );
         let installed = visibility[&target]["state"] == "committed";
+        // An authenticated resource refusal is not an approval failure.
+        // Retain only an existing pre-intent retryable label; every next job
+        // still takes its own lease and revalidates the same approvals and
+        // all durable evidence. Cancellation and import recovery stay closed.
+        let busy_retry = (error.reason == "team_bootstrap_busy")
+            .then_some(attempt["state"].as_str())
+            .flatten()
+            .filter(|state| matches!(*state, "approval_pending" | "transferring" | "verifying"));
         let pending = error.reason == "team_bootstrap_approval_pending"
             || (error.reason == "team_bootstrap_peer_offline"
                 && attempt["state"] == "approval_pending");
@@ -1709,6 +1920,8 @@ fn receive_job(
             "installed_syncing"
         } else if visibility.get(&target).is_some() {
             "recovery_required"
+        } else if let Some(prior) = busy_retry {
+            prior
         } else if pending {
             "approval_pending"
         } else {
@@ -1744,6 +1957,155 @@ fn receive_job(
 #[cfg(test)]
 mod attempt_lifecycle_tests {
     use super::*;
+    #[test]
+    fn personal_bootstrap_authenticated_remote_busy_recovers_with_same_approvals() {
+        let f = super::install::tests::pending();
+        let ta = crate::team::sync::attached(&f.a).unwrap();
+        let tb = crate::team::sync::attached(&f.b).unwrap();
+        struct Stop(Vec<Arc<TeamSync>>);
+        impl Drop for Stop {
+            fn drop(&mut self) {
+                for team in self.0.iter().rev() {
+                    team.stop();
+                }
+            }
+        }
+        let _stop = Stop(vec![ta.clone(), tb.clone()]);
+        ta.enable_sync_state();
+        tb.enable_sync_state();
+        let deadline = Instant::now() + Duration::from_secs(35);
+        let held = loop {
+            match Slot::take(&f.a, &f.env) {
+                Ok(slot) => break slot,
+                Err(error) if error.reason == "team_bootstrap_busy" => {
+                    assert!(
+                        Instant::now() < deadline,
+                        "owned sender lease did not settle"
+                    );
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Err(error) => panic!("owned sender lease refused: {}", error.reason),
+            }
+        };
+        approval::approve_receiver(
+            &f.b,
+            &f.env,
+            text(&f.pending, "inviter_record_binding").unwrap(),
+            text(&f.pending, "self_record_binding").unwrap(),
+            "synthetic-install-fault-administrator",
+        )
+        .unwrap();
+        let approval_path = path(&f.env, "receiver.json").unwrap();
+        let original_approval = f.b.state.read_bytes(&approval_path).unwrap();
+        let attempt = loop {
+            let attempt =
+                f.b.state
+                    .read_json(&path(&f.env, "attempt.json").unwrap(), Value::Null)
+                    .unwrap();
+            if attempt["reason"] == "team_bootstrap_busy" {
+                break attempt;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "authenticated busy was not observed"
+            );
+            thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!(attempt["state"], "approval_pending");
+        assert!(f.b.state.read_bytes(&approval_path).unwrap() == original_approval);
+        assert!(
+            import_barrier::index(f.b.state)
+                .unwrap()
+                .get(&f.env)
+                .is_none()
+        );
+        assert!(f.b.vault.secret_for_trusted_use("alpha", None).is_err());
+        drop(held);
+        loop {
+            let a_ready = ta.synced_at(&f.env).is_some();
+            let b_ready = tb.synced_at(&f.env).is_some();
+            if a_ready && b_ready {
+                break;
+            }
+            if Instant::now() >= deadline {
+                fn meta(ctx: &Context, env: &str, peer: &str) -> Value {
+                    let closed = |value: &Value| {
+                        value
+                            .as_str()
+                            .filter(|s| {
+                                s.len() <= 64
+                                    && s.bytes().all(|b| {
+                                        b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_'
+                                    })
+                            })
+                            .map(|s| json!(s))
+                            .unwrap_or(Value::Null)
+                    };
+                    let read = |name: String| {
+                        ctx.state
+                            .read_json(&name, Value::Null)
+                            .unwrap_or(Value::Null)
+                    };
+                    let attempt = read(path(env, "attempt.json").unwrap());
+                    let auth = read(path(env, &format!("authorizations/{peer}.json")).unwrap());
+                    let sender = read(path(env, "sender-status.json").unwrap());
+                    let sync = read(format!("team/{env}/sync_state.json"));
+                    let events = ctx.state.read_lines("audit/audit.jsonl",Some(16)).unwrap_or_default().iter()
+                        .filter_map(|line|crate::pyjson::loads(line).ok())
+                        .filter(|row|matches!(row["event"].as_str(),Some("team_handshake_failed"|"team_sync_poll")))
+                        .take(8).map(|row|json!({"event":closed(&row["event"]),"reason":closed(&row["reason"])})).collect::<Vec<_>>();
+                    json!({"attempt_state":closed(&attempt["state"]),"attempt_reason":closed(&attempt["reason"]),"authorization_activated":auth["activated"],"admission_present":auth["admission"].is_object(),"manifest_present":auth["last_manifest"].is_object(),"sender_state":closed(&sender["state"]),"sender_reason":closed(&sender["reason"]),"peer_session":sync["peers"][peer]["session"],"peer_error":closed(&sync["peers"][peer]["last_error"]),"gate_ready":sync["peers"][peer]["tombstone_agreement"]["ready"],"events":events})
+                }
+                let af = DeviceKey::load_or_create(f.a.state, f.a.kms)
+                    .unwrap()
+                    .fingerprint()
+                    .unwrap();
+                let bf = DeviceKey::load_or_create(f.b.state, f.b.kms)
+                    .unwrap()
+                    .fingerprint()
+                    .unwrap();
+                eprintln!(
+                    "PVBOOT_REMOTE_BUSY_CLOSED_STATE {}",
+                    json!({"a_ready":a_ready,"b_ready":b_ready,"a":meta(&f.a,&f.env,&bf),"b":meta(&f.b,&f.env,&af)})
+                );
+                panic!("unchanged35s busy recovery deadline");
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        assert!(f.b.state.read_bytes(&approval_path).unwrap() == original_approval);
+        assert!(
+            f.b.vault
+                .secret_for_trusted_use("alpha", None)
+                .unwrap()
+                .ct_eq(b"synthetic-install-fault-value")
+        );
+        let peer = DeviceKey::load_or_create(f.b.state, f.b.kms)
+            .unwrap()
+            .fingerprint()
+            .unwrap();
+        let auth =
+            f.a.state
+                .read_json(
+                    &path(&f.env, &format!("authorizations/{peer}.json")).unwrap(),
+                    Value::Null,
+                )
+                .unwrap();
+        assert_eq!(auth["activated"], true);
+        let commits = crate::team::commit::CommitStore::new(f.a.state, &f.env)
+            .all_commits()
+            .unwrap();
+        assert_eq!(
+            commits
+                .iter()
+                .flat_map(|c| &c.ops)
+                .filter(|op| op["op"] == "member.add")
+                .count(),
+            1
+        );
+        println!(
+            "PVBOOT_REMOTE_BUSY_RECOVERY {{\"real_held_sender_lease\":true,\"same_signed_approval\":true,\"one_admission\":true,\"fresh_agreement\":true}}"
+        );
+    }
     #[test]
     fn personal_bootstrap_closed_encrypted_caps_send_is_offline() {
         let f = super::install::tests::pending();

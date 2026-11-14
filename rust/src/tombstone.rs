@@ -11,7 +11,22 @@ fn bad() -> Error {
     Error::state("state_corrupt").with_detail(PATH)
 }
 pub fn load(state: &StateDir) -> Result<Value> {
-    let value = state.read_json(PATH, json!({}))?;
+    validate_loaded(state.read_json(PATH, json!({}))?)
+}
+
+pub(crate) fn load_with_input(history: &crate::team::commit::HistorySession<'_>) -> Result<Value> {
+    let io = history.import_io()?;
+    let value = history.state().read_json_in(&io, PATH, json!({}))?;
+    // Two complete serialize/hash/clone walks conservatively cover the
+    // unchanged deny-ledger validator. No signature authority is added.
+    history.reserve_import_signature(&value)?;
+    history.reserve_import_signature(&value)?;
+    let result = validate_loaded(value);
+    history.check()?;
+    result
+}
+
+fn validate_loaded(value: Value) -> Result<Value> {
     let obj = value.as_object().ok_or_else(bad)?;
     for (key, field) in obj {
         if !["local", "shared", "required", "bindings"].contains(&key.as_str())
@@ -75,6 +90,13 @@ pub fn load(state: &StateDir) -> Result<Value> {
 }
 pub fn shared_facts(state: &StateDir, env: &str) -> Result<Vec<Value>> {
     let ledger = load(state)?;
+    shared_facts_from_ledger(&ledger, env)
+}
+pub(crate) fn shared_facts_original(value: Value, env: &str) -> Result<Vec<Value>> {
+    let ledger = validate_loaded(value)?;
+    shared_facts_from_ledger(&ledger, env)
+}
+fn shared_facts_from_ledger(ledger: &Value, env: &str) -> Result<Vec<Value>> {
     match ledger["shared"].get(env) {
         None => Ok(vec![]),
         Some(value) => Ok(value
@@ -137,7 +159,69 @@ pub fn retain_fact(state: &StateDir, fact: &crate::team::sync::Fact) -> Result<(
         return Ok(());
     }
     let _lock = state.lock()?;
-    let mut ledger = load(state)?;
+    let image = retained_fact_image(
+        fact,
+        |name, default| state.read_json(name, default),
+        |env| crate::team::sync::env_project_environment(state, env),
+    )?;
+    match image {
+        Some(ledger) => state.write_json(PATH, &ledger),
+        None => Ok(()),
+    }
+}
+
+pub(crate) fn retain_fact_with_input(
+    history: &crate::team::commit::HistorySession<'_>,
+    fact: &crate::team::sync::Fact,
+) -> Result<()> {
+    if !history.is_scoped() {
+        return retain_fact(history.state(), fact);
+    }
+    if fact.kind != "secret_deleted" {
+        return Ok(());
+    }
+    if fact.env_id != history.env() {
+        return Err(Error::state("team_bootstrap_local_state_changed"));
+    }
+    let input = history.acquire()?;
+    let image = input.with_retained_io(history.state(), history.env(), |reads| {
+        retained_fact_image(
+            fact,
+            |name, default| {
+                let value = reads.read_json(name, default)?;
+                if name == PATH {
+                    history.reserve_import_signature(&value)?;
+                    history.reserve_import_signature(&value)?;
+                }
+                Ok(value)
+            },
+            |env| {
+                let doc = reads.read_json(crate::team::sync::ENVS_MAP_PATH, json!({}))?;
+                let entry = &doc[env];
+                Ok((
+                    entry["project"].as_str().map(str::to_owned),
+                    entry["environment"].as_str().map(str::to_owned),
+                ))
+            },
+        )
+    })?;
+    if let Some(ledger) = image {
+        let data = history.encode_import_record(&ledger)?;
+        input.recheck()?;
+        crate::import_barrier::write_tombstones_with_history(history, &data)?;
+    }
+    history.check()
+}
+
+// One retained-fact selection and binding engine. The selected caller supplies
+// original DATA from its same locked, revision-checked input; ordinary callers
+// retain their filtered reads and existing writer/error behavior.
+fn retained_fact_image(
+    fact: &crate::team::sync::Fact,
+    mut read: impl FnMut(&str, Value) -> Result<Value>,
+    mut environment: impl FnMut(&str) -> Result<(Option<String>, Option<String>)>,
+) -> Result<Option<Value>> {
+    let mut ledger = validate_loaded(read(PATH, json!({}))?)?;
     let hash = fact.hash()?;
     ledger
         .as_object_mut()
@@ -151,7 +235,7 @@ pub fn retain_fact(state: &StateDir, fact: &crate::team::sync::Fact) -> Result<(
         .as_object_mut()
         .ok_or_else(bad)?
         .insert(hash, fact.to_dict());
-    let vault = state.read_json(crate::vault::VAULT_DOC, json!({}))?;
+    let vault = read(crate::vault::VAULT_DOC, json!({}))?;
     let id = fact.target["secret_id"].as_str().ok_or_else(bad)?;
     let entry = &vault["secrets"][id];
     if entry["shared_env"] == fact.env_id {
@@ -161,9 +245,7 @@ pub fn retain_fact(state: &StateDir, fact: &crate::team::sync::Fact) -> Result<(
             id,
             json!({"project":entry["project"],"environment":entry["environment"]}),
         )?;
-        if let (Some(project), Some(environment)) =
-            crate::team::sync::env_project_environment(state, &fact.env_id)?
-        {
+        if let (Some(project), Some(environment)) = environment(&fact.env_id)? {
             add_binding(
                 &mut ledger,
                 &fact.env_id,
@@ -172,10 +254,10 @@ pub fn retain_fact(state: &StateDir, fact: &crate::team::sync::Fact) -> Result<(
             )?;
         }
     }
-    if ledger == load(state)? {
-        return Ok(());
+    if ledger == validate_loaded(read(PATH, json!({}))?)? {
+        return Ok(None);
     }
-    state.write_json(PATH, &ledger)
+    Ok(Some(ledger))
 }
 pub fn require_support(state: &StateDir, env: &str) -> Result<()> {
     let _lock = state.lock()?;
@@ -194,11 +276,21 @@ pub fn require_support(state: &StateDir, env: &str) -> Result<()> {
     state.write_json(PATH, &ledger)
 }
 pub fn support_required(state: &StateDir, env: &str) -> Result<bool> {
-    let ledger = load(state)?;
-    Ok(ledger["required"][env] == true
+    Ok(support_required_from_ledger(&load(state)?, env))
+}
+pub(crate) fn support_required_with_input(
+    history: &crate::team::commit::HistorySession<'_>,
+) -> Result<bool> {
+    Ok(support_required_from_ledger(
+        &load_with_input(history)?,
+        history.env(),
+    ))
+}
+fn support_required_from_ledger(ledger: &Value, env: &str) -> bool {
+    ledger["required"][env] == true
         || ledger["shared"]
             .get(env)
-            .is_some_and(|v| v.as_object().is_none_or(|m| !m.is_empty())))
+            .is_some_and(|v| v.as_object().is_none_or(|m| !m.is_empty()))
 }
 fn bound_scope(
     ledger: &Value,

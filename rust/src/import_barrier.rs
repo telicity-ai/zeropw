@@ -68,7 +68,7 @@ impl<'a> ImportIo<'a, 'a> {
     pub(crate) fn open(state: &'a StateDir) -> Result<Self> {
         let lock = state.lock()?;
         #[cfg(test)]
-        opus_cost::metric(state, "standalone_guards", 1);
+        opus_cost::standalone_guard(state);
         let budget = std::rc::Rc::new(crate::team::commit::ImportHistoryBudget::new_guard());
         Self::capture(state, None, Some(lock), budget)
     }
@@ -264,7 +264,7 @@ impl<'g, 'a> ImportIo<'g, 'a> {
         if self.paths.entries.borrow().get(&key) == Some(&(generation, stamp)) {
             return Ok(());
         }
-        private(path, directory)?;
+        private_accounted(path, directory, &|work, bytes| self.charge(work, bytes))?;
         self.charge(1, 256)?;
         if io_stamp(&fs::symlink_metadata(path).map_err(|_| failed())?) != stamp {
             return Err(failed());
@@ -1848,6 +1848,14 @@ macro_rules! fault_edge {
     }};
 }
 fn private(path: &Path, dir: bool) -> Result<()> {
+    private_accounted(path, dir, &|_, _| Ok(()))
+}
+
+fn private_accounted(
+    path: &Path,
+    dir: bool,
+    charge: &dyn Fn(u64, u64) -> Result<()>,
+) -> Result<()> {
     let m = fs::symlink_metadata(path).map_err(|_| failed())?;
     if (if dir { !m.is_dir() } else { !m.is_file() })
         || m.uid() != nix::unistd::geteuid().as_raw()
@@ -1860,11 +1868,10 @@ fn private(path: &Path, dir: bool) -> Result<()> {
     {
         // Refuse extended ACLs, including inherited ACLs. The trusted system
         // utility is fixed; no peer data selects a program or shell command.
-        let out = std::process::Command::new("/bin/ls")
-            .args(["-lde", "--"])
-            .arg(path)
-            .output()
-            .map_err(|_| failed())?;
+        #[cfg(not(test))]
+        let out = private_acl_output(path, charge)?;
+        #[cfg(test)]
+        let out = private_acl_output(path, charge, None)?;
         if !out.status.success()
             || out
                 .stdout
@@ -1875,7 +1882,242 @@ fn private(path: &Path, dir: bool) -> Result<()> {
             return Err(failed());
         }
     }
+    #[cfg(not(target_os = "macos"))]
+    let _ = charge;
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[cfg(test)]
+type AclCaptureObserver<'a> = Option<&'a dyn Fn(&File) -> Result<()>>;
+
+#[cfg(target_os = "macos")]
+fn private_acl_output(
+    path: &Path,
+    charge: &dyn Fn(u64, u64) -> Result<()>,
+    #[cfg(test)] after_capture: AclCaptureObserver<'_>,
+) -> Result<std::process::Output> {
+    use std::io::{Read, Seek};
+
+    // A concurrently spawned trusted CLI can inherit a transient pipe writer
+    // on Darwin. Waiting for that pipe's EOF while holding StateLock deadlocks
+    // if the CLI needs the same lock. Reap only the actual ls child and read
+    // its anonymous regular file; another open writer cannot delay that read.
+    // No pathname or credential material is published by this observation.
+    charge(256, 4096)?;
+    let mut capture = tempfile::tempfile().map_err(|_| failed())?;
+    let metadata = capture.metadata().map_err(|_| failed())?;
+    if !metadata.is_file()
+        || metadata.uid() != nix::unistd::geteuid().as_raw()
+        || metadata.permissions().mode() & 0o777 != 0o600
+        || metadata.nlink() != 0
+    {
+        return Err(failed());
+    }
+    #[cfg(test)]
+    if let Some(observe) = after_capture {
+        observe(&capture)?;
+    }
+    let status = std::process::Command::new("/bin/ls")
+        .args(["-lde", "--"])
+        .arg(path)
+        .stdout(capture.try_clone().map_err(|_| failed())?)
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map_err(|_| failed())?;
+    let bytes = capture.metadata().map_err(|_| failed())?.len();
+    // A legitimate single ls header is below PATH_MAX plus fixed metadata.
+    // Larger output cannot establish the required absence of extended ACLs.
+    if bytes > 65_536 {
+        return Err(failed());
+    }
+    // Include read_to_end's conservative capacity growth before allocation.
+    charge(bytes * 2 + 16, bytes * 4 + 4096)?;
+    capture.rewind().map_err(|_| failed())?;
+    let mut stdout = Vec::new();
+    std::io::Read::by_ref(&mut capture)
+        .take(bytes + 1)
+        .read_to_end(&mut stdout)
+        .map_err(|_| failed())?;
+    if stdout.len() as u64 != bytes || capture.metadata().map_err(|_| failed())?.len() != bytes {
+        return Err(failed());
+    }
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr: Vec::new(),
+    })
+}
+
+#[cfg(test)]
+#[cfg(target_os = "macos")]
+mod personal_acl_observation_tests {
+    use super::*;
+    use std::{
+        cell::{Cell, RefCell},
+        io::{BufRead, BufReader, Read},
+        os::{fd::OwnedFd, unix::net::UnixStream},
+        process::{Child, Command, Stdio},
+        sync::mpsc,
+        time::Duration,
+    };
+
+    const CHILD: &str = "PVBOOT_ACL_WRITER_OWN_CHILD";
+    const READY: &str = "PVBOOT_ACL_WRITER_READY";
+
+    struct WriterChild(Child, Option<std::thread::JoinHandle<()>>);
+    impl WriterChild {
+        fn spawn(stderr: Stdio) -> Self {
+            let mut owner = Self(
+                Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "import_barrier::personal_acl_observation_tests::private_acl_writer_child",
+                        "--nocapture",
+                    ])
+                    .env(CHILD, "1")
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(stderr)
+                    .spawn()
+                    .unwrap(),
+                None,
+            );
+            let output = owner.0.stdout.take().unwrap();
+            let (tx, rx) = mpsc::channel();
+            let reader = std::thread::spawn(move || {
+                for line in BufReader::new(output).lines() {
+                    if line.unwrap().trim() == READY {
+                        let _ = tx.send(());
+                    }
+                }
+            });
+            let ready = rx.recv_timeout(Duration::from_secs(5));
+            if ready.is_err() {
+                let _ = owner.0.kill();
+                let _ = owner.0.wait();
+            }
+            owner.1 = Some(reader);
+            ready.expect("owned writer child must acknowledge before observation");
+            owner
+        }
+        fn finish(&mut self) {
+            self.0.stdin.take().unwrap().write_all(b"x").unwrap();
+            assert!(self.0.wait().unwrap().success());
+            self.1.take().unwrap().join().unwrap();
+        }
+    }
+    impl Drop for WriterChild {
+        fn drop(&mut self) {
+            if self.0.try_wait().ok().flatten().is_none() {
+                let _ = self.0.kill();
+            }
+            let _ = self.0.wait();
+            if let Some(reader) = self.1.take() {
+                let _ = reader.join();
+            }
+        }
+    }
+
+    #[test]
+    fn private_acl_writer_child() {
+        if std::env::var(CHILD).as_deref() != Ok("1") {
+            return;
+        }
+        println!("\n{READY}");
+        std::io::stdout().flush().unwrap();
+        let mut byte = [0];
+        std::io::stdin().read_exact(&mut byte).unwrap();
+        assert_eq!(byte, *b"x");
+    }
+
+    #[test]
+    fn personal_acl_observation_does_not_wait_for_an_inherited_writer() {
+        let root = tempfile::tempdir().unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+
+        // Reproduce the actual EOF dependency with a real ls and a second
+        // owned process retaining its output writer. No timing/key campaign.
+        let (mut read, write) = UnixStream::pair().unwrap();
+        let inherited: OwnedFd = write.try_clone().unwrap().into();
+        let mut old_writer = WriterChild::spawn(Stdio::from(inherited));
+        let stdout: OwnedFd = write.into();
+        assert!(
+            Command::new("/bin/ls")
+                .args(["-lde", "--"])
+                .arg(root.path())
+                .stdout(Stdio::from(stdout))
+                .stderr(Stdio::null())
+                .status()
+                .unwrap()
+                .success()
+        );
+        read.set_read_timeout(Some(Duration::from_millis(100)))
+            .unwrap();
+        let mut header = Vec::new();
+        let error = read.read_to_end(&mut header).unwrap_err();
+        assert!(matches!(
+            error.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+        ));
+        assert!(!header.is_empty());
+        assert!(old_writer.0.try_wait().unwrap().is_none());
+        old_writer.finish();
+        read.read_to_end(&mut header).unwrap();
+
+        // The actual fixed acquisition must complete while its extra writer
+        // is still alive, preserve the original ls bytes, and charge the same
+        // caller before materializing any captured output.
+        let held = RefCell::new(None);
+        let observe = |capture: &File| -> Result<()> {
+            *held.borrow_mut() = Some(WriterChild::spawn(Stdio::from(
+                capture.try_clone().unwrap(),
+            )));
+            Ok(())
+        };
+        let work = Cell::new(0u64);
+        let bytes = Cell::new(0u64);
+        let charges = Cell::new(0u64);
+        let charge = |w: u64, b: u64| {
+            work.set(work.get().checked_add(w).unwrap());
+            bytes.set(bytes.get().checked_add(b).unwrap());
+            charges.set(charges.get() + 1);
+            Ok(())
+        };
+        let output = private_acl_output(root.path(), &charge, Some(&observe)).unwrap();
+        assert!(output.status.success());
+        assert!(
+            held.borrow_mut()
+                .as_mut()
+                .unwrap()
+                .0
+                .try_wait()
+                .unwrap()
+                .is_none()
+        );
+        let reference = Command::new("/bin/ls")
+            .args(["-lde", "--"])
+            .arg(root.path())
+            .output()
+            .unwrap();
+        assert!(reference.status.success());
+        assert_eq!(output.stdout, reference.stdout);
+        assert_eq!(charges.get(), 2);
+        assert!(work.get() >= 256 && bytes.get() > 8192);
+        private(root.path(), true).unwrap();
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(private(root.path(), true).is_err());
+        fs::set_permissions(root.path(), fs::Permissions::from_mode(0o700)).unwrap();
+        let file = root.path().join("ordinary");
+        fs::write(&file, b"metadata-only").unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+        private(&file, false).unwrap();
+        fs::hard_link(&file, root.path().join("alias")).unwrap();
+        assert!(private(&file, false).is_err());
+        std::os::unix::fs::symlink(&file, root.path().join("symlink")).unwrap();
+        assert!(private(&root.path().join("symlink"), false).is_err());
+        held.borrow_mut().as_mut().unwrap().finish();
+    }
 }
 
 pub(crate) fn private_relative(state: &StateDir, name: &str) -> Result<()> {
@@ -1900,7 +2142,70 @@ pub(crate) fn private_relative(state: &StateDir, name: &str) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn write_cache_metadata_with_history(
+    history: &crate::team::commit::HistorySession<'_>,
+    name: &str,
+    data: &[u8],
+) -> Result<()> {
+    if name != format!("team/{}/sync_state.json", history.env())
+        && name != format!("team/{}/peer_vectors.json", history.env())
+    {
+        return Err(failed());
+    }
+    write_mutable_with_history(history, name, data)
+}
+
+pub(crate) fn write_tombstones_with_history(
+    history: &crate::team::commit::HistorySession<'_>,
+    data: &[u8],
+) -> Result<()> {
+    write_mutable_with_history(history, crate::tombstone::PATH, data)
+}
+
+fn write_mutable_with_history(
+    history: &crate::team::commit::HistorySession<'_>,
+    name: &str,
+    data: &[u8],
+) -> Result<()> {
+    let io = history.import_io()?;
+    let before = io.read(name, 67_108_864)?;
+    if let Some(before) = &before {
+        let cost = (before.len() as u64).checked_mul(16).ok_or_else(failed)?;
+        history.charge_import(cost, cost)?;
+    }
+    history.reserve_writer(name, data.len() as u64)?;
+    write_guarded(history.state(), name, data, || {
+        history.check()?;
+        if name == crate::tombstone::PATH {
+            // A deny ledger may only replace the exact consumed image, or
+            // read back this writer's exact postimage after its rename.
+            let observed = io.read(name, 67_108_864)?;
+            io.charge(
+                before
+                    .as_ref()
+                    .map_or(0, |v| v.len() as u64)
+                    .checked_add(data.len() as u64)
+                    .and_then(|n| n.checked_add(observed.as_ref().map_or(0, |v| v.len() as u64)))
+                    .ok_or_else(failed)?,
+                0,
+            )?;
+            if observed != before && observed.as_deref() != Some(data) {
+                return Err(Error::state("team_bootstrap_local_state_changed"));
+            }
+        }
+        history.invalidate()
+    })
+}
+
 pub(crate) fn write(state: &StateDir, name: &str, data: &[u8]) -> Result<()> {
+    write_guarded(state, name, data, || Ok(()))
+}
+fn write_guarded(
+    state: &StateDir,
+    name: &str,
+    data: &[u8],
+    guard: impl Fn() -> Result<()>,
+) -> Result<()> {
     if !state.locked_by_current_thread() {
         return Err(failed());
     }
@@ -1919,17 +2224,21 @@ pub(crate) fn write(state: &StateDir, name: &str, data: &[u8]) -> Result<()> {
         match fs::symlink_metadata(&current) {
             Ok(_) => private(&current, true)?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                guard()?;
                 fault_edge!(state, name, "directory-create-before");
                 fs::DirBuilder::new()
                     .mode(0o700)
                     .create(&current)
                     .map_err(|_| failed())?;
+                guard()?;
                 fault_edge!(state, name, "directory-create-after");
                 private(&current, true)?;
+                guard()?;
                 fault_edge!(state, name, "ancestor-fsync-before");
                 File::open(current.parent().ok_or_else(failed)?)
                     .and_then(|f| f.sync_all())
                     .map_err(|_| failed())?;
+                guard()?;
                 fault_edge!(state, name, "ancestor-fsync-after");
             }
             Err(_) => return Err(failed()),
@@ -1943,6 +2252,7 @@ pub(crate) fn write(state: &StateDir, name: &str, data: &[u8]) -> Result<()> {
     }
     let temp = current.join(format!(".pvboot-{}", super::team::bootstrap::random(16)));
     let result = (|| {
+        guard()?;
         fault_edge!(state, name, "file-open-before");
         let mut f = OpenOptions::new()
             .write(true)
@@ -1951,39 +2261,53 @@ pub(crate) fn write(state: &StateDir, name: &str, data: &[u8]) -> Result<()> {
             .custom_flags(libc::O_NOFOLLOW)
             .open(&temp)
             .map_err(|_| failed())?;
+        guard()?;
         fault_edge!(state, name, "file-open-after");
+        guard()?;
         fault_edge!(state, name, "file-write-before");
         f.write_all(data).map_err(|_| failed())?;
+        guard()?;
         fault_edge!(state, name, "file-write-after");
+        guard()?;
         fault_edge!(state, name, "file-fsync-before");
         f.sync_all().map_err(|_| failed())?;
+        guard()?;
         fault_edge!(state, name, "file-fsync-after");
         private(&temp, false)?;
+        guard()?;
         fault_edge!(state, name, "readback-before");
         if fs::read(&temp).map_err(|_| failed())? != data {
             return Err(failed());
         }
+        guard()?;
         fault_edge!(state, name, "readback-after");
+        guard()?;
         fault_edge!(state, name, "rename-before");
         fs::rename(&temp, &target).map_err(|_| failed())?;
+        guard()?;
         fault_edge!(state, name, "rename-after");
+        guard()?;
         fault_edge!(state, name, "parent-fsync-before");
         File::open(&current)
             .and_then(|f| f.sync_all())
             .map_err(|_| failed())?;
+        guard()?;
         fault_edge!(state, name, "parent-fsync-after");
         private(&target, false)?;
+        guard()?;
         fault_edge!(state, name, "final-readback-before");
         if fs::read(&target).map_err(|_| failed())? != data {
             return Err(failed());
         }
+        guard()?;
         fault_edge!(state, name, "final-readback-after");
         Ok(())
     })();
     if result.is_err() {
         let _ = fs::remove_file(&temp);
     }
-    result
+    result?;
+    guard()
 }
 
 /// Exact-owned-state, in-process fault control. No environment variable,
@@ -3436,6 +3760,47 @@ pub(crate) mod opus_cost {
             SPECS.lock().unwrap().remove(&self.root);
         }
     }
+    pub(crate) fn standalone_guard(state: &StateDir) {
+        metric(state, "standalone_guards", 1);
+    }
+    pub(crate) fn budget_refusal(
+        state: &StateDir,
+        env: &str,
+        requested_work: u64,
+        requested_bytes: u64,
+        charged_work: u64,
+        charged_bytes: u64,
+    ) {
+        let sample = {
+            let mut specs = SPECS.lock().unwrap();
+            specs.get_mut(&state.path).is_some_and(|spec| {
+                if spec.address != state as *const StateDir as usize
+                    || spec.env != env
+                    || !spec.protocol_trace
+                {
+                    return false;
+                }
+                let count = spec.metrics.entry("budget_refusals").or_default();
+                *count += 1;
+                *count == 1
+            })
+        };
+        if sample {
+            // Sample only AFTER the operation refused. Successful bounded
+            // operations pay no stack-capture cost; no values/frames are read.
+            let trace = std::backtrace::Backtrace::force_capture().to_string();
+            let callers = trace
+                .lines()
+                .filter(|line| line.contains("zeropw::"))
+                .take(14)
+                .map(|line| line.chars().take(256).collect::<String>())
+                .collect::<Vec<_>>();
+            eprintln!(
+                "PVBOOT_HISTORY_BUDGET_REFUSAL {}",
+                serde_json::json!({"requested_work":requested_work,"requested_bytes":requested_bytes,"charged_work":charged_work,"charged_bytes":charged_bytes,"callers":callers})
+            );
+        }
+    }
     pub(crate) fn note(state: &StateDir, env: &str, label: &str) {
         let mut specs = SPECS.lock().unwrap();
         if let Some(spec) = specs.get_mut(&state.path)
@@ -3473,6 +3838,68 @@ pub(crate) mod opus_cost {
             *count += 1;
             if *count <= 8 {
                 eprintln!("PVBOOT_OPUS_PROTOCOL_EVENT kind={label} count={count}");
+            }
+        }
+    }
+    pub(crate) fn control_stage(
+        state: &StateDir,
+        env: &str,
+        label: &'static str,
+        elapsed_us: u128,
+        operation_us: u128,
+        work: u64,
+        bytes: u64,
+    ) {
+        let mut specs = SPECS.lock().unwrap();
+        if let Some(spec) = specs.get_mut(&state.path)
+            && spec.address == state as *const StateDir as usize
+            && spec.env == env
+            && spec.protocol_trace
+        {
+            let count = spec.metrics.entry(label).or_default();
+            *count += 1;
+            let first = *count <= 8;
+            let slow = if operation_us >= 4_000_000 {
+                let slow_count = spec.metrics.entry("control_slow_stages").or_default();
+                *slow_count += 1;
+                *slow_count <= 16
+            } else {
+                false
+            };
+            if first || slow {
+                let side = if state
+                    .import_identity()
+                    .is_some_and(|r| env.starts_with(&(r.fingerprint() + "-")))
+                {
+                    "owner"
+                } else {
+                    "recipient"
+                };
+                eprintln!(
+                    "PVBOOT_PERSONAL_CONTROL_STAGE side={side} kind={label} elapsed_us={elapsed_us} operation_us={operation_us} work={work} charged_bytes={bytes}"
+                );
+            }
+        }
+    }
+    pub(crate) fn control_gate(state: &StateDir, env: &str, label: &'static str, value: Value) {
+        let mut specs = SPECS.lock().unwrap();
+        if let Some(spec) = specs.get_mut(&state.path)
+            && spec.address == state as *const StateDir as usize
+            && spec.env == env
+            && spec.protocol_trace
+        {
+            let count = spec.metrics.entry(label).or_default();
+            *count += 1;
+            if *count <= 8 {
+                let side = if state
+                    .import_identity()
+                    .is_some_and(|r| env.starts_with(&(r.fingerprint() + "-")))
+                {
+                    "owner"
+                } else {
+                    "recipient"
+                };
+                eprintln!("PVBOOT_PERSONAL_CONTROL_GATE side={side} kind={label} value={value}");
             }
         }
     }
